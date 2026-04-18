@@ -10,8 +10,9 @@ import type {
   TerminalDTO,
 } from '@argus/shared-types';
 import { getToken } from './auth';
+import { apiBaseUrl } from './host';
 
-const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:4000';
+const BASE = apiBaseUrl();
 
 export class ApiError extends Error {
   constructor(

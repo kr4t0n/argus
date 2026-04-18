@@ -12,8 +12,9 @@ import type {
 } from '@argus/shared-types';
 import { WS_NAMESPACE } from '@argus/shared-types';
 import { getToken } from './auth';
+import { wsBaseUrl } from './host';
 
-const BASE = (import.meta.env.VITE_WS_URL as string | undefined) ?? 'http://localhost:4000';
+const BASE = wsBaseUrl();
 
 export type WSSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
