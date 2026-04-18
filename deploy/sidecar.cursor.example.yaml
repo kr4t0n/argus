@@ -8,3 +8,10 @@ bus:
   url: redis://localhost:6379
 adapter:
   binary: cursor-agent
+  # Pass --yolo so tool calls execute without per-call approval prompts.
+  # Required for headless operation — the sidecar has no TTY to approve
+  # through, so leaving this off will hang any tool-using turn forever.
+  yolo: true
+  # Optional: extra flags appended to every `cursor-agent` invocation
+  # (before the prompt, after the built-in flags).
+  # extraArgs: ["--max-turns", "10"]
