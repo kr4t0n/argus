@@ -12,10 +12,13 @@ import (
 // CursorCLIAdapter wraps the Cursor agent CLI (`cursor-agent`) using
 // --output-format stream-json. Events shape:
 //
-//	{ "type": "system",     "session_id": "..." }
-//	{ "type": "assistant",  "message": { "content": [ {text}/{tool_use} ] } }
-//	{ "type": "user",       "message": { "content": [ {tool_result} ] } }
-//	{ "type": "result",     "result": "...", "is_error": bool }
+//	{ "type": "system",    "subtype": "init", "session_id": "..." }
+//	{ "type": "assistant", "message": { "content": [ {text} ] } }
+//	{ "type": "user",      "message": { "content": [ {text} ] } }   (our prompt)
+//	{ "type": "tool_call", "subtype": "started"|"completed",
+//	    "call_id": "...",
+//	    "tool_call": { "<kind>ToolCall": { "args": {…}, "result": {…}? } } }
+//	{ "type": "result",    "subtype": "success"|"error", "result": "..." }
 //
 // Defaults that differ from interactive `cursor-agent`:
 //   - --force: non-interactive, skip confirmation screens.
@@ -64,6 +67,10 @@ func (a *CursorCLIAdapter) Ping(ctx context.Context) error {
 	return exec.CommandContext(ctx, a.binary, "--version").Run()
 }
 
+func (a *CursorCLIAdapter) Version(ctx context.Context) (string, error) {
+	return readBinaryVersion(ctx, a.binary)
+}
+
 func (a *CursorCLIAdapter) Execute(
 	ctx context.Context, cmd protocol.Command,
 ) (<-chan Chunk, error) {
@@ -87,10 +94,12 @@ func (a *CursorCLIAdapter) Execute(
 	args = append(args, a.extraArgs...)
 	args = append(args, cmd.Prompt)
 
-	// Per-run state so the mapper can snapshot file contents at tool_use
-	// time and emit a unified diff at the matching tool_result. Same flow
-	// and helpers as Claude Code; cursor-agent intentionally mirrors
-	// Claude's stream-json schema.
+	// cursor-agent's stream-json schema diverged from Claude's: it emits
+	// top-level `tool_call` events with a typed `*ToolCall` payload (and
+	// already includes a unified `diffString` for edit-style tools), so
+	// it gets its own mapper. We thread a fileEditState in for forward
+	// compat — the current schema doesn't need it, but a future cursor
+	// release that omits diffString could opt back into snapshot diffing.
 	state := newFileEditState()
 
 	spec := StreamSpec{
@@ -99,7 +108,7 @@ func (a *CursorCLIAdapter) Execute(
 		Dir:        a.workingDir,
 		StderrKind: protocol.KindStderr,
 		Mapper: func(line string) []Chunk {
-			return mapClaudeLine(line, state, a.workingDir)
+			return mapCursorLine(line, state, a.workingDir)
 		},
 	}
 	runner, err := Start(ctx, spec)
