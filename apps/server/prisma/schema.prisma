@@ -31,8 +31,9 @@ model Agent {
   registeredAt    DateTime
   archivedAt      DateTime? // soft-hide from sidebar; preserves history.
 
-  sessions Session[]
-  commands Command[]
+  sessions  Session[]
+  commands  Command[]
+  terminals Terminal[]
 
   @@index([status])
   @@index([type])
@@ -90,4 +91,29 @@ model ResultChunk {
   command Command @relation(fields: [commandId], references: [id], onDelete: Cascade)
 
   @@index([commandId, seq])
+}
+
+// Audit row for an interactive PTY session opened against an agent.
+// We do NOT persist the keystroke transcript here; that would balloon
+// fast and risks capturing secrets typed into the shell. Add a separate
+// transcript table later if you need replay/forensics.
+model Terminal {
+  id          String    @id @default(cuid())
+  agentId     String
+  userId      String
+  status      String    @default("opening") // opening | open | closed | error
+  shell       String
+  cwd         String?
+  cols        Int       @default(120)
+  rows        Int       @default(32)
+  exitCode    Int?
+  closeReason String?   @db.Text
+  openedAt    DateTime  @default(now())
+  closedAt    DateTime?
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId, openedAt])
+  @@index([userId, openedAt])
+  @@index([status])
 }

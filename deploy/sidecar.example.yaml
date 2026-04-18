@@ -25,6 +25,16 @@ adapter:
   # Override the `claude` binary if it isn't on PATH.
   binary: claude
 
+# Optional: expose an interactive terminal in the dashboard's right panel.
+# THIS IS REMOTE SHELL ACCESS — only enable on hosts where every dashboard
+# user is trusted with shell-as-sidecar-user privileges.
+# terminal:
+#   enabled: true
+#   shells: ["/bin/zsh", "/bin/bash", "/bin/sh"]
+#   defaultShell: /bin/zsh    # optional; falls back to $SHELL ∩ shells, then shells[0]
+#   maxSessions: 5            # cap concurrent open PTYs per sidecar
+#   cwd: ~/work               # optional; defaults to workingDir above
+
 ---
 # Second doc (commented) with the Codex adapter wiring for reference.
 # id: codex-1

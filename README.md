@@ -35,6 +35,12 @@ box; new ones are ~30 lines + an `init()` register call.
 sidebar without losing history. The data stays in Postgres and can be
 restored with one click; archived agents stay archived even if the
 sidecar restarts.
+- **Interactive terminal per agent (opt-in)**: when a sidecar enables
+`terminal.enabled`, the dashboard's right panel grows a real PTY shell
+on that machine — full ANSI colors, resize, ctrl-C, the works.
+xterm.js on the front, `creack/pty` in the sidecar, multiplexed over
+the same Redis bus. Treat opt-in as remote shell access: only enable
+on hosts where every dashboard user is trusted to that level.
 - **Redis Streams** for the bus: durable, replayable, no extra ops weight on
 top of the Redis you already run.
 
@@ -96,6 +102,27 @@ Set `workingDir:` in `sidecar.yaml` to control the directory the wrapped CLI
 runs in — all of the agent's file reads/edits and shell commands resolve
 relative to it. Supports `~` and `${ENV}` expansion; the path must exist.
 The dashboard shows the active working dir in the Agent context pane.
+
+#### Optional: enable the interactive terminal
+
+Add this stanza to a sidecar's YAML to expose a PTY in the right-side
+panel of the dashboard:
+
+```yaml
+terminal:
+  enabled: true
+  shells: ["/bin/zsh", "/bin/bash", "/bin/sh"]
+  # defaultShell: /bin/zsh   # optional; falls back to $SHELL ∩ shells, then shells[0]
+  # maxSessions: 5           # cap concurrent PTYs per sidecar
+  # cwd: ~/work              # defaults to workingDir
+```
+
+> **Security**: this gives every dashboard user shell-as-sidecar-user on
+> this host. Only enable on machines where that's an acceptable trust
+> model. The sidecar enforces a `shells` allowlist and a session cap;
+> the server scopes terminals to the opening user; every open/close is
+> recorded in the `Terminal` table for audit. Transcripts are **not**
+> persisted by design.
 
 ### 3. Local development without Docker
 

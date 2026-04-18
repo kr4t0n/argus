@@ -6,6 +6,9 @@ import type {
   ResultChunkDTO,
   ServerToClientEvents,
   SessionDTO,
+  TerminalClosedMessage,
+  TerminalDTO,
+  TerminalOutputMessage,
 } from '@argus/shared-types';
 import { WS_NAMESPACE } from '@argus/shared-types';
 import { getToken } from './auth';
@@ -24,6 +27,10 @@ type Handler = {
   onCommandCreated?: (c: CommandDTO) => void;
   onCommandUpdated?: (c: CommandDTO) => void;
   onChunk?: (c: ResultChunkDTO) => void;
+  onTerminalCreated?: (t: TerminalDTO) => void;
+  onTerminalUpdated?: (t: TerminalDTO) => void;
+  onTerminalOutput?: (m: TerminalOutputMessage) => void;
+  onTerminalClosed?: (m: TerminalClosedMessage) => void;
   onConnect?: () => void;
   onDisconnect?: () => void;
 };
@@ -50,6 +57,10 @@ export function ensureSocket(): WSSocket {
   socket.on('command:created', (c) => handlers.forEach((h) => h.onCommandCreated?.(c)));
   socket.on('command:updated', (c) => handlers.forEach((h) => h.onCommandUpdated?.(c)));
   socket.on('chunk', (c) => handlers.forEach((h) => h.onChunk?.(c)));
+  socket.on('terminal:created', (t) => handlers.forEach((h) => h.onTerminalCreated?.(t)));
+  socket.on('terminal:updated', (t) => handlers.forEach((h) => h.onTerminalUpdated?.(t)));
+  socket.on('terminal:output', (m) => handlers.forEach((h) => h.onTerminalOutput?.(m)));
+  socket.on('terminal:closed', (m) => handlers.forEach((h) => h.onTerminalClosed?.(m)));
   return socket;
 }
 
@@ -78,4 +89,19 @@ export function joinSession(sessionId: string) {
 }
 export function leaveSession(sessionId: string) {
   ensureSocket().emit('unsubscribe:session', sessionId);
+}
+export function joinTerminal(terminalId: string) {
+  ensureSocket().emit('subscribe:terminal', terminalId);
+}
+export function leaveTerminal(terminalId: string) {
+  ensureSocket().emit('unsubscribe:terminal', terminalId);
+}
+export function sendTerminalInput(terminalId: string, dataB64: string) {
+  ensureSocket().emit('terminal:input', { terminalId, data: dataB64 });
+}
+export function sendTerminalResize(terminalId: string, cols: number, rows: number) {
+  ensureSocket().emit('terminal:resize', { terminalId, cols, rows });
+}
+export function sendTerminalClose(terminalId: string) {
+  ensureSocket().emit('terminal:close', terminalId);
 }

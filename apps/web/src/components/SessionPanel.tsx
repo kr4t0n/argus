@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { PanelRightClose, PanelRightOpen, Square } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
@@ -9,6 +9,7 @@ import { joinSession, leaveSession } from '../lib/ws';
 import { StatusDot } from './ui/StatusDot';
 import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
 import { Button } from './ui/Button';
+import { ResizeHandle } from './ui/ResizeHandle';
 import { StreamViewer } from './StreamViewer';
 import { Composer } from './Composer';
 import { ContextPane } from './ContextPane';
@@ -27,6 +28,9 @@ export function SessionPanel() {
 
   const contextPaneOpen = useUIStore((s) => s.contextPaneOpen);
   const toggleContextPane = useUIStore((s) => s.toggleContextPane);
+  const contextPaneWidth = useUIStore((s) => s.contextPaneWidth);
+  const setContextPaneWidth = useUIStore((s) => s.setContextPaneWidth);
+  const contextPaneRef = useRef<HTMLDivElement | null>(null);
   const draft = useUIStore((s) =>
     agent ? s.drafts[agent.id] ?? '' : '',
   );
@@ -148,7 +152,16 @@ export function SessionPanel() {
       </div>
 
       {contextPaneOpen && (
-        <div className="w-[280px] shrink-0 hidden md:block">
+        <div
+          ref={contextPaneRef}
+          style={{ width: contextPaneWidth }}
+          className="relative shrink-0 hidden md:block"
+        >
+          <ResizeHandle
+            side="left"
+            targetRef={contextPaneRef}
+            onResize={setContextPaneWidth}
+          />
           <ContextPane
             agent={agent}
             session={entry.session}

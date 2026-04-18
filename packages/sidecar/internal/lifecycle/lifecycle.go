@@ -16,6 +16,7 @@ import (
 	"github.com/kyley/argus/sidecar/internal/bus"
 	"github.com/kyley/argus/sidecar/internal/config"
 	"github.com/kyley/argus/sidecar/internal/protocol"
+	"github.com/kyley/argus/sidecar/internal/terminal"
 )
 
 const (
@@ -78,6 +79,17 @@ func (r *Runner) Run(ctx context.Context) error {
 		defer wg.Done()
 		r.heartbeatLoop(ctx)
 	}()
+
+	if r.cfg.Terminal.Enabled {
+		termRunner := terminal.New(r.cfg, r.bus, r.log)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := termRunner.Run(ctx); err != nil {
+				r.log.Printf("terminal runner error: %v", err)
+			}
+		}()
+	}
 
 	consumer := "c-" + shortID()
 	r.log.Printf("ready id=%s type=%s machine=%s", r.cfg.ID, r.cfg.Type, r.cfg.Machine)

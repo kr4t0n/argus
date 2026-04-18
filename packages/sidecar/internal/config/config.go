@@ -18,13 +18,34 @@ type Config struct {
 	// WorkingDir is the directory the wrapped CLI subprocess runs in.
 	// Supports ~ expansion and ${ENV} substitution. If empty, the CLI
 	// inherits the sidecar's own working directory.
-	WorkingDir   string         `yaml:"workingDir"`
-	Bus          BusConfig      `yaml:"bus"`
-	Adapter      map[string]any `yaml:"adapter"`
+	WorkingDir string         `yaml:"workingDir"`
+	Bus        BusConfig      `yaml:"bus"`
+	Adapter    map[string]any `yaml:"adapter"`
+	Terminal   TerminalConfig `yaml:"terminal"`
 }
 
 type BusConfig struct {
 	URL string `yaml:"url"`
+}
+
+// TerminalConfig opts a sidecar into serving interactive PTY sessions.
+// Defaults: disabled. When enabled the dashboard can open terminals on
+// this machine running as the sidecar's UID — treat as you would SSH
+// access and only enable it on hosts where dashboard users are trusted
+// to that level.
+type TerminalConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Shells is the allowlist of shell binaries the sidecar will spawn.
+	// Empty defaults to ["/bin/zsh", "/bin/bash", "/bin/sh"].
+	Shells []string `yaml:"shells"`
+	// DefaultShell is used when the dashboard doesn't specify one.
+	// Empty falls back to $SHELL, then to the first entry of Shells.
+	DefaultShell string `yaml:"defaultShell"`
+	// MaxSessions caps concurrent open terminals per sidecar (default 5).
+	MaxSessions int `yaml:"maxSessions"`
+	// Cwd overrides the default working dir for new terminals.
+	// Empty inherits Config.WorkingDir, then the sidecar's own cwd.
+	Cwd string `yaml:"cwd"`
 }
 
 func Load(path string) (*Config, error) {
@@ -77,7 +98,47 @@ func Load(path string) (*Config, error) {
 		}
 		cfg.WorkingDir = resolved
 	}
+
+	if cfg.Terminal.Enabled {
+		if len(cfg.Terminal.Shells) == 0 {
+			cfg.Terminal.Shells = []string{"/bin/zsh", "/bin/bash", "/bin/sh"}
+		}
+		if cfg.Terminal.MaxSessions <= 0 {
+			cfg.Terminal.MaxSessions = 5
+		}
+		if cfg.Terminal.DefaultShell == "" {
+			if env := os.Getenv("SHELL"); env != "" && containsString(cfg.Terminal.Shells, env) {
+				cfg.Terminal.DefaultShell = env
+			} else {
+				cfg.Terminal.DefaultShell = cfg.Terminal.Shells[0]
+			}
+		}
+		if !containsString(cfg.Terminal.Shells, cfg.Terminal.DefaultShell) {
+			return nil, fmt.Errorf("terminal.defaultShell %q must appear in terminal.shells", cfg.Terminal.DefaultShell)
+		}
+		if cfg.Terminal.Cwd != "" {
+			resolved, err := expandPath(cfg.Terminal.Cwd)
+			if err != nil {
+				return nil, fmt.Errorf("terminal.cwd: %w", err)
+			}
+			cfg.Terminal.Cwd = resolved
+		}
+		// Advertise capability so the UI can hide the panel when the
+		// sidecar didn't opt in.
+		if !containsString(cfg.Capabilities, "terminal") {
+			cfg.Capabilities = append(cfg.Capabilities, "terminal")
+		}
+	}
 	return &cfg, nil
+}
+
+func containsString(xs []string, target string) bool {
+	for _, x := range xs {
+		if x == target {
+			return true
+		}
+	}
+	return false
 }
 
 // expandPath resolves ~, ${VAR}, and relative paths against the current working dir.

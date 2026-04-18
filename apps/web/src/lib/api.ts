@@ -4,8 +4,10 @@ import type {
   CreateCommandRequest,
   CreateSessionRequest,
   LoginResponse,
+  OpenTerminalRequest,
   ResultChunkDTO,
   SessionDTO,
+  TerminalDTO,
 } from '@argus/shared-types';
 import { getToken } from './auth';
 
@@ -97,4 +99,15 @@ export const api = {
     }),
   cancelCommand: (id: string) =>
     http<CommandDTO>(`/commands/${id}/cancel`, { method: 'POST' }),
+
+  // Terminals
+  openTerminal: (agentId: string, body: OpenTerminalRequest = {}) =>
+    http<TerminalDTO>(`/agents/${agentId}/terminals`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  listTerminals: (agentId: string) =>
+    http<TerminalDTO[]>(`/agents/${agentId}/terminals`),
+  closeTerminal: (id: string) =>
+    http<TerminalDTO>(`/terminals/${id}`, { method: 'DELETE' }),
 };

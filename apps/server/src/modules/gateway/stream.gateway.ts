@@ -15,6 +15,9 @@ import type {
   CommandDTO,
   ResultChunkDTO,
   SessionDTO,
+  TerminalDTO,
+  TerminalOutputMessage,
+  TerminalClosedMessage,
 } from '@argus/shared-types';
 import { WS_NAMESPACE } from '@argus/shared-types';
 
@@ -74,6 +77,16 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
     c.leave(`session:${sessionId}`);
   }
 
+  @SubscribeMessage('subscribe:terminal')
+  subTerminal(@ConnectedSocket() c: Socket, @MessageBody() terminalId: string) {
+    c.join(`terminal:${terminalId}`);
+  }
+
+  @SubscribeMessage('unsubscribe:terminal')
+  unsubTerminal(@ConnectedSocket() c: Socket, @MessageBody() terminalId: string) {
+    c.leave(`terminal:${terminalId}`);
+  }
+
   // ------- Broadcast helpers (called from other services) -------
 
   emitAgentUpsert(agent: AgentDTO) {
@@ -108,5 +121,24 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   emitChunk(chunk: ResultChunkDTO) {
     this.server.to(`session:${chunk.sessionId}`).emit('chunk', chunk);
+  }
+
+  // ------- Terminal events -------
+
+  emitTerminalCreated(terminal: TerminalDTO) {
+    this.server.to(`user:${terminal.userId}`).emit('terminal:created', terminal);
+  }
+
+  emitTerminalUpdated(terminal: TerminalDTO) {
+    this.server.to(`user:${terminal.userId}`).emit('terminal:updated', terminal);
+    this.server.to(`terminal:${terminal.id}`).emit('terminal:updated', terminal);
+  }
+
+  emitTerminalOutput(msg: TerminalOutputMessage) {
+    this.server.to(`terminal:${msg.terminalId}`).emit('terminal:output', msg);
+  }
+
+  emitTerminalClosed(msg: TerminalClosedMessage) {
+    this.server.to(`terminal:${msg.terminalId}`).emit('terminal:closed', msg);
   }
 }

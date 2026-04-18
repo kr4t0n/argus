@@ -1,6 +1,9 @@
+import { useState } from 'react';
 import type { AgentDTO, SessionDTO, CommandDTO } from '@argus/shared-types';
+import { ChevronDown, ChevronRight, Terminal as TerminalIcon } from 'lucide-react';
 import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
 import { StatusDot } from './ui/StatusDot';
+import { TerminalPane } from './TerminalPane';
 import { relativeTime } from '../lib/utils';
 
 type Props = {
@@ -110,6 +113,20 @@ export function ContextPane({ agent, session, recentCommands }: Props) {
           </ul>
         </Section>
       )}
+
+      {/* Terminal sits last because it's the only section users actively
+          interact with; putting it at the bottom keeps the read-only
+          context (agent / session / recent turns) above the fold and
+          prevents an expanded xterm from pushing that info off-screen. */}
+      <CollapsibleSection
+        title="Terminal"
+        icon={<TerminalIcon className="h-3 w-3" />}
+        // Default-collapsed: spinning up xterm + opening a PTY costs CPU
+        // and a network round-trip we shouldn't pay until the user asks.
+        defaultOpen={false}
+      >
+        <TerminalPane key={agent.id} agent={agent} />
+      </CollapsibleSection>
     </aside>
   );
 }
@@ -121,6 +138,37 @@ function Section({ title, children }: { title: string; children: React.ReactNode
         {title}
       </div>
       <div className="space-y-1">{children}</div>
+    </div>
+  );
+}
+
+function CollapsibleSection({
+  title,
+  icon,
+  defaultOpen,
+  children,
+}: {
+  title: string;
+  icon?: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <div className="mb-4">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 text-[10px] uppercase tracking-widest text-neutral-600 hover:text-neutral-400"
+      >
+        {open ? (
+          <ChevronDown className="h-3 w-3" />
+        ) : (
+          <ChevronRight className="h-3 w-3" />
+        )}
+        {icon}
+        <span>{title}</span>
+      </button>
+      {open && <div className="mt-1.5">{children}</div>}
     </div>
   );
 }

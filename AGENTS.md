@@ -15,10 +15,12 @@ Argus has **four** moving parts and one wire format:
 3. **Sidecar (`packages/sidecar`)** — small Go binary that wraps **one** CLI
    agent. Talks to the server *only* through Redis Streams. Each sidecar has a
    stable `id`.
-4. **Bus** — Redis Streams. Three streams matter:
+4. **Bus** — Redis Streams. Five streams matter:
    - `agent:lifecycle`        — sidecars announce themselves and heartbeat.
    - `agent:{id}:cmd`         — server → that sidecar.
    - `agent:{id}:result`      — that sidecar → server (chunks, externalId).
+   - `agent:{id}:term:in`     — server → sidecar (terminal open / input / resize / close).
+   - `agent:{id}:term:out`    — sidecar → server (terminal output / closed).
 
 The wire format lives in `packages/shared-types/src/protocol.ts` and is
 hand-mirrored in `packages/sidecar/internal/protocol/protocol.go`. **If you
@@ -60,10 +62,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   (refreshed every 5s). Persists each chunk and **immediately** forwards to
   WS room `session:{sessionId}` (no batching — the typewriter UX needs it).
   Also flips command/session status on `final`/`error`.
+- `terminal/` — interactive PTY plumbing. Owns the `Terminal` row, exposes
+  REST (`POST/GET /agents/:id/terminals`, `DELETE /terminals/:id`), a WS
+  subgateway for `terminal:input` / `terminal:resize` / `terminal:close`,
+  and a single XREADGROUP consumer (`TerminalOutputConsumer`) across every
+  agent's `term:out` stream. Bytes are base64 over the wire to survive JSON.
 - `gateway/` — Socket.IO namespace `/stream`. Rooms: `user:{id}`,
-  `agent:{id}`, `session:{id}`. Authenticates the handshake using the same
-  JWT used for REST. The gateway is the **only** thing that emits live data
-  to clients.
+  `agent:{id}`, `session:{id}`, `terminal:{id}`. Authenticates the handshake
+  using the same JWT used for REST. The gateway is the **only** thing that
+  emits live data to clients.
 - `infra/redis/` — wrapper that owns *two* connections: one for blocking
   XREADGROUP, one for everything else (ioredis requires this).
 - `infra/prisma/` — Prisma client.
@@ -78,7 +85,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `clistream.Start` helper does the heavy lifting (spawn, line-buffered
   read, SIGTERM-then-SIGKILL cancel, final/error close).
 - `lifecycle/` — registers, heartbeats, drains commands, dispatches each
-  one to the adapter, forwards chunks back, ACKs Redis, deregisters.
+  one to the adapter, forwards chunks back, ACKs Redis, deregisters. Also
+  starts the terminal runner if `terminal.enabled` in YAML.
+- `terminal/` — PTY runner using `github.com/creack/pty`. Subscribes to
+  `agent:{id}:term:in`, multiplexes per-terminal goroutines (read pump +
+  wait-for-exit), batches output (16 KB / 16 ms) onto
+  `agent:{id}:term:out`. Enforces shell allowlist, max-sessions cap, and
+  writes a `TERM=xterm-256color` env into every PTY.
 - `cmd/sidecar/main.go` — flag parsing, signal handling, runner glue.
 
 ### `apps/web/src/`
@@ -94,6 +107,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   cursor while running.
 - `components/Sidebar.tsx` — agent-first tree: each agent is a top-level row
   with its sessions nested underneath and a `+ new session` affordance.
+- `components/TerminalPane.tsx` — xterm.js bound to one agent. Owns the
+  WebSocket plumbing, a debounced ResizeObserver for fit, base64 encoding
+  on input, and a duplicate-seq guard on output. Lives in a collapsible
+  section inside `ContextPane` so we don't pay the xterm cost until the
+  user clicks "open".
 
 ## Conventions
 
@@ -166,6 +184,35 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   re-registers via the lifecycle stream, its `archivedAt` is preserved
   (the upsert clause does not touch it), so the operator's hide decision
   is sticky across restarts.
+- **Terminal == remote shell access**: enabling `terminal.enabled: true` in
+  a sidecar YAML lets *any* dashboard user spawn shells on that host as
+  the sidecar's UID. Treat this as equivalent to handing out SSH; only
+  enable on hosts where every dashboard user is trusted to that level.
+  Hardening hooks: the sidecar enforces a `shells` allowlist and a
+  `maxSessions` cap; the server REST/WS layer requires JWT, scopes
+  terminals to the opening user (`requireOwned`), and the `Terminal`
+  table is an audit trail (open/close timestamps, exit codes).
+- **Terminal latency budget**: terminal traffic flows
+  browser → server-WS → Redis Streams → sidecar → PTY → sidecar →
+  Redis → server → browser-WS. With Upstash (regional) you'll see
+  ~50-150 ms RTT per keystroke echo. That's fine for typing commands;
+  it is noticeably laggy for full-screen TUIs (`vim`, `htop`,
+  `less +F`). If you need that, swap the per-agent `term:out` Redis
+  consumer for a direct sidecar→server WebSocket, keep the PTY runner
+  unchanged, and only the bridge code in `apps/server/src/modules/terminal`
+  has to move. The wire types in `shared-types` already support it.
+- **Terminal transcripts are not persisted**: the `Terminal` row stores
+  metadata only — never the keystroke/output transcript. Adding one
+  would balloon storage fast and risks capturing secrets typed into the
+  shell. If you need replay, add a separate, opt-in `TerminalTranscript`
+  table and gate it behind `terminal.recordTranscript: true` per sidecar.
+- **Terminal output binary safety**: PTYs emit raw bytes (escape
+  sequences, control chars, partial UTF-8 across read boundaries). We
+  base64-encode `data` in both directions so JSON serialization can't
+  corrupt them. The xterm.js side decodes back to bytes via `atob` and
+  hands them to `term.write` — do NOT try to be clever and decode as
+  UTF-8 strings server-side, you'll mangle multibyte chars at chunk
+  boundaries.
 
 ## Tech debt / planned
 

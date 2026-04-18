@@ -72,3 +72,57 @@ export interface CreateCommandRequest {
   prompt: string;
   options?: Record<string, unknown>;
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Terminals (interactive PTY)
+// ─────────────────────────────────────────────────────────────────────
+
+export type TerminalStatus = 'opening' | 'open' | 'closed' | 'error';
+
+export interface TerminalDTO {
+  id: string;
+  agentId: string;
+  userId: string;
+  status: TerminalStatus;
+  shell: string;
+  cwd: string | null;
+  cols: number;
+  rows: number;
+  exitCode: number | null;
+  closeReason: string | null;
+  openedAt: string;
+  closedAt: string | null;
+}
+
+export interface OpenTerminalRequest {
+  shell?: string;
+  cwd?: string;
+  cols?: number;
+  rows?: number;
+}
+
+/** WS event payloads (client ⇄ server) */
+export interface TerminalInputMessage {
+  terminalId: string;
+  /** base64 raw bytes (matches the wire protocol). */
+  data: string;
+}
+
+export interface TerminalResizeMessage {
+  terminalId: string;
+  cols: number;
+  rows: number;
+}
+
+export interface TerminalOutputMessage {
+  terminalId: string;
+  seq: number;
+  /** base64 raw bytes from the PTY. */
+  data: string;
+}
+
+export interface TerminalClosedMessage {
+  terminalId: string;
+  exitCode: number;
+  reason?: string;
+}

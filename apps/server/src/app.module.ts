@@ -8,6 +8,7 @@ import { SessionModule } from './modules/session/session.module';
 import { CommandModule } from './modules/command/command.module';
 import { ResultIngestorModule } from './modules/result-ingestor/result-ingestor.module';
 import { GatewayModule } from './modules/gateway/gateway.module';
+import { TerminalModule } from './modules/terminal/terminal.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { GatewayModule } from './modules/gateway/gateway.module';
     CommandModule,
     ResultIngestorModule,
     GatewayModule,
+    TerminalModule,
   ],
 })
 export class AppModule {}

@@ -4,6 +4,8 @@ import { persist } from 'zustand/middleware';
 interface UIState {
   sidebarWidth: number;
   contextPaneOpen: boolean;
+  /** Persisted width of the right-hand context pane in pixels. */
+  contextPaneWidth: number;
   expanded: Record<string, boolean>;
   /** agentId → whether archived sessions are visible for that agent. */
   showArchived: Record<string, boolean>;
@@ -12,17 +14,22 @@ interface UIState {
   drafts: Record<string, string>;
   setSidebarWidth: (w: number) => void;
   toggleContextPane: () => void;
+  setContextPaneWidth: (w: number) => void;
   toggleAgentExpanded: (id: string, expanded?: boolean) => void;
   toggleShowArchived: (agentId: string) => void;
   toggleShowArchivedAgents: () => void;
   setDraft: (agentId: string, v: string) => void;
 }
 
+export const CONTEXT_PANE_MIN = 240;
+export const CONTEXT_PANE_MAX = 720;
+
 export const useUIStore = create<UIState>()(
   persist(
     (set, get) => ({
       sidebarWidth: 320,
       contextPaneOpen: true,
+      contextPaneWidth: 320,
       expanded: {},
       showArchived: {},
       showArchivedAgents: false,
@@ -32,6 +39,11 @@ export const useUIStore = create<UIState>()(
       },
       toggleContextPane() {
         set({ contextPaneOpen: !get().contextPaneOpen });
+      },
+      setContextPaneWidth(w) {
+        set({
+          contextPaneWidth: Math.max(CONTEXT_PANE_MIN, Math.min(CONTEXT_PANE_MAX, Math.round(w))),
+        });
       },
       toggleAgentExpanded(id, expanded) {
         const current = get().expanded[id] ?? true;

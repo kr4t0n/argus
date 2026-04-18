@@ -110,11 +110,90 @@ export interface SessionExternalIdEvent {
   ts: number;
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Terminal (PTY) protocol
+//
+// Multiplexed over two per-agent streams so we don't explode the number
+// of Redis streams as terminals come and go. Every message carries
+// `terminalId` so the sidecar knows which PTY it targets.
+//
+//   server  → sidecar:  agent:{id}:term:in   (open / input / resize / close)
+//   sidecar → server :  agent:{id}:term:out  (output / close)
+//
+// `data` payloads are base64-encoded raw bytes — terminals carry binary
+// input (escape sequences, SIGINT 0x03, etc.) and Redis stream values
+// must be valid JSON strings.
+// ─────────────────────────────────────────────────────────────────────
+
+export interface TerminalOpen {
+  kind: 'terminal-open';
+  terminalId: string;
+  agentId: string;
+  /** Optional shell path; sidecar enforces an allowlist. Empty → default. */
+  shell?: string;
+  /** Optional cwd; defaults to the sidecar's workingDir. */
+  cwd?: string;
+  cols: number;
+  rows: number;
+  ts: number;
+}
+
+export interface TerminalInput {
+  kind: 'terminal-input';
+  terminalId: string;
+  /** base64-encoded raw bytes from the user's keyboard. */
+  data: string;
+  ts: number;
+}
+
+export interface TerminalResize {
+  kind: 'terminal-resize';
+  terminalId: string;
+  cols: number;
+  rows: number;
+  ts: number;
+}
+
+/** Server → sidecar: explicit close (otherwise PTY dies on shell exit). */
+export interface TerminalCloseRequest {
+  kind: 'terminal-close';
+  terminalId: string;
+  ts: number;
+}
+
+export type TerminalInputEvent =
+  | TerminalOpen
+  | TerminalInput
+  | TerminalResize
+  | TerminalCloseRequest;
+
+export interface TerminalOutput {
+  kind: 'terminal-output';
+  terminalId: string;
+  seq: number;
+  /** base64-encoded raw bytes from the PTY. */
+  data: string;
+  ts: number;
+}
+
+export interface TerminalClosed {
+  kind: 'terminal-closed';
+  terminalId: string;
+  exitCode: number;
+  /** Optional human-readable reason: 'exit', 'killed', 'error: ...' */
+  reason?: string;
+  ts: number;
+}
+
+export type TerminalOutputEvent = TerminalOutput | TerminalClosed;
+
 /** Redis stream key helpers */
 export const streamKeys = {
   lifecycle: 'agent:lifecycle',
   command: (agentId: string) => `agent:${agentId}:cmd`,
   result: (agentId: string) => `agent:${agentId}:result`,
+  terminalIn: (agentId: string) => `agent:${agentId}:term:in`,
+  terminalOut: (agentId: string) => `agent:${agentId}:term:out`,
 };
 
 export const consumerGroups = {
@@ -122,6 +201,10 @@ export const consumerGroups = {
   server: 'server',
   /** server-side consumer group reading lifecycle events */
   lifecycle: 'server-lifecycle',
+  /** server-side consumer group reading terminal output streams */
+  terminalOut: 'server-term',
   /** per-sidecar consumer group on its command stream */
   sidecar: (agentId: string) => `sidecar-${agentId}`,
+  /** per-sidecar consumer group on its terminal input stream */
+  sidecarTerminal: (agentId: string) => `sidecar-term-${agentId}`,
 };

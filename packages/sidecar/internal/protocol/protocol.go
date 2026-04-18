@@ -81,8 +81,74 @@ type SessionExternalIDEvent struct {
 	TS         int64  `json:"ts"`
 }
 
+// ─────────── Terminal protocol ───────────
+//
+// Multiplexed over per-agent in/out streams, keyed by terminalId. Data
+// payloads are base64 strings so binary keystrokes (e.g. 0x03 SIGINT)
+// survive a JSON round-trip.
+
+const (
+	TerminalKindOpen         = "terminal-open"
+	TerminalKindInput        = "terminal-input"
+	TerminalKindResize       = "terminal-resize"
+	TerminalKindCloseRequest = "terminal-close"
+	TerminalKindOutput       = "terminal-output"
+	TerminalKindClosed       = "terminal-closed"
+)
+
+type TerminalOpen struct {
+	Kind       string `json:"kind"`
+	TerminalID string `json:"terminalId"`
+	AgentID    string `json:"agentId"`
+	Shell      string `json:"shell,omitempty"`
+	Cwd        string `json:"cwd,omitempty"`
+	Cols       int    `json:"cols"`
+	Rows       int    `json:"rows"`
+	TS         int64  `json:"ts"`
+}
+
+type TerminalInput struct {
+	Kind       string `json:"kind"`
+	TerminalID string `json:"terminalId"`
+	Data       string `json:"data"` // base64
+	TS         int64  `json:"ts"`
+}
+
+type TerminalResize struct {
+	Kind       string `json:"kind"`
+	TerminalID string `json:"terminalId"`
+	Cols       int    `json:"cols"`
+	Rows       int    `json:"rows"`
+	TS         int64  `json:"ts"`
+}
+
+type TerminalCloseRequest struct {
+	Kind       string `json:"kind"`
+	TerminalID string `json:"terminalId"`
+	TS         int64  `json:"ts"`
+}
+
+type TerminalOutput struct {
+	Kind       string `json:"kind"`
+	TerminalID string `json:"terminalId"`
+	Seq        int    `json:"seq"`
+	Data       string `json:"data"` // base64
+	TS         int64  `json:"ts"`
+}
+
+type TerminalClosed struct {
+	Kind       string `json:"kind"`
+	TerminalID string `json:"terminalId"`
+	ExitCode   int    `json:"exitCode"`
+	Reason     string `json:"reason,omitempty"`
+	TS         int64  `json:"ts"`
+}
+
 // Stream key helpers
-func LifecycleStream() string         { return "agent:lifecycle" }
-func CommandStream(id string) string  { return "agent:" + id + ":cmd" }
-func ResultStream(id string) string   { return "agent:" + id + ":result" }
-func SidecarConsumerGroup(id string) string { return "sidecar-" + id }
+func LifecycleStream() string                     { return "agent:lifecycle" }
+func CommandStream(id string) string              { return "agent:" + id + ":cmd" }
+func ResultStream(id string) string               { return "agent:" + id + ":result" }
+func TerminalInStream(id string) string           { return "agent:" + id + ":term:in" }
+func TerminalOutStream(id string) string          { return "agent:" + id + ":term:out" }
+func SidecarConsumerGroup(id string) string       { return "sidecar-" + id }
+func SidecarTerminalConsumerGroup(id string) string { return "sidecar-term-" + id }
