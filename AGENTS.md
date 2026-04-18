@@ -13,14 +13,17 @@ Argus has **four** moving parts and one wire format:
 2. **Server (`apps/server`)** — NestJS control plane. Owns Postgres, owns the
    WebSocket, brokers between the UI and the message bus.
 3. **Sidecar (`packages/sidecar`)** — small Go binary that wraps **one** CLI
-   agent. Talks to the server *only* through Redis Streams. Each sidecar has a
-   stable `id`.
-4. **Bus** — Redis Streams. Five streams matter:
-   - `agent:lifecycle`        — sidecars announce themselves and heartbeat.
-   - `agent:{id}:cmd`         — server → that sidecar.
-   - `agent:{id}:result`      — that sidecar → server (chunks, externalId).
-   - `agent:{id}:term:in`     — server → sidecar (terminal open / input / resize / close).
-   - `agent:{id}:term:out`    — sidecar → server (terminal output / closed).
+   agent. Each sidecar has a stable `id`.
+4. **Transports** — two independent channels, split by workload:
+   - **Redis Streams** (durable, at-least-once) for control-plane traffic:
+     - `agent:lifecycle`     — sidecars announce themselves and heartbeat.
+     - `agent:{id}:cmd`      — server → that sidecar.
+     - `agent:{id}:result`   — that sidecar → server (chunks, externalId).
+   - **Sidecar link** (direct WebSocket, path `/sidecar-link`) for terminal
+     PTY traffic (open / input / resize / close / output / closed). This
+     bypasses Redis because every keystroke-echo round-trip used to cost
+     50-150 ms on a regional Redis (Upstash) and felt visibly laggy. See
+     "Terminal latency budget" under Gotchas.
 
 The wire format lives in `packages/shared-types/src/protocol.ts` and is
 hand-mirrored in `packages/sidecar/internal/protocol/protocol.go`. **If you
@@ -65,8 +68,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `terminal/` — interactive PTY plumbing. Owns the `Terminal` row, exposes
   REST (`POST/GET /agents/:id/terminals`, `DELETE /terminals/:id`), a WS
   subgateway for `terminal:input` / `terminal:resize` / `terminal:close`,
-  and a single XREADGROUP consumer (`TerminalOutputConsumer`) across every
-  agent's `term:out` stream. Bytes are base64 over the wire to survive JSON.
+  and a `TerminalLinkBridge` that routes inbound `SidecarLinkService`
+  frames (output, closed) back to the browser WS and the DB. When the
+  sidecar link drops, the bridge force-closes all of that sidecar's
+  open terminals so the UI doesn't show zombies. Bytes are base64 over
+  the wire to survive JSON. A small in-memory cache keyed by terminalId
+  short-circuits Postgres ownership checks on every keystroke.
+- `sidecar-link/` — raw WebSocket server on path `/sidecar-link`
+  attached to the same `http.Server` as NestJS (via `HttpAdapterHost`,
+  `noServer` pattern). Owns one connection per sidecar, validates a
+  shared-secret `SIDECAR_LINK_TOKEN`, and exposes `send(sidecarId,
+  frame)` / `onFrame(...)` / `onDisconnect(...)` hooks to the terminal
+  module. Pings every 15 s, idle-timeout after 45 s.
 - `gateway/` — Socket.IO namespace `/stream`. Rooms: `user:{id}`,
   `agent:{id}`, `session:{id}`, `terminal:{id}`. Authenticates the handshake
   using the same JWT used for REST. The gateway is the **only** thing that
@@ -87,10 +100,20 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `lifecycle/` — registers, heartbeats, drains commands, dispatches each
   one to the adapter, forwards chunks back, ACKs Redis, deregisters. Also
   starts the terminal runner if `terminal.enabled` in YAML.
-- `terminal/` — PTY runner using `github.com/creack/pty`. Subscribes to
-  `agent:{id}:term:in`, multiplexes per-terminal goroutines (read pump +
-  wait-for-exit), batches output (16 KB / 16 ms) onto
-  `agent:{id}:term:out`. Enforces shell allowlist, max-sessions cap, and
+- `sidecarlink/` — gorilla/websocket client that dials
+  `ws://{server.url}/sidecar-link`, performs a `hello`/`hello-ack`
+  handshake, and exposes `Publish(frame)` + `Inbound()`. Reconnects
+  with exponential backoff (0.5 s → 30 s cap), pings every 15 s with a
+  40 s pong timeout, serializes writes with a mutex. The inbound
+  channel uses drop-oldest backpressure to keep the read loop from
+  stalling pongs if a downstream consumer is slow.
+- `terminal/` — PTY runner using `github.com/creack/pty`. Consumes
+  control frames from the `Link` (a `sidecarlink.Client`) instead of a
+  Redis stream, multiplexes per-terminal goroutines (read pump +
+  wait-for-exit), and publishes output frames back over the same link
+  with an **adaptive flush**: single keystrokes flush immediately
+  (`idleGap` detection), active bursts get a 4 ms debounce, and 16 KB
+  caps a single frame. Enforces shell allowlist, max-sessions cap, and
   writes a `TERM=xterm-256color` env into every PTY.
 - `cmd/sidecar/main.go` — flag parsing, signal handling, runner glue.
 
@@ -193,14 +216,32 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   terminals to the opening user (`requireOwned`), and the `Terminal`
   table is an audit trail (open/close timestamps, exit codes).
 - **Terminal latency budget**: terminal traffic flows
-  browser → server-WS → Redis Streams → sidecar → PTY → sidecar →
-  Redis → server → browser-WS. With Upstash (regional) you'll see
-  ~50-150 ms RTT per keystroke echo. That's fine for typing commands;
-  it is noticeably laggy for full-screen TUIs (`vim`, `htop`,
-  `less +F`). If you need that, swap the per-agent `term:out` Redis
-  consumer for a direct sidecar→server WebSocket, keep the PTY runner
-  unchanged, and only the bridge code in `apps/server/src/modules/terminal`
-  has to move. The wire types in `shared-types` already support it.
+  browser → server-WS → **sidecar link (WS)** → sidecar → PTY →
+  sidecar → **sidecar link (WS)** → server → browser-WS. Keystroke
+  echo on a local host measures ~2 ms p50, ~6 ms p99 — usable for
+  full-screen TUIs (`vim`, `htop`, `less +F`). The previous
+  Redis-Streams transport measured 50-150 ms p50 on Upstash (regional),
+  which is why the direct link exists. Commands and session results
+  still ride Redis Streams — those don't sit on the hot path and
+  benefit from Streams' durability/replay semantics. If you ever need
+  to re-introduce a Redis fallback for terminals, wire it behind a
+  config flag in `TerminalService.open/input/resize/close` and keep
+  the frame kinds identical.
+- **Sidecar link authentication**: the `/sidecar-link` WS uses a
+  shared-secret token (`SIDECAR_LINK_TOKEN` on the server,
+  `server.token` in sidecar YAML). If the server env var is empty the
+  endpoint accepts any caller — fine for local dev, loudly logged on
+  boot, **do not** ship that way. The token is compared with plain
+  string equality; it only protects against external attackers
+  reaching `/sidecar-link`, not against a compromised sidecar host
+  (which trivially has shell access anyway).
+- **Sidecar link drop semantics**: when a sidecar's WS drops, the
+  server force-closes every `opening|open` terminal for that agent
+  with reason `"link disconnected: ..."`. We do NOT try to resume
+  PTYs across reconnects — the bytes buffered on the sidecar side
+  during the outage would desync from the browser's xterm state and
+  the rehydration logic is not worth the complexity. Users just
+  re-open a terminal when the sidecar comes back.
 - **Terminal transcripts are not persisted**: the `Terminal` row stores
   metadata only — never the keystroke/output transcript. Adding one
   would balloon storage fast and risks capturing secrets typed into the

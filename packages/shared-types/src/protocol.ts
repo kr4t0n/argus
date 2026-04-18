@@ -113,16 +113,13 @@ export interface SessionExternalIdEvent {
 // ─────────────────────────────────────────────────────────────────────
 // Terminal (PTY) protocol
 //
-// Multiplexed over two per-agent streams so we don't explode the number
-// of Redis streams as terminals come and go. Every message carries
-// `terminalId` so the sidecar knows which PTY it targets.
-//
-//   server  → sidecar:  agent:{id}:term:in   (open / input / resize / close)
-//   sidecar → server :  agent:{id}:term:out  (output / close)
+// Every message carries `terminalId` so the sidecar knows which PTY it
+// targets. Kinds are identical on both the direct sidecar↔server link
+// (preferred) and the legacy Redis streams (kept for reference; no
+// longer used for live traffic).
 //
 // `data` payloads are base64-encoded raw bytes — terminals carry binary
-// input (escape sequences, SIGINT 0x03, etc.) and Redis stream values
-// must be valid JSON strings.
+// input (escape sequences, SIGINT 0x03, etc.).
 // ─────────────────────────────────────────────────────────────────────
 
 export interface TerminalOpen {
@@ -187,13 +184,51 @@ export interface TerminalClosed {
 
 export type TerminalOutputEvent = TerminalOutput | TerminalClosed;
 
-/** Redis stream key helpers */
+// ─────────────────────────────────────────────────────────────────────
+// Sidecar ↔ server direct link
+//
+// Low-latency bidirectional WebSocket used for all terminal traffic
+// (PTY input/output/resize/close). Commands, lifecycle and session
+// results continue to flow over Redis Streams — those don't sit on the
+// ~50ms-per-keystroke hot path and benefit from Stream's durability.
+//
+// Handshake: sidecar dials `{SIDECAR_LINK_PATH}?id=<sidecarId>&token=<shared>`,
+// sends `hello`, waits for `hello-ack`. After that the link is a
+// symmetric JSON frame channel using the `TerminalInputEvent` /
+// `TerminalOutputEvent` kinds defined above.
+// ─────────────────────────────────────────────────────────────────────
+
+export const SIDECAR_LINK_PATH = '/sidecar-link';
+
+export interface SidecarHello {
+  kind: 'hello';
+  sidecarId: string;
+  /** Client-side wallclock; server echoes in `hello-ack` so sidecar can
+   *  measure link RTT for diagnostics (not used for correctness). */
+  ts: number;
+}
+
+export interface SidecarHelloAck {
+  kind: 'hello-ack';
+  /** Server wallclock — sidecar logs drift if > ~5s. */
+  ts: number;
+  /** Milliseconds the server will tolerate without a client ping before
+   *  the link is assumed dead and closed. Advisory only. */
+  idleTimeoutMs: number;
+}
+
+export type SidecarLinkFrame =
+  | SidecarHello
+  | SidecarHelloAck
+  | TerminalInputEvent
+  | TerminalOutputEvent;
+
+/** Redis stream key helpers (commands / lifecycle / results only —
+ *  terminal traffic goes over the sidecar link, see SIDECAR_LINK_PATH). */
 export const streamKeys = {
   lifecycle: 'agent:lifecycle',
   command: (agentId: string) => `agent:${agentId}:cmd`,
   result: (agentId: string) => `agent:${agentId}:result`,
-  terminalIn: (agentId: string) => `agent:${agentId}:term:in`,
-  terminalOut: (agentId: string) => `agent:${agentId}:term:out`,
 };
 
 export const consumerGroups = {
@@ -201,10 +236,6 @@ export const consumerGroups = {
   server: 'server',
   /** server-side consumer group reading lifecycle events */
   lifecycle: 'server-lifecycle',
-  /** server-side consumer group reading terminal output streams */
-  terminalOut: 'server-term',
   /** per-sidecar consumer group on its command stream */
   sidecar: (agentId: string) => `sidecar-${agentId}`,
-  /** per-sidecar consumer group on its terminal input stream */
-  sidecarTerminal: (agentId: string) => `sidecar-term-${agentId}`,
 };

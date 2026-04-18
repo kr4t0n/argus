@@ -9,10 +9,17 @@ import { CommandModule } from './modules/command/command.module';
 import { ResultIngestorModule } from './modules/result-ingestor/result-ingestor.module';
 import { GatewayModule } from './modules/gateway/gateway.module';
 import { TerminalModule } from './modules/terminal/terminal.module';
+import { SidecarLinkModule } from './modules/sidecar-link/sidecar-link.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      // Look for .env both in the package (apps/server) and at the repo
+      // root, so `pnpm --filter @argus/server dev` picks up the
+      // monorepo-wide secrets file.
+      envFilePath: ['.env', '../../.env'],
+    }),
     PrismaModule,
     RedisModule,
     AuthModule,
@@ -21,6 +28,7 @@ import { TerminalModule } from './modules/terminal/terminal.module';
     CommandModule,
     ResultIngestorModule,
     GatewayModule,
+    SidecarLinkModule,
     TerminalModule,
   ],
 })

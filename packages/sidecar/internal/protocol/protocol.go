@@ -144,11 +144,32 @@ type TerminalClosed struct {
 	TS         int64  `json:"ts"`
 }
 
-// Stream key helpers
-func LifecycleStream() string                     { return "agent:lifecycle" }
-func CommandStream(id string) string              { return "agent:" + id + ":cmd" }
-func ResultStream(id string) string               { return "agent:" + id + ":result" }
-func TerminalInStream(id string) string           { return "agent:" + id + ":term:in" }
-func TerminalOutStream(id string) string          { return "agent:" + id + ":term:out" }
-func SidecarConsumerGroup(id string) string       { return "sidecar-" + id }
-func SidecarTerminalConsumerGroup(id string) string { return "sidecar-term-" + id }
+// ─────────── Sidecar ↔ server direct link ───────────
+//
+// Terminal traffic rides a direct WebSocket between the sidecar and
+// the server. Commands / lifecycle / results still flow through Redis
+// Streams.
+
+const (
+	SidecarLinkPath   = "/sidecar-link"
+	LinkKindHello     = "hello"
+	LinkKindHelloAck  = "hello-ack"
+)
+
+type SidecarHello struct {
+	Kind      string `json:"kind"` // "hello"
+	SidecarID string `json:"sidecarId"`
+	TS        int64  `json:"ts"`
+}
+
+type SidecarHelloAck struct {
+	Kind          string `json:"kind"` // "hello-ack"
+	TS            int64  `json:"ts"`
+	IdleTimeoutMS int64  `json:"idleTimeoutMs"`
+}
+
+// Stream key helpers (Redis Streams — commands/lifecycle/results only).
+func LifecycleStream() string                      { return "agent:lifecycle" }
+func CommandStream(id string) string               { return "agent:" + id + ":cmd" }
+func ResultStream(id string) string                { return "agent:" + id + ":result" }
+func SidecarConsumerGroup(id string) string        { return "sidecar-" + id }

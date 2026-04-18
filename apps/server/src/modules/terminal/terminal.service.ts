@@ -4,10 +4,10 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import type { Terminal as PTerminal } from '@prisma/client';
 import {
-  streamKeys,
   type OpenTerminalRequest,
   type TerminalDTO,
   type TerminalInputMessage,
@@ -15,24 +15,22 @@ import {
 } from '@argus/shared-types';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../infra/prisma/prisma.service';
-import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
+import { SidecarLinkService } from '../sidecar-link/sidecar-link.service';
 
 /**
  * In-memory view of the subset of terminal state needed on the hot path.
- * Input/resize events arrive once per keystroke/pointer move; hitting
- * Postgres for each one added 5-25 ms of latency to terminal echo.
  *
- * Cache invariants:
- *   - Populated on `open()` and `get()`.
- *   - `status` flipped to terminal ('closed'/'error') on `markClosed()`.
- *   - Dropped on `markClosed()` after the emit completes so a future
- *     lookup forces a fresh DB read (defensive: cache only lives while
- *     a pty is plausibly alive).
- * We deliberately do NOT cache anything that mutates outside this
- * service (cols/rows are updated elsewhere by `resize()` itself, so the
- * cached copy would stale — we read them from DB only when we need to
- * actually persist; the hot path doesn't care).
+ * Hot-path writes (input/resize) arrive once per keystroke; we don't
+ * want a Postgres round-trip on each one — that's the whole reason
+ * Tier-1 exists. Cache invariants:
+ *
+ *   - Populated on `open()` and on any cache-missing ownership check.
+ *   - `status` is flipped to a terminal state ('closed'/'error') by
+ *     `markClosed()` and then the entry is dropped so subsequent use
+ *     forces a fresh DB read (defensive).
+ *   - `cols`/`rows` intentionally NOT cached; they change via resize()
+ *     which can tolerate an eventually-consistent DB write.
  */
 interface HotMeta {
   agentId: string;
@@ -47,14 +45,14 @@ export class TerminalService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly redis: RedisService,
     private readonly gateway: StreamGateway,
+    private readonly link: SidecarLinkService,
   ) {}
 
   /**
    * Ownership check that prefers the in-memory cache so we don't round
-   * trip to Postgres on every keystroke. DB is consulted on cache miss
-   * (first use after boot, or after a long-idle terminal was evicted).
+   * trip to Postgres on every keystroke. DB is consulted only on cache
+   * miss (first use after boot, or after a terminal was evicted).
    */
   private async checkOwnedFast(
     userId: string,
@@ -105,6 +103,11 @@ export class TerminalService {
         'agent has no terminal capability (sidecar must enable terminal in YAML)',
       );
     }
+    if (!this.link.isConnected(agentId)) {
+      throw new ServiceUnavailableException(
+        'sidecar link not connected (check sidecar logs and server.url in its YAML)',
+      );
+    }
 
     const cols = clampDimension(req.cols ?? 120, 20, 400);
     const rows = clampDimension(req.rows ?? 32, 5, 200);
@@ -123,7 +126,7 @@ export class TerminalService {
       },
     });
 
-    await this.redis.publish(streamKeys.terminalIn(agentId), {
+    const sent = this.link.send(agentId, {
       kind: 'terminal-open',
       terminalId: id,
       agentId,
@@ -133,6 +136,15 @@ export class TerminalService {
       rows,
       ts: Date.now(),
     });
+    if (!sent) {
+      // Race: link dropped between the isConnected check and the send.
+      // Roll back the row so the client gets a clean error and no
+      // orphaned "opening" terminal lingers in the DB.
+      await this.prisma.terminal
+        .delete({ where: { id } })
+        .catch(() => undefined);
+      throw new ServiceUnavailableException('sidecar link dropped during open');
+    }
 
     this.hotCache.set(id, { agentId, userId, status: 'opening' });
     const dto = TerminalService.toDto(row);
@@ -145,25 +157,34 @@ export class TerminalService {
     if (t.status === 'closed' || t.status === 'error') {
       return TerminalService.toDto(t);
     }
-    await this.redis.publish(streamKeys.terminalIn(t.agentId), {
+    // Fire-and-forget: even if the link is down we still want to mark
+    // the row closed so the UI stops showing a zombie terminal.
+    const sent = this.link.send(t.agentId, {
       kind: 'terminal-close',
       terminalId: t.id,
       ts: Date.now(),
     });
-    // Don't mark closed yet — wait for the sidecar's terminal-closed
-    // event so the row reflects the real exit code.
+    if (!sent) {
+      await this.markClosed(terminalId, -1, 'sidecar link not connected');
+    }
     return TerminalService.toDto(t);
   }
 
   async input(userId: string, msg: TerminalInputMessage): Promise<void> {
     const meta = await this.checkOwnedFast(userId, msg.terminalId);
     if (!meta) return;
-    await this.redis.publish(streamKeys.terminalIn(meta.agentId), {
+    const ok = this.link.send(meta.agentId, {
       kind: 'terminal-input',
       terminalId: msg.terminalId,
       data: msg.data,
       ts: Date.now(),
     });
+    if (!ok) {
+      // Don't throw — input messages are best-effort and the UI will
+      // see the terminal flip to closed once our disconnect handler
+      // (TerminalLinkBridge) marks it.
+      this.logger.debug(`drop input for ${msg.terminalId}: link not connected`);
+    }
   }
 
   async resize(userId: string, msg: TerminalResizeMessage): Promise<void> {
@@ -172,9 +193,9 @@ export class TerminalService {
     const cols = clampDimension(msg.cols, 20, 400);
     const rows = clampDimension(msg.rows, 5, 200);
     // Publish first so the pty resizes as soon as possible; persist the
-    // dimensions for resume/replay in the background — a dropped write
-    // here is cosmetic, not a correctness issue.
-    await this.redis.publish(streamKeys.terminalIn(meta.agentId), {
+    // dimensions for replay in the background — a dropped write here
+    // is cosmetic, not a correctness issue.
+    this.link.send(meta.agentId, {
       kind: 'terminal-resize',
       terminalId: msg.terminalId,
       cols,
@@ -187,9 +208,9 @@ export class TerminalService {
   }
 
   /**
-   * Called by the result-ingestor side when the sidecar reports a
-   * terminal as closed. Idempotent so we can safely receive it twice
-   * (at-least-once delivery via streams).
+   * Called by `TerminalLinkBridge` when the sidecar reports a terminal
+   * as closed, OR when the link drops and we need to force-close all
+   * of that sidecar's open terminals. Idempotent.
    */
   async markClosed(
     terminalId: string,
@@ -201,7 +222,7 @@ export class TerminalService {
     if (existing.status === 'closed' || existing.status === 'error') {
       return TerminalService.toDto(existing);
     }
-    const status = exitCode === 0 ? 'closed' : exitCode > 0 ? 'closed' : 'error';
+    const status = exitCode < 0 ? 'error' : 'closed';
     const updated = await this.prisma.terminal.update({
       where: { id: terminalId },
       data: {
@@ -230,6 +251,18 @@ export class TerminalService {
     });
     if (cached) cached.status = 'open';
     this.gateway.emitTerminalUpdated(TerminalService.toDto(updated));
+  }
+
+  /** Mark all of a sidecar's not-yet-closed terminals as closed with
+   *  the given reason. Used by TerminalLinkBridge on disconnect. */
+  async markAllForAgentClosed(agentId: string, reason: string): Promise<void> {
+    const rows = await this.prisma.terminal.findMany({
+      where: { agentId, status: { in: ['opening', 'open'] } },
+      select: { id: true },
+    });
+    await Promise.all(
+      rows.map((r) => this.markClosed(r.id, -1, reason).catch(() => undefined)),
+    );
   }
 
   listForAgent(userId: string, agentId: string): Promise<PTerminal[]> {

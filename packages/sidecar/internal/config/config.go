@@ -20,12 +20,26 @@ type Config struct {
 	// inherits the sidecar's own working directory.
 	WorkingDir string         `yaml:"workingDir"`
 	Bus        BusConfig      `yaml:"bus"`
+	Server     ServerConfig   `yaml:"server"`
 	Adapter    map[string]any `yaml:"adapter"`
 	Terminal   TerminalConfig `yaml:"terminal"`
 }
 
 type BusConfig struct {
 	URL string `yaml:"url"`
+}
+
+// ServerConfig configures the direct sidecar↔server WebSocket link.
+// Required when terminal.enabled is true (terminal traffic does not
+// flow over Redis — see packages/shared-types/src/protocol.ts).
+type ServerConfig struct {
+	// URL is the server base, e.g. "http://localhost:4000". The
+	// sidecar appends /sidecar-link and upgrades to ws.
+	URL string `yaml:"url"`
+	// Token is matched against the server's SIDECAR_LINK_TOKEN env
+	// var. If the server has no token set, any value (or empty) is
+	// accepted — useful for local dev.
+	Token string `yaml:"token"`
 }
 
 // TerminalConfig opts a sidecar into serving interactive PTY sessions.
@@ -97,6 +111,10 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("workingDir %q is not a directory", resolved)
 		}
 		cfg.WorkingDir = resolved
+	}
+
+	if cfg.Terminal.Enabled && cfg.Server.URL == "" {
+		return nil, fmt.Errorf("terminal.enabled requires server.url (terminal traffic uses the direct sidecar link, not Redis)")
 	}
 
 	if cfg.Terminal.Enabled {

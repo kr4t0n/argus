@@ -6,20 +6,23 @@ number of machines, and watch their answers stream back into a single
 dashboard in real time.
 
 ```
-┌────────┐  HTTPS+WS   ┌─────────────┐  Redis Streams  ┌──────────────┐  exec  ┌────────────┐
-│  Web   │ ─────────▶ │   Server    │ ─────────────▶  │   Sidecar    │ ─────▶ │  CLI agent │
-│ (React)│ ◀───────── │ (NestJS)    │ ◀─────────────  │   (Go)       │ ◀───── │            │
-└────────┘            └─────────────┘                  └──────────────┘        └────────────┘
-                            │
-                            ▼
+┌────────┐  HTTPS+WS   ┌─────────────┐  Redis Streams (commands/results)  ┌──────────────┐  exec  ┌────────────┐
+│  Web   │ ─────────▶ │   Server    │ ─────────────────────────────────▶ │   Sidecar    │ ─────▶ │  CLI agent │
+│ (React)│ ◀───────── │ (NestJS)    │ ◀───────────────────────────────── │   (Go)       │ ◀───── │            │
+└────────┘            └─────────────┘   Direct WS (PTY: /sidecar-link)    └──────────────┘        └────────────┘
+                            │           ═══════════════════════════════▶
+                            ▼           ◀═══════════════════════════════
                        Postgres
 ```
 
 The control plane never speaks to a CLI directly: every CLI is wrapped by a
 small Go *sidecar* that translates the CLI's native streaming output into a
-common `ResultChunk` format and pushes it onto Redis Streams. The server
-relays chunks to the browser over Socket.IO so you get true token-level
-streaming with reconnect-safe replay.
+common `ResultChunk` format. Control-plane traffic (commands, lifecycle,
+streamed results) flows over **Redis Streams** for durability and replay;
+interactive **terminal (PTY) traffic** flows over a **direct sidecar↔server
+WebSocket** so keystroke echo stays sub-10 ms even on regional Redis. The
+server relays everything to the browser over Socket.IO so you get true
+token-level streaming with reconnect-safe replay.
 
 ## Features
 
@@ -38,9 +41,11 @@ sidecar restarts.
 - **Interactive terminal per agent (opt-in)**: when a sidecar enables
 `terminal.enabled`, the dashboard's right panel grows a real PTY shell
 on that machine — full ANSI colors, resize, ctrl-C, the works.
-xterm.js on the front, `creack/pty` in the sidecar, multiplexed over
-the same Redis bus. Treat opt-in as remote shell access: only enable
-on hosts where every dashboard user is trusted to that level.
+xterm.js on the front, `creack/pty` in the sidecar. Traffic rides a
+direct sidecar↔server WebSocket (not Redis) for sub-10 ms keystroke
+echo, usable for full-screen TUIs like `vim` and `htop`. Treat opt-in
+as remote shell access: only enable on hosts where every dashboard
+user is trusted to that level.
 - **Redis Streams** for the bus: durable, replayable, no extra ops weight on
 top of the Redis you already run.
 
@@ -105,10 +110,16 @@ The dashboard shows the active working dir in the Agent context pane.
 
 #### Optional: enable the interactive terminal
 
-Add this stanza to a sidecar's YAML to expose a PTY in the right-side
-panel of the dashboard:
+Add these stanzas to a sidecar's YAML to expose a PTY in the right-side
+panel of the dashboard. The `server` block is **required** when
+terminals are enabled — PTY traffic flows over a direct WebSocket, not
+Redis, so the sidecar needs to know where to dial.
 
 ```yaml
+server:
+  url: http://localhost:4000       # the Argus server
+  # token: ${SIDECAR_LINK_TOKEN}   # must match the server's env var if set
+
 terminal:
   enabled: true
   shells: ["/bin/zsh", "/bin/bash", "/bin/sh"]
@@ -116,6 +127,11 @@ terminal:
   # maxSessions: 5           # cap concurrent PTYs per sidecar
   # cwd: ~/work              # defaults to workingDir
 ```
+
+On the server side, set `SIDECAR_LINK_TOKEN` in `.env` to a long random
+string in production; sidecars must send the same value in
+`server.token`. An empty server-side token is accepted for local dev
+(the server logs a loud warning on boot).
 
 > **Security**: this gives every dashboard user shell-as-sidecar-user on
 > this host. Only enable on machines where that's an acceptable trust

@@ -1,7 +1,7 @@
 // Package terminal serves interactive PTY sessions on the agent's host
-// machine. It mirrors the lifecycle/command pattern: subscribe to a
-// per-agent input stream, fan-out per-terminal goroutines that own a
-// PTY each, and publish output to a per-agent output stream.
+// machine. It consumes terminal control frames from the sidecar↔server
+// WebSocket link, owns a PTY per session, and ships output back over
+// the same link.
 //
 // Security model: a sidecar only runs this if `terminal.enabled: true`
 // in its YAML. The PTY inherits the sidecar's UID, so anyone with
@@ -24,129 +24,129 @@ import (
 
 	"github.com/creack/pty"
 
-	"github.com/kyley/argus/sidecar/internal/bus"
 	"github.com/kyley/argus/sidecar/internal/config"
 	"github.com/kyley/argus/sidecar/internal/protocol"
+	"github.com/kyley/argus/sidecar/internal/sidecarlink"
 )
 
 const (
 	// activeBurstInterval is how long we wait for more bytes once we're
-	// already inside a burst. Keep it tight: local echo of a single
+	// already inside a burst. Tight value: local echo of a single
 	// keystroke should still feel snappy even when adjacent bytes come
-	// in back-to-back (e.g. shell redraws).
+	// in back-to-back (shell redraws).
 	activeBurstInterval = 4 * time.Millisecond
-	// idleGap is the window we use to detect "first byte after quiet".
-	// If we've published nothing for longer than this, the next arrival
-	// is almost certainly a user keystroke and we flush it immediately
-	// (no batching) to minimize echo latency. Bytes arriving faster
-	// than this are treated as part of an ongoing burst and get the
-	// (much cheaper) active-burst debounce.
+	// idleGap detects "first byte after quiet". If we've published
+	// nothing for longer than this, the next arrival is almost
+	// certainly a user keystroke; flush it immediately (no batching)
+	// for minimum echo latency. Bytes arriving faster get the much
+	// cheaper active-burst debounce.
 	idleGap = 8 * time.Millisecond
-	// outputBatchMax bounds the size of a single output message. Larger
-	// payloads risk Redis stream entry limits and waste UI render time.
+	// outputBatchMax bounds a single output message. We cap well below
+	// the server's frame limit (see MAX_FRAME_BYTES on the server) to
+	// leave slack for JSON encoding overhead.
 	outputBatchMax = 16 * 1024
-	// readBlock is the XREADGROUP block timeout for the input stream.
-	readBlock = 2 * time.Second
 )
 
+// Link is the minimal surface of sidecarlink.Client that the runner
+// needs. Kept as an interface to make testing painless.
+type Link interface {
+	Publish(frame any) bool
+	Inbound() <-chan json.RawMessage
+	IsConnected() bool
+}
+
 type Runner struct {
-	cfg *config.Config
-	bus *bus.Bus
-	log *log.Logger
+	cfg  *config.Config
+	link Link
+	log  *log.Logger
 
 	mu       sync.Mutex
 	sessions map[string]*ptySession
 }
 
 type ptySession struct {
-	id     string
-	cmd    *exec.Cmd
-	pty    *os.File
-	cancel context.CancelFunc
-	// outSeq is monotonically incremented per output message published.
-	outSeq int
-	// writeMu guards writes to the PTY (input arrives on a single
-	// goroutine today, but cheap to be defensive).
+	id      string
+	cmd     *exec.Cmd
+	pty     *os.File
+	cancel  context.CancelFunc
+	outSeq  int
 	writeMu sync.Mutex
 }
 
-func New(cfg *config.Config, b *bus.Bus, logger *log.Logger) *Runner {
+// New constructs a Runner. `link` is typically a *sidecarlink.Client
+// but any Link implementation works.
+func New(cfg *config.Config, link Link, logger *log.Logger) *Runner {
 	return &Runner{
 		cfg:      cfg,
-		bus:      b,
+		link:     link,
 		log:      logger,
 		sessions: make(map[string]*ptySession),
 	}
 }
 
-// Run blocks until ctx is cancelled. Spawn it in its own goroutine; on
-// ctx.Done() it kills every active PTY and returns.
+// Run blocks until ctx is cancelled, dispatching inbound frames from
+// the link to per-session handlers. If the link drops we don't do
+// anything special from here — the server will have force-closed all
+// of this sidecar's terminals on disconnect, and our pump/wait
+// goroutines will observe their publishes returning false and exit.
 func (r *Runner) Run(ctx context.Context) error {
-	stream := protocol.TerminalInStream(r.cfg.ID)
-	group := protocol.SidecarTerminalConsumerGroup(r.cfg.ID)
-	if err := r.bus.EnsureGroup(ctx, stream, group); err != nil {
-		return fmt.Errorf("ensure terminal group: %w", err)
-	}
-	consumer := "term-c-" + r.cfg.ID
 	r.log.Printf("terminal: ready (max=%d shells=%v)", r.cfg.Terminal.MaxSessions, r.cfg.Terminal.Shells)
-
 	for {
-		if ctx.Err() != nil {
-			break
+		select {
+		case <-ctx.Done():
+			r.killAll("sidecar shutdown")
+			return nil
+		case raw, ok := <-r.link.Inbound():
+			if !ok {
+				return nil
+			}
+			r.dispatch(ctx, raw)
 		}
-		msgID, payload, err := r.bus.ReadMessage(ctx, stream, group, consumer, readBlock)
-		if errors.Is(err, context.Canceled) {
-			break
-		}
-		if err != nil {
-			r.log.Printf("terminal read error: %v", err)
-			time.Sleep(time.Second)
-			continue
-		}
-		if msgID == "" {
-			continue
-		}
-		r.dispatch(ctx, payload)
-		_ = r.bus.Ack(ctx, stream, group, msgID)
 	}
-
-	r.killAll("sidecar shutdown")
-	return nil
 }
 
-func (r *Runner) dispatch(ctx context.Context, payload map[string]any) {
-	kind, _ := payload["kind"].(string)
-	switch kind {
+func (r *Runner) dispatch(ctx context.Context, raw json.RawMessage) {
+	var head struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal(raw, &head); err != nil {
+		r.log.Printf("terminal: bad frame: %v", err)
+		return
+	}
+	switch head.Kind {
 	case protocol.TerminalKindOpen:
 		var ev protocol.TerminalOpen
-		if err := remap(payload, &ev); err != nil {
+		if err := json.Unmarshal(raw, &ev); err != nil {
 			r.log.Printf("terminal: bad open: %v", err)
 			return
 		}
 		r.handleOpen(ctx, ev)
 	case protocol.TerminalKindInput:
 		var ev protocol.TerminalInput
-		if err := remap(payload, &ev); err != nil {
+		if err := json.Unmarshal(raw, &ev); err != nil {
 			r.log.Printf("terminal: bad input: %v", err)
 			return
 		}
 		r.handleInput(ev)
 	case protocol.TerminalKindResize:
 		var ev protocol.TerminalResize
-		if err := remap(payload, &ev); err != nil {
+		if err := json.Unmarshal(raw, &ev); err != nil {
 			r.log.Printf("terminal: bad resize: %v", err)
 			return
 		}
 		r.handleResize(ev)
 	case protocol.TerminalKindCloseRequest:
 		var ev protocol.TerminalCloseRequest
-		if err := remap(payload, &ev); err != nil {
+		if err := json.Unmarshal(raw, &ev); err != nil {
 			r.log.Printf("terminal: bad close: %v", err)
 			return
 		}
 		r.handleClose(ev.TerminalID, "closed by client")
+	case protocol.LinkKindHello, protocol.LinkKindHelloAck:
+		// Handshake frames are swallowed by the link client itself;
+		// getting one here means someone rewired things. Ignore.
 	default:
-		r.log.Printf("terminal: unknown kind %q", kind)
+		r.log.Printf("terminal: unknown kind %q", head.Kind)
 	}
 }
 
@@ -221,18 +221,16 @@ func (r *Runner) handleOpen(parent context.Context, ev protocol.TerminalOpen) {
 	r.mu.Unlock()
 	r.log.Printf("terminal: opened %s shell=%s cwd=%s size=%dx%d", ev.TerminalID, shell, cwd, cols, rows)
 
-	// Output pump.
 	go r.pumpOutput(ctx, sess)
-	// Wait-and-cleanup.
 	go r.waitForExit(sess)
 }
 
-// pumpOutput reads PTY bytes and publishes output messages with an
+// pumpOutput reads PTY bytes and publishes output frames with an
 // adaptive flush policy:
 //   - idle → flush immediately (single keystroke echo hits the wire
 //     with zero batching delay).
 //   - in an active burst (another byte arrived within idleGap of the
-//     last flush) → debounce by activeBurstInterval to amortize Redis
+//     last flush) → debounce by activeBurstInterval to amortize link
 //     publishes across chatty output (shell redraws, `ls`, etc).
 //
 // Size cap (outputBatchMax) always wins: if a burst fills the buffer
@@ -252,7 +250,7 @@ func (r *Runner) pumpOutput(ctx context.Context, s *ptySession) {
 			return
 		}
 		s.outSeq++
-		_ = r.bus.Publish(context.Background(), protocol.TerminalOutStream(r.cfg.ID), protocol.TerminalOutput{
+		r.link.Publish(protocol.TerminalOutput{
 			Kind:       protocol.TerminalKindOutput,
 			TerminalID: s.id,
 			Seq:        s.outSeq,
@@ -261,7 +259,6 @@ func (r *Runner) pumpOutput(ctx context.Context, s *ptySession) {
 		})
 		pending = pending[:0]
 		if timerArmed {
-			// Drain a pending tick so the next Reset starts clean.
 			if !timer.Stop() {
 				select {
 				case <-timer.C:
@@ -306,7 +303,7 @@ func (r *Runner) pumpOutput(ctx context.Context, s *ptySession) {
 			for len(pending) >= outputBatchMax {
 				chunk := pending[:outputBatchMax]
 				s.outSeq++
-				_ = r.bus.Publish(context.Background(), protocol.TerminalOutStream(r.cfg.ID), protocol.TerminalOutput{
+				r.link.Publish(protocol.TerminalOutput{
 					Kind:       protocol.TerminalKindOutput,
 					TerminalID: s.id,
 					Seq:        s.outSeq,
@@ -320,9 +317,10 @@ func (r *Runner) pumpOutput(ctx context.Context, s *ptySession) {
 				continue
 			}
 			if time.Since(lastFlush) > idleGap {
-				// Quiet period just ended — almost certainly a user-
-				// visible event (keystroke echo or prompt refresh).
-				// Publish without batching for minimum echo latency.
+				// Quiet period just ended — almost certainly a
+				// user-visible event (keystroke echo or prompt
+				// refresh). Publish without batching for minimum
+				// echo latency.
 				flush()
 			} else if !timerArmed {
 				timer.Reset(activeBurstInterval)
@@ -409,8 +407,7 @@ func (r *Runner) handleClose(id, reason string) {
 		return
 	}
 	r.log.Printf("terminal: %s closing (%s)", id, reason)
-	// Send SIGHUP-equivalent by killing the process; waitForExit will
-	// publish the terminal-closed event when cmd.Wait returns.
+	// Kill the process; waitForExit will publish terminal-closed.
 	if s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 	}
@@ -430,7 +427,7 @@ func (r *Runner) killAll(reason string) {
 }
 
 func (r *Runner) publishClosed(terminalID string, exit int, reason string) {
-	_ = r.bus.Publish(context.Background(), protocol.TerminalOutStream(r.cfg.ID), protocol.TerminalClosed{
+	r.link.Publish(protocol.TerminalClosed{
 		Kind:       protocol.TerminalKindClosed,
 		TerminalID: terminalID,
 		ExitCode:   exit,
@@ -448,13 +445,6 @@ func containsString(xs []string, target string) bool {
 	return false
 }
 
-// remap converts an arbitrary JSON-decoded map back into a typed struct
-// via JSON. We accept the round-trip cost (sidecar message rates are
-// tiny) for the simplicity of not maintaining bespoke decoders per kind.
-func remap(in map[string]any, out any) error {
-	b, err := json.Marshal(in)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(b, out)
-}
+// Ensure Link (and thus *sidecarlink.Client) is importable for
+// downstream callers that still reference the concrete type.
+var _ Link = (*sidecarlink.Client)(nil)

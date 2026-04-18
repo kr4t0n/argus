@@ -16,6 +16,7 @@ import (
 	"github.com/kyley/argus/sidecar/internal/bus"
 	"github.com/kyley/argus/sidecar/internal/config"
 	"github.com/kyley/argus/sidecar/internal/protocol"
+	"github.com/kyley/argus/sidecar/internal/sidecarlink"
 	"github.com/kyley/argus/sidecar/internal/terminal"
 )
 
@@ -81,7 +82,18 @@ func (r *Runner) Run(ctx context.Context) error {
 	}()
 
 	if r.cfg.Terminal.Enabled {
-		termRunner := terminal.New(r.cfg, r.bus, r.log)
+		// Terminal traffic rides the direct sidecar↔server link, not
+		// Redis. Spin up the link first so the runner has a channel
+		// to consume from immediately; it can tolerate the link
+		// being disconnected (control frames just queue on the
+		// server side until a sidecar reconnects and re-opens).
+		link := sidecarlink.New(r.cfg.Server.URL, r.cfg.Server.Token, r.cfg.ID, r.log)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			link.Run(ctx)
+		}()
+		termRunner := terminal.New(r.cfg, link, r.log)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

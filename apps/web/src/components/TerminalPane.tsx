@@ -40,6 +40,38 @@ type Status =
 
 const ENABLED_CAP = 'terminal';
 
+// Shared UTF-8 codec instances — cheap to construct but no reason to
+// rebuild them per keystroke / per output frame.
+const utf8Encoder = new TextEncoder();
+
+/**
+ * Decode base64 → Uint8Array of raw bytes. We route bytes (not strings)
+ * into xterm so its UTF-8 decoder can stitch multi-byte glyphs correctly,
+ * even across frame boundaries.
+ */
+function decodeBase64Bytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/**
+ * Encode a JS string as UTF-8 then base64. Using `btoa(str)` directly
+ * throws on any codepoint > 0xFF, which would drop pasted emoji/CJK.
+ */
+function encodeUtf8Base64(s: string): string {
+  const bytes = utf8Encoder.encode(s);
+  let bin = '';
+  // String.fromCharCode spread works but blows the stack for huge pastes;
+  // chunk to stay safe without sacrificing throughput for normal typing.
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
 /**
  * Interactive PTY pane bound to a single agent. Owns one xterm instance
  * for the lifetime of an open terminal; if the user closes & reopens we
@@ -164,13 +196,14 @@ export function TerminalPane({ agent }: Props) {
     termRef.current = term;
     fitRef.current = fit;
 
-    // Forward keystrokes (xterm hands us the *string* the OS would send;
-    // we transmit raw bytes base64-encoded so binary control sequences
-    // round-trip cleanly).
+    // Forward keystrokes. xterm hands us the *string* the OS would send; we
+    // encode it as UTF-8 bytes and base64 that, so multi-byte characters
+    // (emoji, CJK, prompt glyphs pasted in) round-trip as raw bytes to the
+    // PTY instead of being mangled by btoa's latin-1 assumption.
     const dataDisp = term.onData((data) => {
       const id = terminalIdRef.current;
       if (!id) return;
-      sendTerminalInput(id, btoa(data));
+      sendTerminalInput(id, encodeUtf8Base64(data));
     });
     dataDisposeRef.current = () => dataDisp.dispose();
 
@@ -211,8 +244,11 @@ export function TerminalPane({ agent }: Props) {
         if (m.seq <= lastSeqRef.current) return; // duplicate after reconnect
         lastSeqRef.current = m.seq;
         try {
-          const bytes = atob(m.data);
-          termRef.current?.write(bytes);
+          // Decode base64 → raw byte array and hand the Uint8Array straight
+          // to xterm. xterm's write(Uint8Array) runs its own UTF-8 decoder;
+          // write(string) would treat each byte as a UTF-16 codepoint and
+          // split multi-byte glyphs (e.g. "➜" → "â\x9e\x9c").
+          termRef.current?.write(decodeBase64Bytes(m.data));
         } catch {
           /* ignore decode errors */
         }
