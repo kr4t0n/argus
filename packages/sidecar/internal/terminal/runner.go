@@ -30,9 +30,18 @@ import (
 )
 
 const (
-	// outputBatchInterval bounds how often we flush PTY output. Humans
-	// can't see >60Hz; coarser flushes amortize Redis publish overhead.
-	outputBatchInterval = 16 * time.Millisecond
+	// activeBurstInterval is how long we wait for more bytes once we're
+	// already inside a burst. Keep it tight: local echo of a single
+	// keystroke should still feel snappy even when adjacent bytes come
+	// in back-to-back (e.g. shell redraws).
+	activeBurstInterval = 4 * time.Millisecond
+	// idleGap is the window we use to detect "first byte after quiet".
+	// If we've published nothing for longer than this, the next arrival
+	// is almost certainly a user keystroke and we flush it immediately
+	// (no batching) to minimize echo latency. Bytes arriving faster
+	// than this are treated as part of an ongoing burst and get the
+	// (much cheaper) active-burst debounce.
+	idleGap = 8 * time.Millisecond
 	// outputBatchMax bounds the size of a single output message. Larger
 	// payloads risk Redis stream entry limits and waste UI render time.
 	outputBatchMax = 16 * 1024
@@ -218,15 +227,25 @@ func (r *Runner) handleOpen(parent context.Context, ev protocol.TerminalOpen) {
 	go r.waitForExit(sess)
 }
 
-// pumpOutput reads PTY bytes and publishes batched output messages.
-// Batches by both size (16 KB) and time (16 ms) so we get smooth
-// streaming for chatty processes without flooding the bus on bulk dumps.
+// pumpOutput reads PTY bytes and publishes output messages with an
+// adaptive flush policy:
+//   - idle → flush immediately (single keystroke echo hits the wire
+//     with zero batching delay).
+//   - in an active burst (another byte arrived within idleGap of the
+//     last flush) → debounce by activeBurstInterval to amortize Redis
+//     publishes across chatty output (shell redraws, `ls`, etc).
+//
+// Size cap (outputBatchMax) always wins: if a burst fills the buffer
+// we publish mid-burst rather than waiting for the timer.
 func (r *Runner) pumpOutput(ctx context.Context, s *ptySession) {
 	buf := make([]byte, 32*1024)
 	pending := make([]byte, 0, outputBatchMax)
-	timer := time.NewTimer(outputBatchInterval)
+	timer := time.NewTimer(activeBurstInterval)
 	timer.Stop()
 	timerArmed := false
+	// Start in the "idle" state so the very first byte of the session
+	// (typically the shell prompt) flushes without batching delay.
+	lastFlush := time.Now().Add(-time.Hour)
 
 	flush := func() {
 		if len(pending) == 0 {
@@ -241,7 +260,17 @@ func (r *Runner) pumpOutput(ctx context.Context, s *ptySession) {
 			TS:         time.Now().UnixMilli(),
 		})
 		pending = pending[:0]
-		timerArmed = false
+		if timerArmed {
+			// Drain a pending tick so the next Reset starts clean.
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timerArmed = false
+		}
+		lastFlush = time.Now()
 	}
 
 	readDone := make(chan struct{})
@@ -275,7 +304,6 @@ func (r *Runner) pumpOutput(ctx context.Context, s *ptySession) {
 		case data := <-dataCh:
 			pending = append(pending, data...)
 			for len(pending) >= outputBatchMax {
-				// emit a chunk worth, keep the tail.
 				chunk := pending[:outputBatchMax]
 				s.outSeq++
 				_ = r.bus.Publish(context.Background(), protocol.TerminalOutStream(r.cfg.ID), protocol.TerminalOutput{
@@ -286,12 +314,22 @@ func (r *Runner) pumpOutput(ctx context.Context, s *ptySession) {
 					TS:         time.Now().UnixMilli(),
 				})
 				pending = append(pending[:0], pending[outputBatchMax:]...)
+				lastFlush = time.Now()
 			}
-			if !timerArmed {
-				timer.Reset(outputBatchInterval)
+			if len(pending) == 0 {
+				continue
+			}
+			if time.Since(lastFlush) > idleGap {
+				// Quiet period just ended — almost certainly a user-
+				// visible event (keystroke echo or prompt refresh).
+				// Publish without batching for minimum echo latency.
+				flush()
+			} else if !timerArmed {
+				timer.Reset(activeBurstInterval)
 				timerArmed = true
 			}
 		case <-timer.C:
+			timerArmed = false
 			flush()
 		case <-readDone:
 			flush()
