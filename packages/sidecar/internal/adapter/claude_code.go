@@ -70,6 +70,10 @@ func (a *ClaudeCodeAdapter) Ping(ctx context.Context) error {
 	return exec.CommandContext(ctx, a.binary, "--version").Run()
 }
 
+func (a *ClaudeCodeAdapter) Version(ctx context.Context) (string, error) {
+	return readBinaryVersion(ctx, a.binary)
+}
+
 func (a *ClaudeCodeAdapter) Execute(
 	ctx context.Context, cmd protocol.Command,
 ) (<-chan Chunk, error) {

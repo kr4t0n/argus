@@ -97,10 +97,9 @@ export class TerminalService {
     if (!agent) throw new NotFoundException('agent not found');
     if (agent.archivedAt) throw new BadRequestException('agent is archived');
     if (agent.status === 'offline') throw new BadRequestException('agent is offline');
-    const caps = (agent.capabilities as string[]) ?? [];
-    if (!caps.includes('terminal')) {
+    if (!agent.supportsTerminal) {
       throw new BadRequestException(
-        'agent has no terminal capability (sidecar must enable terminal in YAML)',
+        'agent does not support terminals (sidecar must set terminal.enabled in YAML)',
       );
     }
     if (!this.link.isConnected(agentId)) {

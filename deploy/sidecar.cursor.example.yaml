@@ -1,8 +1,7 @@
 id: cursor-1
 type: cursor-cli
 machine: local
-version: '0.1.0'
-capabilities: [code-gen, refactor]
+# version: '1.0.0'   # optional; auto-detected from `cursor-agent --version` at boot
 workingDir: ~/code/my-project
 bus:
   url: redis://localhost:6379

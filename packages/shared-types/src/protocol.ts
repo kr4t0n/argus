@@ -38,7 +38,13 @@ export interface RegisterEvent {
   id: string;
   type: AgentType;
   machine: string;
-  capabilities: string[];
+  /**
+   * Whether this sidecar has a PTY runner attached (`terminal.enabled` in
+   * its YAML). Controls whether the dashboard exposes the Terminal pane
+   * for this agent; the server also uses it to reject terminal-open
+   * requests before they hit the sidecar link.
+   */
+  supportsTerminal: boolean;
   version: string;
   /** Working directory the wrapped CLI is launched in. Empty means inherited. */
   workingDir?: string;

@@ -24,14 +24,14 @@ const (
 )
 
 type RegisterEvent struct {
-	Kind         string   `json:"kind"` // "register"
-	ID           string   `json:"id"`
-	Type         string   `json:"type"`
-	Machine      string   `json:"machine"`
-	Capabilities []string `json:"capabilities"`
-	Version      string   `json:"version"`
-	WorkingDir   string   `json:"workingDir,omitempty"`
-	TS           int64    `json:"ts"`
+	Kind             string `json:"kind"` // "register"
+	ID               string `json:"id"`
+	Type             string `json:"type"`
+	Machine          string `json:"machine"`
+	SupportsTerminal bool   `json:"supportsTerminal"`
+	Version          string `json:"version"`
+	WorkingDir       string `json:"workingDir,omitempty"`
+	TS               int64  `json:"ts"`
 }
 
 type HeartbeatEvent struct {
@@ -48,15 +48,15 @@ type DeregisterEvent struct {
 }
 
 type Command struct {
-	ID         string                 `json:"id"`
-	AgentID    string                 `json:"agentId"`
-	SessionID  string                 `json:"sessionId"`
-	ExternalID string                 `json:"externalId,omitempty"`
-	Kind       string                 `json:"kind"` // "execute" | "cancel"
-	Prompt     string                 `json:"prompt,omitempty"`
-	Context    map[string]any         `json:"context,omitempty"`
-	TimeoutMS  int                    `json:"timeoutMs,omitempty"`
-	Options    map[string]any         `json:"options,omitempty"`
+	ID         string         `json:"id"`
+	AgentID    string         `json:"agentId"`
+	SessionID  string         `json:"sessionId"`
+	ExternalID string         `json:"externalId,omitempty"`
+	Kind       string         `json:"kind"` // "execute" | "cancel"
+	Prompt     string         `json:"prompt,omitempty"`
+	Context    map[string]any `json:"context,omitempty"`
+	TimeoutMS  int            `json:"timeoutMs,omitempty"`
+	Options    map[string]any `json:"options,omitempty"`
 }
 
 type ResultChunk struct {
@@ -151,9 +151,9 @@ type TerminalClosed struct {
 // Streams.
 
 const (
-	SidecarLinkPath   = "/sidecar-link"
-	LinkKindHello     = "hello"
-	LinkKindHelloAck  = "hello-ack"
+	SidecarLinkPath  = "/sidecar-link"
+	LinkKindHello    = "hello"
+	LinkKindHelloAck = "hello-ack"
 )
 
 type SidecarHello struct {
@@ -169,7 +169,7 @@ type SidecarHelloAck struct {
 }
 
 // Stream key helpers (Redis Streams — commands/lifecycle/results only).
-func LifecycleStream() string                      { return "agent:lifecycle" }
-func CommandStream(id string) string               { return "agent:" + id + ":cmd" }
-func ResultStream(id string) string                { return "agent:" + id + ":result" }
-func SidecarConsumerGroup(id string) string        { return "sidecar-" + id }
+func LifecycleStream() string               { return "agent:lifecycle" }
+func CommandStream(id string) string        { return "agent:" + id + ":cmd" }
+func ResultStream(id string) string         { return "agent:" + id + ":result" }
+func SidecarConsumerGroup(id string) string { return "sidecar-" + id }

@@ -27,7 +27,13 @@ export interface AgentDTO {
   type: AgentType;
   machine: string;
   status: AgentStatus;
-  capabilities: string[];
+  /**
+   * Whether this agent's sidecar runs a PTY host (`terminal.enabled`
+   * in its YAML). Controls whether the dashboard exposes the Terminal
+   * pane; the server also rejects terminal-open requests for agents
+   * where this is false.
+   */
+  supportsTerminal: boolean;
   version: string | null;
   workingDir: string | null;
   lastHeartbeatAt: string;

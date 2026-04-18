@@ -1,8 +1,7 @@
 id: codex-1
 type: codex
 machine: local
-version: '0.1.0'
-capabilities: [code-gen, review]
+# version: '0.121.0'   # optional; auto-detected from `codex --version` at boot
 workingDir: ~/code/my-project
 bus:
   url: redis://localhost:6379

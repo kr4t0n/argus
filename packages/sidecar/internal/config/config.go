@@ -10,11 +10,10 @@ import (
 )
 
 type Config struct {
-	ID           string         `yaml:"id"`
-	Type         string         `yaml:"type"`
-	Machine      string         `yaml:"machine"`
-	Capabilities []string       `yaml:"capabilities"`
-	Version      string         `yaml:"version"`
+	ID      string `yaml:"id"`
+	Type    string `yaml:"type"`
+	Machine string `yaml:"machine"`
+	Version string `yaml:"version"`
 	// WorkingDir is the directory the wrapped CLI subprocess runs in.
 	// Supports ~ expansion and ${ENV} substitution. If empty, the CLI
 	// inherits the sidecar's own working directory.
@@ -91,12 +90,10 @@ func Load(path string) (*Config, error) {
 	if cfg.Bus.URL == "" {
 		cfg.Bus.URL = "redis://localhost:6379"
 	}
-	if cfg.Version == "" {
-		cfg.Version = "0.1.0"
-	}
-	if cfg.Capabilities == nil {
-		cfg.Capabilities = []string{}
-	}
+	// cfg.Version intentionally has no default. Empty means "let the
+	// adapter detect the wrapped CLI's version at register time"; set
+	// it explicitly in YAML only if auto-detection is wrong or the
+	// wrapped CLI doesn't support `--version`.
 
 	if cfg.WorkingDir != "" {
 		resolved, err := expandPath(cfg.WorkingDir)
@@ -140,11 +137,6 @@ func Load(path string) (*Config, error) {
 				return nil, fmt.Errorf("terminal.cwd: %w", err)
 			}
 			cfg.Terminal.Cwd = resolved
-		}
-		// Advertise capability so the UI can hide the panel when the
-		// sidecar didn't opt in.
-		if !containsString(cfg.Capabilities, "terminal") {
-			cfg.Capabilities = append(cfg.Capabilities, "terminal")
 		}
 	}
 	return &cfg, nil

@@ -6,11 +6,10 @@
 id: claude-1
 type: claude-code          # claude-code | codex | cursor-cli | <custom>
 machine: ${HOSTNAME:-dev-machine}
-version: '0.1.0'
-capabilities:
-  - code-gen
-  - refactor
-  - review
+# version is optional; when omitted the sidecar runs `<binary> --version`
+# at boot and reports whatever that returns. Pin it only if auto-detect
+# is wrong or the wrapped CLI doesn't implement --version.
+# version: '1.2.3'
 
 # Directory the wrapped CLI runs in. The CLI sees this as its $CWD, so all
 # Read/Edit/Bash tools operate relative to it. Supports ~ and ${ENV} expansion.

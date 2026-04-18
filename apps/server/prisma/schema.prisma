@@ -20,16 +20,16 @@ model User {
 }
 
 model Agent {
-  id              String    @id
-  type            String
-  machine         String
-  status          String    @default("offline") // online | offline | busy | error
-  capabilities    Json      @default("[]")
-  version         String?
-  workingDir      String?
-  lastHeartbeatAt DateTime
-  registeredAt    DateTime
-  archivedAt      DateTime? // soft-hide from sidebar; preserves history.
+  id               String    @id
+  type             String
+  machine          String
+  status           String    @default("offline") // online | offline | busy | error
+  supportsTerminal Boolean   @default(false)
+  version          String?
+  workingDir       String?
+  lastHeartbeatAt  DateTime
+  registeredAt     DateTime
+  archivedAt       DateTime? // soft-hide from sidebar; preserves history.
 
   sessions  Session[]
   commands  Command[]

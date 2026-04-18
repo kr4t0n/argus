@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -37,8 +37,6 @@ type Status =
   | { kind: 'open'; terminal: TerminalDTO }
   | { kind: 'closed'; terminal: TerminalDTO; exitCode: number; reason?: string }
   | { kind: 'error'; message: string };
-
-const ENABLED_CAP = 'terminal';
 
 // Shared UTF-8 codec instances — cheap to construct but no reason to
 // rebuild them per keystroke / per output frame.
@@ -85,10 +83,7 @@ function encodeUtf8Base64(s: string): string {
  *   the highest seq seen and discard duplicates.
  */
 export function TerminalPane({ agent }: Props) {
-  const supported = useMemo(
-    () => agent.capabilities.includes(ENABLED_CAP),
-    [agent.capabilities],
-  );
+  const supported = agent.supportsTerminal;
 
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const containerRef = useRef<HTMLDivElement | null>(null);

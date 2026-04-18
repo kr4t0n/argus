@@ -59,21 +59,6 @@ export function ContextPane({ agent, session, recentCommands }: Props) {
         />
       </Section>
 
-      {agent.capabilities.length > 0 && (
-        <Section title="Capabilities">
-          <div className="flex flex-wrap gap-1 mt-1">
-            {agent.capabilities.map((c) => (
-              <span
-                key={c}
-                className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-neutral-900 border border-neutral-800 text-neutral-400"
-              >
-                {c}
-              </span>
-            ))}
-          </div>
-        </Section>
-      )}
-
       {session && (
         <Section title="Session">
           <KV k="title" v={session.title} />

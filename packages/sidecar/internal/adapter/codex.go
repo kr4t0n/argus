@@ -77,6 +77,10 @@ func (a *CodexAdapter) Ping(ctx context.Context) error {
 	return exec.CommandContext(ctx, a.binary, "--version").Run()
 }
 
+func (a *CodexAdapter) Version(ctx context.Context) (string, error) {
+	return readBinaryVersion(ctx, a.binary)
+}
+
 func (a *CodexAdapter) Execute(
 	ctx context.Context, cmd protocol.Command,
 ) (<-chan Chunk, error) {
@@ -521,4 +525,3 @@ func toMap(v any) map[string]any {
 	}
 	return nil
 }
-

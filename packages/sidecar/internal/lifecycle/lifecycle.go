@@ -55,6 +55,25 @@ func New(ctx context.Context, cfg *config.Config, logger *log.Logger) (*Runner, 
 	if err := ad.Ping(ctx); err != nil {
 		logger.Printf("adapter ping failed: %v (will keep running)", err)
 	}
+
+	// Auto-detect the wrapped CLI's version when the YAML didn't pin one.
+	// An explicit cfg.Version wins so operators have an escape hatch for
+	// CLIs with a funky `--version` format (or when version detection
+	// times out on a slow box).
+	if cfg.Version == "" {
+		if v, ok := ad.(adapter.Versioned); ok {
+			if detected, err := v.Version(ctx); err == nil && detected != "" {
+				cfg.Version = detected
+				logger.Printf("detected %s version: %s", cfg.Type, detected)
+			} else if err != nil {
+				logger.Printf("version detection failed: %v", err)
+			}
+		}
+		if cfg.Version == "" {
+			cfg.Version = "unknown"
+		}
+	}
+
 	return &Runner{
 		cfg:     cfg,
 		bus:     b,
@@ -162,14 +181,14 @@ func (r *Runner) Run(ctx context.Context) error {
 
 func (r *Runner) register(ctx context.Context) error {
 	return r.bus.Publish(ctx, protocol.LifecycleStream(), protocol.RegisterEvent{
-		Kind:         "register",
-		ID:           r.cfg.ID,
-		Type:         r.cfg.Type,
-		Machine:      r.cfg.Machine,
-		Capabilities: r.cfg.Capabilities,
-		Version:      r.cfg.Version,
-		WorkingDir:   r.cfg.WorkingDir,
-		TS:           time.Now().UnixMilli(),
+		Kind:             "register",
+		ID:               r.cfg.ID,
+		Type:             r.cfg.Type,
+		Machine:          r.cfg.Machine,
+		SupportsTerminal: r.cfg.Terminal.Enabled,
+		Version:          r.cfg.Version,
+		WorkingDir:       r.cfg.WorkingDir,
+		TS:               time.Now().UnixMilli(),
 	})
 }
 

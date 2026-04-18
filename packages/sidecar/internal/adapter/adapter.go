@@ -29,6 +29,17 @@ type Adapter interface {
 	Ping(ctx context.Context) error
 }
 
+// Versioned is an optional capability for adapters that can report the
+// version of the CLI they wrap. Lifecycle queries this at register time
+// so the dashboard shows the actual CLI version instead of a hand-rolled
+// string from the sidecar YAML.
+//
+// Adapters that don't implement this interface fall back to cfg.Version
+// (or the "unknown" sentinel) during registration.
+type Versioned interface {
+	Version(ctx context.Context) (string, error)
+}
+
 type Factory func(cfg map[string]any) (Adapter, error)
 
 var (
