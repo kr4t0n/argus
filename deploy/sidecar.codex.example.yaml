@@ -1,0 +1,21 @@
+id: codex-1
+type: codex
+machine: local
+version: '0.1.0'
+capabilities: [code-gen, review]
+workingDir: ~/code/my-project
+bus:
+  url: redis://localhost:6379
+adapter:
+  binary: codex
+  # Pass --skip-git-repo-check so the agent can operate on plain folders.
+  # Set to false if you want codex to refuse non-git working dirs.
+  skipGitRepoCheck: true
+  # Run in --full-auto: tool calls execute under the workspace-write sandbox
+  # without per-call approval prompts. Required for headless operation.
+  fullAuto: true
+  # Optional: pin a specific sandbox mode instead of --full-auto.
+  # One of: read-only | workspace-write | danger-full-access
+  # sandbox: workspace-write
+  # Optional: extra flags appended to every `codex exec` invocation.
+  # extraArgs: ["--profile", "argus"]

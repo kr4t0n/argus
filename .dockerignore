@@ -1,0 +1,9 @@
+node_modules
+**/node_modules
+**/dist
+**/build
+**/.turbo
+.git
+.env
+.env.local
+packages/sidecar/bin

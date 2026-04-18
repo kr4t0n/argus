@@ -1,0 +1,10 @@
+id: claude-1
+type: claude-code
+machine: local
+version: '0.1.0'
+capabilities: [code-gen, refactor, review]
+workingDir: ~/code/my-project
+bus:
+  url: redis://localhost:6379
+adapter:
+  binary: claude

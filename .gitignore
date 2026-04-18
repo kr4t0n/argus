@@ -1,0 +1,64 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+build/
+.next/
+.turbo/
+out/
+*.tsbuildinfo
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Per-operator sidecar configs. `*.example.yaml` files are checked in as
+# templates; `*.local.yaml` contains real bus URLs / tokens and must not be
+# committed. Use `deploy/sidecar.*.example.yaml` as the starting point.
+deploy/*.local.yaml
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# OS
+Thumbs.db
+
+# Testing
+coverage/
+.nyc_output/
+
+# Go
+packages/sidecar/bin/
+packages/sidecar/sidecar
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Prisma
+apps/server/prisma/migrations/dev/
+
+# Local data
+data/
+postgres-data/
+redis-data/

@@ -1,0 +1,93 @@
+// Argus control plane — Prisma schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  role         String    @default("admin") // admin | viewer
+  createdAt    DateTime  @default(now())
+
+  sessions Session[]
+}
+
+model Agent {
+  id              String    @id
+  type            String
+  machine         String
+  status          String    @default("offline") // online | offline | busy | error
+  capabilities    Json      @default("[]")
+  version         String?
+  workingDir      String?
+  lastHeartbeatAt DateTime
+  registeredAt    DateTime
+  archivedAt      DateTime? // soft-hide from sidebar; preserves history.
+
+  sessions Session[]
+  commands Command[]
+
+  @@index([status])
+  @@index([type])
+  @@index([archivedAt])
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  agentId    String
+  title      String
+  externalId String?
+  status     String   @default("active") // active | idle | done | failed
+  archivedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agent    Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  commands Command[]
+
+  @@index([userId, updatedAt])
+  @@index([agentId, updatedAt])
+  @@index([userId, archivedAt])
+}
+
+model Command {
+  id          String    @id @default(cuid())
+  sessionId   String
+  agentId     String
+  kind        String    @default("execute") // execute | cancel
+  prompt      String?   @db.Text
+  status      String    @default("pending")
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  session Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  agent   Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  chunks  ResultChunk[]
+
+  @@index([sessionId, createdAt])
+  @@index([agentId, createdAt])
+}
+
+model ResultChunk {
+  id        String   @id @default(cuid())
+  commandId String
+  seq       Int
+  kind      String
+  delta     String?  @db.Text
+  content   String?  @db.Text
+  meta      Json?
+  ts        DateTime @default(now())
+
+  command Command @relation(fields: [commandId], references: [id], onDelete: Cascade)
+
+  @@index([commandId, seq])
+}

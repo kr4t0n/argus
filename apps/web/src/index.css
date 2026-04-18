@@ -1,0 +1,98 @@
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-neutral-950 text-neutral-100 font-sans;
+  }
+
+  ::selection {
+    @apply bg-neutral-700 text-neutral-50;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-neutral-800 rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-neutral-700;
+  }
+}
+
+@layer components {
+  .surface {
+    @apply bg-neutral-900 border border-neutral-800;
+  }
+  .status-dot {
+    @apply inline-block w-2 h-2 rounded-full;
+  }
+  .status-online {
+    @apply bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)];
+  }
+  .status-busy {
+    @apply bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.6)];
+  }
+  .status-error {
+    @apply bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)];
+  }
+  .status-offline {
+    @apply bg-neutral-600;
+  }
+  .typewriter-cursor::after {
+    content: '▍';
+    @apply ml-[2px] animate-blink text-neutral-400;
+  }
+}
+
+.markdown p {
+  @apply my-2 leading-relaxed;
+}
+.markdown p:first-child {
+  @apply mt-0;
+}
+.markdown p:last-child {
+  @apply mb-0;
+}
+.markdown code {
+  @apply font-mono text-[0.9em] bg-neutral-800/70 px-1 py-0.5 rounded;
+}
+.markdown pre {
+  @apply font-mono text-sm bg-neutral-800/70 px-3 py-2 rounded-md overflow-x-auto my-3;
+}
+.markdown pre code {
+  @apply bg-transparent px-0 py-0;
+}
+.markdown ul {
+  @apply list-disc pl-5 my-2;
+}
+.markdown ol {
+  @apply list-decimal pl-5 my-2;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  @apply font-semibold my-2;
+}
+.markdown a {
+  @apply text-sky-400 hover:underline;
+}
