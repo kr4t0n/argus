@@ -17,9 +17,21 @@ import (
 //	{ "type": "assistant", "message": { "content": [ {text}/{tool_use} ] } }
 //	{ "type": "user",      "message": { "content": [ {tool_result} ] } }
 //	{ "type": "result",    "result": "...", "is_error": bool }         → final
+//
+// Two defaults differ from interactive `claude`:
+//   - dangerouslySkipPermissions=true so tool calls don't wait on TTY prompts
+//     (we have no TTY to approve them). Required for headless operation.
+//   - --verbose is always on because claude *requires* it when combining
+//     --print with --output-format stream-json.
+//
+// Both can be overridden from the sidecar YAML, and `permissionMode` lets you
+// swap --dangerously-skip-permissions for an explicit --permission-mode <m>.
 type ClaudeCodeAdapter struct {
-	binary     string
-	workingDir string
+	binary                     string
+	workingDir                 string
+	dangerouslySkipPermissions bool
+	permissionMode             string // optional override; takes precedence over the flag
+	extraArgs                  []string
 
 	runMu   sync.Mutex
 	runners map[string]*CLIRunner // commandID → runner
@@ -34,11 +46,23 @@ func init() {
 		if _, err := exec.LookPath(bin); err != nil {
 			return nil, fmt.Errorf("claude CLI %q not found: %w", bin, err)
 		}
-		return &ClaudeCodeAdapter{
-			binary:     bin,
-			workingDir: WorkingDirFromCfg(cfg),
-			runners:    map[string]*CLIRunner{},
-		}, nil
+		a := &ClaudeCodeAdapter{
+			binary:                     bin,
+			workingDir:                 WorkingDirFromCfg(cfg),
+			dangerouslySkipPermissions: boolFromCfg(cfg, "dangerouslySkipPermissions", true),
+			runners:                    map[string]*CLIRunner{},
+		}
+		if s, ok := cfg["permissionMode"].(string); ok {
+			a.permissionMode = s
+		}
+		if extra, ok := cfg["extraArgs"].([]any); ok {
+			for _, v := range extra {
+				if s, ok := v.(string); ok {
+					a.extraArgs = append(a.extraArgs, s)
+				}
+			}
+		}
+		return a, nil
 	})
 }
 
@@ -49,10 +73,24 @@ func (a *ClaudeCodeAdapter) Ping(ctx context.Context) error {
 func (a *ClaudeCodeAdapter) Execute(
 	ctx context.Context, cmd protocol.Command,
 ) (<-chan Chunk, error) {
+	// Flag layout (claude [...flags...] [--resume <id>]):
+	//   -p / --print                         non-interactive: print & exit
+	//   --output-format stream-json          NDJSON stream on stdout
+	//   --verbose                            mandatory companion of the above
+	//   --dangerously-skip-permissions |     accept all tool calls w/o prompts
+	//     --permission-mode <mode>           (mutually exclusive override)
+	//   --resume <id>                        resume prior session by id
+	//   --model <name>                       per-command model override
 	args := []string{
-		"--print",
+		"-p",
 		"--output-format", "stream-json",
 		"--verbose",
+	}
+	switch {
+	case a.permissionMode != "":
+		args = append(args, "--permission-mode", a.permissionMode)
+	case a.dangerouslySkipPermissions:
+		args = append(args, "--dangerously-skip-permissions")
 	}
 	if cmd.ExternalID != "" {
 		args = append(args, "--resume", cmd.ExternalID)
@@ -60,6 +98,7 @@ func (a *ClaudeCodeAdapter) Execute(
 	if model, ok := cmd.Options["model"].(string); ok && model != "" {
 		args = append(args, "--model", model)
 	}
+	args = append(args, a.extraArgs...)
 
 	// Per-run state so mapClaudeLine can snapshot file contents at tool_use
 	// time and emit a unified diff at the matching tool_result. Scoped to

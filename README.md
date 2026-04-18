@@ -90,15 +90,23 @@ The sidecar is **not** part of compose on purpose: you run it on whatever
 machine actually has the CLI you want to expose.
 
 ```bash
-# Build the binary
-cd packages/sidecar && go build -o bin/sidecar ./cmd/sidecar
+# Build the binary for the host machine
+cd packages/sidecar && make              # → bin/argus-sidecar
+
+# Or cross-compile a static binary for a remote Linux box
+make linux-amd64                         # → bin/argus-sidecar-linux-amd64
+make linux-arm64                         # → bin/argus-sidecar-linux-arm64
+make cross                               # builds all supported GOOS/GOARCH
 
 # Edit a config (one per machine/adapter)
 cp ../../deploy/sidecar.claude.example.yaml ./sidecar.yaml
 
 # Run it
-./bin/sidecar --config sidecar.yaml
+./bin/argus-sidecar --config sidecar.yaml
 ```
+
+The cross-compiled binaries are fully static (no cgo, no glibc
+dependency) — scp them straight onto the target machine and run.
 
 Once the sidecar registers you'll see it appear in the dashboard's sidebar.
 Click `+ new session` under it to start a streaming chat.

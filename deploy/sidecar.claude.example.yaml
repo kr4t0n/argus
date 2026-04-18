@@ -8,3 +8,14 @@ bus:
   url: redis://localhost:6379
 adapter:
   binary: claude
+  # Pass --dangerously-skip-permissions so tool calls execute without per-call
+  # TTY approval prompts. Required for headless operation (the sidecar has no
+  # TTY to accept prompts through). Set to false to force approvals, which
+  # will hang any tool-using turn.
+  dangerouslySkipPermissions: true
+  # Optional: pin an explicit permission mode instead of the skip flag above.
+  # Takes precedence over `dangerouslySkipPermissions` when set.
+  # One of: default | acceptEdits | bypassPermissions | plan
+  # permissionMode: acceptEdits
+  # Optional: extra flags appended to every `claude` invocation.
+  # extraArgs: ["--max-turns", "10"]
