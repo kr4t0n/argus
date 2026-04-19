@@ -73,6 +73,12 @@ argus/
 
 ## Quick start
 
+> Just want to deploy Argus, not develop on it? See
+> [**INSTALLATION.md**](INSTALLATION.md) for the production install
+> guide — it covers managed Postgres / Redis options, putting the
+> dashboard behind a reverse proxy, and installing sidecars on remote
+> agent machines with launchd / systemd recipes.
+
 ### 1. Bring up Postgres, Redis, server, and web
 
 ```bash
