@@ -14,7 +14,10 @@ name: helm-publish
 
 on:
   push:
-    branches: [main]
+    # TEMPORARY: feat/web-runtime-config is here so we can smoke-test a
+    # publish before merging. Revert to `[main]` only in the cleanup
+    # commit before this branch lands.
+    branches: [main, feat/web-runtime-config]
     paths:
       - 'helm/**'
       - '.github/workflows/helm-publish.yml'
