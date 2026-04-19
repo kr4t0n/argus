@@ -1,0 +1,63 @@
+{{- if .Values.ingress.enabled -}}
+{{- $fullName := include "argus.fullname" . -}}
+{{- $serverSvc := include "argus.server.fullname" . -}}
+{{- $webSvc := include "argus.web.fullname" . -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "argus.labels" . | nindent 4 }}
+  {{- with (merge .Values.ingress.annotations .Values.commonAnnotations) }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- end }}
+  rules:
+    {{- if and .Values.web.enabled .Values.ingress.web.host }}
+    - host: {{ .Values.ingress.web.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.web.path }}
+            pathType: {{ .Values.ingress.web.pathType }}
+            backend:
+              service:
+                name: {{ $webSvc }}
+                port:
+                  name: http
+    {{- end }}
+    {{- if and .Values.server.enabled .Values.ingress.server.host }}
+    - host: {{ .Values.ingress.server.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.server.path }}
+            pathType: {{ .Values.ingress.server.pathType }}
+            backend:
+              service:
+                name: {{ $serverSvc }}
+                port:
+                  name: http
+    {{- end }}
+  {{- $tlsBlocks := list }}
+  {{- if and .Values.web.enabled .Values.ingress.web.host .Values.ingress.web.tls.enabled }}
+    {{- $tlsBlocks = append $tlsBlocks (dict "hosts" (list .Values.ingress.web.host) "secretName" .Values.ingress.web.tls.secretName) }}
+  {{- end }}
+  {{- if and .Values.server.enabled .Values.ingress.server.host .Values.ingress.server.tls.enabled }}
+    {{- $tlsBlocks = append $tlsBlocks (dict "hosts" (list .Values.ingress.server.host) "secretName" .Values.ingress.server.tls.secretName) }}
+  {{- end }}
+  {{- if $tlsBlocks }}
+  tls:
+    {{- range $tlsBlocks }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      {{- if .secretName }}
+      secretName: {{ .secretName | quote }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}

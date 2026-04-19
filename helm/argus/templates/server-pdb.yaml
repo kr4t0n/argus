@@ -1,0 +1,14 @@
+{{- if and .Values.server.enabled .Values.pdb.server.enabled (gt (.Values.server.replicaCount | int) 1) -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "argus.server.fullname" . }}
+  labels:
+    {{- include "argus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  minAvailable: {{ .Values.pdb.server.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "argus.server.selectorLabels" . | nindent 6 }}
+{{- end }}

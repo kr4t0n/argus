@@ -1,0 +1,14 @@
+{{- if and .Values.web.enabled .Values.pdb.web.enabled (gt (.Values.web.replicaCount | int) 1) -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "argus.web.fullname" . }}
+  labels:
+    {{- include "argus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  minAvailable: {{ .Values.pdb.web.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "argus.web.selectorLabels" . | nindent 6 }}
+{{- end }}

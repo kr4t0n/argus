@@ -1,0 +1,275 @@
+# ─────────────────────────────────────────────────────────────────────
+# Argus Helm chart values
+#
+# This chart deploys the control plane only — `argus-server` (NestJS
+# REST + WebSocket gateway) and `argus-web` (React SPA on nginx).
+# PostgreSQL and Redis are required dependencies but are NOT installed
+# by this chart; point at managed instances (Aiven / RDS / Upstash /
+# self-hosted in the same cluster) via `externalDatabase` / `externalRedis`.
+#
+# Sidecars (`argus-sidecar`) are deliberately out of scope: they run
+# on the agent host machines, not in the Kubernetes cluster.
+# ─────────────────────────────────────────────────────────────────────
+
+# Optional override; defaults to the release name (the standard Helm
+# pattern). All resources are named `<fullname>-server` / `-web`, etc.
+nameOverride: ""
+fullnameOverride: ""
+
+# Common labels applied to every object the chart renders.
+commonLabels: {}
+# Common annotations for every object the chart renders.
+commonAnnotations: {}
+
+# ─── Image registry shared by both components ────────────────────────
+image:
+  registry: docker.io
+  pullPolicy: IfNotPresent
+  # Tag default falls back to .Chart.AppVersion (set in Chart.yaml).
+  # Override here to pin to a specific release without bumping the chart.
+  tag: ""
+
+# Used when pulling from a private registry; references existing Secrets
+# of type kubernetes.io/dockerconfigjson.
+imagePullSecrets: []
+# - name: my-registry-creds
+
+# ─── External datastores ─────────────────────────────────────────────
+# Two ways to wire each datastore:
+#   1. Set `url` here — the chart drops it into a generated Secret.
+#   2. Point `existingSecret` at a Secret you manage out-of-band
+#      (sealed-secrets, external-secrets, vault-injector, …) and the
+#      chart will reference it directly.
+externalDatabase:
+  url: ""
+  existingSecret: ""
+  existingSecretKey: "DATABASE_URL"
+
+externalRedis:
+  url: ""
+  existingSecret: ""
+  existingSecretKey: "REDIS_URL"
+
+# ─── Auth / bootstrap secrets ────────────────────────────────────────
+# Same pattern: inline values land in the generated Secret; or wire
+# `auth.existingSecret` to an externally managed one with these keys:
+#   JWT_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD, SIDECAR_LINK_TOKEN
+auth:
+  jwtSecret: ""                  # required if existingSecret is empty
+  jwtExpiresIn: "7d"             # `never` for non-expiring tokens
+  adminEmail: "admin@argus.local"
+  adminPassword: ""              # required if existingSecret is empty
+  # Optional shared secret between server and sidecars for the direct
+  # /sidecar-link WebSocket. Empty disables enforcement (server logs a
+  # warning on boot — fine for dev, never for prod).
+  sidecarLinkToken: ""
+  existingSecret: ""
+
+# ─── Server ──────────────────────────────────────────────────────────
+server:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: kr4t0n/argus-server
+    # Empty falls back to `image.tag` then `.Chart.AppVersion`.
+    tag: ""
+
+  # Server listens on this port inside the container; matches its
+  # SERVER_PORT env var which is set automatically.
+  containerPort: 4000
+
+  service:
+    type: ClusterIP
+    port: 4000
+    annotations: {}
+
+  # Extra environment variables (literal). Use `extraEnvFrom` for
+  # secret/configmap references.
+  extraEnv: []
+  # - name: TERMINAL_FOO
+  #   value: "bar"
+
+  extraEnvFrom: []
+  # - secretRef:
+  #     name: my-extra-secret
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+  # Liveness/readiness probe the server's TCP socket — there's no
+  # /health endpoint yet (tracked separately). TCP open is good enough
+  # for now: nest binds the listener after Prisma connects.
+  livenessProbe:
+    tcpSocket:
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 6
+
+  readinessProbe:
+    tcpSocket:
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  # `prisma migrate deploy` runs at boot inside the same container
+  # before the Nest process starts (see deploy/server.Dockerfile).
+  # We give it generous startup time via the liveness probe delay above
+  # rather than a separate init container.
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+
+  # Pod-level security context. Defaults are sane; the runtime image is
+  # already non-root via tini + node.
+  podSecurityContext:
+    fsGroup: 1000
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    runAsNonRoot: true
+    runAsUser: 1000
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+# ─── Web ─────────────────────────────────────────────────────────────
+web:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: kr4t0n/argus-web
+    tag: ""
+
+  # nginx in the bundled image listens on 80.
+  containerPort: 80
+
+  service:
+    type: ClusterIP
+    port: 80
+    annotations: {}
+
+  # Runtime config injected into /config.js at container start by the
+  # web image's entrypoint. Empty values fall back to:
+  #   1) any VITE_API_URL / VITE_WS_URL baked at image build time, then
+  #   2) `<window.location.protocol>//<hostname>:4000` derived in-browser.
+  #
+  # For a two-domain deployment (web on argus.example.com, server on
+  # argus-api.example.com), set both to the API hostname here — no
+  # custom image rebuild required.
+  config:
+    apiUrl: ""    # e.g. https://argus-api.example.com
+    wsUrl: ""     # defaults to apiUrl when empty (same host for HTTP+WS)
+
+  # Extra environment variables (literal). Use for anything beyond the
+  # built-in ARGUS_API_URL / ARGUS_WS_URL above.
+  extraEnv: []
+  extraEnvFrom: []
+
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 32Mi
+
+  livenessProbe:
+    httpGet:
+      path: /
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+  readinessProbe:
+    httpGet:
+      path: /
+      port: http
+    initialDelaySeconds: 1
+    periodSeconds: 5
+
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+
+  podSecurityContext: {}
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    # nginx unprivileged image isn't used here; keep root for default
+    # nginx:alpine which binds :80. Switch images and toggle these to
+    # run rootless.
+    runAsNonRoot: false
+
+# ─── Ingress ─────────────────────────────────────────────────────────
+# IMPORTANT: the SPA derives the API URL at runtime from
+# `window.location.hostname:4000`. Two practical deployment shapes:
+#
+#   A) Two hostnames: e.g. argus.example.com (web) and
+#      argus-api.example.com (server). Requires a custom-built web
+#      image with VITE_API_URL/VITE_WS_URL pointing at the API host.
+#
+#   B) One hostname + path-routed Ingress: web at /, server at e.g.
+#      / for non-asset traffic the SPA never makes — won't work for
+#      the API since the SPA hits :4000 explicitly. So the simplest
+#      single-host pattern is to put the server on a NodePort/LB at
+#      a known port and use a custom web image baked with that URL.
+#
+# This chart's Ingress block intentionally exposes the two services
+# under separate hosts (or a single host for the web only), and leaves
+# the API URL wiring to you.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # cert-manager.io/cluster-issuer: letsencrypt
+  # nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"  # for WebSocket
+
+  # Web hostname (HTTP[S]).
+  web:
+    host: argus.example.com
+    path: /
+    pathType: Prefix
+    tls:
+      enabled: false
+      secretName: ""
+
+  # Server hostname. Leave host empty to skip rendering an API ingress
+  # (e.g. you'll expose 4000 via a LoadBalancer Service or a NodePort).
+  server:
+    host: ""
+    path: /
+    pathType: Prefix
+    tls:
+      enabled: false
+      secretName: ""
+
+# ─── Pod Disruption Budget ───────────────────────────────────────────
+# Useful in multi-replica setups; ignored when replicaCount=1.
+pdb:
+  server:
+    enabled: false
+    minAvailable: 1
+  web:
+    enabled: false
+    minAvailable: 1

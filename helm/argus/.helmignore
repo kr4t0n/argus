@@ -1,0 +1,16 @@
+.DS_Store
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+# Helm metadata
+.helmignore
+# CI / docs that shouldn't ship inside the chart tarball
+ci/
+tests/
+README.md.tmpl
