@@ -1,9 +1,33 @@
-node_modules
+# Keep the build context lean so `docker build`/buildx don't ship the
+# whole repo (and especially node_modules) over to the daemon.
+
 **/node_modules
 **/dist
-**/build
 **/.turbo
+**/.cache
+**/.next
+
 .git
+.github
+.vscode
+.idea
+.DS_Store
+
+# Local env / secrets
 .env
-.env.local
+.env.*
+**/.env
+**/.env.*
+deploy/sidecar.*.local.yaml
+
+# Sidecar artifacts (Go binaries — irrelevant to the Node images)
 packages/sidecar/bin
+
+# Local-only logs and tmp
+*.log
+tmp
+.tmp
+
+# Docs / dotfiles that don't affect the build
+*.md
+!README.md
