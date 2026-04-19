@@ -20,6 +20,21 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+  pull_request:
+    branches: [main]
+    paths:
+      # Only re-run the (slow) Docker build when something that actually
+      # affects the image changes. Keeps unrelated PRs cheap.
+      - 'apps/**'
+      - 'packages/shared-types/**'
+      - 'deploy/server.Dockerfile'
+      - 'deploy/web.Dockerfile'
+      - 'deploy/web.nginx.conf'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.dockerignore'
+      - '.github/workflows/docker-publish.yml'
   workflow_dispatch:
     inputs:
       push:
@@ -67,11 +82,14 @@ jobs:
       - name: Resolve push flag
         id: pushflag
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "push=${{ inputs.push }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "push=true" >> "$GITHUB_OUTPUT"
-          fi
+          # PR builds always smoke-test only — never push from a fork or
+          # unmerged change. Manual dispatches honor the input toggle.
+          # Pushes to main / tags always publish.
+          case "${{ github.event_name }}" in
+            pull_request)       echo "push=false" >> "$GITHUB_OUTPUT" ;;
+            workflow_dispatch)  echo "push=${{ inputs.push }}" >> "$GITHUB_OUTPUT" ;;
+            *)                  echo "push=true"  >> "$GITHUB_OUTPUT" ;;
+          esac
 
       - name: Login to Docker Hub
         if: steps.pushflag.outputs.push == 'true'
