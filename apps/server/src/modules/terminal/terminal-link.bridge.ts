@@ -79,11 +79,14 @@ export class TerminalLinkBridge implements OnApplicationBootstrap, OnModuleDestr
   }
 
   private handleDisconnect(sidecarId: string, reason: string) {
+    // sidecarId == machineId in the new architecture: the daemon
+    // identifies itself by machine id when dialing the link, and the
+    // server keys connections by that same id.
     this.terminals
-      .markAllForAgentClosed(sidecarId, `link disconnected: ${reason}`)
+      .markAllForMachineClosed(sidecarId, `link disconnected: ${reason}`)
       .catch((err) =>
         this.logger.warn(
-          `markAllForAgentClosed failed for ${sidecarId}: ${(err as Error).message}`,
+          `markAllForMachineClosed failed for ${sidecarId}: ${(err as Error).message}`,
         ),
       );
   }

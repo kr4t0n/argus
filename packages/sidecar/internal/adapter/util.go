@@ -25,6 +25,13 @@ func marshal(v any) (string, error) {
 // "claude 1.2.3 (anthropic-claude-code)" → "1.2.3".
 var versionNumberRe = regexp.MustCompile(`\d+\.\d+(?:\.\d+)?(?:[.\-+][\w.\-]*)?`)
 
+// ReadBinaryVersion is the exported entrypoint for boot-time discovery
+// (machine.Discover). It delegates to readBinaryVersion so adapters and
+// the discovery probe share identical version-extraction behavior.
+func ReadBinaryVersion(ctx context.Context, binary string) (string, error) {
+	return readBinaryVersion(ctx, binary)
+}
+
 // readBinaryVersion invokes `<binary> --version` with a short timeout and
 // returns a cleaned-up version string. It prefers the first dotted-number
 // run on the first non-empty line; if none is found it falls back to the

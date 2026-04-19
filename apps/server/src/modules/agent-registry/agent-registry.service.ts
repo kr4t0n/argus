@@ -1,222 +1,83 @@
-import {
-  Injectable,
-  Logger,
-  NotFoundException,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Agent as PAgent } from '@prisma/client';
-import type { AgentDTO, LifecycleEvent } from '@argus/shared-types';
-import { consumerGroups, streamKeys } from '@argus/shared-types';
+import type { AgentDTO } from '@argus/shared-types';
 import { PrismaService } from '../../infra/prisma/prisma.service';
-import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
+import { MachineService } from '../machine/machine.service';
 
-const CONSUMER = 'server-1';
-const STALE_AFTER_MS = 30_000;
-const SWEEP_INTERVAL_MS = 15_000;
-
+/**
+ * Agent CRUD that the dashboard's per-agent endpoints hit (list, get,
+ * archive, unarchive).
+ *
+ * The lifecycle stream consumer used to live here too, but it now lives
+ * in MachineService — agents are children of machines and the two share
+ * the same Redis stream. This service stays small and is purely the
+ * REST/DB face of the per-agent surface.
+ */
 @Injectable()
-export class AgentRegistryService implements OnModuleInit, OnModuleDestroy {
+export class AgentRegistryService {
   private readonly logger = new Logger(AgentRegistryService.name);
-  private running = false;
-  private sweepTimer?: NodeJS.Timeout;
-  private loopPromise?: Promise<void>;
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly redis: RedisService,
     private readonly gateway: StreamGateway,
   ) {}
 
-  async onModuleInit() {
-    await this.redis.ensureGroup(streamKeys.lifecycle, consumerGroups.lifecycle);
-    this.running = true;
-    this.loopPromise = this.consumeLoop();
-    this.sweepTimer = setInterval(() => this.sweepStale(), SWEEP_INTERVAL_MS);
-  }
-
-  async onModuleDestroy() {
-    this.running = false;
-    if (this.sweepTimer) clearInterval(this.sweepTimer);
-    // allow blocking xread to unblock naturally
-    await Promise.race([
-      this.loopPromise,
-      new Promise((r) => setTimeout(r, 6_000)),
-    ]);
-  }
-
-  listAll(includeArchived = false): Promise<PAgent[]> {
-    return this.prisma.agent.findMany({
+  async listAll(includeArchived = false): Promise<AgentDTO[]> {
+    const rows = await this.prisma.agent.findMany({
       where: includeArchived ? {} : { archivedAt: null },
-      orderBy: [{ status: 'asc' }, { type: 'asc' }, { machine: 'asc' }],
+      include: { machine: { select: { name: true } } },
+      orderBy: [{ status: 'asc' }, { type: 'asc' }, { name: 'asc' }],
     });
+    return rows.map((r) => MachineService.agentToDto(r, r.machine.name));
   }
 
-  get(id: string) {
-    return this.prisma.agent.findUnique({ where: { id } });
+  async get(id: string): Promise<AgentDTO> {
+    const row = await this.prisma.agent.findUnique({
+      where: { id },
+      include: { machine: { select: { name: true } } },
+    });
+    if (!row) throw new NotFoundException('agent not found');
+    return MachineService.agentToDto(row, row.machine.name);
   }
 
   /**
-   * Soft-archives an agent: hides it from the default sidebar list but keeps
-   * the row (and therefore all its sessions / commands / chunks) intact.
-   * If the sidecar later re-registers it stays archived; the user must
-   * explicitly unarchive to bring it back into view.
+   * Soft-archives an agent: hides it from the default sidebar list but
+   * keeps the row (and therefore all its sessions / commands / chunks)
+   * intact. The supervisor on the sidecar keeps running — archiving is
+   * a UI concern, not a process-control one. To stop the supervisor,
+   * use DELETE /machines/:id/agents/:agentId.
    */
-  async archive(id: string): Promise<PAgent> {
-    const existing = await this.prisma.agent.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('agent not found');
+  async archive(id: string): Promise<AgentDTO> {
+    const row = await this.prisma.agent.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException('agent not found');
     const saved = await this.prisma.agent.update({
       where: { id },
       data: { archivedAt: new Date() },
+      include: { machine: { select: { name: true } } },
     });
-    this.gateway.emitAgentUpsert(AgentRegistryService.toDto(saved));
+    const dto = MachineService.agentToDto(saved, saved.machine.name);
+    this.gateway.emitAgentUpsert(dto);
     this.logger.log(`archived ${id}`);
-    return saved;
+    return dto;
   }
 
-  async unarchive(id: string): Promise<PAgent> {
-    const existing = await this.prisma.agent.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('agent not found');
+  async unarchive(id: string): Promise<AgentDTO> {
+    const row = await this.prisma.agent.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException('agent not found');
     const saved = await this.prisma.agent.update({
       where: { id },
       data: { archivedAt: null },
+      include: { machine: { select: { name: true } } },
     });
-    this.gateway.emitAgentUpsert(AgentRegistryService.toDto(saved));
+    const dto = MachineService.agentToDto(saved, saved.machine.name);
+    this.gateway.emitAgentUpsert(dto);
     this.logger.log(`unarchived ${id}`);
-    return saved;
+    return dto;
   }
 
-  static toDto(a: PAgent): AgentDTO {
-    return {
-      id: a.id,
-      type: a.type,
-      machine: a.machine,
-      status: a.status as AgentDTO['status'],
-      supportsTerminal: a.supportsTerminal,
-      version: a.version,
-      workingDir: a.workingDir,
-      lastHeartbeatAt: a.lastHeartbeatAt.toISOString(),
-      registeredAt: a.registeredAt.toISOString(),
-      archivedAt: a.archivedAt ? a.archivedAt.toISOString() : null,
-    };
+  /** Internal helper for callers that need the raw row (e.g. terminal/command). */
+  getRow(id: string): Promise<PAgent | null> {
+    return this.prisma.agent.findUnique({ where: { id } });
   }
-
-  private async consumeLoop() {
-    while (this.running) {
-      try {
-        const res = (await this.redis.read.xreadgroup(
-          'GROUP',
-          consumerGroups.lifecycle,
-          CONSUMER,
-          'COUNT',
-          50,
-          'BLOCK',
-          5_000,
-          'STREAMS',
-          streamKeys.lifecycle,
-          '>',
-        )) as Array<[string, Array<[string, string[]]>]> | null;
-
-        if (!res) continue;
-        for (const [, entries] of res) {
-          for (const [msgId, fields] of entries) {
-            try {
-              const data = parseData(fields);
-              if (data) await this.handle(data as LifecycleEvent);
-            } catch (err) {
-              this.logger.error(
-                `failed to handle lifecycle event: ${(err as Error).message}`,
-              );
-            }
-            await this.redis.cmd.xack(streamKeys.lifecycle, consumerGroups.lifecycle, msgId);
-          }
-        }
-      } catch (err) {
-        if (this.running) {
-          this.logger.error(`lifecycle loop error: ${(err as Error).message}`);
-          await new Promise((r) => setTimeout(r, 1_000));
-        }
-      }
-    }
-  }
-
-  private async handle(ev: LifecycleEvent) {
-    switch (ev.kind) {
-      case 'register': {
-        const now = new Date();
-        const workingDir = ev.workingDir ?? null;
-        const saved = await this.prisma.agent.upsert({
-          where: { id: ev.id },
-          create: {
-            id: ev.id,
-            type: ev.type,
-            machine: ev.machine,
-            status: 'online',
-            supportsTerminal: ev.supportsTerminal,
-            version: ev.version,
-            workingDir,
-            lastHeartbeatAt: now,
-            registeredAt: now,
-          },
-          update: {
-            type: ev.type,
-            machine: ev.machine,
-            status: 'online',
-            supportsTerminal: ev.supportsTerminal,
-            version: ev.version,
-            workingDir,
-            lastHeartbeatAt: now,
-          },
-        });
-        this.gateway.emitAgentUpsert(AgentRegistryService.toDto(saved));
-        this.logger.log(`registered ${ev.id} (${ev.type} @ ${ev.machine})`);
-        break;
-      }
-      case 'heartbeat': {
-        const saved = await this.prisma.agent.update({
-          where: { id: ev.id },
-          data: { status: ev.status, lastHeartbeatAt: new Date() },
-        }).catch(() => null);
-        if (saved) this.gateway.emitAgentStatus(saved.id, saved.status as AgentDTO['status']);
-        break;
-      }
-      case 'deregister': {
-        const saved = await this.prisma.agent.update({
-          where: { id: ev.id },
-          data: { status: 'offline' },
-        }).catch(() => null);
-        if (saved) this.gateway.emitAgentStatus(saved.id, 'offline');
-        break;
-      }
-    }
-  }
-
-  private async sweepStale() {
-    const threshold = new Date(Date.now() - STALE_AFTER_MS);
-    const stale = await this.prisma.agent.findMany({
-      where: { status: { not: 'offline' }, lastHeartbeatAt: { lt: threshold } },
-      select: { id: true },
-    });
-    if (stale.length === 0) return;
-    await this.prisma.agent.updateMany({
-      where: { id: { in: stale.map((s) => s.id) } },
-      data: { status: 'offline' },
-    });
-    for (const { id } of stale) this.gateway.emitAgentStatus(id, 'offline');
-    this.logger.warn(`swept ${stale.length} stale agent(s)`);
-  }
-}
-
-function parseData(fields: string[]): unknown | null {
-  for (let i = 0; i < fields.length - 1; i += 2) {
-    if (fields[i] === 'data') {
-      try {
-        return JSON.parse(fields[i + 1]!);
-      } catch {
-        return null;
-      }
-    }
-  }
-  return null;
 }

@@ -3,6 +3,7 @@ import type {
   AgentDTO,
   ClientToServerEvents,
   CommandDTO,
+  MachineDTO,
   ResultChunkDTO,
   ServerToClientEvents,
   SessionDTO,
@@ -20,8 +21,13 @@ export type WSSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
 let socket: WSSocket | null = null;
 type Handler = {
+  onMachineUpsert?: (m: MachineDTO) => void;
+  onMachineStatus?: (p: { id: string; status: MachineDTO['status'] }) => void;
+  onMachineRemoved?: (p: { id: string }) => void;
   onAgentUpsert?: (a: AgentDTO) => void;
   onAgentStatus?: (p: { id: string; status: AgentDTO['status'] }) => void;
+  onAgentRemoved?: (p: { id: string }) => void;
+  onAgentSpawnFailed?: (p: { machineId: string; agentId: string; reason: string }) => void;
   onSessionCreated?: (s: SessionDTO) => void;
   onSessionUpdated?: (s: SessionDTO) => void;
   onSessionStatus?: (p: { id: string; status: SessionDTO['status'] }) => void;
@@ -50,8 +56,15 @@ export function ensureSocket(): WSSocket {
   }) as WSSocket;
   socket.on('connect', () => handlers.forEach((h) => h.onConnect?.()));
   socket.on('disconnect', () => handlers.forEach((h) => h.onDisconnect?.()));
+  socket.on('machine:upsert', (m) => handlers.forEach((h) => h.onMachineUpsert?.(m)));
+  socket.on('machine:status', (p) => handlers.forEach((h) => h.onMachineStatus?.(p)));
+  socket.on('machine:removed', (p) => handlers.forEach((h) => h.onMachineRemoved?.(p)));
   socket.on('agent:upsert', (a) => handlers.forEach((h) => h.onAgentUpsert?.(a)));
   socket.on('agent:status', (p) => handlers.forEach((h) => h.onAgentStatus?.(p)));
+  socket.on('agent:removed', (p) => handlers.forEach((h) => h.onAgentRemoved?.(p)));
+  socket.on('agent:spawn-failed', (p) =>
+    handlers.forEach((h) => h.onAgentSpawnFailed?.(p)),
+  );
   socket.on('session:created', (s) => handlers.forEach((h) => h.onSessionCreated?.(s)));
   socket.on('session:updated', (s) => handlers.forEach((h) => h.onSessionUpdated?.(s)));
   socket.on('session:status', (p) => handlers.forEach((h) => h.onSessionStatus?.(p)));

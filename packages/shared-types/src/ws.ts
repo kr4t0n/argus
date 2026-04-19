@@ -1,6 +1,7 @@
 import type {
   AgentDTO,
   CommandDTO,
+  MachineDTO,
   ResultChunkDTO,
   SessionDTO,
   TerminalClosedMessage,
@@ -28,8 +29,19 @@ export interface ClientToServerEvents {
 
 /** Server → client events */
 export interface ServerToClientEvents {
+  'machine:upsert': (machine: MachineDTO) => void;
+  'machine:status': (payload: { id: string; status: MachineDTO['status'] }) => void;
+  'machine:removed': (payload: { id: string }) => void;
   'agent:upsert': (agent: AgentDTO) => void;
   'agent:status': (payload: { id: string; status: AgentDTO['status'] }) => void;
+  'agent:removed': (payload: { id: string }) => void;
+  /** Surfaces sidecar-side spawn errors (bad workingDir, missing binary, …)
+   *  so the dashboard can show inline feedback on the create-agent flow. */
+  'agent:spawn-failed': (payload: {
+    machineId: string;
+    agentId: string;
+    reason: string;
+  }) => void;
   'session:created': (session: SessionDTO) => void;
   'session:updated': (session: SessionDTO) => void;
   'session:status': (payload: { id: string; status: SessionDTO['status'] }) => void;

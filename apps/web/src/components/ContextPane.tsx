@@ -23,7 +23,7 @@ export function ContextPane({ agent, session, recentCommands }: Props) {
           <AgentTypeIcon type={agent.type} />
           <span className="text-sm text-neutral-100">{agentTypeLabel(agent.type)}</span>
         </div>
-        <KV k="machine" v={agent.machine} />
+        <KV k="machine" v={agent.machineName} />
         <KV
           k="status"
           v={

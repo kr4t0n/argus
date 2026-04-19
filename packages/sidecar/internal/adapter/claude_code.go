@@ -37,32 +37,37 @@ type ClaudeCodeAdapter struct {
 	runners map[string]*CLIRunner // commandID → runner
 }
 
+const claudeDefaultBinary = "claude"
+
 func init() {
-	Register("claude-code", func(cfg map[string]any) (Adapter, error) {
-		bin, _ := cfg["binary"].(string)
-		if bin == "" {
-			bin = "claude"
-		}
-		if _, err := exec.LookPath(bin); err != nil {
-			return nil, fmt.Errorf("claude CLI %q not found: %w", bin, err)
-		}
-		a := &ClaudeCodeAdapter{
-			binary:                     bin,
-			workingDir:                 WorkingDirFromCfg(cfg),
-			dangerouslySkipPermissions: boolFromCfg(cfg, "dangerouslySkipPermissions", true),
-			runners:                    map[string]*CLIRunner{},
-		}
-		if s, ok := cfg["permissionMode"].(string); ok {
-			a.permissionMode = s
-		}
-		if extra, ok := cfg["extraArgs"].([]any); ok {
-			for _, v := range extra {
-				if s, ok := v.(string); ok {
-					a.extraArgs = append(a.extraArgs, s)
+	Register("claude-code", Plugin{
+		DefaultBinary: claudeDefaultBinary,
+		Factory: func(cfg map[string]any) (Adapter, error) {
+			bin, _ := cfg["binary"].(string)
+			if bin == "" {
+				bin = claudeDefaultBinary
+			}
+			if _, err := exec.LookPath(bin); err != nil {
+				return nil, fmt.Errorf("claude CLI %q not found: %w", bin, err)
+			}
+			a := &ClaudeCodeAdapter{
+				binary:                     bin,
+				workingDir:                 WorkingDirFromCfg(cfg),
+				dangerouslySkipPermissions: boolFromCfg(cfg, "dangerouslySkipPermissions", true),
+				runners:                    map[string]*CLIRunner{},
+			}
+			if s, ok := cfg["permissionMode"].(string); ok {
+				a.permissionMode = s
+			}
+			if extra, ok := cfg["extraArgs"].([]any); ok {
+				for _, v := range extra {
+					if s, ok := v.(string); ok {
+						a.extraArgs = append(a.extraArgs, s)
+					}
 				}
 			}
-		}
-		return a, nil
+			return a, nil
+		},
 	})
 }
 

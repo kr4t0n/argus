@@ -1,9 +1,11 @@
 import type {
   AgentDTO,
   CommandDTO,
+  CreateAgentRequest,
   CreateCommandRequest,
   CreateSessionRequest,
   LoginResponse,
+  MachineDTO,
   OpenTerminalRequest,
   ResultChunkDTO,
   SessionDTO,
@@ -62,6 +64,21 @@ export const api = {
     http<AgentDTO>(`/agents/${id}/archive`, { method: 'POST' }),
   unarchiveAgent: (id: string) =>
     http<AgentDTO>(`/agents/${id}/unarchive`, { method: 'POST' }),
+
+  // Machines
+  listMachines: (opts?: { includeArchived?: boolean }) =>
+    http<MachineDTO[]>(
+      `/machines${opts?.includeArchived ? '?includeArchived=true' : ''}`,
+    ),
+  getMachine: (id: string) => http<MachineDTO>(`/machines/${id}`),
+  listMachineAgents: (id: string) => http<AgentDTO[]>(`/machines/${id}/agents`),
+  createAgent: (machineId: string, body: CreateAgentRequest) =>
+    http<AgentDTO>(`/machines/${machineId}/agents`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  destroyAgent: (machineId: string, agentId: string) =>
+    http<void>(`/machines/${machineId}/agents/${agentId}`, { method: 'DELETE' }),
 
   listSessions: (opts?: { includeArchived?: boolean }) =>
     http<SessionDTO[]>(

@@ -13,6 +13,7 @@ import { Server, Socket } from 'socket.io';
 import type {
   AgentDTO,
   CommandDTO,
+  MachineDTO,
   ResultChunkDTO,
   SessionDTO,
   TerminalDTO,
@@ -95,6 +96,26 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   emitAgentStatus(id: string, status: AgentDTO['status']) {
     this.server.emit('agent:status', { id, status });
+  }
+
+  emitAgentRemoved(id: string) {
+    this.server.emit('agent:removed', { id });
+  }
+
+  emitAgentSpawnFailed(payload: { machineId: string; agentId: string; reason: string }) {
+    this.server.emit('agent:spawn-failed', payload);
+  }
+
+  emitMachineUpsert(machine: MachineDTO) {
+    this.server.emit('machine:upsert', machine);
+  }
+
+  emitMachineStatus(id: string, status: MachineDTO['status']) {
+    this.server.emit('machine:status', { id, status });
+  }
+
+  emitMachineRemoved(id: string) {
+    this.server.emit('machine:removed', { id });
   }
 
   emitSessionCreated(session: SessionDTO) {

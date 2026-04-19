@@ -4,6 +4,7 @@ import { PrismaModule } from './infra/prisma/prisma.module';
 import { RedisModule } from './infra/redis/redis.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AgentRegistryModule } from './modules/agent-registry/agent-registry.module';
+import { MachineModule } from './modules/machine/machine.module';
 import { SessionModule } from './modules/session/session.module';
 import { CommandModule } from './modules/command/command.module';
 import { ResultIngestorModule } from './modules/result-ingestor/result-ingestor.module';
@@ -23,6 +24,7 @@ import { SidecarLinkModule } from './modules/sidecar-link/sidecar-link.module';
     PrismaModule,
     RedisModule,
     AuthModule,
+    MachineModule,
     AgentRegistryModule,
     SessionModule,
     CommandModule,

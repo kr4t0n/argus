@@ -100,7 +100,7 @@ export function SessionPanel() {
             </div>
             {agent && (
               <span className="text-xs text-neutral-500 truncate">
-                · {agentTypeLabel(agent.type)} · {agent.machine}
+                · {agentTypeLabel(agent.type)} · {agent.machineName}
               </span>
             )}
             {agent && <StatusDot status={agent.status} />}
@@ -145,7 +145,7 @@ export function SessionPanel() {
           onChange={(v) => agent && setDraft(agent.id, v)}
           placeholder={
             agent?.status === 'offline'
-              ? `${agent.machine} is offline`
+              ? `${agent.machineName} is offline`
               : 'Request changes or ask a question…'
           }
         />

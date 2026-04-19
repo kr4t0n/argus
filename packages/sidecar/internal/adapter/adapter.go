@@ -42,22 +42,38 @@ type Versioned interface {
 
 type Factory func(cfg map[string]any) (Adapter, error)
 
+// Plugin bundles everything the registry needs to know about an adapter
+// type *before* an instance is constructed. We separate this from the
+// Adapter interface itself because boot-time discovery wants to probe
+// for installed binaries without spending the cost of constructing a
+// fully-validated adapter (which would also fail outright if the binary
+// is missing).
+type Plugin struct {
+	// Factory builds an instance from a per-agent cfg map.
+	Factory Factory
+	// DefaultBinary is the conventional executable name to look up on
+	// PATH during discovery (e.g. "claude", "codex", "cursor-agent").
+	// Empty means the adapter is not auto-discoverable.
+	DefaultBinary string
+}
+
 var (
 	mu       sync.RWMutex
-	registry = map[string]Factory{}
+	registry = map[string]Plugin{}
 )
 
 // Register is called from each adapter file's init() function.
-func Register(typeName string, f Factory) {
+// Plugin.DefaultBinary may be empty for adapters that don't wrap a CLI.
+func Register(typeName string, p Plugin) {
 	mu.Lock()
 	defer mu.Unlock()
-	registry[typeName] = f
+	registry[typeName] = p
 }
 
 // New constructs an adapter by its type name.
 func New(typeName string, cfg map[string]any) (Adapter, error) {
 	mu.RLock()
-	f, ok := registry[typeName]
+	p, ok := registry[typeName]
 	mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("unknown adapter type %q (did you forget an import?)", typeName)
@@ -65,7 +81,16 @@ func New(typeName string, cfg map[string]any) (Adapter, error) {
 	if cfg == nil {
 		cfg = map[string]any{}
 	}
-	return f(cfg)
+	return p.Factory(cfg)
+}
+
+// DefaultBinary returns the convention binary name for an adapter type,
+// or "" when the type is unknown / non-CLI. Used by machine.discovery
+// to probe PATH at sidecar boot.
+func DefaultBinary(typeName string) string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return registry[typeName].DefaultBinary
 }
 
 // The sidecar-wide workingDir is injected into every adapter's cfg under

@@ -28,24 +28,31 @@ token-level streaming with reconnect-safe replay.
 
 - **Streaming-first UI**: typewriter deltas, tool-call pills, stdout/stderr
 blocks, auto-scroll-with-stickiness, replay-on-reconnect.
-- **Multi-machine, multi-agent**: each sidecar has its own identity; agents
-appear in the sidebar grouped by type with sessions nested under them.
+- **Machine-driven agents**: each host runs one `argus-sidecar` daemon
+that self-registers as a *Machine*. Agents are created from the
+dashboard ("hover a machine, click +") and the server pushes them
+down to the sidecar over a per-machine Redis control stream — no
+YAML files to ship to remote boxes.
 - **Sessions = conversations**: long-lived chat threads tied to the CLI's
 native `--resume` ids so you can pick up where you left off.
-- **Pluggable adapters**: `claude-code`, `codex`, `cursor-cli` ship in the
-box; new ones are ~30 lines + an `init()` register call.
+- **Pluggable adapters with auto-discovery**: `claude-code`, `codex`,
+`cursor-cli` ship in the box; the sidecar probes `PATH` at boot and
+the dashboard's "create agent" dropdown is filtered to whatever's
+actually installed on that machine. New adapters are ~30 lines + an
+`init()` register call.
 - **Soft-archive everywhere**: hide a session or an entire agent from the
 sidebar without losing history. The data stays in Postgres and can be
 restored with one click; archived agents stay archived even if the
 sidecar restarts.
-- **Interactive terminal per agent (opt-in)**: when a sidecar enables
-`terminal.enabled`, the dashboard's right panel grows a real PTY shell
-on that machine — full ANSI colors, resize, ctrl-C, the works.
-xterm.js on the front, `creack/pty` in the sidecar. Traffic rides a
-direct sidecar↔server WebSocket (not Redis) for sub-10 ms keystroke
-echo, usable for full-screen TUIs like `vim` and `htop`. Treat opt-in
-as remote shell access: only enable on hosts where every dashboard
-user is trusted to that level.
+- **Interactive terminal per agent (opt-in)**: tick the "attach
+interactive terminal" box when creating an agent and the dashboard's
+right panel grows a real PTY shell on that machine — full ANSI
+colors, resize, ctrl-C, the works. xterm.js on the front,
+`creack/pty` in the sidecar. Traffic rides a direct sidecar↔server
+WebSocket (not Redis) for sub-10 ms keystroke echo, usable for
+full-screen TUIs like `vim` and `htop`. Treat the opt-in as remote
+shell access: only enable on hosts where every dashboard user is
+trusted to that level.
 - **Redis Streams** for the bus: durable, replayable, no extra ops weight on
 top of the Redis you already run.
 
@@ -59,7 +66,7 @@ argus/
 ├── packages/
 │   ├── shared-types/         TS types shared by web + server
 │   └── sidecar/              Go sidecar (single binary)
-└── deploy/                   docker-compose + Dockerfiles + sample sidecar.yaml
+└── deploy/                   docker-compose + Dockerfiles
 ```
 
 ## Prerequisites
@@ -168,24 +175,47 @@ make cross                               # builds all supported GOOS/GOARCH
 The cross-compiled binaries are fully static (no cgo, no glibc
 dependency) — scp them straight onto the target machine and run.
 
-#### Configure and run
+#### Initialize and run
+
+The sidecar has no YAML config — there's a one-time interactive `init`
+that asks for the bus URL, the server URL, and an optional friendly
+machine name (defaults to the hostname), then writes the answers to
+`~/.config/argus/sidecar.json`. Subsequent runs just read that file:
 
 ```bash
-# Edit a config (one per machine/adapter)
-cp deploy/sidecar.claude.example.yaml ./sidecar.yaml
+argus-sidecar init                # interactive
+argus-sidecar                     # daemon — starts in the foreground
 
-# Run it
-argus-sidecar --config sidecar.yaml
+# Or fully scripted:
+argus-sidecar init \
+  --bus  redis://default:PASS@your-redis-host:6379 \
+  --server http://argus.your.tld:4000 \
+  --token "$SIDECAR_LINK_TOKEN"   # only needed if you set the server-side token
 ```
+
+On boot the daemon:
+
+1. Probes `PATH` for every adapter it knows about (`claude`, `codex`,
+   `cursor-agent`, …) and reports what it finds back to the server.
+2. Self-registers as a `Machine` row visible at the bottom of the
+   dashboard's left panel.
+3. Sits idle until you create an agent on it from the UI — at which
+   point the server pushes a `create-agent` command down the
+   per-machine Redis stream and the daemon spawns a supervisor for
+   that adapter.
+
+Created agents are cached in `~/.config/argus/sidecar.json`, so a
+sidecar restart immediately re-spawns every supervisor without waiting
+for the server's reconcile broadcast.
 
 To upgrade an installed sidecar in place to the latest published release
 for its OS/arch, run:
 
 ```bash
-./argus-sidecar update                # downloads, sha256-verifies, swaps
-./argus-sidecar update --prerelease   # also consider pre-release tags
-./argus-sidecar update --force        # reinstall even if already current
-./argus-sidecar version               # print the baked-in version
+argus-sidecar update                # downloads, sha256-verifies, swaps
+argus-sidecar update --prerelease   # also consider pre-release tags
+argus-sidecar update --force        # reinstall even if already current
+argus-sidecar version               # print the baked-in version
 ```
 
 The update is atomic (`os.Rename` over the running executable). Restart
@@ -193,45 +223,45 @@ your launchd/systemd unit afterwards to pick up the new binary. If the
 GitHub repo is private, set `GITHUB_TOKEN` in the environment so the
 update can read the release asset list.
 
-Once the sidecar registers you'll see it appear in the dashboard's sidebar.
-Click `+ new session` under it to start a streaming chat.
+#### Creating agents from the dashboard
 
-Set `workingDir:` in `sidecar.yaml` to control the directory the wrapped CLI
-runs in — all of the agent's file reads/edits and shell commands resolve
-relative to it. Supports `~` and `${ENV}` expansion; the path must exist.
-The dashboard shows the active working dir in the Agent context pane.
+Once a machine has registered, hover over its row in the bottom-of-the-
+sidebar **machines** list and click the `+`. A small popover lets you
+pick:
 
-#### Optional: enable the interactive terminal
+- **adapter** — pre-filtered to what was discovered on that host.
+- **name** — what you'll see in the sidebar.
+- **working dir** — the directory the wrapped CLI is launched in
+  (optional; defaults to the daemon's cwd). Every file edit and shell
+  command the agent runs resolves relative to this.
+- **attach interactive terminal** — opt-in PTY (see the security note
+  below).
 
-Add these stanzas to a sidecar's YAML to expose a PTY in the right-side
-panel of the dashboard. The `server` block is **required** when
-terminals are enabled — PTY traffic flows over a direct WebSocket, not
-Redis, so the sidecar needs to know where to dial.
+Click **create**. The agent appears in the sidebar within a fraction
+of a second; click it and `+ new session` to start a streaming chat.
 
-```yaml
-server:
-  url: http://localhost:4000       # the Argus server
-  # token: ${SIDECAR_LINK_TOKEN}   # must match the server's env var if set
+To remove an agent permanently, open the machine's focus view (click
+the machine name) and use the trash icon next to the agent. That
+hard-deletes the agent and its history. To just hide an agent from
+the sidebar without losing data, use the **archive** button on its
+sidebar row instead.
 
-terminal:
-  enabled: true
-  shells: ["/bin/zsh", "/bin/bash", "/bin/sh"]
-  # defaultShell: /bin/zsh   # optional; falls back to $SHELL ∩ shells, then shells[0]
-  # maxSessions: 5           # cap concurrent PTYs per sidecar
-  # cwd: ~/work              # defaults to workingDir
-```
+#### Optional: interactive terminal opt-in
 
-On the server side, set `SIDECAR_LINK_TOKEN` in `.env` to a long random
-string in production; sidecars must send the same value in
-`server.token`. An empty server-side token is accepted for local dev
-(the server logs a loud warning on boot).
+The PTY is per-agent, enabled at create time via the "attach
+interactive terminal" checkbox. Server-side, set
+`SIDECAR_LINK_TOKEN` in `.env` to a long random string in production
+and pass the same value as `--token` to `argus-sidecar init`. An
+empty server-side token is accepted for local dev (the server logs a
+loud warning on boot).
 
-> **Security**: this gives every dashboard user shell-as-sidecar-user on
-> this host. Only enable on machines where that's an acceptable trust
-> model. The sidecar enforces a `shells` allowlist and a session cap;
-> the server scopes terminals to the opening user; every open/close is
-> recorded in the `Terminal` table for audit. Transcripts are **not**
-> persisted by design.
+> **Security**: enabling the terminal grants every dashboard user
+> shell-as-sidecar-user on this host. Only enable on machines where
+> that's an acceptable trust model. The sidecar enforces a default
+> shell allowlist (`$SHELL`, `/bin/bash`, `/bin/zsh`, `/bin/sh`) and
+> a session cap; the server scopes terminals to the opening user;
+> every open/close is recorded in the `Terminal` table for audit.
+> Transcripts are **not** persisted by design.
 
 ### 3. Local development without Docker
 
@@ -249,8 +279,10 @@ pnpm --filter @argus/server dev
 # Web (Vite)
 pnpm --filter @argus/web dev
 
-# Sidecar
-cd packages/sidecar && go run ./cmd/sidecar --config ../../deploy/sidecar.claude.example.yaml
+# Sidecar (one-time init, then run)
+cd packages/sidecar
+go run ./cmd/sidecar init --bus redis://localhost:6379 --server http://localhost:4000
+go run ./cmd/sidecar
 ```
 
 ## Common tasks
@@ -262,7 +294,9 @@ cd packages/sidecar && go run ./cmd/sidecar --config ../../deploy/sidecar.claude
 | Build everything                    | `pnpm build`                                          |
 | Apply a Prisma migration            | `pnpm --filter @argus/server exec prisma migrate dev` |
 | Re-seed the admin user              | `pnpm --filter @argus/server seed`                    |
-| List adapters compiled into sidecar | `./packages/sidecar/bin/sidecar --list-adapters`      |
+| List adapters compiled into sidecar | `./packages/sidecar/bin/argus-sidecar --list-adapters`|
+| Re-init sidecar config              | `argus-sidecar init --force`                          |
+| Show sidecar's cached config path   | `argus-sidecar version`                               |
 | Open Prisma Studio                  | `pnpm --filter @argus/server exec prisma studio`      |
 
 
@@ -285,9 +319,10 @@ See `[.env.example](./.env.example)` for the full list. Highlights:
 
 1. Create `packages/sidecar/internal/adapter/myagent.go`.
 2. Implement the `Adapter` interface (usually 20–40 lines — reuse `clistream.Start`).
-3. Call `adapter.Register("my-agent", newMyAgent)` from `init()`.
-4. Rebuild the sidecar.
-5. Point a `sidecar.yaml` at it with `type: my-agent`.
+3. Call `adapter.Register("my-agent", &adapter.Plugin{Factory: newMyAgent, DefaultBinary: "my-cli"})` from `init()`.
+4. Rebuild the sidecar with `make` (or just `go build` for a host-only binary).
+5. The next time the daemon boots it will discover `my-cli` on `PATH` and
+   make it selectable in the dashboard's "create agent" popover.
 
 No changes are needed in the server, dashboard, or protocol — `AgentType` is
 an open string and the UI falls back to a generic icon for unknown types.
