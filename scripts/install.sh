@@ -282,8 +282,11 @@ esac
 cat <<EOF >&2
 
 ${BOLD}Next steps${RESET}
-  - Write a sidecar config:  https://github.com/${REPO}/blob/main/INSTALLATION.md#step-6-write-the-sidecar-yaml
-  - Run it:                  ${BIN_NAME} --config sidecar.yaml
-  - Self-update later with:  ${BIN_NAME} update
+  - One-time setup (interactive):  ${BIN_NAME} init
+        scripted:                  ${BIN_NAME} init --bus REDIS_URL --server https://argus.your.tld --token \$SIDECAR_LINK_TOKEN
+  - Run it:                        ${BIN_NAME}
+  - Background it (launchd/systemd) — see:
+        https://github.com/${REPO}/blob/main/INSTALLATION.md#step-6-initialize-the-sidecar
+  - Self-update later with:        ${BIN_NAME} update
 
 EOF
