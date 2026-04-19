@@ -17,7 +17,7 @@ are intentionally **out of scope** — see the trade-offs section below.
 
 ## What this chart deploys
 
-- `Deployment` + `Service` + `ServiceAccount` + (optional) `PodDisruptionBudget` for `argus-server`
+- `Deployment` + `Service` + (optional) `PodDisruptionBudget` for `argus-server`
 - `Deployment` + `Service` + (optional) `PodDisruptionBudget` for `argus-web`
 - `Secret` containing the server's sensitive env vars (JWT secret, admin
 password, sidecar-link token, optionally the database/Redis URLs)

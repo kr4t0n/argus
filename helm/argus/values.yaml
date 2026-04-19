@@ -143,11 +143,6 @@ server:
     runAsNonRoot: true
     runAsUser: 1000
 
-  serviceAccount:
-    create: true
-    name: ""
-    annotations: {}
-
 # ─── Web ─────────────────────────────────────────────────────────────
 web:
   enabled: true

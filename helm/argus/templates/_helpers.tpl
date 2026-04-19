@@ -92,14 +92,6 @@ unconfigured chart always pulls the matching app release.
 {{- printf "%s/%s:%s" $reg $repo $tag -}}
 {{- end -}}
 
-{{- define "argus.serviceAccountName" -}}
-{{- if .Values.server.serviceAccount.create -}}
-{{- default (include "argus.server.fullname" .) .Values.server.serviceAccount.name -}}
-{{- else -}}
-{{- default "default" .Values.server.serviceAccount.name -}}
-{{- end -}}
-{{- end -}}
-
 {{/*
 Validate that the user supplied either inline secrets or an existing
 Secret reference. Trips a `helm install` failure with a helpful
