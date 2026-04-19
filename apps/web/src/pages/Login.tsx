@@ -5,8 +5,8 @@ import { Button } from '../components/ui/Button';
 
 export function Login() {
   const login = useAuthStore((s) => s.login);
-  const [email, setEmail] = useState('admin@argus.local');
-  const [password, setPassword] = useState('changeme');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const nav = useNavigate();
@@ -30,7 +30,6 @@ export function Login() {
       <form
         onSubmit={submit}
         className="surface rounded-xl w-[360px] p-6 space-y-4"
-        autoComplete="off"
       >
         <div className="flex items-center gap-2 mb-2">
           <div className="h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.6)]" />
@@ -43,6 +42,8 @@ export function Login() {
         <Field label="Email">
           <input
             type="email"
+            name="email"
+            autoComplete="username"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
@@ -52,6 +53,8 @@ export function Login() {
         <Field label="Password">
           <input
             type="password"
+            name="password"
+            autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
