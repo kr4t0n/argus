@@ -265,6 +265,29 @@ WebSocket upgrade is automatic in Caddy. For nginx remember
 `proxy_set_header Upgrade $http_upgrade;` + `Connection "upgrade"` on
 the API location.
 
+#### Deploying on Kubernetes (Helm)
+
+If you'd rather run the control plane on a cluster, the same images
+ship as a Helm chart published to a GitHub Pages-served repo:
+
+```bash
+helm repo add argus https://kr4t0n.github.io/argus/helm
+helm repo update
+
+helm install argus argus/argus \
+  --namespace argus --create-namespace \
+  --set externalDatabase.url='postgresql://argus:STRONG_PW@db.example.com:5432/argus?schema=public&sslmode=require' \
+  --set externalRedis.url='rediss://default:STRONG_PW@redis.example.com:6379' \
+  --set auth.jwtSecret="$(openssl rand -hex 32)" \
+  --set auth.adminPassword='<a-strong-password>' \
+  --set auth.sidecarLinkToken="$(openssl rand -hex 32)"
+```
+
+Postgres and Redis stay external (managed services or in-cluster
+sub-charts) — the chart deploys only `argus-server` + `argus-web` plus
+optional `Ingress`. See [`helm/argus/README.md`](./helm/argus/README.md)
+for the full values reference and ingress recipes.
+
 ### Step 4: Sign in
 
 Open `http://<host>:5173` (or your proxied domain). Sign in with the

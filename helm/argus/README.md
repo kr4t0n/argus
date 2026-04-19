@@ -38,14 +38,30 @@ on each host and run `argus-sidecar init`.
 
 ## Quick install
 
+The chart is published to a Helm repo at
+**https://kr4t0n.github.io/argus/helm**, refreshed by the
+[`helm-publish`](../../.github/workflows/helm-publish.yml) workflow on
+every change to `helm/**` on `main`. Pull-and-install:
+
 ```bash
-helm install argus ./helm/argus \
+helm repo add argus https://kr4t0n.github.io/argus/helm
+helm repo update
+
+helm install argus argus/argus \
   --namespace argus --create-namespace \
   --set externalDatabase.url='postgresql://argus:argus@my-pg:5432/argus?schema=public' \
   --set externalRedis.url='redis://my-redis:6379' \
   --set auth.jwtSecret="$(openssl rand -hex 32)" \
   --set auth.adminPassword='change-me-now' \
   --set auth.sidecarLinkToken="$(openssl rand -hex 32)"
+```
+
+If you've cloned the repo and want to test local changes, swap the
+chart reference for the path:
+
+```bash
+helm install argus ./helm/argus --namespace argus --create-namespace \
+  ...
 ```
 
 The chart will refuse to install if the required secrets are missing —
@@ -126,35 +142,25 @@ container start, so the same image works for any deployment shape
 without a rebuild. Resolution order in `apps/web/src/lib/host.ts`:
 
 1. `window.__ARGUS_CONFIG__.apiUrl` — populated from the container's
-   `ARGUS_API_URL` env var (the chart wires this from
+  `ARGUS_API_URL` env var (the chart wires this from
    `web.config.apiUrl`).
 2. `import.meta.env.VITE_API_URL` — only set if you built the image
-   yourself with `--build-arg VITE_API_URL=…`. Default is empty.
+  yourself with `--build-arg VITE_API_URL=…`. Default is empty.
 3. `<window.location.protocol>//<window.location.hostname>:4000` —
-   browser-side fallback. Useful for `localhost` and LAN dev.
+  browser-side fallback. Useful for `localhost` and LAN dev.
 
 Three clean deployment shapes:
 
 1. **Two hostnames (recommended for prod).** Web on `argus.example.com`,
-   API on `argus-api.example.com`. Set:
-   ```yaml
-   web:
-     config:
-       apiUrl: https://argus-api.example.com
-       wsUrl:  https://argus-api.example.com
-   ingress:
-     enabled: true
-     web:    { host: argus.example.com,     tls: { enabled: true, secretName: argus-web-tls } }
-     server: { host: argus-api.example.com, tls: { enabled: true, secretName: argus-api-tls } }
-   ```
+  API on `argus-api.example.com`. Set:
    No custom image rebuild needed.
 2. **Same hostname, port 4000 exposed.** Web on `argus.example.com:443`,
-   API on `argus.example.com:4000` via a TCP listener on the ingress
+  API on `argus.example.com:4000` via a TCP listener on the ingress
    controller (or a separate `LoadBalancer` Service). Leave
    `web.config.apiUrl` empty — the SPA's hostname-derivation fallback
    handles it.
 3. **Path-routed (`/api` → server, `/` → web).** Set
-   `web.config.apiUrl: https://argus.example.com/api` and ship a custom
+  `web.config.apiUrl: https://argus.example.com/api` and ship a custom
    Ingress that rewrites the prefix off before forwarding to the
    server. Disable the chart's Ingress (`ingress.enabled: false`) and
    apply your own.
@@ -218,6 +224,28 @@ restarts the pods rather than silently leaving the old value in
 memory). The strategy is `RollingUpdate` with `maxUnavailable: 0` /
 `maxSurge: 1` because the server runs `prisma migrate deploy` at boot
 and we don't want two boots racing the schema lock.
+
+## Releasing a new chart version
+
+The published Helm repo lives on the `gh-pages` branch under `helm/`.
+The `helm-publish` workflow runs on every push to `main` that touches
+`helm/**`, packages the chart, and merges the new tarball into
+`index.yaml`.
+
+Two important contracts:
+
+1. **`helm package` refuses to overwrite an existing `name-version`
+   tarball.** That's the safety net — the only way to actually publish
+   a new release is to bump `helm/argus/Chart.yaml`'s `version:`. A
+   merge to main that edits a template but forgets to bump the version
+   is a no-op for end users.
+2. **Old versions are preserved.** `helm repo index --merge` carries
+   forward every previously-published version, so a user pinned to
+   `0.1.1` keeps working after we ship `0.2.0`.
+
+The convention is to bump `version` and `appVersion` together when the
+images change, and to bump only `version` for chart-only fixes (a
+template edit that doesn't change the deployed app).
 
 ## Uninstall
 

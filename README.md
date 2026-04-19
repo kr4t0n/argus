@@ -84,7 +84,9 @@ argus/
 > [**INSTALLATION.md**](INSTALLATION.md) for the production install
 > guide — it covers managed Postgres / Redis options, putting the
 > dashboard behind a reverse proxy, and installing sidecars on remote
-> agent machines with launchd / systemd recipes.
+> agent machines with launchd / systemd recipes. Running on
+> Kubernetes? `helm repo add argus https://kr4t0n.github.io/argus/helm`
+> — full chart docs in [`helm/argus/README.md`](helm/argus/README.md).
 
 ### 1. Bring up Postgres, Redis, server, and web
 
