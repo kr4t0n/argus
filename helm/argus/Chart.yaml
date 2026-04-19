@@ -7,16 +7,14 @@ description: |
   the bitnami subcharts alongside.
 type: application
 
-# Chart version is independent of the app it ships. Bump on chart changes.
-# 0.1.2-test.1 — pre-release marker for a smoke test of helm-publish CI
-# against a manually-built docker image. Bump to 0.1.2 (stable) once the
-# runtime-config images are merged + published via docker-publish.yml.
-version: 0.1.2-test.6
-# App version tracks the Docker image tags pulled by default. The
-# `manual-*` tag below points at a docker image built from this branch
-# by hand (workflow_dispatch on docker-publish) so the chart can pull
-# the runtime-VITE-env-vars feature without waiting for a main merge.
-appVersion: "manual-24629223743"
+# Chart version is independent of the app it ships. Bump on chart
+# changes. Releasing a new chart version only requires bumping this
+# field — see helm-publish.yml.
+version: 0.1.2
+# App version tracks the Docker image tags pulled by default. Bump in
+# lockstep with `version` whenever the chart starts requiring features
+# only present in newer images; otherwise it can lag.
+appVersion: "0.1.2"
 
 home: https://github.com/kr4t0n/argus
 sources:
