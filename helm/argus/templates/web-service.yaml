@@ -1,0 +1,22 @@
+{{- if .Values.web.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "argus.web.fullname" . }}
+  labels:
+    {{- include "argus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+  {{- with (merge .Values.web.service.annotations .Values.commonAnnotations) }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.web.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.web.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "argus.web.selectorLabels" . | nindent 4 }}
+{{- end }}

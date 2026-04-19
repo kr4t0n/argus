@@ -1,0 +1,30 @@
+apiVersion: v2
+name: argus
+description: |
+  Argus — multi-machine agent management dashboard. This chart deploys the
+  control plane (NestJS server + React web UI). PostgreSQL and Redis are
+  intentionally NOT bundled — point at your own managed instances or run
+  the bitnami subcharts alongside.
+type: application
+
+# Chart version is independent of the app it ships. Bump on chart
+# changes. Releasing a new chart version only requires bumping this
+# field — see helm-publish.yml.
+version: 0.1.2
+# App version tracks the Docker image tags pulled by default. Bump in
+# lockstep with `version` whenever the chart starts requiring features
+# only present in newer images; otherwise it can lag.
+appVersion: "0.1.2"
+
+home: https://github.com/kr4t0n/argus
+sources:
+  - https://github.com/kr4t0n/argus
+keywords:
+  - argus
+  - agents
+  - claude-code
+  - codex
+  - cursor-cli
+maintainers:
+  - name: kr4t0n
+    url: https://github.com/kr4t0n

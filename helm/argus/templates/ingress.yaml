@@ -1,0 +1,92 @@
+{{- /*
+Renders one Ingress object PER service (web, server) when its host is
+set. We deliberately don't fold both hosts into a single Ingress with
+two `rules` for two reasons:
+
+  1. The tailscale Kubernetes operator maps one Ingress -> one tailnet
+     device (named from `tls.hosts[0]`). A two-rule Ingress only ever
+     becomes one device, which collapses our split-host design.
+  2. Per-Ingress annotations (cert-manager issuer, WS timeouts, …) and
+     per-service TLS Secrets are usually configured independently, so
+     keeping the docs separate avoids cross-contamination.
+
+  Plain nginx-ingress / traefik / haproxy users see the same behaviour
+  they would from a two-rule Ingress, just spread across two manifests.
+*/}}
+{{- if .Values.ingress.enabled -}}
+{{- $ann := merge .Values.ingress.annotations .Values.commonAnnotations -}}
+
+{{- if and .Values.web.enabled .Values.ingress.web.host }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "argus.web.fullname" . }}
+  labels:
+    {{- include "argus.labels" . | nindent 4 }}
+  {{- with $ann }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.web.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.web.path }}
+            pathType: {{ .Values.ingress.web.pathType }}
+            backend:
+              service:
+                name: {{ include "argus.web.fullname" . }}
+                port:
+                  name: http
+  {{- if .Values.ingress.web.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.web.host | quote }}
+      {{- if .Values.ingress.web.tls.secretName }}
+      secretName: {{ .Values.ingress.web.tls.secretName | quote }}
+      {{- end }}
+  {{- end }}
+{{- end }}
+
+{{- if and .Values.server.enabled .Values.ingress.server.host }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "argus.server.fullname" . }}
+  labels:
+    {{- include "argus.labels" . | nindent 4 }}
+  {{- with $ann }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.server.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.server.path }}
+            pathType: {{ .Values.ingress.server.pathType }}
+            backend:
+              service:
+                name: {{ include "argus.server.fullname" . }}
+                port:
+                  name: http
+  {{- if .Values.ingress.server.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.server.host | quote }}
+      {{- if .Values.ingress.server.tls.secretName }}
+      secretName: {{ .Values.ingress.server.tls.secretName | quote }}
+      {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}

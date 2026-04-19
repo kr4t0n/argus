@@ -1,0 +1,118 @@
+# ─────────────────────────────────────────────────────────────────────
+# Argus on Kubernetes — Tailscale Ingress example
+#
+# Two-hostname layout served entirely over the tailnet:
+#
+#   argus      → web (React SPA)
+#   argus-api  → server (NestJS REST + Socket.IO + sidecar/terminal WS)
+#
+# Each Ingress object becomes its own tailnet device, so both
+# endpoints get auto-issued HTTPS certs from Tailscale and are reachable
+# at https://<name>.<tailnet>.ts.net (and via MagicDNS short names from
+# inside the tailnet).
+#
+# Prerequisites:
+#   - The tailscale Kubernetes operator is installed in the cluster:
+#       https://tailscale.com/kb/1236/kubernetes-operator
+#   - You've created an external Secret named `argus-secret` containing
+#     ALL of these keys:
+#         DATABASE_URL          postgresql://...
+#         REDIS_URL             rediss://... (or redis://...)
+#         JWT_SECRET            32+ random bytes (openssl rand -hex 32)
+#         ADMIN_PASSWORD        bootstrap admin password
+#         SIDECAR_LINK_TOKEN    32+ random bytes (terminal feature; optional)
+#     e.g.
+#       kubectl -n argus create secret generic argus-secret \
+#         --from-literal=DATABASE_URL='postgresql://argus:pw@pg/argus?schema=public' \
+#         --from-literal=REDIS_URL='rediss://default:pw@redis:6379' \
+#         --from-literal=JWT_SECRET="$(openssl rand -hex 32)" \
+#         --from-literal=ADMIN_PASSWORD='change-me-now' \
+#         --from-literal=SIDECAR_LINK_TOKEN="$(openssl rand -hex 32)"
+#
+# Install:
+#   helm repo add argus https://kr4t0n.github.io/argus/helm
+#   helm install argus argus/argus \
+#     --namespace argus --create-namespace \
+#     -f examples/values.tailscale.yaml
+# ─────────────────────────────────────────────────────────────────────
+
+# ─── Reuse one external Secret for everything ────────────────────────
+# All three blocks point at the same `argus-secret`. The chart's own
+# generated server Secret is suppressed when auth.existingSecret is set.
+externalDatabase:
+  existingSecret: argus-secret
+  existingSecretKey: DATABASE_URL
+
+externalRedis:
+  existingSecret: argus-secret
+  existingSecretKey: REDIS_URL
+
+auth:
+  # JWT_SECRET, ADMIN_PASSWORD, and SIDECAR_LINK_TOKEN come from the
+  # external Secret. ADMIN_EMAIL and JWT_EXPIRES_IN are non-sensitive
+  # and stay as plain values.
+  existingSecret: argus-secret
+  adminEmail: "admin@argus.local"
+  jwtExpiresIn: "never"   # long-lived terminal sessions hate token rotation
+
+# ─── Web SPA ─────────────────────────────────────────────────────────
+web:
+  config:
+    # The SPA runs in a browser on whatever device the user opens. Both
+    # patterns work — pick whichever your users will type:
+    #
+    #   1) MagicDNS short name (in-tailnet only):
+    #      apiUrl: "https://argus-api"
+    #
+    #   2) Full tailnet FQDN (works from any tailnet member, even when
+    #      the browser doesn't have MagicDNS configured):
+    #      apiUrl: "https://argus-api.<your-tailnet>.ts.net"
+    #
+    # IMPORTANT: replace <your-tailnet> with the slug from `tailscale
+    # status --json | jq .MagicDNSSuffix` (drops the `.ts.net`).
+    apiUrl: "https://argus-api.your-tailnet.ts.net"
+    # wsUrl defaults to apiUrl when empty — no need to set it unless
+    # you split HTTP and WebSocket onto different hosts.
+    wsUrl: ""
+
+# ─── Ingress: one Ingress per host = one tailnet device per host ─────
+# The ingress.yaml template renders TWO Ingress objects when both
+# `web.host` and `server.host` are set, because the tailscale operator
+# maps one Ingress -> one tailnet device (named from tls.hosts[0]).
+#
+# tls.enabled: true is required — it's how the tailscale controller
+# learns the device name. We leave secretName blank because tailscale
+# issues + manages certs itself; no Kubernetes Secret involved.
+ingress:
+  enabled: true
+  className: tailscale
+
+  # The web and server `host` values become the tailnet device names.
+  # Pick whatever short names you want; they show up under
+  # `tailscale status` and resolve via MagicDNS.
+  web:
+    host: argus
+    path: /
+    pathType: Prefix
+    tls:
+      enabled: true
+      secretName: ""   # tailscale issues its own cert
+
+  server:
+    host: argus-api
+    path: /
+    pathType: Prefix
+    tls:
+      enabled: true
+      secretName: ""
+
+  # Optional: pin the device to a specific Tailscale ACL tag set, or
+  # opt into Funnel for public Internet exposure. Drop these into
+  # `annotations:` if you need them — they're applied to BOTH Ingress
+  # objects, so use sparingly and create per-service overrides via
+  # extra raw manifests if you need different annotations per device.
+  #
+  # annotations:
+  #   tailscale.com/tags: "tag:argus"
+  #   tailscale.com/funnel: "true"
+  annotations: {}

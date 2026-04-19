@@ -1,0 +1,99 @@
+name: helm-publish
+
+# Publish the Argus Helm chart to a GitHub Pages-served repo at
+#   https://kr4t0n.github.io/argus/helm/
+# (i.e. the `helm/` subfolder of the gh-pages branch).
+#
+# Trigger: any push to main that touches `helm/**` or this workflow.
+# Bumping `helm/argus/Chart.yaml`'s `version:` is the natural release
+# action — `helm package` won't overwrite an existing tarball, so a
+# no-op merge with the same version is harmless and idempotent.
+#
+# Manual `workflow_dispatch` is also wired up for ad-hoc rebuilds /
+# index regeneration without a code change.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'helm/**'
+      - '.github/workflows/helm-publish.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # required to push commits to gh-pages
+
+concurrency:
+  # Serialize publishes — two parallel runs would race on `git push
+  # gh-pages`. We don't cancel-in-progress because each run finalizes
+  # an immutable artifact (a versioned .tgz) we don't want to lose.
+  group: helm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.0
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: pages
+
+      - name: Package & (re)index the chart under /helm
+        env:
+          # Pages URL the index will advertise for chart downloads. Must
+          # match the live Pages URL exactly — tarballs resolved from
+          # `index.yaml` are absolute, so a wrong base here yields 404s
+          # at install time even though the .tgz is sitting right there.
+          REPO_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/helm
+        run: |
+          set -euo pipefail
+          mkdir -p pages/helm
+
+          # Package every chart under helm/ — extend by adding more
+          # `helm package <chart>` lines if/when we ship sub-charts.
+          # `helm package` refuses to overwrite a tarball of the same
+          # `name-version`, which is exactly the safety net we want:
+          # the only way to publish is to bump Chart.yaml's `version`.
+          helm package helm/argus --destination pages/helm
+
+          # Rebuild index.yaml. `--merge` carries forward entries for
+          # chart versions that are already published, so a user can
+          # still pin to an older 0.1.x after we ship 0.2.0.
+          if [ -f pages/helm/index.yaml ]; then
+            helm repo index pages/helm \
+              --url "$REPO_URL" \
+              --merge pages/helm/index.yaml
+          else
+            helm repo index pages/helm --url "$REPO_URL"
+          fi
+
+          echo "Repo URL : $REPO_URL"
+          echo "Tarballs :"
+          ls -1 pages/helm/*.tgz || true
+
+      - name: Commit & push to gh-pages
+        working-directory: pages
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add helm
+          # Skip the commit if nothing actually changed (e.g. the
+          # workflow ran but Chart.yaml's version wasn't bumped — the
+          # tarball already exists and `helm repo index --merge`
+          # produced byte-identical YAML).
+          if git diff --staged --quiet; then
+            echo "no chart changes — nothing to publish"
+            exit 0
+          fi
+          git commit -m "chore(helm): publish chart from ${GITHUB_SHA::7}"
+          git push origin gh-pages

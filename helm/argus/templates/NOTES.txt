@@ -1,0 +1,47 @@
+Argus is starting up. Give the server pod ~30s to apply Prisma migrations
+on first boot.
+
+──────────────────────────────────────────────────────────────────────
+Reach the dashboard
+──────────────────────────────────────────────────────────────────────
+
+{{- if .Values.ingress.enabled }}
+{{- if and .Values.web.enabled .Values.ingress.web.host }}
+  Web: http{{ if .Values.ingress.web.tls.enabled }}s{{ end }}://{{ .Values.ingress.web.host }}{{ .Values.ingress.web.path }}
+{{- end }}
+{{- if and .Values.server.enabled .Values.ingress.server.host }}
+  API: http{{ if .Values.ingress.server.tls.enabled }}s{{ end }}://{{ .Values.ingress.server.host }}{{ .Values.ingress.server.path }}
+{{- end }}
+{{- else }}
+  Both Services are ClusterIP. Port-forward to test:
+
+    kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "argus.web.fullname" . }} 5173:{{ .Values.web.service.port }} &
+    kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "argus.server.fullname" . }} 4000:{{ .Values.server.service.port }} &
+
+  Then open http://localhost:5173 — the SPA derives the API URL from the
+  hostname you load it on, so it will hit http://localhost:4000.
+{{- end }}
+
+──────────────────────────────────────────────────────────────────────
+Default credentials
+──────────────────────────────────────────────────────────────────────
+
+  email:    {{ .Values.auth.adminEmail }}
+  password: <value of auth.adminPassword> (set at install time;
+            change after first login from the dashboard)
+
+──────────────────────────────────────────────────────────────────────
+Wire sidecars
+──────────────────────────────────────────────────────────────────────
+
+Sidecars run on the agent host machines (NOT in this cluster). On each
+host install the binary and run:
+
+  argus-sidecar init \
+    --bus    "<your Redis URL — must be reachable from the host>" \
+    --server "<URL the host can reach the API at>" \
+{{- if .Values.auth.sidecarLinkToken }}
+    --token  "$SIDECAR_LINK_TOKEN"   # must match auth.sidecarLinkToken
+{{- end }}
+
+The host appears in the dashboard sidebar within ~1s of startup.
