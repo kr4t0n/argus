@@ -133,6 +133,7 @@ export function SessionPanel() {
             commands={entry.commands}
             chunks={entry.chunks}
             running={running}
+            workingDir={agent?.workingDir}
           />
         </div>
 

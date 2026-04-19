@@ -10,6 +10,8 @@ type Props = {
   commands: CommandDTO[];
   chunks: ResultChunkDTO[];
   running: boolean;
+  /** Anchor used to relativize file chip paths (`AgentDTO.workingDir`). */
+  workingDir?: string | null;
 };
 
 /**
@@ -20,7 +22,7 @@ type Props = {
  *   • file chips for files the agent touched
  *   • errors surfaced inline.
  */
-export function StreamViewer({ commands, chunks, running }: Props) {
+export function StreamViewer({ commands, chunks, running, workingDir }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [stickBottom, setStickBottom] = useState(true);
 
@@ -57,6 +59,7 @@ export function StreamViewer({ commands, chunks, running }: Props) {
             command={g.command}
             chunks={g.chunks}
             running={running && isLast(g, grouped)}
+            workingDir={workingDir}
           />
         ))}
       </div>
@@ -99,10 +102,12 @@ function CommandBlock({
   command,
   chunks,
   running,
+  workingDir,
 }: {
   command: CommandDTO;
   chunks: ResultChunkDTO[];
   running: boolean;
+  workingDir?: string | null;
 }) {
   const deltaText = useMemo(
     () => chunks.filter((c) => c.kind === 'delta').map((c) => c.delta ?? '').join(''),
@@ -139,7 +144,7 @@ function CommandBlock({
         </div>
       )}
 
-      <FileChips files={files} />
+      <FileChips files={files} workingDir={workingDir} />
 
       {errorChunk && (
         <div className="flex items-start gap-2.5 rounded-md border border-red-900/50 bg-red-950/20 px-3 py-2">
