@@ -77,6 +77,9 @@ importers:
       pino-http:
         specifier: ^10.3.0
         version: 10.5.0
+      prisma:
+        specifier: ^5.22.0
+        version: 5.22.0
       reflect-metadata:
         specifier: ^0.2.2
         version: 0.2.2
@@ -111,9 +114,6 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
-      prisma:
-        specifier: ^5.22.0
-        version: 5.22.0
       tsx:
         specifier: ^4.19.2
         version: 4.21.0

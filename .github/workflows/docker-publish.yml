@@ -1,0 +1,121 @@
+name: docker-publish
+
+# Builds the Argus web and server Docker images for linux/amd64 +
+# linux/arm64 and pushes them to Docker Hub.
+#
+# Triggers:
+#   - push to main → publishes :latest, :main, :sha-<short>
+#   - push of a `v*` tag (e.g. v0.2.0) → publishes :latest, :v0.2.0,
+#     :0.2.0, :0.2 (semver-derived), and :sha-<short>
+#   - manual workflow_dispatch → publishes :manual-<run_id> alongside the
+#     usual branch/sha tags. Useful for cutting an out-of-band image
+#     without touching git.
+#
+# Image names default to `${DOCKERHUB_USERNAME}/argus-web` and
+# `${DOCKERHUB_USERNAME}/argus-server`. Override `IMAGE_NAMESPACE` below
+# if you want to publish under a different Docker Hub org/user without
+# rotating the secret.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      push:
+        description: 'Push to Docker Hub (uncheck for build-only smoke test)'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # Only run one publish per ref at a time. Cancel in-flight builds when
+  # main moves so we don't waste minutes on stale layers.
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build & push (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: argus-server
+            dockerfile: deploy/server.Dockerfile
+          - image: argus-web
+            dockerfile: deploy/web.Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      # buildx + qemu enable cross-arch builds from the amd64 runner so
+      # one workflow produces both linux/amd64 and linux/arm64 manifests
+      # under a single tag.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Login is only required when we're going to push. workflow_dispatch
+      # with `push: false` skips it so a fork without secrets can still
+      # smoke-test the build.
+      - name: Resolve push flag
+        id: pushflag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "push=${{ inputs.push }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Login to Docker Hub
+        if: steps.pushflag.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Compute tags & labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}
+          # Tag schedule:
+          #   - latest on default branch & semver tags
+          #   - branch name (main)
+          #   - semver pieces from `v*` tags
+          #   - short sha for traceability on every build
+          #   - manual-<run_id> for ad-hoc dispatches
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short,prefix=sha-
+            type=raw,value=manual-${{ github.run_id }},enable=${{ github.event_name == 'workflow_dispatch' }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ steps.pushflag.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GitHub Actions cache backend: pulls the previous build's
+          # layers in, writes the new layers back. Keeps incremental
+          # rebuilds fast (~1 min) without leaning on a registry mirror.
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          provenance: false

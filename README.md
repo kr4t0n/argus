@@ -84,6 +84,24 @@ The dashboard is at [http://localhost:5173](http://localhost:5173). Sign in with
 credentials (`admin@argus.local` / `changeme` by default — change them in
 `.env`).
 
+#### Pulling pre-built images instead of building locally
+
+Tagged commits and pushes to `main` publish multi-arch (amd64 + arm64)
+images to Docker Hub via `.github/workflows/docker-publish.yml`:
+
+```
+docker pull <DOCKERHUB_USERNAME>/argus-server:latest
+docker pull <DOCKERHUB_USERNAME>/argus-web:latest
+```
+
+Override the `image:` field in `deploy/docker-compose.yml` (or use a
+`docker-compose.override.yml`) to skip the local `build:` and pull
+those instead. The server image runs `prisma migrate deploy` on every
+boot, so first-time and rolling deployments need no manual migration
+step. The web image is generic — `host.ts` derives the API base URL
+from the browser's hostname at runtime, so the same image works behind
+any reverse proxy.
+
 ### 2. Build and run a sidecar
 
 The sidecar is **not** part of compose on purpose: you run it on whatever
