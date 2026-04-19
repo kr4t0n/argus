@@ -54,9 +54,18 @@ jobs:
           go-version: '1.23'
           cache-dependency-path: packages/sidecar/go.sum
 
+      - name: Resolve VERSION to bake into binary
+        id: ver
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "value=sidecar-v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Cross-compile ${{ matrix.target }}
         working-directory: packages/sidecar
-        run: make ${{ matrix.target }}
+        run: make ${{ matrix.target }} VERSION=${{ steps.ver.outputs.value }}
 
       - name: Generate SHA-256 checksum
         working-directory: packages/sidecar/bin
