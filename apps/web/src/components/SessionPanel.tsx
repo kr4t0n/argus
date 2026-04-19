@@ -92,7 +92,7 @@ export function SessionPanel() {
   return (
     <div className="flex h-full">
       <div className="flex flex-col flex-1 min-w-0">
-        <div className="flex items-center gap-3 px-5 py-2.5 border-b border-neutral-900">
+        <div className="h-12 shrink-0 flex items-center gap-3 px-5 border-b border-neutral-900">
           {agent && <AgentTypeIcon type={agent.type} />}
           <div className="flex items-center gap-2 min-w-0">
             <div className="text-sm font-medium text-neutral-100 truncate">

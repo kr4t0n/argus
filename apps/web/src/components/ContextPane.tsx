@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { AgentDTO, SessionDTO, CommandDTO } from '@argus/shared-types';
-import { ChevronDown, ChevronRight, Terminal as TerminalIcon } from 'lucide-react';
+import { Terminal as TerminalIcon } from 'lucide-react';
 import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
 import { StatusDot } from './ui/StatusDot';
 import { TerminalPane } from './TerminalPane';
@@ -145,11 +145,6 @@ function CollapsibleSection({
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-1.5 text-[10px] uppercase tracking-widest text-neutral-600 hover:text-neutral-400"
       >
-        {open ? (
-          <ChevronDown className="h-3 w-3" />
-        ) : (
-          <ChevronRight className="h-3 w-3" />
-        )}
         {icon}
         <span>{title}</span>
       </button>

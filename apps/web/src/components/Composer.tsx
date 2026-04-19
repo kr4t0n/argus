@@ -56,7 +56,7 @@ export function Composer({
   }
 
   return (
-    <div className="border-t border-neutral-900 bg-neutral-950 px-4 py-3">
+    <div className="bg-neutral-950 px-4 py-3">
       <div
         className={cn(
           'surface rounded-xl flex items-end gap-2 px-3 py-2.5',

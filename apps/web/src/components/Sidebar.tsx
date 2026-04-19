@@ -53,7 +53,7 @@ export function Sidebar() {
 
   return (
     <aside className="h-full w-full flex flex-col border-r border-neutral-900 bg-neutral-950">
-      <div className="px-4 py-3 border-b border-neutral-900 flex items-center justify-between">
+      <div className="h-12 shrink-0 px-4 border-b border-neutral-900 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
           <span className="text-sm font-semibold tracking-tight">Argus</span>
