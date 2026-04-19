@@ -10,9 +10,6 @@ interface AgentState {
   upsert: (a: AgentDTO) => void;
   setStatus: (id: string, status: AgentDTO['status']) => void;
   remove: (id: string) => void;
-  /** Convenience selector: agents that belong to a given machine, in
-   *  global sidebar order. The Sidebar groups by machine using this. */
-  forMachine: (machineId: string) => AgentDTO[];
 }
 
 export const useAgentStore = create<AgentState>((set, get) => ({
@@ -52,11 +49,23 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       order: get().order.filter((x) => x !== id),
     });
   },
-  forMachine(machineId) {
-    const { agents, order } = get();
-    return order.map((id) => agents[id]!).filter((a) => a && a.machineId === machineId);
-  },
 }));
+
+/**
+ * Pick the agents that belong to a given machine, in global sort order.
+ * Pure helper — call from a `useMemo`/component, *not* as a zustand
+ * selector. Returning a freshly-allocated array on every snapshot would
+ * make `useSyncExternalStore` think the slice changed every render and
+ * trip React's infinite-loop guard.
+ */
+export function selectAgentsForMachine(
+  state: { agents: Record<string, AgentDTO>; order: string[] },
+  machineId: string,
+): AgentDTO[] {
+  return state.order
+    .map((id) => state.agents[id]!)
+    .filter((a) => a && a.machineId === machineId);
+}
 
 function sortOrder(order: string[], agents: Record<string, AgentDTO>): string[] {
   const statusWeight: Record<AgentDTO['status'], number> = {
