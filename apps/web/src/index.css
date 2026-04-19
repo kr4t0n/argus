@@ -96,3 +96,29 @@
 .markdown a {
   @apply text-sky-400 hover:underline;
 }
+/* GFM tables. Without these the table dumps as raw text — no borders,
+   no cell padding, no header background — because we don't ship a
+   prose plugin. Match the surrounding dark theme: subtle border, dim
+   header row, generous cell padding, and a horizontal scroll wrapper
+   so a wide table doesn't blow out the message column. */
+.markdown table {
+  @apply my-3 w-full border-collapse text-sm;
+  display: block;
+  overflow-x: auto;
+}
+.markdown thead {
+  @apply bg-neutral-900/60;
+}
+.markdown th,
+.markdown td {
+  @apply border border-neutral-800 px-3 py-1.5 align-top;
+}
+.markdown th {
+  @apply text-left font-semibold text-neutral-100;
+}
+.markdown td {
+  @apply text-neutral-300;
+}
+.markdown tbody tr:nth-child(even) {
+  @apply bg-neutral-900/30;
+}
