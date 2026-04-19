@@ -207,14 +207,24 @@ web:
   topologySpreadConstraints: []
 
   podSecurityContext: {}
+  # The bundled web image is built FROM nginx:alpine, whose master
+  # process starts as root, chowns /var/cache/nginx/* to UID 101 (the
+  # `nginx` user), binds :80, and only THEN drops privileges to that
+  # uid for worker processes. The chown needs CAP_CHOWN, the bind to
+  # :80 needs CAP_NET_BIND_SERVICE, the setuid needs CAP_SETUID — i.e.
+  # the kernel default capability set. Stripping with `drop: [ALL]`
+  # breaks startup with `chown(...) failed (Operation not permitted)`.
+  #
+  # We therefore only set `allowPrivilegeEscalation: false` (the
+  # process can't gain MORE privs after exec) and leave the kernel
+  # defaults alone. Override below to lock down further if your
+  # cluster's Pod Security Admission permits — but if PSA is set to
+  # `restricted`, switch to a non-root nginx base image instead (the
+  # nginxinc/nginx-unprivileged variant listens on :8080 and runs as
+  # UID 101 from PID 1, which is compatible with `drop: [ALL]` +
+  # `runAsNonRoot: true`).
   securityContext:
     allowPrivilegeEscalation: false
-    capabilities:
-      drop: ["ALL"]
-    # nginx unprivileged image isn't used here; keep root for default
-    # nginx:alpine which binds :80. Switch images and toggle these to
-    # run rootless.
-    runAsNonRoot: false
 
 # ─── Ingress ─────────────────────────────────────────────────────────
 # IMPORTANT: the SPA derives the API URL at runtime from
