@@ -258,13 +258,3 @@ ingress:
     tls:
       enabled: false
       secretName: ""
-
-# ─── Pod Disruption Budget ───────────────────────────────────────────
-# Useful in multi-replica setups; ignored when replicaCount=1.
-pdb:
-  server:
-    enabled: false
-    minAvailable: 1
-  web:
-    enabled: false
-    minAvailable: 1
