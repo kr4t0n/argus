@@ -311,8 +311,10 @@ See `[.env.example](./.env.example)` for the full list. Highlights:
 | `REDIS_URL`            | Redis connection string used by server **and** sidecars |
 | `JWT_SECRET`           | HMAC secret for auth tokens                             |
 | `ADMIN_EMAIL/PASSWORD` | Bootstrapped admin credentials                          |
-| `VITE_API_URL`         | URL the web app uses for REST calls                     |
-| `VITE_WS_URL`          | URL the web app uses for Socket.IO                      |
+| `ARGUS_API_URL`        | Runtime URL the web app uses for REST calls (rendered into `/config.js` at container start; empty = derive from the page hostname) |
+| `ARGUS_WS_URL`         | Runtime URL the web app uses for Socket.IO; defaults to `ARGUS_API_URL` |
+| `VITE_API_URL`         | Build-time fallback baked into the web bundle (only used if you build your own image) |
+| `VITE_WS_URL`          | Build-time fallback for Socket.IO (only used if you build your own image) |
 
 
 ## Adding a custom CLI agent

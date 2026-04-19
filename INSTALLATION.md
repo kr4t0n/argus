@@ -185,6 +185,13 @@ services:
     image: kr4t0n/argus-web:0.1.0
     restart: unless-stopped
     depends_on: [server]
+    environment:
+      # Optional — leave blank to let the SPA derive the API URL from
+      # the browser's own hostname at port 4000 (works for localhost
+      # and LAN dev). Set to e.g. https://argus-api.example.com if you
+      # split the API onto a separate hostname behind a reverse proxy.
+      ARGUS_API_URL: ""
+      ARGUS_WS_URL: ""
     ports:
       - '5173:80'
 ```
@@ -231,10 +238,13 @@ Bootstrapped admin you@your-domain.com
 Argus control plane listening on :4000
 ```
 
-The web image is **runtime-generic**: `host.ts` derives the API base URL
-from the browser's hostname at load time, so the same image works whether
-you reach the dashboard at `http://localhost:5173`, the host's LAN IP,
-or a public domain behind a reverse proxy. No rebuild needed.
+The web image is **runtime-configurable**: it renders `/config.js` from
+the `ARGUS_API_URL` / `ARGUS_WS_URL` env vars at container start, and
+`host.ts` reads `window.__ARGUS_CONFIG__` first. If those are blank,
+the SPA falls back to deriving `<browser-hostname>:4000`, so the same
+image works whether you reach the dashboard at `http://localhost:5173`,
+the host's LAN IP, or a public domain behind a reverse proxy. No
+rebuild needed in any of these cases.
 
 #### Putting it behind a reverse proxy
 
