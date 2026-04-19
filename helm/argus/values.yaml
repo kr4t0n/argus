@@ -148,11 +148,26 @@ web:
   enabled: true
   replicaCount: 1
 
+  # The bundled `kr4t0n/argus-web` image is built FROM nginx:alpine,
+  # ships the React SPA bundle in /usr/share/nginx/html, and drops a
+  # /docker-entrypoint.d/40-argus-runtime-config.sh hook that renders
+  # `ARGUS_API_URL` / `ARGUS_WS_URL` into /config.js at container start
+  # (see deploy/web.entrypoint.sh).
+  #
+  # Override `repository` / `tag` to point at your own derivative image
+  # — useful for, e.g., rebuilding FROM nginxinc/nginx-unprivileged so
+  # the chart slots into restricted Pod Security Admission clusters
+  # without `runAsUser: 0`. Note that any third-party nginx image will
+  # need to ALSO ship the SPA bundle and the runtime-config entrypoint
+  # hook; see deploy/web.Dockerfile for the recipe to fork.
   image:
     repository: kr4t0n/argus-web
     tag: ""
 
-  # nginx in the bundled image listens on 80.
+  # The bundled image's nginx listens on :80. Switch to :8080 (or
+  # whatever port your custom image binds) when overriding `image`
+  # above. The Service / probes / Ingress backend all derive from this
+  # via the named `http` port, so this is the only place to change it.
   containerPort: 80
 
   service:

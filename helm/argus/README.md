@@ -165,6 +165,45 @@ Three clean deployment shapes:
    server. Disable the chart's Ingress (`ingress.enabled: false`) and
    apply your own.
 
+## Swapping the web image
+
+The default `web.image.repository` is `kr4t0n/argus-web`, our own
+multi-stage build FROM `nginx:alpine` that bundles the React SPA and a
+`/docker-entrypoint.d/` hook to render `ARGUS_API_URL` →
+`/config.js` at container start. That image needs `runAsUser: 0` (its
+nginx master chowns cache dirs and binds :80 before dropping to UID
+101 for workers) — fine on default-PSA clusters, blocked on
+`restricted` ones.
+
+To run the chart on a `restricted` Pod Security Admission cluster
+without `runAsUser: 0`, build a fork of [`deploy/web.Dockerfile`](https://github.com/kr4t0n/argus/blob/main/deploy/web.Dockerfile)
+that swaps `FROM nginx:alpine` for `FROM nginxinc/nginx-unprivileged:alpine`
+(everything else — the SPA copy and the entrypoint hook — keeps
+working unchanged). Push it somewhere your cluster can pull, then:
+
+```yaml
+web:
+  image:
+    repository: my-org/argus-web-unprivileged
+    tag: "0.1.2"
+  containerPort: 8080            # nginx-unprivileged binds :8080
+  service:
+    port: 80                     # external still 80, targetPort follows containerPort
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    runAsNonRoot: true
+    runAsUser: 101
+```
+
+Pointing `web.image.repository` at a stock `nginx` / `nginx-unprivileged`
+image without baking in the SPA + entrypoint hook will leave you with
+a generic nginx serving "Welcome to nginx!" — the runtime-config
+injection lives in the image, not the chart. (We may ship a
+chart-managed ConfigMap variant in a future release; track that
+separately.)
+
 ## Ingress shape
 
 The chart renders **one Ingress object per service** when both
