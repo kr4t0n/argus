@@ -1,0 +1,124 @@
+name: sidecar-release
+
+# Builds the Argus sidecar for all supported OS/arch targets and attaches
+# the binaries (plus SHA-256 checksums) to a GitHub Release.
+#
+# Triggers:
+#   - push of a tag matching `sidecar-v*` (e.g. `sidecar-v0.2.0`) — the tag
+#     name minus the `sidecar-` prefix is used as the release name.
+#   - manual `workflow_dispatch` with a required `version` input
+#     (e.g. `0.2.0` → release named `sidecar-v0.2.0`). Useful for cutting
+#     a release without first pushing a tag.
+
+on:
+  push:
+    tags:
+      - 'sidecar-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (without the `sidecar-v` prefix), e.g. 0.2.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write # required to create releases & upload artifacts
+
+concurrency:
+  # One release run at a time per ref. Cancel in-flight if a new tag lands.
+  group: sidecar-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Cross-compile each target in parallel ─────────────────────────────
+  # We always run the build on ubuntu-latest because Go cross-compilation
+  # needs no host toolchain (CGO_ENABLED=0). Matching the local Makefile
+  # targets keeps build flags in lockstep — nothing here re-specifies
+  # -trimpath / -ldflags; they live in the Makefile.
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - linux-amd64
+          - linux-arm64
+          - darwin-amd64
+          - darwin-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: packages/sidecar/go.sum
+
+      - name: Cross-compile ${{ matrix.target }}
+        working-directory: packages/sidecar
+        run: make ${{ matrix.target }}
+
+      - name: Generate SHA-256 checksum
+        working-directory: packages/sidecar/bin
+        run: sha256sum argus-sidecar-${{ matrix.target }} > argus-sidecar-${{ matrix.target }}.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: argus-sidecar-${{ matrix.target }}
+          path: |
+            packages/sidecar/bin/argus-sidecar-${{ matrix.target }}
+            packages/sidecar/bin/argus-sidecar-${{ matrix.target }}.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── Aggregate artifacts and publish the GitHub Release ────────────────
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release tag and name
+        id: meta
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="sidecar-v${{ inputs.version }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "name=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh dist
+
+      - name: Aggregate SHA-256 checksums
+        working-directory: dist
+        run: |
+          # Concatenate per-binary .sha256 files into one SHASUMS256.txt so
+          # users can verify everything with `sha256sum -c SHASUMS256.txt`.
+          cat *.sha256 | sort > SHASUMS256.txt
+          rm -f *.sha256
+          cat SHASUMS256.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/argus-sidecar-linux-amd64
+            dist/argus-sidecar-linux-arm64
+            dist/argus-sidecar-darwin-amd64
+            dist/argus-sidecar-darwin-arm64
+            dist/SHASUMS256.txt
