@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useMemo, useRef, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { Server, Trash2 } from 'lucide-react';
 import type { AgentDTO, AvailableAdapter } from '@argus/shared-types';
 import { useMachineStore } from '../stores/machineStore';
@@ -26,10 +26,25 @@ export function MachinePanel() {
   const machine = useMachineStore((s) =>
     machineId ? s.machines[machineId] : undefined,
   );
-  const agents = useAgentStore((s) =>
-    machineId ? s.forMachine(machineId) : [],
+  // Subscribe to the raw slices and compute the per-machine list with
+  // useMemo. We can't subscribe to `s.forMachine(machineId)` directly:
+  // it allocates a fresh array every call, and zustand's snapshot
+  // (useSyncExternalStore) is invoked on every render — a never-equal
+  // snapshot triggers React's "infinite update loop" bail-out and the
+  // pane renders blank. Selecting the underlying maps and deriving in
+  // a memo gives us a stable reference and a clean re-render only when
+  // the inputs actually change.
+  const agentsMap = useAgentStore((s) => s.agents);
+  const agentOrder = useAgentStore((s) => s.order);
+  const agents = useMemo(
+    () =>
+      machineId
+        ? agentOrder.map((id) => agentsMap[id]!).filter((a) => a && a.machineId === machineId)
+        : [],
+    [machineId, agentsMap, agentOrder],
   );
   const [showCreate, setShowCreate] = useState(false);
+  const createBtnRef = useRef<HTMLDivElement>(null);
 
   if (!machineId) return null;
   if (!machine) {
@@ -55,7 +70,7 @@ export function MachinePanel() {
           </span>
           <StatusDot status={machine.status === 'online' ? 'online' : 'offline'} />
         </div>
-        <div className="ml-auto relative">
+        <div ref={createBtnRef} className="ml-auto relative">
           <Button
             size="sm"
             variant="subtle"
@@ -65,12 +80,11 @@ export function MachinePanel() {
             new agent
           </Button>
           {showCreate && (
-            <div className="absolute right-0 top-full mt-1 z-40">
-              <CreateAgentPopover
-                machine={machine}
-                onClose={() => setShowCreate(false)}
-              />
-            </div>
+            <CreateAgentPopover
+              machine={machine}
+              anchor={createBtnRef}
+              onClose={() => setShowCreate(false)}
+            />
           )}
         </div>
       </div>
@@ -199,6 +213,3 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
   );
 }
 
-// Suppress unused lint warning for the dev import — the link is referenced
-// by Sidebar but kept here for symmetry with future deep-links.
-void Link;

@@ -19,12 +19,15 @@ import { cn } from '../lib/utils';
  * doesn't overlap the row itself), vertically aligned with the row's
  * top, then nudged up if it would otherwise overflow the viewport.
  *
- * The adapter dropdown is pre-filtered to the adapters the sidecar
- * actually discovered on the host (`machine.availableAdapters`),
- * because asking the user to pick an adapter that isn't installed
- * is just an instant 400 from the server. If the machine reported
- * no adapters at all we still let them try — useful for debugging
- * and forward-compat with custom adapters.
+ * The adapter picker is rendered as a row of icon buttons (one per
+ * adapter the sidecar actually discovered on the host via
+ * `machine.availableAdapters`) — clicking one selects it, similar
+ * to a segmented control. We previously used a `<select>` dropdown
+ * but a flat picker is faster (one click vs. open + scan + click)
+ * and reads better at the popover's narrow width. If the machine
+ * reported no adapters at all we still expose a free-form text
+ * input as an escape hatch — useful for debugging and forward-compat
+ * with custom adapters.
  */
 type Props = {
   machine: MachineDTO;
@@ -174,31 +177,50 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
       <form onSubmit={submit} className="space-y-2">
         <Field label="adapter">
           {adapters.length > 0 ? (
-            <select
-              value={type}
-              onChange={(e) => setType(e.target.value)}
-              className="w-full rounded bg-neutral-900 px-2 py-1.5 text-sm text-neutral-100 outline-none ring-1 ring-neutral-800 focus:ring-neutral-600"
-            >
-              {adapters.map((a) => (
-                <option key={a.type} value={a.type}>
-                  {agentTypeLabel(a.type)}
-                  {a.version ? ` · ${a.version}` : ''}
-                </option>
-              ))}
-            </select>
+            <>
+              <div className="flex flex-wrap gap-1.5">
+                {adapters.map((a) => {
+                  const selected = a.type === type;
+                  return (
+                    <button
+                      key={a.type}
+                      type="button"
+                      onClick={() => setType(a.type)}
+                      title={a.version ? `${agentTypeLabel(a.type)} · ${a.version}` : agentTypeLabel(a.type)}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs ring-1 transition-colors',
+                        selected
+                          ? 'bg-neutral-800 text-neutral-100 ring-neutral-600'
+                          : 'bg-neutral-900 text-neutral-400 ring-neutral-800 hover:bg-neutral-800/70 hover:text-neutral-200',
+                      )}
+                    >
+                      <AgentTypeIcon type={a.type} />
+                      <span>{agentTypeLabel(a.type)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {type && (
+                <div className="mt-1 text-[11px] text-neutral-500">
+                  {adapters.find((a) => a.type === type)?.version ?? ''}
+                </div>
+              )}
+            </>
           ) : (
-            <input
-              value={type}
-              onChange={(e) => setType(e.target.value)}
-              placeholder="claude-code, codex, cursor-cli, …"
-              className="w-full rounded bg-neutral-900 px-2 py-1.5 font-mono text-xs text-neutral-100 outline-none ring-1 ring-neutral-800 focus:ring-neutral-600"
-            />
-          )}
-          {type && (
-            <div className="mt-1 flex items-center gap-1.5 text-[11px] text-neutral-500">
-              <AgentTypeIcon type={type} />
-              <span>{agentTypeLabel(type)}</span>
-            </div>
+            <>
+              <input
+                value={type}
+                onChange={(e) => setType(e.target.value)}
+                placeholder="claude-code, codex, cursor-cli, …"
+                className="w-full rounded bg-neutral-900 px-2 py-1.5 font-mono text-xs text-neutral-100 outline-none ring-1 ring-neutral-800 focus:ring-neutral-600"
+              />
+              {type && (
+                <div className="mt-1 flex items-center gap-1.5 text-[11px] text-neutral-500">
+                  <AgentTypeIcon type={type} />
+                  <span>{agentTypeLabel(type)}</span>
+                </div>
+              )}
+            </>
           )}
         </Field>
 
