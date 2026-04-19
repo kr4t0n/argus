@@ -65,9 +65,24 @@ type release struct {
 }
 
 type asset struct {
+	ID                 int64  `json:"id"`
 	Name               string `json:"name"`
+	URL                string `json:"url"` // api.github.com/repos/.../assets/<id>
 	BrowserDownloadURL string `json:"browser_download_url"`
 	Size               int64  `json:"size"`
+}
+
+// downloadURL returns the URL we should actually GET to fetch the asset
+// bytes. We prefer the API URL (with Accept: application/octet-stream)
+// because it works for both public AND private repos when paired with
+// GITHUB_TOKEN — `browser_download_url` 404s on private repos because it
+// redirects to a short-lived signed URL that is incompatible with the
+// Authorization header.
+func (a *asset) downloadURL() string {
+	if a.URL != "" {
+		return a.URL
+	}
+	return a.BrowserDownloadURL
 }
 
 // Update performs the full update flow. Returns the tag we updated to (or
@@ -109,7 +124,7 @@ func Update(ctx context.Context, opts Options) (string, error) {
 		return "", fmt.Errorf("release %s has no SHASUMS256.txt — refusing to update without checksum", rel.TagName)
 	}
 
-	expectedSum, err := fetchExpectedChecksum(ctx, client, sumsAsset.BrowserDownloadURL, binAssetName)
+	expectedSum, err := fetchExpectedChecksum(ctx, client, sumsAsset.downloadURL(), binAssetName)
 	if err != nil {
 		return "", fmt.Errorf("fetch checksum: %w", err)
 	}
@@ -124,7 +139,7 @@ func Update(ctx context.Context, opts Options) (string, error) {
 	}
 
 	logger.Printf("downloading %s (%.1f MB)…", binAsset.Name, float64(binAsset.Size)/1024/1024)
-	tmpPath, gotSum, err := downloadToTemp(ctx, client, binAsset.BrowserDownloadURL, exe)
+	tmpPath, gotSum, err := downloadToTemp(ctx, client, binAsset.downloadURL(), exe)
 	if err != nil {
 		return "", fmt.Errorf("download binary: %w", err)
 	}
@@ -213,12 +228,30 @@ func findAsset(assets []asset, name string) *asset {
 	return nil
 }
 
+// newAssetRequest builds a GET request that downloads release-asset
+// bytes. The combo of the API URL + `Accept: application/octet-stream`
+// + `Authorization: Bearer <token>` is the GitHub-blessed way to
+// download assets from private repos. For public repos it works too and
+// gracefully degrades when GITHUB_TOKEN is unset.
+func newAssetRequest(ctx context.Context, url string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/octet-stream")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if tok := os.Getenv("GITHUB_TOKEN"); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	return req, nil
+}
+
 // fetchExpectedChecksum downloads SHASUMS256.txt and finds the line for
 // the given filename. Format mirrors GNU `sha256sum`:
 //
 //	<hex-digest>  <filename>
 func fetchExpectedChecksum(ctx context.Context, client *http.Client, url, filename string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := newAssetRequest(ctx, url)
 	if err != nil {
 		return "", err
 	}
@@ -248,7 +281,7 @@ func fetchExpectedChecksum(ctx context.Context, client *http.Client, url, filena
 // Same-directory placement is required so the final os.Rename is atomic
 // (cross-filesystem rename would fall back to copy-then-delete).
 func downloadToTemp(ctx context.Context, client *http.Client, url, nearby string) (string, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := newAssetRequest(ctx, url)
 	if err != nil {
 		return "", "", err
 	}
