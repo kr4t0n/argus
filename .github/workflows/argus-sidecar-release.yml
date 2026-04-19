@@ -1,23 +1,23 @@
-name: sidecar-release
+name: argus-sidecar-release
 
 # Builds the Argus sidecar for all supported OS/arch targets and attaches
 # the binaries (plus SHA-256 checksums) to a GitHub Release.
 #
 # Triggers:
-#   - push of a tag matching `sidecar-v*` (e.g. `sidecar-v0.2.0`) — the tag
-#     name minus the `sidecar-` prefix is used as the release name.
+#   - push of a tag matching `argus-sidecar-v*` (e.g. `argus-sidecar-v0.2.0`)
+#     — the tag name is used verbatim as the release name.
 #   - manual `workflow_dispatch` with a required `version` input
-#     (e.g. `0.2.0` → release named `sidecar-v0.2.0`). Useful for cutting
-#     a release without first pushing a tag.
+#     (e.g. `0.2.0` → release named `argus-sidecar-v0.2.0`). Useful for
+#     cutting a release without first pushing a tag.
 
 on:
   push:
     tags:
-      - 'sidecar-v*'
+      - 'argus-sidecar-v*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (without the `sidecar-v` prefix), e.g. 0.2.0'
+        description: 'Release version (without the `argus-sidecar-v` prefix), e.g. 0.2.0'
         required: true
         type: string
 
@@ -26,7 +26,7 @@ permissions:
 
 concurrency:
   # One release run at a time per ref. Cancel in-flight if a new tag lands.
-  group: sidecar-release-${{ github.ref }}
+  group: argus-sidecar-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -58,7 +58,7 @@ jobs:
         id: ver
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "value=sidecar-v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "value=argus-sidecar-v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
           else
             echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
@@ -93,7 +93,7 @@ jobs:
         id: meta
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            TAG="sidecar-v${{ inputs.version }}"
+            TAG="argus-sidecar-v${{ inputs.version }}"
           else
             TAG="${GITHUB_REF_NAME}"
           fi

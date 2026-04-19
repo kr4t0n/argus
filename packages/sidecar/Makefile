@@ -17,7 +17,7 @@ BIN_NAME  := argus-sidecar
 
 # Version baked into the binary via -ldflags. The `update` subcommand uses
 # this for the "already on latest" check. Override on the command line:
-#   make build VERSION=sidecar-v0.1.0
+#   make build VERSION=argus-sidecar-v0.1.0
 # The release workflow always sets this to the git tag name.
 VERSION   ?= dev
 

@@ -3,8 +3,8 @@
 // At a high level we:
 //
 //  1. Hit the GitHub Releases API and pick the newest release whose tag
-//     starts with `sidecar-v` (so other components can have their own
-//     release cadence in the same repo without confusing us).
+//     starts with `argus-sidecar-v` (so other components can have their
+//     own release cadence in the same repo without confusing us).
 //  2. Find the asset matching `argus-sidecar-<goos>-<goarch>` and the
 //     companion `SHASUMS256.txt`. Bail with a clear error if either is
 //     missing — that means the release wasn't built by our workflow.
@@ -41,8 +41,8 @@ import (
 const DefaultRepo = "kr4t0n/argus"
 
 // tagPrefix scopes which releases we consider. Lets future component
-// releases (e.g. `web-v1.0.0`) coexist without mass-confusion.
-const tagPrefix = "sidecar-v"
+// releases (e.g. `argus-web-v1.0.0`) coexist without mass-confusion.
+const tagPrefix = "argus-sidecar-v"
 
 // Options controls a single update run. Zero values pick safe defaults
 // (kr4t0n/argus, stable releases only, std logger).
@@ -172,12 +172,12 @@ func Update(ctx context.Context, opts Options) (string, error) {
 }
 
 // pickLatestRelease lists recent releases and returns the newest one whose
-// tag starts with `sidecar-v`. The GitHub `/releases` endpoint already
+// tag starts with `argus-sidecar-v`. The GitHub `/releases` endpoint already
 // returns results in descending publish order so the first match is the
 // newest. We deliberately do NOT use `/releases/latest` because that
 // endpoint always returns the single newest release across the whole
 // repository, which could be a different component (e.g. a future
-// `web-v1.0.0`).
+// `argus-web-v1.0.0`).
 func pickLatestRelease(ctx context.Context, client *http.Client, repo string, includePrerelease bool) (*release, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=30", repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

@@ -19,8 +19,8 @@ import (
 
 // Version is injected at build time via -ldflags="-X main.Version=…".
 // Untagged dev builds report "dev"; release builds report the git tag
-// (e.g. "sidecar-v0.1.0"). Used by the `version` subcommand and the
-// "already up to date" check inside `update`.
+// (e.g. "argus-sidecar-v0.1.0"). Used by the `version` subcommand and
+// the "already up to date" check inside `update`.
 var Version = "dev"
 
 func main() {
