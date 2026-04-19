@@ -13,6 +13,7 @@ import { ResizeHandle } from './ui/ResizeHandle';
 import { StreamViewer } from './StreamViewer';
 import { Composer } from './Composer';
 import { ContextPane } from './ContextPane';
+import { UsageBadge } from './UsageBadge';
 import { relativeTime } from '../lib/utils';
 
 export function SessionPanel() {
@@ -106,7 +107,8 @@ export function SessionPanel() {
             {agent && <StatusDot status={agent.status} />}
             {elapsed && <span className="text-xs text-neutral-500">· {elapsed}</span>}
           </div>
-          <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto flex items-center gap-2">
+            <UsageBadge chunks={entry.chunks} agentType={agent?.type} />
             {running && (
               <Button size="sm" variant="subtle" onClick={onCancel}>
                 <Square className="h-3 w-3" />
@@ -167,6 +169,7 @@ export function SessionPanel() {
             agent={agent}
             session={entry.session}
             recentCommands={entry.commands}
+            chunks={entry.chunks}
           />
         </div>
       )}

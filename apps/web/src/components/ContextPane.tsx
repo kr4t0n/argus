@@ -1,18 +1,35 @@
 import { useState } from 'react';
-import type { AgentDTO, SessionDTO, CommandDTO } from '@argus/shared-types';
+import type {
+  AgentDTO,
+  CommandDTO,
+  ResultChunkDTO,
+  SessionDTO,
+} from '@argus/shared-types';
 import { Terminal as TerminalIcon } from 'lucide-react';
 import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
 import { StatusDot } from './ui/StatusDot';
 import { TerminalPane } from './TerminalPane';
 import { relativeTime } from '../lib/utils';
+import { useSessionModel } from '../lib/usage';
 
 type Props = {
   agent: AgentDTO | undefined;
   session: SessionDTO | undefined;
   recentCommands: CommandDTO[];
+  /** Whole stream of result chunks for the active session. Used here
+   *  only to derive token usage — kept as a raw prop (not pre-aggregated)
+   *  so the hook can memoize against the same array reference Zustand
+   *  hands out, sharing the recompute path with the header `UsageBadge`. */
+  chunks: ResultChunkDTO[];
 };
 
-export function ContextPane({ agent, session, recentCommands }: Props) {
+export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
+  // Model surfaces in the very first system / init progress chunk a
+  // turn emits, so it appears almost immediately on session open.
+  // Token usage (input/output/cache) lives in the header badge's
+  // hover tooltip — keeping it out of the always-visible right pane
+  // since the tooltip is now reliable (Radix, not native `title`).
+  const model = useSessionModel(chunks);
   if (!agent) {
     return <div className="h-full p-4 text-sm text-neutral-500">no agent selected</div>;
   }
@@ -68,6 +85,21 @@ export function ContextPane({ agent, session, recentCommands }: Props) {
             k="updated"
             v={<span title={session.updatedAt}>{relativeTime(session.updatedAt)} ago</span>}
           />
+
+          {/* Model is the only chunk-derived field surfaced in the
+              right pane — the full token breakdown lives in the
+              header badge's hover tooltip, which keeps the always-
+              visible session metadata uncluttered. */}
+          {model && (
+            <KV
+              k="model"
+              v={
+                <span title={model} className="font-mono text-[11px] text-neutral-300">
+                  {model}
+                </span>
+              }
+            />
+          )}
         </Section>
       )}
 
