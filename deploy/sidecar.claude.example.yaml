@@ -1,6 +1,9 @@
 id: claude-1
 type: claude-code
-machine: local
+# machine is optional; defaults to the host's `os.Hostname()` (with the
+# macOS `.local` mDNS suffix stripped). Pin it only if you want a
+# friendlier label, or to disambiguate two sidecars on the same host.
+# machine: local
 # version: '1.2.3'   # optional; auto-detected from `claude --version` at boot
 workingDir: ~/code/my-project
 bus:

@@ -81,11 +81,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config.type is required")
 	}
 	if cfg.Machine == "" {
-		if hn, err := os.Hostname(); err == nil {
-			cfg.Machine = hn
-		} else {
-			cfg.Machine = "unknown"
-		}
+		cfg.Machine = detectMachine()
 	}
 	if cfg.Bus.URL == "" {
 		cfg.Bus.URL = "redis://localhost:6379"
@@ -140,6 +136,46 @@ func Load(path string) (*Config, error) {
 		}
 	}
 	return &cfg, nil
+}
+
+// detectMachine returns a sensible default for cfg.Machine when the
+// YAML omits it. We prefer os.Hostname() because:
+//
+//   - It's stable across reboots (kernel/launchd-managed, not per-process).
+//   - It naturally differs across hosts in a fleet, so two sidecars on
+//     two machines never collide on (machine + id) in the dashboard.
+//   - It matches what users see in their terminal prompts, so the
+//     dashboard's "machine" column reads like an inventory.
+//
+// We strip the trailing `.local` mDNS suffix (added by macOS Bonjour and
+// some Linux avahi setups) so a Mac that calls itself
+// `kyles-Mac-mini.local` shows up as `kyles-Mac-mini` — the suffix is
+// not informative and clutters the UI. We deliberately do NOT lowercase
+// or shorten cloud-style FQDNs (e.g. `ip-10-0-1-23.ec2.internal`):
+// those carry useful provenance and uniqueness, and aggressively
+// shortening them risks collisions across availability zones.
+//
+// If the OS refuses to give us a hostname (rare; sandboxed envs, some
+// minimal containers), we fall back to "unknown" so registration still
+// succeeds — the user can always pin `machine:` in YAML to override.
+func detectMachine() string {
+	hn, err := os.Hostname()
+	if err != nil {
+		return "unknown"
+	}
+	return normalizeHostname(hn)
+}
+
+// normalizeHostname applies the trimming rules described on
+// detectMachine. Split out so it can be unit-tested independently of
+// os.Hostname() (which we don't want to mock in tests).
+func normalizeHostname(hn string) string {
+	hn = strings.TrimSpace(hn)
+	hn = strings.TrimSuffix(hn, ".local")
+	if hn == "" {
+		return "unknown"
+	}
+	return hn
 }
 
 func containsString(xs []string, target string) bool {

@@ -5,7 +5,10 @@
 
 id: claude-1
 type: claude-code          # claude-code | codex | cursor-cli | <custom>
-machine: ${HOSTNAME:-dev-machine}
+# machine is optional; defaults to the host's `os.Hostname()` (with the
+# macOS `.local` mDNS suffix stripped). Pin it only if you want a
+# friendlier label, or to disambiguate two sidecars on the same host.
+# machine: prod-runner-7
 # version is optional; when omitted the sidecar runs `<binary> --version`
 # at boot and reports whatever that returns. Pin it only if auto-detect
 # is wrong or the wrapped CLI doesn't implement --version.
@@ -46,7 +49,6 @@ adapter:
 # Second doc (commented) with the Codex adapter wiring for reference.
 # id: codex-1
 # type: codex
-# machine: ${HOSTNAME}
 # bus: { url: redis://localhost:6379 }
 # adapter:
 #   binary: codex
@@ -54,7 +56,6 @@ adapter:
 ---
 # id: cursor-1
 # type: cursor-cli
-# machine: ${HOSTNAME}
 # bus: { url: redis://localhost:6379 }
 # adapter:
 #   binary: cursor-agent

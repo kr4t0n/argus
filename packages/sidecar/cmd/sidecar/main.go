@@ -85,6 +85,13 @@ func runDaemon(args []string) {
 	if err != nil {
 		logger.Fatalf("load config: %v", err)
 	}
+	// Surface the resolved values up-front so users can see what the YAML
+	// produced after defaults were filled in — particularly useful for
+	// `machine`, which auto-detects from os.Hostname() when the YAML
+	// omits it. This runs before the bus connects, so a wrong value
+	// surfaces immediately rather than after a registration round-trip.
+	logger.Printf("config: id=%s type=%s machine=%s workingDir=%s",
+		cfg.ID, cfg.Type, cfg.Machine, cfg.WorkingDir)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
