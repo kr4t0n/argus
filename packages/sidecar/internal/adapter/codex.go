@@ -32,33 +32,38 @@ type CodexAdapter struct {
 	runs             map[string]*CLIRunner
 }
 
+const codexDefaultBinary = "codex"
+
 func init() {
-	Register("codex", func(cfg map[string]any) (Adapter, error) {
-		bin, _ := cfg["binary"].(string)
-		if bin == "" {
-			bin = "codex"
-		}
-		if _, err := exec.LookPath(bin); err != nil {
-			return nil, fmt.Errorf("codex CLI %q not found: %w", bin, err)
-		}
-		a := &CodexAdapter{
-			binary:           bin,
-			workingDir:       WorkingDirFromCfg(cfg),
-			skipGitRepoCheck: boolFromCfg(cfg, "skipGitRepoCheck", true),
-			fullAuto:         boolFromCfg(cfg, "fullAuto", true),
-			runs:             map[string]*CLIRunner{},
-		}
-		if s, ok := cfg["sandbox"].(string); ok {
-			a.sandbox = s
-		}
-		if extra, ok := cfg["extraArgs"].([]any); ok {
-			for _, v := range extra {
-				if s, ok := v.(string); ok {
-					a.extraArgs = append(a.extraArgs, s)
+	Register("codex", Plugin{
+		DefaultBinary: codexDefaultBinary,
+		Factory: func(cfg map[string]any) (Adapter, error) {
+			bin, _ := cfg["binary"].(string)
+			if bin == "" {
+				bin = codexDefaultBinary
+			}
+			if _, err := exec.LookPath(bin); err != nil {
+				return nil, fmt.Errorf("codex CLI %q not found: %w", bin, err)
+			}
+			a := &CodexAdapter{
+				binary:           bin,
+				workingDir:       WorkingDirFromCfg(cfg),
+				skipGitRepoCheck: boolFromCfg(cfg, "skipGitRepoCheck", true),
+				fullAuto:         boolFromCfg(cfg, "fullAuto", true),
+				runs:             map[string]*CLIRunner{},
+			}
+			if s, ok := cfg["sandbox"].(string); ok {
+				a.sandbox = s
+			}
+			if extra, ok := cfg["extraArgs"].([]any); ok {
+				for _, v := range extra {
+					if s, ok := v.(string); ok {
+						a.extraArgs = append(a.extraArgs, s)
+					}
 				}
 			}
-		}
-		return a, nil
+			return a, nil
+		},
 	})
 }
 

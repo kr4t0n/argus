@@ -266,17 +266,24 @@ registered. On to Part 2.
 
 ## Part 2 — Sidecars
 
-A sidecar is one Go binary you run on each machine that hosts a CLI
-agent. It does three things: (1) registers itself with the server on
-boot, (2) consumes commands from Redis Streams, executes them via the
-local CLI, and streams results back, (3) optionally hosts a PTY for the
-interactive terminal in the dashboard.
+A sidecar is one Go binary you run on each machine that may host one
+or more CLI agents. It does four things:
 
-You install one sidecar **per CLI per machine**. A single Mac running
-both `claude` and `codex` runs two sidecars with two YAML files. A
-fleet of five build boxes each running `cursor-agent` runs five
-sidecars (typically with the same YAML except for the `id` and
-`machine` fields).
+1. Registers itself as a *Machine* with the server on boot and reports
+  which CLI adapters it found on `PATH` (so the dashboard's "create
+   agent" dropdown shows only what's actually installed).
+2. Subscribes to a per-machine Redis control stream and spawns /
+  destroys agent supervisors as the dashboard creates / removes them.
+3. Consumes per-agent commands from Redis Streams, executes them via
+  the local CLI, and streams results back.
+4. Optionally hosts a PTY per agent for the interactive terminal in
+  the dashboard.
+
+You install **one sidecar per machine**, regardless of how many agents
+you plan to run on it. A single Mac running both `claude` and `codex`
+runs one daemon and creates two agents on it from the dashboard. A
+fleet of five build boxes runs five daemons (one each), and you create
+agents on whichever fleet member you want.
 
 ### Step 5: Install the binary
 
@@ -293,11 +300,11 @@ This script:
 1. Detects your OS (`darwin`/`linux`) and arch (`amd64`/`arm64`).
 2. Resolves the latest `argus-sidecar-v*` release via the GitHub API.
 3. Downloads the matching binary **and** the release's
-   `SHASUMS256.txt`, verifies the SHA-256 before installing.
+  `SHASUMS256.txt`, verifies the SHA-256 before installing.
 4. Drops the binary in `/usr/local/bin` (or `$HOME/.local/bin` if that
-   isn't writable, with a `PATH` reminder printed at the end).
+  isn't writable, with a `PATH` reminder printed at the end).
 5. Performs an atomic `mv` over any existing copy, so re-running the
-   installer is a safe upgrade path.
+  installer is a safe upgrade path.
 
 Common overrides:
 
@@ -319,7 +326,7 @@ The installer is POSIX `sh` (no bashisms) and works on Alpine, Debian,
 RHEL, macOS — anywhere `curl` (or `wget`) and `sha256sum` (or
 `shasum`) exist. Inspect the script before piping to a shell if your
 threat model requires it: it lives at
-[`scripts/install.sh`](scripts/install.sh) in the repo, and the
+`[scripts/install.sh](scripts/install.sh)` in the repo, and the
 release workflow attaches a copy to every release for tagged-version
 auditability.
 
@@ -384,101 +391,93 @@ The swap is atomic (`os.Rename` over the running executable). After
 updating, restart the running sidecar process so it picks up the new
 binary (see Step 7 for service-manager recipes).
 
-### Step 6: Write the sidecar YAML
+### Step 6: Initialize the sidecar
 
-One YAML file per sidecar process. The schema is small. Reference
-examples live under `[deploy/sidecar.*.example.yaml](deploy/)` — copy
-one matching your CLI and edit. The minimal valid file is ~10 lines.
+The sidecar has no YAML config file. There's a one-time `init`
+subcommand that records the bus URL, the server URL, and a friendly
+machine name in `~/.config/argus/sidecar.json` (override the path
+with `-cache /etc/argus/sidecar.json` for a system-wide install).
+After that, the daemon just reads that file on every start.
 
-#### `claude-code` adapter
+#### Interactive
 
-```yaml
-# /etc/argus/sidecar.yaml on the agent machine
-id: claude-build-box-1                    # stable identity in the dashboard
-type: claude-code                         # adapter type (built-in)
-# machine: build-box-1                    # optional; defaults to `os.Hostname()` (`.local` stripped)
-workingDir: /home/ci/projects/api         # CLI runs here; tools resolve relative to it
-
-bus:
-  url: rediss://default:STRONG_PW@redis.example.com:6379
-
-adapter:
-  binary: claude                          # override only if not on PATH
-
-  # Required for headless operation — the sidecar has no TTY to approve
-  # tool calls through. Set to false to force per-call prompts (will hang).
-  dangerouslySkipPermissions: true
-
-  # Optional: pin a specific permission mode instead of the skip flag.
-  # One of: default | acceptEdits | bypassPermissions | plan
-  # permissionMode: acceptEdits
-
-  # Optional: extra flags appended to every `claude` invocation.
-  # extraArgs: ["--max-turns", "10"]
+```bash
+argus-sidecar init
 ```
 
-#### `codex` adapter
+You'll be asked for:
 
-```yaml
-id: codex-build-box-1
-type: codex
-# machine: build-box-1                    # optional; defaults to `os.Hostname()` (`.local` stripped)
-workingDir: /home/ci/projects/api
+- **Bus URL** — the Redis URL the control plane uses (same value as
+the server's `REDIS_URL` from Step 2).
+- **Server URL** — `http(s)://argus.your.tld:4000`. Required if you
+plan to use the interactive terminal feature; harmless to set even
+if you don't.
+- **Machine name** — defaults to `os.Hostname()` with the macOS
+`.local` suffix stripped. Override if you have two boxes with the
+same hostname or want a friendlier label.
+- **Sidecar link token** — only needed if the server has
+`SIDECAR_LINK_TOKEN` set in its `.env`. Same value on both sides.
 
-bus:
-  url: rediss://default:STRONG_PW@redis.example.com:6379
+#### Scripted (recommended for automation)
 
-adapter:
-  binary: codex
-  skipGitRepoCheck: true                  # operate on plain folders too
-  fullAuto: true                          # sandbox=workspace-write, no per-call prompts
-  # sandbox: workspace-write              # alternative — pin sandbox mode explicitly
-  # extraArgs: ["--profile", "argus"]
+Every prompt has a corresponding flag, so the same setup runs cleanly
+under Ansible / Terraform / a setup script:
+
+```bash
+sudo argus-sidecar init \
+  --bus     "rediss://default:STRONG_PW@redis.example.com:6379" \
+  --server  "https://argus.example.com" \
+  --token   "$SIDECAR_LINK_TOKEN" \
+  --name    "build-box-1"           # optional; defaults to hostname
 ```
 
-#### `cursor-cli` adapter
+Re-running `init` over an existing config errors out by default. Pass
+`--force` to overwrite (you'll keep the same machine ID — agents
+created on this box stay attached).
 
-```yaml
-id: cursor-build-box-1
-type: cursor-cli
-# machine: build-box-1                    # optional; defaults to `os.Hostname()` (`.local` stripped)
-workingDir: /home/ci/projects/api
+#### What gets discovered
 
-bus:
-  url: rediss://default:STRONG_PW@redis.example.com:6379
+On the next `argus-sidecar` boot the daemon probes `PATH` for every
+adapter it knows about (`claude`, `codex`, `cursor-agent`, …) and
+reports what it finds — adapter type, binary path, and `--version` —
+back to the server. The dashboard's "create agent" popover will then
+list only the adapters that actually exist on this host.
 
-adapter:
-  binary: cursor-agent
-  yolo: true                              # skip per-call approval prompts
-  # extraArgs: ["--max-turns", "10"]
+You don't pre-declare adapters or list them anywhere. Install the
+CLI you want exposed (`brew install claude`, `npm i -g @openai/codex`,
+…) and restart the sidecar; it will appear.
+
+#### Where the cache lives
+
+```
+~/.config/argus/sidecar.json     # default
+$XDG_CONFIG_HOME/argus/sidecar.json    # if XDG_CONFIG_HOME is set
+$ARGUS_CONFIG_DIR/sidecar.json         # explicit override (highest priority)
 ```
 
-#### Common fields, in detail
+Or pass `-cache /full/path/sidecar.json` to either subcommand for an
+ad-hoc location (handy for system-wide installs at
+`/etc/argus/sidecar.json`).
 
-
-| Field               | Required | Meaning                                                                                        |
-| ------------------- | -------- | ---------------------------------------------------------------------------------------------- |
-| `id`                | yes      | Stable identity. The sidebar groups sessions under this. Don't change it after first register. |
-| `type`              | yes      | Adapter selector: `claude-code`                                                                |
-| `machine`           | no       | Label shown in the dashboard. Defaults to `os.Hostname()` with the macOS `.local` suffix stripped. Pin only to override (e.g. two sidecars on the same host). |
-| `version`           | no       | Pinned version string. Omit and the sidecar runs `<binary> --version` at boot to detect it.    |
-| `workingDir`        | no       | The CLI's `$CWD`. Supports `~` and `${ENV}` expansion. Defaults to the sidecar's own CWD.      |
-| `bus.url`           | yes      | Redis URL. Must be reachable from this host. Use `rediss://` for TLS.                          |
-| `adapter.binary`    | no       | Path to the wrapped CLI. Defaults to the adapter type's conventional name.                     |
-| `adapter.extraArgs` | no       | Additional flags appended to every CLI invocation, after the adapter's built-ins.              |
-
+The file is small JSON — bus URL, server URL, machine name + ID, and
+the canonical agent list. It's safe to inspect and to back up. The
+agent list is rewritten every time the server pushes a `create-agent`
+or `destroy-agent` command, so a sidecar restart re-spawns every
+supervisor instantly without waiting for the server's reconcile
+broadcast.
 
 ### Step 7: Run the sidecar in the background
 
 For development, just run it in a terminal:
 
 ```bash
-argus-sidecar --config /etc/argus/sidecar.yaml
+argus-sidecar
 ```
 
-Refresh the dashboard — your agent appears in the sidebar within ~1
-second of startup. For production you want a service manager so the
-process survives reboots and restarts on crashes.
+Refresh the dashboard — the machine appears at the bottom of the
+sidebar within ~1 second of startup. For production you want a
+service manager so the process survives reboots and restarts on
+crashes.
 
 #### macOS — launchd (recommended)
 
@@ -494,8 +493,6 @@ Drop the following at `~/Library/LaunchAgents/com.argus.sidecar.plist`
   <key>ProgramArguments</key>
   <array>
     <string>/usr/local/bin/argus-sidecar</string>
-    <string>--config</string>
-    <string>/Users/you/.config/argus/sidecar.yaml</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -534,7 +531,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=argus
-ExecStart=/usr/local/bin/argus-sidecar --config /etc/argus/sidecar.yaml
+ExecStart=/usr/local/bin/argus-sidecar
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -555,52 +552,70 @@ Restart after update: `sudo systemctl restart argus-sidecar`.
 #### Quick-and-dirty (non-production)
 
 ```bash
-nohup argus-sidecar --config sidecar.yaml >sidecar.log 2>&1 &
+nohup argus-sidecar >sidecar.log 2>&1 &
 ```
 
 Survives the terminal but not a reboot. Useful for one-off testing only.
 
-### Step 8 — Verify
+### Step 8 — Verify and create your first agent
 
-In the dashboard's sidebar you should now see your sidecar's `id`
-listed under its adapter type, with a green dot if it's healthy. Click
-**+ new session** under the agent and send a prompt — the response
-streams back token-by-token, with tool-call cards rendering inline.
+1. Refresh the dashboard. The bottom of the sidebar grows a
+  **machines** section with your host listed (green dot when
+   reachable).
+2. Hover the machine row and click the `+`. A popover appears with:
+  - **adapter** — pre-filtered to whatever the sidecar discovered on
+   `PATH`.
+  - **name** — what you'll see in the sidebar.
+  - **working dir** — optional `$CWD` for the wrapped CLI.
+  - **attach interactive terminal** — opt-in PTY (see the next
+  section).
+3. Click **create**. The agent appears in the sidebar within a
+  fraction of a second. Click it, then **+ new session**, and send a
+   prompt — the response streams back token-by-token, with tool-call
+   cards rendering inline.
 
-If nothing appears, jump to [Troubleshooting](#troubleshooting) below.
+Created agents are persisted on the sidecar in `sidecar.json`, so a
+daemon restart immediately re-spawns each agent's supervisor with no
+operator action.
+
+If the machine never appears, jump to [Troubleshooting](#troubleshooting)
+below.
 
 ---
 
 ## Optional: enable the interactive terminal
 
-When a sidecar opts in, the dashboard grows a real PTY shell on that
-machine in the right-hand panel — full ANSI colors, resize, ctrl-C,
-usable for `vim` / `htop` / anything. Traffic flows over a direct
-sidecar↔server WebSocket (not Redis) so keystroke echo stays
-sub-10 ms.
+The PTY is per-agent, ticked at agent-create time via the **attach
+interactive terminal** checkbox in the create-agent popover. When
+enabled, the dashboard grows a real PTY shell on that machine in the
+right-hand panel — full ANSI colors, resize, ctrl-C, usable for
+`vim` / `htop` / anything. Traffic flows over a direct sidecar↔server
+WebSocket (not Redis) so keystroke echo stays sub-10 ms.
 
 > **This is remote shell access** under whichever user runs the sidecar
 > process. Only enable on hosts where every dashboard user is trusted
 > with that level of access.
 
-Add these stanzas to the sidecar YAML:
+Two pieces of plumbing are required, both *server-side* — the sidecar
+needs no extra config beyond what `init` already collected:
 
-```yaml
-server:
-  url: https://argus.example.com         # the Argus server (must be reachable from here)
-  token: ${SIDECAR_LINK_TOKEN}           # must match the server's env var
+1. Set `SIDECAR_LINK_TOKEN` in the server's `.env` to a long random
+  value (`openssl rand -hex 32`).
+2. Pass the same value to `argus-sidecar init --token "..."` on each
+  sidecar (or run `argus-sidecar init --force --token "..."` to add
+   it to an already-initialized box).
 
-terminal:
-  enabled: true
-  shells: ["/bin/zsh", "/bin/bash", "/bin/sh"]
-  # defaultShell: /bin/zsh        # optional; falls back to $SHELL ∩ shells, then shells[0]
-  # maxSessions: 5                # cap concurrent open PTYs per sidecar
-  # cwd: /home/ci/work            # optional; defaults to workingDir above
-```
+Defaults the sidecar enforces on the PTY:
 
-Set `SIDECAR_LINK_TOKEN` in your sidecar's environment to the same value
-the server has in its `.env`. Restart the sidecar and a `> TERMINAL`
-section will appear in the agent's right panel on the dashboard.
+- Allowed shells: `$SHELL`, `/bin/bash`, `/bin/zsh`, `/bin/sh`.
+- Max concurrent open PTYs per sidecar: 16.
+- `cwd` defaults to the agent's `workingDir` (set when you created the
+agent), falling back to the daemon's own CWD.
+
+These can be overridden with environment variables on the sidecar
+(`ARGUS_TERMINAL_SHELLS=/bin/zsh,/bin/bash` and
+`ARGUS_TERMINAL_MAX=32`) — see
+`packages/sidecar/internal/terminal/runner.go` for the full list.
 
 ---
 
@@ -643,17 +658,20 @@ Network/firewall. From the sidecar host: `redis-cli -u "$REDIS_URL" PING`.
 For Upstash / managed services, double-check you're using the `rediss://`
 scheme (TLS) and including the password.
 
-**Sidecar registers, but commands hang forever with no output.**
-Almost always a TTY-prompt problem in the wrapped CLI. Make sure
-`adapter.dangerouslySkipPermissions: true` (claude), `fullAuto: true`
-(codex), or `yolo: true` (cursor) is set. Without these, the CLI waits
-for an approval prompt from a TTY that doesn't exist.
+**Agent registers, but commands hang forever with no output.**
+Almost always a TTY-prompt problem in the wrapped CLI. The built-in
+adapters set the right "skip approval prompts" flag by default
+(`--dangerously-skip-permissions` for claude, `--full-auto` for
+codex, `--yolo` for cursor) so this should never bite a stock
+install — but if you create an agent with custom `adapter` overrides
+that disable those, the CLI will sit waiting for a TTY that doesn't
+exist. Drop the override or re-create the agent without it.
 
 **Terminal pane shows "disconnected" immediately.**
 `SIDECAR_LINK_TOKEN` mismatch between server and sidecar, or the sidecar
-can't reach the server URL set under `server.url`. Check the server's
-logs for `sidecar-link rejected: bad token` and the sidecar's logs for
-HTTP dial errors.
+can't reach the server URL recorded by `argus-sidecar init`. Check the
+server's logs for `sidecar-link rejected: bad token` and the sidecar's
+logs for HTTP dial errors. Re-run `argus-sidecar init --force --token "..." --server "..."` to repair.
 
 **The dashboard loads from a phone but sign-in fails with "load failed".**
 You're hitting the API at the phone's own `localhost`. The bundled

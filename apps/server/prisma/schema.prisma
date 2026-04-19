@@ -19,10 +19,42 @@ model User {
   sessions Session[]
 }
 
+// A Machine is a host running one argus-sidecar process. The sidecar
+// self-registers on boot via MachineRegisterEvent; the dashboard then
+// creates Agent rows as children of this machine and the server pushes
+// them down via control commands.
+//
+// `name` is what the user sees in the sidebar — by default it's the
+// machine's hostname (Bonjour `.local` suffix stripped). Operators can
+// override at `argus-sidecar init` time.
+model Machine {
+  id                String   @id @default(uuid())
+  name              String   @unique
+  hostname          String
+  os                String   // darwin | linux
+  arch              String   // amd64 | arm64
+  sidecarVersion    String
+  // Json shape: [{ "type": "claude-code", "binary": "claude", "version": "1.2.3" }, ...]
+  availableAdapters Json
+  status            String   @default("offline") // online | offline
+  lastSeenAt        DateTime
+  registeredAt      DateTime @default(now())
+  archivedAt        DateTime?
+
+  agents Agent[]
+
+  @@index([status])
+  @@index([archivedAt])
+}
+
 model Agent {
-  id               String    @id
+  // Server-generated UUID. Returned by POST /machines/:id/agents and
+  // pushed to the sidecar via CreateAgentCommand.
+  id               String    @id @default(uuid())
+  // User-friendly label, unique within a single machine.
+  name             String
+  machineId        String
   type             String
-  machine          String
   status           String    @default("offline") // online | offline | busy | error
   supportsTerminal Boolean   @default(false)
   version          String?
@@ -31,13 +63,16 @@ model Agent {
   registeredAt     DateTime
   archivedAt       DateTime? // soft-hide from sidebar; preserves history.
 
+  machine   Machine    @relation(fields: [machineId], references: [id], onDelete: Cascade)
   sessions  Session[]
   commands  Command[]
   terminals Terminal[]
 
+  @@unique([machineId, name])
   @@index([status])
   @@index([type])
   @@index([archivedAt])
+  @@index([machineId])
 }
 
 model Session {

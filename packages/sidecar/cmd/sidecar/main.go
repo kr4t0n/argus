@@ -1,10 +1,27 @@
+// Command argus-sidecar is the per-machine daemon. It registers itself
+// with the Argus server, supervises N agents (each one wrapping a CLI
+// like claude-code, codex, cursor-agent), and persists its identity and
+// agent set to ~/.config/argus/sidecar.json so a restart re-spawns
+// agents instantly without waiting for a server reconcile.
+//
+// Subcommands:
+//
+//	(default)   run the daemon (requires `init` to have been run once)
+//	init        write the on-disk cache (bus URL, server URL, machine
+//	            name) — interactive at a TTY, flag-driven otherwise
+//	update      self-update by fetching the latest release for this OS/arch
+//	version     print the build version
+//	help        show usage
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
@@ -12,25 +29,22 @@ import (
 	"syscall"
 
 	"github.com/kyley/argus/sidecar/internal/adapter"
-	"github.com/kyley/argus/sidecar/internal/config"
-	"github.com/kyley/argus/sidecar/internal/lifecycle"
+	"github.com/kyley/argus/sidecar/internal/machine"
 	"github.com/kyley/argus/sidecar/internal/updater"
 )
 
 // Version is injected at build time via -ldflags="-X main.Version=…".
 // Untagged dev builds report "dev"; release builds report the git tag
-// (e.g. "argus-sidecar-v0.1.0"). Used by the `version` subcommand and
-// the "already up to date" check inside `update`.
+// (e.g. "argus-sidecar-v0.1.0"). Used by `version`, `update`, and
+// embedded into MachineRegisterEvent.sidecarVersion.
 var Version = "dev"
 
 func main() {
-	// Lightweight subcommand dispatch. We deliberately avoid pulling in a
-	// full CLI framework — the surface is tiny and `argus-sidecar` is the
-	// hot path, so startup cost matters. The default (no subcommand) keeps
-	// the original "run the daemon" behavior so existing launchd/systemd
-	// units don't need to change.
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
+		case "init":
+			runInit(os.Args[2:])
+			return
 		case "update":
 			runUpdate(os.Args[2:])
 			return
@@ -49,14 +63,23 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, `argus-sidecar — Argus per-machine agent gateway
 
 Usage:
-  argus-sidecar [flags]            run the sidecar (default)
+  argus-sidecar [flags]            run the daemon (default)
+  argus-sidecar init [flags]       write the on-disk cache (one-time setup)
   argus-sidecar update [flags]     download the latest release for this OS/arch
   argus-sidecar version            print the build version
   argus-sidecar help               this message
 
 Run flags (default mode):
-  -config <path>     path to sidecar.yaml (default: sidecar.yaml)
+  -cache <path>      path to sidecar cache (default: $XDG_CONFIG_HOME/argus/sidecar.json)
   -list-adapters     print registered adapter types and exit
+
+Init flags:
+  -bus <url>         Redis URL the server is using (e.g. redis://default:pwd@host:6379)
+  -server <url>      Argus server base URL (e.g. https://argus.example.com)
+  -token <secret>    SIDECAR_LINK_TOKEN matching the server (optional)
+  -name <string>     machine name shown in the dashboard (defaults to hostname)
+  -cache <path>      override cache path
+  -force             overwrite an existing cache (regenerates machineId)
 
 Update flags:
   -repo <owner/repo> override the GitHub repo (default: %s)
@@ -70,7 +93,7 @@ Update flags:
 
 func runDaemon(args []string) {
 	fs := flag.NewFlagSet("argus-sidecar", flag.ExitOnError)
-	cfgPath := fs.String("config", "sidecar.yaml", "path to sidecar config")
+	cachePath := fs.String("cache", "", "path to sidecar cache (default: $XDG_CONFIG_HOME/argus/sidecar.json)")
 	listAdapters := fs.Bool("list-adapters", false, "print registered adapter types and exit")
 	_ = fs.Parse(args)
 
@@ -81,17 +104,20 @@ func runDaemon(args []string) {
 
 	logger := log.New(os.Stderr, "[argus-sidecar] ", log.LstdFlags|log.Lmicroseconds)
 
-	cfg, err := config.Load(*cfgPath)
+	path, err := resolveCachePath(*cachePath)
 	if err != nil {
-		logger.Fatalf("load config: %v", err)
+		logger.Fatalf("resolve cache path: %v", err)
 	}
-	// Surface the resolved values up-front so users can see what the YAML
-	// produced after defaults were filled in — particularly useful for
-	// `machine`, which auto-detects from os.Hostname() when the YAML
-	// omits it. This runs before the bus connects, so a wrong value
-	// surfaces immediately rather than after a registration round-trip.
-	logger.Printf("config: id=%s type=%s machine=%s workingDir=%s",
-		cfg.ID, cfg.Type, cfg.Machine, cfg.WorkingDir)
+
+	cache, err := machine.Load(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			logger.Fatalf("no cache at %s — run `argus-sidecar init` first", path)
+		}
+		logger.Fatalf("load cache: %v", err)
+	}
+	logger.Printf("config: machineId=%s name=%s bus=%s agents=%d cache=%s",
+		cache.MachineID, cache.Name, redactBus(cache.Bus), len(cache.Agents), path)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -104,14 +130,98 @@ func runDaemon(args []string) {
 		cancel()
 	}()
 
-	r, err := lifecycle.New(ctx, cfg, logger)
-	if err != nil {
-		logger.Fatalf("init runner: %v", err)
-	}
-	if err := r.Run(ctx); err != nil && err != context.Canceled {
-		logger.Fatalf("runner: %v", err)
+	d := machine.New(path, cache, Version, logger)
+	if err := d.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		logger.Fatalf("daemon: %v", err)
 	}
 	logger.Println("bye")
+}
+
+func runInit(args []string) {
+	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	bus := fs.String("bus", "", "Redis URL (required)")
+	server := fs.String("server", "", "Argus server base URL (required for terminal access)")
+	token := fs.String("token", "", "SIDECAR_LINK_TOKEN matching the server")
+	name := fs.String("name", "", "machine name (defaults to hostname)")
+	cachePath := fs.String("cache", "", "override cache path")
+	force := fs.Bool("force", false, "overwrite an existing cache")
+	_ = fs.Parse(args)
+
+	logger := log.New(os.Stderr, "[argus-sidecar init] ", log.LstdFlags)
+
+	path, err := resolveCachePath(*cachePath)
+	if err != nil {
+		logger.Fatalf("resolve cache path: %v", err)
+	}
+
+	existing, _ := machine.Load(path)
+	if existing != nil && !*force {
+		logger.Fatalf("cache already exists at %s — pass --force to overwrite (this regenerates machineId)", path)
+	}
+
+	interactive := isStdinTTY()
+	if !interactive && *bus == "" {
+		logger.Fatal("`--bus` is required in non-interactive mode")
+	}
+
+	if interactive {
+		reader := bufio.NewReader(os.Stdin)
+		if *bus == "" {
+			*bus = prompt(reader, "Redis URL (e.g. redis://default:pwd@host:6379)", "")
+		}
+		if *server == "" {
+			*server = prompt(reader, "Argus server base URL (optional, blank = headless agents only)", "")
+		}
+		if *token == "" && *server != "" {
+			*token = prompt(reader, "Sidecar link token (matches server SIDECAR_LINK_TOKEN; blank if server has none)", "")
+		}
+		defaultName := machine.DetectMachineName()
+		if *name == "" {
+			*name = prompt(reader, "Machine name", defaultName)
+		}
+	}
+
+	if *bus == "" {
+		logger.Fatal("bus URL is required")
+	}
+	if _, err := url.Parse(*bus); err != nil {
+		logger.Fatalf("invalid bus URL: %v", err)
+	}
+	if *server != "" {
+		if _, err := url.Parse(*server); err != nil {
+			logger.Fatalf("invalid server URL: %v", err)
+		}
+	}
+	if *name == "" {
+		*name = machine.DetectMachineName()
+	}
+
+	cache := &machine.Cache{
+		MachineID: machine.NewMachineID(),
+		Name:      *name,
+		Bus:       *bus,
+		Server:    machine.ServerConfig{URL: *server, Token: *token},
+		Agents:    nil,
+	}
+	if existing != nil && *force {
+		// Preserve the agent set across re-init: the operator probably
+		// wants a fresh server URL or rotated bus credentials, not to
+		// nuke the (server-managed) agent definitions and risk an
+		// out-of-sync sidecar↔server view until the next sync.
+		cache.Agents = existing.Agents
+	}
+
+	if err := machine.Save(path, cache); err != nil {
+		logger.Fatalf("save cache: %v", err)
+	}
+	fmt.Printf("argus-sidecar initialized at %s\n", path)
+	fmt.Printf("  machineId: %s\n", cache.MachineID)
+	fmt.Printf("  name:      %s\n", cache.Name)
+	fmt.Printf("  bus:       %s\n", redactBus(cache.Bus))
+	if cache.Server.URL != "" {
+		fmt.Printf("  server:    %s\n", cache.Server.URL)
+	}
+	fmt.Printf("\nStart the daemon with: argus-sidecar\n")
 }
 
 func runUpdate(args []string) {
@@ -135,8 +245,51 @@ func runUpdate(args []string) {
 		logger.Fatalf("update failed: %v", err)
 	}
 	if tag == Version {
-		// Already-up-to-date case — Update logged it; nothing more to say.
 		return
 	}
 	fmt.Printf("argus-sidecar updated to %s\n", tag)
+}
+
+func resolveCachePath(override string) (string, error) {
+	if override != "" {
+		return override, nil
+	}
+	return machine.DefaultPath()
+}
+
+// redactBus replaces any inline credentials in a Redis URL with "***"
+// so log lines / init banners don't leak the password to whoever's
+// watching the terminal. Best-effort: malformed URLs pass through.
+func redactBus(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	u.User = url.UserPassword(u.User.Username(), "***")
+	return u.String()
+}
+
+func prompt(r *bufio.Reader, question, def string) string {
+	if def != "" {
+		fmt.Fprintf(os.Stderr, "%s [%s]: ", question, def)
+	} else {
+		fmt.Fprintf(os.Stderr, "%s: ", question)
+	}
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return def
+	}
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return def
+	}
+	return line
+}
+
+func isStdinTTY() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
 }

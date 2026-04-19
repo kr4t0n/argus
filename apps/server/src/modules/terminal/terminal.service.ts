@@ -34,6 +34,10 @@ import { SidecarLinkService } from '../sidecar-link/sidecar-link.service';
  */
 interface HotMeta {
   agentId: string;
+  /** Sidecar link is keyed by machineId now that one daemon supervises
+   *  many agents. We cache it on first use so the keystroke hot path
+   *  doesn't need to re-join Agent on every frame. */
+  machineId: string;
   userId: string;
   status: string;
 }
@@ -64,8 +68,18 @@ export class TerminalService {
       if (cached.status === 'closed' || cached.status === 'error') return null;
       return cached;
     }
-    const t = await this.requireOwned(userId, terminalId);
-    const meta: HotMeta = { agentId: t.agentId, userId: t.userId, status: t.status };
+    const t = await this.prisma.terminal.findUnique({
+      where: { id: terminalId },
+      include: { agent: { select: { machineId: true } } },
+    });
+    if (!t) throw new NotFoundException('terminal not found');
+    if (t.userId !== userId) throw new ForbiddenException('terminal not yours');
+    const meta: HotMeta = {
+      agentId: t.agentId,
+      machineId: t.agent.machineId,
+      userId: t.userId,
+      status: t.status,
+    };
     this.hotCache.set(terminalId, meta);
     if (t.status === 'closed' || t.status === 'error') return null;
     return meta;
@@ -99,12 +113,12 @@ export class TerminalService {
     if (agent.status === 'offline') throw new BadRequestException('agent is offline');
     if (!agent.supportsTerminal) {
       throw new BadRequestException(
-        'agent does not support terminals (sidecar must set terminal.enabled in YAML)',
+        'agent does not support terminals (enable when creating it from the dashboard)',
       );
     }
-    if (!this.link.isConnected(agentId)) {
+    if (!this.link.isConnected(agent.machineId)) {
       throw new ServiceUnavailableException(
-        'sidecar link not connected (check sidecar logs and server.url in its YAML)',
+        'sidecar link not connected for this machine (check argus-sidecar logs)',
       );
     }
 
@@ -125,7 +139,7 @@ export class TerminalService {
       },
     });
 
-    const sent = this.link.send(agentId, {
+    const sent = this.link.send(agent.machineId, {
       kind: 'terminal-open',
       terminalId: id,
       agentId,
@@ -145,7 +159,12 @@ export class TerminalService {
       throw new ServiceUnavailableException('sidecar link dropped during open');
     }
 
-    this.hotCache.set(id, { agentId, userId, status: 'opening' });
+    this.hotCache.set(id, {
+      agentId,
+      machineId: agent.machineId,
+      userId,
+      status: 'opening',
+    });
     const dto = TerminalService.toDto(row);
     this.gateway.emitTerminalCreated(dto);
     return dto;
@@ -156,13 +175,19 @@ export class TerminalService {
     if (t.status === 'closed' || t.status === 'error') {
       return TerminalService.toDto(t);
     }
+    const agent = await this.prisma.agent.findUnique({
+      where: { id: t.agentId },
+      select: { machineId: true },
+    });
     // Fire-and-forget: even if the link is down we still want to mark
     // the row closed so the UI stops showing a zombie terminal.
-    const sent = this.link.send(t.agentId, {
-      kind: 'terminal-close',
-      terminalId: t.id,
-      ts: Date.now(),
-    });
+    const sent = agent
+      ? this.link.send(agent.machineId, {
+          kind: 'terminal-close',
+          terminalId: t.id,
+          ts: Date.now(),
+        })
+      : false;
     if (!sent) {
       await this.markClosed(terminalId, -1, 'sidecar link not connected');
     }
@@ -172,7 +197,7 @@ export class TerminalService {
   async input(userId: string, msg: TerminalInputMessage): Promise<void> {
     const meta = await this.checkOwnedFast(userId, msg.terminalId);
     if (!meta) return;
-    const ok = this.link.send(meta.agentId, {
+    const ok = this.link.send(meta.machineId, {
       kind: 'terminal-input',
       terminalId: msg.terminalId,
       data: msg.data,
@@ -194,7 +219,7 @@ export class TerminalService {
     // Publish first so the pty resizes as soon as possible; persist the
     // dimensions for replay in the background — a dropped write here
     // is cosmetic, not a correctness issue.
-    this.link.send(meta.agentId, {
+    this.link.send(meta.machineId, {
       kind: 'terminal-resize',
       terminalId: msg.terminalId,
       cols,
@@ -252,11 +277,15 @@ export class TerminalService {
     this.gateway.emitTerminalUpdated(TerminalService.toDto(updated));
   }
 
-  /** Mark all of a sidecar's not-yet-closed terminals as closed with
-   *  the given reason. Used by TerminalLinkBridge on disconnect. */
-  async markAllForAgentClosed(agentId: string, reason: string): Promise<void> {
+  /**
+   * Mark every not-yet-closed terminal hosted on the given machine as
+   * closed. Used by TerminalLinkBridge when a sidecar's link drops:
+   * one daemon now supervises many agents, so a single disconnect
+   * forces close across the entire machine.
+   */
+  async markAllForMachineClosed(machineId: string, reason: string): Promise<void> {
     const rows = await this.prisma.terminal.findMany({
-      where: { agentId, status: { in: ['opening', 'open'] } },
+      where: { agent: { machineId }, status: { in: ['opening', 'open'] } },
       select: { id: true },
     });
     await Promise.all(

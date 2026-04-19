@@ -3,10 +3,13 @@
 // WebSocket link, owns a PTY per session, and ships output back over
 // the same link.
 //
-// Security model: a sidecar only runs this if `terminal.enabled: true`
-// in its YAML. The PTY inherits the sidecar's UID, so anyone with
-// dashboard access effectively gets shell-as-sidecar-user on this host.
-// Treat opt-in as equivalent to handing out SSH access.
+// Security model: terminal access is gated per-agent (Agent.supportsTerminal
+// must be true; the dashboard sets this when the operator opts in at
+// agent-creation time). The PTY inherits the sidecar daemon's UID, so
+// anyone with dashboard access to a terminal-enabled agent effectively
+// gets shell-as-sidecar-user on the agent's machine. Treat opting an
+// agent into terminal access as equivalent to handing out SSH access
+// to that user on that host.
 package terminal
 
 import (
@@ -24,7 +27,6 @@ import (
 
 	"github.com/creack/pty"
 
-	"github.com/kyley/argus/sidecar/internal/config"
 	"github.com/kyley/argus/sidecar/internal/protocol"
 	"github.com/kyley/argus/sidecar/internal/sidecarlink"
 )
@@ -55,10 +57,71 @@ type Link interface {
 	IsConnected() bool
 }
 
+// AgentInfo is the per-agent slice of state the runner needs to validate
+// terminal-open requests and pick a sensible default cwd. Provided by
+// the daemon (which owns the AgentRecord set) via AgentLookup.
+type AgentInfo struct {
+	SupportsTerminal bool
+	WorkingDir       string
+}
+
+// AgentLookup is the runner's read-only view onto the daemon's agent
+// registry. Returns ok=false when the agent isn't known to this machine
+// (e.g. a stale terminal-open after the agent was destroyed).
+type AgentLookup interface {
+	Lookup(agentID string) (AgentInfo, bool)
+}
+
+// Settings are the machine-wide PTY policy knobs. The dashboard never
+// pokes at these — they're intentionally fixed to safe defaults at boot
+// (DefaultSettings) with environment overrides for power users.
+type Settings struct {
+	// Shells is the allowlist of shell binaries the runner will spawn.
+	Shells []string
+	// DefaultShell is used when the dashboard doesn't specify one.
+	// Must appear in Shells.
+	DefaultShell string
+	// MaxSessions caps concurrent open terminals across all agents on
+	// this machine.
+	MaxSessions int
+}
+
+// DefaultSettings returns the baseline policy a fresh sidecar boots with.
+// Honors:
+//   - $ARGUS_TERMINAL_SHELLS  : comma-separated allowlist override
+//   - $ARGUS_TERMINAL_MAX     : MaxSessions override (positive int)
+//   - $SHELL                  : preferred default shell, if in the allowlist
+func DefaultSettings() Settings {
+	shells := []string{"/bin/zsh", "/bin/bash", "/bin/sh"}
+	if env := os.Getenv("ARGUS_TERMINAL_SHELLS"); env != "" {
+		shells = splitCsv(env)
+	}
+
+	defaultShell := shells[0]
+	if env := os.Getenv("SHELL"); env != "" && containsString(shells, env) {
+		defaultShell = env
+	}
+
+	max := 5
+	if env := os.Getenv("ARGUS_TERMINAL_MAX"); env != "" {
+		var n int
+		if _, err := fmt.Sscanf(env, "%d", &n); err == nil && n > 0 {
+			max = n
+		}
+	}
+
+	return Settings{
+		Shells:       shells,
+		DefaultShell: defaultShell,
+		MaxSessions:  max,
+	}
+}
+
 type Runner struct {
-	cfg  *config.Config
-	link Link
-	log  *log.Logger
+	settings Settings
+	agents   AgentLookup
+	link     Link
+	log      *log.Logger
 
 	mu       sync.Mutex
 	sessions map[string]*ptySession
@@ -75,9 +138,10 @@ type ptySession struct {
 
 // New constructs a Runner. `link` is typically a *sidecarlink.Client
 // but any Link implementation works.
-func New(cfg *config.Config, link Link, logger *log.Logger) *Runner {
+func New(settings Settings, agents AgentLookup, link Link, logger *log.Logger) *Runner {
 	return &Runner{
-		cfg:      cfg,
+		settings: settings,
+		agents:   agents,
 		link:     link,
 		log:      logger,
 		sessions: make(map[string]*ptySession),
@@ -90,7 +154,7 @@ func New(cfg *config.Config, link Link, logger *log.Logger) *Runner {
 // of this sidecar's terminals on disconnect, and our pump/wait
 // goroutines will observe their publishes returning false and exit.
 func (r *Runner) Run(ctx context.Context) error {
-	r.log.Printf("terminal: ready (max=%d shells=%v)", r.cfg.Terminal.MaxSessions, r.cfg.Terminal.Shells)
+	r.log.Printf("terminal: ready (max=%d shells=%v)", r.settings.MaxSessions, r.settings.Shells)
 	for {
 		select {
 		case <-ctx.Done():
@@ -156,34 +220,45 @@ func (r *Runner) handleOpen(parent context.Context, ev protocol.TerminalOpen) {
 		return
 	}
 
+	// Validate against the daemon's agent registry. Two failure modes:
+	// the agent is gone (race with destroy), or the agent didn't opt
+	// into terminal access (defense-in-depth — the server should have
+	// rejected the open already, but the sidecar is the authority).
+	info, ok := r.agents.Lookup(ev.AgentID)
+	if !ok {
+		r.publishClosed(ev.TerminalID, -1, fmt.Sprintf("agent %q is not running on this machine", ev.AgentID))
+		return
+	}
+	if !info.SupportsTerminal {
+		r.publishClosed(ev.TerminalID, -1, fmt.Sprintf("agent %q does not have terminal access enabled", ev.AgentID))
+		return
+	}
+
 	r.mu.Lock()
 	if _, exists := r.sessions[ev.TerminalID]; exists {
 		r.mu.Unlock()
 		r.log.Printf("terminal: %s already open, ignoring", ev.TerminalID)
 		return
 	}
-	if len(r.sessions) >= r.cfg.Terminal.MaxSessions {
+	if len(r.sessions) >= r.settings.MaxSessions {
 		r.mu.Unlock()
-		r.publishClosed(ev.TerminalID, -1, fmt.Sprintf("max %d concurrent terminals reached", r.cfg.Terminal.MaxSessions))
+		r.publishClosed(ev.TerminalID, -1, fmt.Sprintf("max %d concurrent terminals reached", r.settings.MaxSessions))
 		return
 	}
 	r.mu.Unlock()
 
 	shell := ev.Shell
 	if shell == "" {
-		shell = r.cfg.Terminal.DefaultShell
+		shell = r.settings.DefaultShell
 	}
-	if !containsString(r.cfg.Terminal.Shells, shell) {
+	if !containsString(r.settings.Shells, shell) {
 		r.publishClosed(ev.TerminalID, -1, fmt.Sprintf("shell %q not allowed", shell))
 		return
 	}
 
 	cwd := ev.Cwd
 	if cwd == "" {
-		cwd = r.cfg.Terminal.Cwd
-	}
-	if cwd == "" {
-		cwd = r.cfg.WorkingDir
+		cwd = info.WorkingDir
 	}
 	// Empty cwd → cmd inherits sidecar's cwd, which is fine.
 
@@ -443,6 +518,31 @@ func containsString(xs []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// splitCsv splits a comma-separated list, trimming whitespace and
+// dropping empty tokens. Used for $ARGUS_TERMINAL_SHELLS parsing.
+func splitCsv(s string) []string {
+	out := make([]string, 0, 4)
+	start := 0
+	for i := 0; i <= len(s); i++ {
+		if i == len(s) || s[i] == ',' {
+			tok := s[start:i]
+			j := 0
+			for j < len(tok) && (tok[j] == ' ' || tok[j] == '\t') {
+				j++
+			}
+			k := len(tok)
+			for k > j && (tok[k-1] == ' ' || tok[k-1] == '\t') {
+				k--
+			}
+			if k > j {
+				out = append(out, tok[j:k])
+			}
+			start = i + 1
+		}
+	}
+	return out
 }
 
 // Ensure Link (and thus *sidecarlink.Client) is importable for

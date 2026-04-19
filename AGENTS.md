@@ -12,13 +12,21 @@ Argus has **four** moving parts and one wire format:
    except via HTTP + WebSocket events.
 2. **Server (`apps/server`)** — NestJS control plane. Owns Postgres, owns the
    WebSocket, brokers between the UI and the message bus.
-3. **Sidecar (`packages/sidecar`)** — small Go binary that wraps **one** CLI
-   agent. Each sidecar has a stable `id`.
+3. **Sidecar (`packages/sidecar`)** — one Go binary per *machine*. The
+   daemon registers itself as a `Machine`, discovers installed CLI
+   adapters on `PATH`, and supervises N agent processes — each a
+   wrapper around one CLI (`claude`, `codex`, `cursor-agent`, …)
+   created from the dashboard. Identity & agent set are persisted to
+   `~/.config/argus/sidecar.json` (see `internal/machine/cache.go`),
+   not YAML.
 4. **Transports** — two independent channels, split by workload:
    - **Redis Streams** (durable, at-least-once) for control-plane traffic:
-     - `agent:lifecycle`     — sidecars announce themselves and heartbeat.
-     - `agent:{id}:cmd`      — server → that sidecar.
-     - `agent:{id}:result`   — that sidecar → server (chunks, externalId).
+     - `agent:lifecycle`        — machines announce/heartbeat themselves;
+       sidecars also publish per-agent spawn/destroy acknowledgments here.
+     - `machine:{mid}:control`  — server → sidecar daemon
+       (`create-agent`, `destroy-agent`, `sync-agents`).
+     - `agent:{id}:cmd`         — server → that agent's supervisor.
+     - `agent:{id}:result`      — supervisor → server (chunks, externalId).
    - **Sidecar link** (direct WebSocket, path `/sidecar-link`) for terminal
      PTY traffic (open / input / resize / close / output / closed). This
      bypasses Redis because every keystroke-echo round-trip used to cost
@@ -38,7 +46,12 @@ Session ── contains ──▶ many Commands (user turns)
 Command ── emits ──▶ many ResultChunks (streamed)
 ```
 
-- An **Agent** is a worker (a long-lived sidecar). "Who can do work."
+- A **Machine** is a host running one `argus-sidecar` daemon. Owns its
+  agents and reports its discovered adapters.
+- An **Agent** is a worker — a single CLI wrapper supervised by some
+  machine's daemon. "Who can do work." Server-managed: created and
+  destroyed from the dashboard, persisted to Postgres, and pushed down
+  to the owning machine over its control stream.
 - A **Session** is a conversation thread targeting one agent. It maps 1-1 to
   the underlying CLI's native conversation id (Claude Code `--resume`, Codex
   `resume`, Cursor CLI `--resume`) via `Session.externalId`. The server stores
@@ -55,9 +68,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 ### `apps/server/src/modules/`
 
 - `auth/` — JWT login, single admin user bootstrapped from env.
-- `agent-registry/` — consumes `agent:lifecycle`, persists `Agent` rows,
-  sweeps stale agents every 15s (offline after 30s with no heartbeat),
-  emits `agent:upsert` / `agent:status` over WS.
+- `machine/` — owns the `Machine` table and the agent control plane.
+  Consumes `agent:lifecycle` (`machine-register`, `machine-heartbeat`,
+  `agent-spawned`, `agent-spawn-failed`, `agent-destroyed`), upserts
+  `Machine` rows, replies with a `sync-agents` reconcile so the
+  sidecar's cached agent set converges with the server's. Exposes
+  REST (`GET /machines`, `POST /machines/:id/agents`,
+  `DELETE /machines/:id/agents/:agentId`) and emits `machine:upsert`
+  / `machine:status` / `machine:removed` / `agent:spawn-failed` over
+  WS. Also publishes `create-agent` / `destroy-agent` commands on
+  `machine:{mid}:control`.
+- `agent-registry/` — `Agent` CRUD: list, get, archive/unarchive, plus
+  the shared `agentToDto` mapper. Lifecycle ingestion lives in
+  `machine/`; this module is purely about the persisted Agent row.
 - `session/` — CRUD for sessions; resolves `externalId` so each subsequent
   turn carries it back to the sidecar for `--resume`.
 - `command/` — persists commands, `XADD`s to `agent:{id}:cmd`, handles cancel.
@@ -91,15 +114,32 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 ### `packages/sidecar/internal/`
 
 - `protocol/` — wire structs (mirror of shared-types).
-- `config/` — YAML loader for `sidecar.yaml`.
+- `machine/` — daemon, on-disk cache, and adapter discovery.
+  - `cache.go` persists `~/.config/argus/sidecar.json` (machine id,
+    bus URL, server link credentials, canonical agent list) with an
+    atomic write so a sidecar restart re-spawns every supervisor
+    *instantly*, without waiting for the server's reconcile broadcast.
+  - `discovery.go` walks the registered adapter set, runs `exec.LookPath`
+    on each `DefaultBinary`, and probes `--version`. The result is
+    reported in `MachineRegisterEvent.adapters` so the dashboard can
+    filter the "create agent" dropdown to what's actually installed.
+  - `daemon.go` is the long-lived process: registers the machine,
+    heartbeats, subscribes to `machine:{mid}:control`, fans
+    create/destroy/sync commands out to per-agent `supervisor`s, and
+    holds the single sidecar↔server WebSocket on behalf of all agents
+    on this host.
+  - `supervisor.go` owns one agent: builds the adapter, pings it once,
+    drains `agent:{id}:cmd`, dispatches to the adapter, forwards
+    chunks back on `agent:{id}:result`, heartbeats, and gracefully
+    drains on destroy. There is no per-agent process — supervisors are
+    goroutines inside the single daemon.
 - `bus/` — go-redis wrapper with `Publish`, `EnsureGroup`, `ReadMessage`, `Ack`.
 - `adapter/` — `Adapter` interface and process-level **registry**. Each
-  adapter file calls `Register(...)` from `init()`. The shared
-  `clistream.Start` helper does the heavy lifting (spawn, line-buffered
-  read, SIGTERM-then-SIGKILL cancel, final/error close).
-- `lifecycle/` — registers, heartbeats, drains commands, dispatches each
-  one to the adapter, forwards chunks back, ACKs Redis, deregisters. Also
-  starts the terminal runner if `terminal.enabled` in YAML.
+  adapter file calls `Register(type, &Plugin{Factory, DefaultBinary})`
+  from `init()` so discovery can find the binary by name on `PATH`.
+  Built-in adapters that report `--version` implement the optional
+  `Versioned` interface (see `util.ReadBinaryVersion`); the daemon
+  prefers the auto-detected string over anything baked in.
 - `sidecarlink/` — gorilla/websocket client that dials
   `ws://{server.url}/sidecar-link`, performs a `hello`/`hello-ack`
   handshake, and exposes `Publish(frame)` + `Inbound()`. Reconnects
@@ -113,9 +153,17 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   wait-for-exit), and publishes output frames back over the same link
   with an **adaptive flush**: single keystrokes flush immediately
   (`idleGap` detection), active bursts get a 4 ms debounce, and 16 KB
-  caps a single frame. Enforces shell allowlist, max-sessions cap, and
-  writes a `TERM=xterm-256color` env into every PTY.
-- `cmd/sidecar/main.go` — flag parsing, signal handling, runner glue.
+  caps a single frame. Decoupled from any global config: takes a
+  `Settings` struct (shells, max-sessions) and an `AgentLookup`
+  interface so it can validate `terminal:open` against the daemon's
+  live agent registry (`Agent.supportsTerminal`, `Agent.workingDir`).
+- `updater/` — self-update: reads the GitHub Releases API for
+  `argus-sidecar-v*` tags, picks the matching `OS-arch` asset,
+  verifies it against `SHASUMS256.txt`, and atomically `os.Rename`s
+  over the running binary. Drives `argus-sidecar update`.
+- `cmd/sidecar/main.go` — subcommand dispatch (`init`, `update`,
+  `version`, default = run daemon), flag parsing, signal handling,
+  runner glue.
 
 ### `apps/web/src/`
 
@@ -143,8 +191,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - **Status vocab**: agents use `online | busy | error | offline`; sessions
   use `active | idle | done | failed`; commands use the lifecycle in the
   Prisma schema (`pending|sent|running|completed|failed|cancelled`).
-- **IDs**: sessions and commands use `cuid()`. Agent ids come from
-  `sidecar.yaml` and **must** be stable across restarts.
+- **IDs**: sessions and commands use `cuid()`. Machine ids are minted
+  once by `argus-sidecar init` and persisted to the cache (regenerated
+  only with `init --force`). Agent ids are server-issued at create
+  time and replayed back to the sidecar via `create-agent` /
+  `sync-agents`. Both are stable across restarts on both sides.
 - **At-least-once delivery**: chunks may be redelivered after a server
   restart. The store de-dups by chunk `id`; the DB write swallows unique-key
   collisions.
@@ -194,22 +245,24 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - **`getSessionChunks` re-fetch on reconnect**: the client passes
   `afterSeq=lastSeq`; the server's REST endpoint hits Postgres, not Redis,
   so it works even after Redis stream trimming.
-- **Archive vs delete**: both `Agent` and `Session` support soft-archive via
-  an `archivedAt DateTime?` column. There is **no in-app delete** for
-  agents (the registry is append-only by design — deleting an agent would
-  orphan its sessions/commands/chunks, and `Session.agentId` is
-  `onDelete: Restrict`). Use `POST /agents/:id/archive` /
-  `POST /agents/:id/unarchive` to hide an agent from the sidebar without
-  losing history. The same pattern applies to sessions
-  (`POST /sessions/:id/archive`). Archived rows are filtered out of
-  `GET /agents` and `GET /sessions` by default — pass
-  `?includeArchived=true` to get them back. When an archived sidecar
-  re-registers via the lifecycle stream, its `archivedAt` is preserved
-  (the upsert clause does not touch it), so the operator's hide decision
-  is sticky across restarts.
-- **Terminal == remote shell access**: enabling `terminal.enabled: true` in
-  a sidecar YAML lets *any* dashboard user spawn shells on that host as
-  the sidecar's UID. Treat this as equivalent to handing out SSH; only
+- **Archive vs destroy vs delete**: agents, sessions, and machines all
+  support soft-archive via an `archivedAt DateTime?` column —
+  `POST /agents/:id/archive` / `POST /sessions/:id/archive` hide rows
+  from default lists without losing history. Pass
+  `?includeArchived=true` to bring them back.
+  *Hard-destroy* an agent via `DELETE /machines/:mid/agents/:agentId`:
+  the server publishes a `destroy-agent` command, the sidecar tears
+  the supervisor down and drops the cache entry, and the row is
+  removed from Postgres (cascading via `onDelete: Cascade` on
+  Session/Command/Result). This is the supported way to delete an
+  agent — the sidebar's per-agent "trash" hits this. There is no
+  separate destroy for sessions; archive and re-create instead.
+  Machine rows are not user-deletable: stale machines are reaped by
+  the periodic sweeper after a grace window and their agents
+  destroyed alongside.
+- **Terminal == remote shell access**: ticking "attach interactive
+  terminal" when creating an agent lets *any* dashboard user spawn
+  shells on that host as the sidecar daemon's UID. Treat this as equivalent to handing out SSH; only
   enable on hosts where every dashboard user is trusted to that level.
   Hardening hooks: the sidecar enforces a `shells` allowlist and a
   `maxSessions` cap; the server REST/WS layer requires JWT, scopes
@@ -228,8 +281,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   config flag in `TerminalService.open/input/resize/close` and keep
   the frame kinds identical.
 - **Sidecar link authentication**: the `/sidecar-link` WS uses a
-  shared-secret token (`SIDECAR_LINK_TOKEN` on the server,
-  `server.token` in sidecar YAML). If the server env var is empty the
+  shared-secret token (`SIDECAR_LINK_TOKEN` on the server, recorded by
+  `argus-sidecar init --token` on the sidecar side). If the server env var is empty the
   endpoint accepts any caller — fine for local dev, loudly logged on
   boot, **do not** ship that way. The token is compared with plain
   string equality; it only protects against external attackers
@@ -246,7 +299,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   metadata only — never the keystroke/output transcript. Adding one
   would balloon storage fast and risks capturing secrets typed into the
   shell. If you need replay, add a separate, opt-in `TerminalTranscript`
-  table and gate it behind `terminal.recordTranscript: true` per sidecar.
+  table gated behind a per-agent flag (mirror the existing
+  `supportsTerminal` plumbing).
 - **Terminal output binary safety**: PTYs emit raw bytes (escape
   sequences, control chars, partial UTF-8 across read boundaries). We
   base64-encode `data` in both directions so JSON serialization can't
@@ -263,7 +317,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - Pool routing (`agents.{type}.commands` consumer group) for "any agent of
   type X" — the protocol/streams support it; the dashboard doesn't expose it
   yet.
-- Pre-commit hooks (ruff/eslint) and a CI workflow.
+- Pre-commit hooks (ruff/eslint).
 
 ## When you change something
 

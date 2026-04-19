@@ -23,11 +23,15 @@ const (
 	KindError    ResultKind = "error"
 )
 
+// RegisterEvent is emitted by an agent supervisor inside the machine
+// daemon when it (re-)spawns. The Agent row already exists in Postgres
+// (created by the dashboard via POST /machines/:id/agents); the server
+// uses this to flip status and refresh metadata.
 type RegisterEvent struct {
 	Kind             string `json:"kind"` // "register"
 	ID               string `json:"id"`
+	MachineID        string `json:"machineId"`
 	Type             string `json:"type"`
-	Machine          string `json:"machine"`
 	SupportsTerminal bool   `json:"supportsTerminal"`
 	Version          string `json:"version"`
 	WorkingDir       string `json:"workingDir,omitempty"`
@@ -45,6 +49,91 @@ type DeregisterEvent struct {
 	Kind string `json:"kind"` // "deregister"
 	ID   string `json:"id"`
 	TS   int64  `json:"ts"`
+}
+
+// ─────────── Machine lifecycle ───────────
+//
+// The sidecar daemon emits these on the same agent:lifecycle stream
+// that agent supervisors use, discriminated by Kind.
+
+// AvailableAdapter is one CLI adapter the sidecar found on PATH at boot.
+type AvailableAdapter struct {
+	Type    string `json:"type"`
+	Binary  string `json:"binary"`
+	Version string `json:"version,omitempty"`
+}
+
+type MachineRegisterEvent struct {
+	Kind              string             `json:"kind"` // "machine-register"
+	MachineID         string             `json:"machineId"`
+	Name              string             `json:"name"`
+	Hostname          string             `json:"hostname"`
+	OS                string             `json:"os"`
+	Arch              string             `json:"arch"`
+	SidecarVersion    string             `json:"sidecarVersion"`
+	AvailableAdapters []AvailableAdapter `json:"availableAdapters"`
+	TS                int64              `json:"ts"`
+}
+
+type MachineHeartbeatEvent struct {
+	Kind      string `json:"kind"` // "machine-heartbeat"
+	MachineID string `json:"machineId"`
+	TS        int64  `json:"ts"`
+}
+
+// ─────────── Machine control commands (server → sidecar) ───────────
+
+// AgentSpec is the canonical shape both Create and Sync embed; mirrors
+// what the sidecar persists in its on-disk cache.
+type AgentSpec struct {
+	AgentID          string         `json:"agentId"`
+	Name             string         `json:"name"`
+	Type             string         `json:"type"`
+	WorkingDir       string         `json:"workingDir,omitempty"`
+	SupportsTerminal bool           `json:"supportsTerminal"`
+	Adapter          map[string]any `json:"adapter,omitempty"`
+}
+
+type CreateAgentCommand struct {
+	Kind  string    `json:"kind"` // "create-agent"
+	Agent AgentSpec `json:"agent"`
+	TS    int64     `json:"ts"`
+}
+
+type DestroyAgentCommand struct {
+	Kind    string `json:"kind"` // "destroy-agent"
+	AgentID string `json:"agentId"`
+	TS      int64  `json:"ts"`
+}
+
+type SyncAgentsCommand struct {
+	Kind   string      `json:"kind"` // "sync-agents"
+	Agents []AgentSpec `json:"agents"`
+	TS     int64       `json:"ts"`
+}
+
+// ─────────── Sidecar acks (sidecar → server, on agent:lifecycle) ───────────
+
+type AgentSpawnedEvent struct {
+	Kind      string `json:"kind"` // "agent-spawned"
+	MachineID string `json:"machineId"`
+	AgentID   string `json:"agentId"`
+	TS        int64  `json:"ts"`
+}
+
+type AgentSpawnFailedEvent struct {
+	Kind      string `json:"kind"` // "agent-spawn-failed"
+	MachineID string `json:"machineId"`
+	AgentID   string `json:"agentId"`
+	Reason    string `json:"reason"`
+	TS        int64  `json:"ts"`
+}
+
+type AgentDestroyedEvent struct {
+	Kind      string `json:"kind"` // "agent-destroyed"
+	MachineID string `json:"machineId"`
+	AgentID   string `json:"agentId"`
+	TS        int64  `json:"ts"`
 }
 
 type Command struct {
@@ -168,8 +257,16 @@ type SidecarHelloAck struct {
 	IdleTimeoutMS int64  `json:"idleTimeoutMs"`
 }
 
-// Stream key helpers (Redis Streams — commands/lifecycle/results only).
-func LifecycleStream() string               { return "agent:lifecycle" }
-func CommandStream(id string) string        { return "agent:" + id + ":cmd" }
-func ResultStream(id string) string         { return "agent:" + id + ":result" }
-func SidecarConsumerGroup(id string) string { return "sidecar-" + id }
+// Stream key helpers (Redis Streams — commands/lifecycle/results/control only).
+func LifecycleStream() string                      { return "agent:lifecycle" }
+func CommandStream(id string) string               { return "agent:" + id + ":cmd" }
+func ResultStream(id string) string                { return "agent:" + id + ":result" }
+func MachineControlStream(machineID string) string { return "machine:" + machineID + ":control" }
+func MachineConsumerGroup(machineID string) string { return "machine-" + machineID }
+
+// SidecarConsumerGroup is the consumer group name an agent supervisor
+// uses on its own per-agent command stream. We name it after the agent
+// itself so two supervisors for the same agent (a brief overlap during
+// daemon restart) share a single group and cooperatively drain pending
+// entries instead of double-delivering.
+func SidecarConsumerGroup(agentID string) string { return "sidecar-" + agentID }

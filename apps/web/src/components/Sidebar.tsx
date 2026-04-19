@@ -9,15 +9,18 @@ import {
   LogOut,
   Pencil,
   Plus,
+  Server,
 } from 'lucide-react';
-import type { AgentDTO, SessionDTO } from '@argus/shared-types';
+import type { AgentDTO, MachineDTO, SessionDTO } from '@argus/shared-types';
 import { useAgentStore } from '../stores/agentStore';
+import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
 import { useAuthStore } from '../stores/authStore';
 import { cn, relativeTime } from '../lib/utils';
 import { StatusDot } from './ui/StatusDot';
 import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
+import { CreateAgentPopover } from './CreateAgentPopover';
 import { api } from '../lib/api';
 
 export function Sidebar() {
@@ -70,7 +73,8 @@ export function Sidebar() {
       <div className="flex-1 overflow-y-auto py-2 px-1">
         {order.length === 0 && (
           <div className="px-4 py-6 text-xs text-neutral-500">
-            No agents registered yet. Start a sidecar with <code>./sidecar --config …</code>.
+            No agents yet — hover a machine below and click{' '}
+            <Plus className="inline h-3 w-3 -mt-0.5" /> to create one.
           </div>
         )}
         {(() => {
@@ -124,7 +128,132 @@ export function Sidebar() {
           );
         })()}
       </div>
+
+      <MachineList />
     </aside>
+  );
+}
+
+/**
+ * Bottom-of-sidebar machine roster. Shows every host that has run
+ * `argus-sidecar init` against this server, even ones currently
+ * offline — so an operator can queue an agent on a machine before
+ * it reconnects (the create-agent command is durably buffered on
+ * the per-machine Redis stream).
+ *
+ * Hover a machine to reveal a `+` action that opens the
+ * CreateAgentPopover. The popover is rendered inline next to the
+ * row (not via a Portal) so its position naturally tracks the row
+ * as the user scrolls the sidebar.
+ */
+function MachineList() {
+  const order = useMachineStore((s) => s.order);
+  const machines = useMachineStore((s) => s.machines);
+  const [openFor, setOpenFor] = useState<string | null>(null);
+
+  if (order.length === 0) {
+    return (
+      <div className="shrink-0 px-4 py-3 text-[11px] text-neutral-600">
+        no machines connected. Run{' '}
+        <code className="rounded bg-neutral-900 px-1 py-0.5 text-neutral-400">
+          argus-sidecar init
+        </code>{' '}
+        on a host.
+      </div>
+    );
+  }
+
+  return (
+    <div className="shrink-0 py-1.5 px-1 max-h-[40%] overflow-y-auto">
+      <div className="px-3 py-1 text-[10px] uppercase tracking-widest text-neutral-600">
+        machines
+      </div>
+      {order.map((id) => {
+        const m = machines[id];
+        if (!m) return null;
+        return (
+          <MachineRow
+            key={id}
+            machine={m}
+            popoverOpen={openFor === id}
+            onOpenPopover={() => setOpenFor(id)}
+            onClosePopover={() => setOpenFor(null)}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function MachineRow({
+  machine,
+  popoverOpen,
+  onOpenPopover,
+  onClosePopover,
+}: {
+  machine: MachineDTO;
+  popoverOpen: boolean;
+  onOpenPopover: () => void;
+  onClosePopover: () => void;
+}) {
+  const { machineId: activeMachineId } = useParams();
+  const active = activeMachineId === machine.id;
+  const adapters = machine.availableAdapters ?? [];
+  const offline = machine.status === 'offline';
+  // Anchor the popover off the row's `+` button via a ref. We use a
+  // portal (rendered inside CreateAgentPopover) so the popover escapes
+  // the sidebar's `overflow-y-auto` machine-list container, which
+  // otherwise clips it (the sidebar is short, the popover is taller
+  // than the gap above the bottom-pinned machine list).
+  const anchorRef = useRef<HTMLDivElement>(null);
+  return (
+    <div
+      ref={anchorRef}
+      className={cn(
+        'group flex items-center gap-1.5 rounded-md px-2.5 py-1.5 transition-colors hover:bg-neutral-900',
+        active && 'bg-neutral-900',
+        offline && 'opacity-60',
+      )}
+    >
+      <Server className="h-3 w-3 shrink-0 text-neutral-500" />
+      <Link
+        to={`/machines/${machine.id}`}
+        className="min-w-0 flex-1 outline-none"
+      >
+        <div
+          className="truncate text-[12px] text-neutral-200"
+          title={`${machine.hostname} · ${machine.os}/${machine.arch} · sidecar ${machine.sidecarVersion}`}
+        >
+          {machine.name}
+        </div>
+        <div className="truncate text-[10px] text-neutral-600">
+          {machine.agentCount} agent{machine.agentCount === 1 ? '' : 's'} ·{' '}
+          {adapters.length} adapter{adapters.length === 1 ? '' : 's'}
+        </div>
+      </Link>
+      <StatusDot status={machine.status === 'online' ? 'online' : 'offline'} />
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpenPopover();
+        }}
+        className={cn(
+          'ml-0.5 flex items-center text-neutral-500 transition-opacity hover:text-neutral-200',
+          popoverOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+        )}
+        title="create agent on this machine"
+      >
+        <Plus className="h-3.5 w-3.5" />
+      </button>
+
+      {popoverOpen && (
+        <CreateAgentPopover
+          machine={machine}
+          anchor={anchorRef}
+          onClose={onClosePopover}
+        />
+      )}
+    </div>
   );
 }
 
@@ -370,8 +499,8 @@ function AgentRow({
             )}
             title={archived ? `${agentTypeLabel(agent.type)} (archived)` : agentTypeLabel(agent.type)}
           >
-            {agent.id}{' '}
-            <span className="text-neutral-500">· {agent.machine}</span>
+            {agent.name || agent.id}{' '}
+            <span className="text-neutral-500">· {agent.machineName}</span>
           </span>
           <span className="ml-auto flex items-center gap-2">
             {visibleSessions.length > 0 && (

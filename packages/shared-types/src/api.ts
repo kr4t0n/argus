@@ -1,6 +1,7 @@
 import type {
   AgentStatus,
   AgentType,
+  AvailableAdapter,
   CommandStatus,
   ResultChunk,
   SessionStatus,
@@ -22,16 +23,46 @@ export interface LoginResponse {
   user: AuthUser;
 }
 
+export type MachineStatus = 'online' | 'offline';
+
+/**
+ * Snapshot of a host running argus-sidecar. Created from the first
+ * MachineRegisterEvent and refreshed on every subsequent (re-)register.
+ * Agents are nested children — see `agents` for the lazy-loaded list.
+ */
+export interface MachineDTO {
+  id: string;
+  /** User-friendly label, defaults to hostname (`.local` stripped). */
+  name: string;
+  hostname: string;
+  os: string;
+  arch: string;
+  sidecarVersion: string;
+  /** Adapters detected on PATH at sidecar boot. The dashboard uses this
+   *  to populate the "create agent" type dropdown. */
+  availableAdapters: AvailableAdapter[];
+  status: MachineStatus;
+  lastSeenAt: string;
+  registeredAt: string;
+  /** ISO timestamp; null means the machine is visible/unarchived. */
+  archivedAt: string | null;
+  /** Convenience count for the sidebar; full agent list lives in agentStore. */
+  agentCount: number;
+}
+
 export interface AgentDTO {
   id: string;
+  /** User-friendly label, unique within a machine. */
+  name: string;
   type: AgentType;
-  machine: string;
+  machineId: string;
+  /** Denormalized for sidebar display; matches Machine.name at render time. */
+  machineName: string;
   status: AgentStatus;
   /**
-   * Whether this agent's sidecar runs a PTY host (`terminal.enabled`
-   * in its YAML). Controls whether the dashboard exposes the Terminal
-   * pane; the server also rejects terminal-open requests for agents
-   * where this is false.
+   * Whether this agent's supervisor has a PTY runner attached. Controls
+   * whether the dashboard exposes the Terminal pane; the server also
+   * rejects terminal-open requests for agents where this is false.
    */
   supportsTerminal: boolean;
   version: string | null;
@@ -40,6 +71,15 @@ export interface AgentDTO {
   registeredAt: string;
   /** ISO timestamp; null means the agent is visible/unarchived. */
   archivedAt: string | null;
+}
+
+export interface CreateAgentRequest {
+  name: string;
+  type: AgentType;
+  workingDir?: string;
+  supportsTerminal?: boolean;
+  /** Optional adapter-specific options forwarded to the sidecar. */
+  adapter?: Record<string, unknown>;
 }
 
 export interface SessionDTO {

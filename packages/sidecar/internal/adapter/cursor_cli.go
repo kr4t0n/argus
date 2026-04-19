@@ -37,29 +37,34 @@ type CursorCLIAdapter struct {
 	runs       map[string]*CLIRunner
 }
 
+const cursorDefaultBinary = "cursor-agent"
+
 func init() {
-	Register("cursor-cli", func(cfg map[string]any) (Adapter, error) {
-		bin, _ := cfg["binary"].(string)
-		if bin == "" {
-			bin = "cursor-agent"
-		}
-		if _, err := exec.LookPath(bin); err != nil {
-			return nil, fmt.Errorf("cursor-agent CLI %q not found: %w", bin, err)
-		}
-		a := &CursorCLIAdapter{
-			binary:     bin,
-			workingDir: WorkingDirFromCfg(cfg),
-			yolo:       boolFromCfg(cfg, "yolo", true),
-			runs:       map[string]*CLIRunner{},
-		}
-		if extra, ok := cfg["extraArgs"].([]any); ok {
-			for _, v := range extra {
-				if s, ok := v.(string); ok {
-					a.extraArgs = append(a.extraArgs, s)
+	Register("cursor-cli", Plugin{
+		DefaultBinary: cursorDefaultBinary,
+		Factory: func(cfg map[string]any) (Adapter, error) {
+			bin, _ := cfg["binary"].(string)
+			if bin == "" {
+				bin = cursorDefaultBinary
+			}
+			if _, err := exec.LookPath(bin); err != nil {
+				return nil, fmt.Errorf("cursor-agent CLI %q not found: %w", bin, err)
+			}
+			a := &CursorCLIAdapter{
+				binary:     bin,
+				workingDir: WorkingDirFromCfg(cfg),
+				yolo:       boolFromCfg(cfg, "yolo", true),
+				runs:       map[string]*CLIRunner{},
+			}
+			if extra, ok := cfg["extraArgs"].([]any); ok {
+				for _, v := range extra {
+					if s, ok := v.(string); ok {
+						a.extraArgs = append(a.extraArgs, s)
+					}
 				}
 			}
-		}
-		return a, nil
+			return a, nil
+		},
 	})
 }
 

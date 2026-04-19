@@ -361,7 +361,7 @@ export function TerminalPane({ agent }: Props) {
         {status.kind === 'idle' && (
           <div className="text-center text-[11px] text-neutral-600">
             click <span className="text-neutral-400">open</span> to attach a shell on{' '}
-            <span className="font-mono text-neutral-400">{agent.machine}</span>
+            <span className="font-mono text-neutral-400">{agent.machineName}</span>
           </div>
         )}
         {status.kind === 'opening' && (

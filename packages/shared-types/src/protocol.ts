@@ -32,17 +32,21 @@ export type ResultKind =
   | 'final' // end of a turn
   | 'error';
 
-/** Sidecar → server, on boot */
+/**
+ * Per-agent register event, emitted by an agent supervisor inside the
+ * machine daemon when it (re-)spawns. The server treats this as a
+ * status nudge — the Agent row already exists in Postgres because it
+ * was created by the dashboard via POST /machines/:id/agents.
+ */
 export interface RegisterEvent {
   kind: 'register';
   id: string;
+  machineId: string;
   type: AgentType;
-  machine: string;
   /**
-   * Whether this sidecar has a PTY runner attached (`terminal.enabled` in
-   * its YAML). Controls whether the dashboard exposes the Terminal pane
-   * for this agent; the server also uses it to reject terminal-open
-   * requests before they hit the sidecar link.
+   * Whether the supervisor has a PTY runner attached. Controls whether
+   * the dashboard exposes the Terminal pane and whether the server
+   * accepts terminal-open requests targeting this agent.
    */
   supportsTerminal: boolean;
   version: string;
@@ -67,6 +71,144 @@ export interface DeregisterEvent {
 }
 
 export type LifecycleEvent = RegisterEvent | HeartbeatEvent | DeregisterEvent;
+
+// ─────────────────────────────────────────────────────────────────────
+// Machine lifecycle (sidecar daemon ⇄ server)
+//
+// Each host runs one argus-sidecar process, which self-identifies as a
+// `Machine` on the same `agent:lifecycle` stream that agents use. We
+// piggy-back the same stream because:
+//   - The server already runs one consumer there (single sweep loop).
+//   - Machine and agent registrations are causally related (an agent
+//     can only register after the server knows about its machine), so
+//     ordering matters.
+// Events are discriminated by `kind`.
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * One adapter the sidecar found on PATH at boot. Surfaced verbatim in
+ * `MachineDTO.availableAdapters` so the dashboard can populate the
+ * adapter dropdown in the "create agent" popover with installed CLIs
+ * only (don't show "Claude Code" if `claude` isn't on this box).
+ */
+export interface AvailableAdapter {
+  type: AgentType;
+  binary: string;
+  /** Empty when `<binary> --version` couldn't be parsed; the adapter
+   *  is still usable, the dashboard just won't render a version pill. */
+  version: string;
+}
+
+export interface MachineRegisterEvent {
+  kind: 'machine-register';
+  machineId: string;
+  /** User-friendly name; defaults to hostname (`.local` stripped). */
+  name: string;
+  hostname: string;
+  os: string;   // darwin | linux
+  arch: string; // amd64 | arm64
+  sidecarVersion: string;
+  availableAdapters: AvailableAdapter[];
+  ts: number;
+}
+
+export interface MachineHeartbeatEvent {
+  kind: 'machine-heartbeat';
+  machineId: string;
+  ts: number;
+}
+
+export type MachineLifecycleEvent =
+  | MachineRegisterEvent
+  | MachineHeartbeatEvent;
+
+// ─────────────────────────────────────────────────────────────────────
+// Machine control plane (server → sidecar)
+//
+// Per-machine stream `machine:<machineId>:control`. The server publishes
+// CreateAgent / DestroyAgent commands when a dashboard user mutates the
+// machine's agent set, plus a SyncAgents reconcile broadcast on every
+// (re)connect so a sidecar that missed events while offline catches up
+// without operator intervention.
+// ─────────────────────────────────────────────────────────────────────
+
+/** Embedded inside Create / Sync. Mirrors what the sidecar caches. */
+export interface AgentSpec {
+  agentId: string;
+  name: string;
+  type: AgentType;
+  workingDir?: string;
+  supportsTerminal: boolean;
+  /** Optional adapter-specific overrides (e.g. binary path, extraArgs).
+   *  Sidecar passes these straight to the adapter factory. */
+  adapter?: Record<string, unknown>;
+}
+
+export interface CreateAgentCommand {
+  kind: 'create-agent';
+  agent: AgentSpec;
+  ts: number;
+}
+
+export interface DestroyAgentCommand {
+  kind: 'destroy-agent';
+  agentId: string;
+  ts: number;
+}
+
+/** Full canonical list — sidecar reconciles its supervisor set against
+ *  this and stops/starts deltas. Sent on every (re)connect. */
+export interface SyncAgentsCommand {
+  kind: 'sync-agents';
+  agents: AgentSpec[];
+  ts: number;
+}
+
+export type MachineControlCommand =
+  | CreateAgentCommand
+  | DestroyAgentCommand
+  | SyncAgentsCommand;
+
+/** Sidecar acks (back on agent:lifecycle). Server uses these to flip
+ *  the Agent row's status promptly and surface spawn failures in the UI. */
+export interface AgentSpawnedEvent {
+  kind: 'agent-spawned';
+  machineId: string;
+  agentId: string;
+  ts: number;
+}
+
+export interface AgentSpawnFailedEvent {
+  kind: 'agent-spawn-failed';
+  machineId: string;
+  agentId: string;
+  reason: string;
+  ts: number;
+}
+
+export interface AgentDestroyedEvent {
+  kind: 'agent-destroyed';
+  machineId: string;
+  agentId: string;
+  ts: number;
+}
+
+export type MachineLifecycleAck =
+  | AgentSpawnedEvent
+  | AgentSpawnFailedEvent
+  | AgentDestroyedEvent;
+
+/** Anything the server expects on `agent:lifecycle`. Ordering matters:
+ *  more specific kinds first so TS narrows correctly. */
+export type AnyLifecycleEvent =
+  | RegisterEvent
+  | HeartbeatEvent
+  | DeregisterEvent
+  | MachineRegisterEvent
+  | MachineHeartbeatEvent
+  | AgentSpawnedEvent
+  | AgentSpawnFailedEvent
+  | AgentDestroyedEvent;
 
 /** Server → sidecar */
 export interface Command {
@@ -229,12 +371,19 @@ export type SidecarLinkFrame =
   | TerminalInputEvent
   | TerminalOutputEvent;
 
-/** Redis stream key helpers (commands / lifecycle / results only —
+/** Redis stream key helpers (commands / lifecycle / results / control —
  *  terminal traffic goes over the sidecar link, see SIDECAR_LINK_PATH). */
 export const streamKeys = {
+  /** All lifecycle events (agent + machine) ride one stream so the
+   *  server's single sweep loop can preserve causal ordering between
+   *  machine-register and agent-register. */
   lifecycle: 'agent:lifecycle',
   command: (agentId: string) => `agent:${agentId}:cmd`,
   result: (agentId: string) => `agent:${agentId}:result`,
+  /** Per-machine control plane: server publishes Create/Destroy/Sync
+   *  agent commands here; the sidecar reads them with its own group
+   *  so a server restart doesn't replay everything. */
+  machineControl: (machineId: string) => `machine:${machineId}:control`,
 };
 
 export const consumerGroups = {
@@ -242,6 +391,12 @@ export const consumerGroups = {
   server: 'server',
   /** server-side consumer group reading lifecycle events */
   lifecycle: 'server-lifecycle',
-  /** per-sidecar consumer group on its command stream */
+  /** per-machine consumer group on the machine control stream */
+  machine: (machineId: string) => `machine-${machineId}`,
+  /** per-agent consumer group an agent supervisor uses on its own
+   *  command stream. Naming the group after the agent (rather than
+   *  the machine or sidecar) lets two supervisors briefly overlap
+   *  during a daemon restart and cooperatively drain the pending
+   *  entry list instead of double-delivering commands. */
   sidecar: (agentId: string) => `sidecar-${agentId}`,
 };

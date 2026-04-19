@@ -9,6 +9,10 @@ interface AgentState {
   load: () => Promise<void>;
   upsert: (a: AgentDTO) => void;
   setStatus: (id: string, status: AgentDTO['status']) => void;
+  remove: (id: string) => void;
+  /** Convenience selector: agents that belong to a given machine, in
+   *  global sidebar order. The Sidebar groups by machine using this. */
+  forMachine: (machineId: string) => AgentDTO[];
 }
 
 export const useAgentStore = create<AgentState>((set, get) => ({
@@ -40,6 +44,18 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const agents = { ...get().agents, [id]: { ...existing, status } };
     set({ agents, order: sortOrder(get().order, agents) });
   },
+  remove(id) {
+    const next = { ...get().agents };
+    delete next[id];
+    set({
+      agents: next,
+      order: get().order.filter((x) => x !== id),
+    });
+  },
+  forMachine(machineId) {
+    const { agents, order } = get();
+    return order.map((id) => agents[id]!).filter((a) => a && a.machineId === machineId);
+  },
 }));
 
 function sortOrder(order: string[], agents: Record<string, AgentDTO>): string[] {
@@ -59,8 +75,12 @@ function sortOrder(order: string[], agents: Record<string, AgentDTO>): string[] 
     if (aw !== bw) return aw - bw;
     const sw = statusWeight[a.status] - statusWeight[b.status];
     if (sw !== 0) return sw;
+    // Group by machine first so the Sidebar can render contiguous
+    // sub-sections without resorting after the fact.
+    const ms = a.machineName.localeCompare(b.machineName);
+    if (ms !== 0) return ms;
     const ts = a.type.localeCompare(b.type);
     if (ts !== 0) return ts;
-    return a.machine.localeCompare(b.machine);
+    return a.name.localeCompare(b.name);
   });
 }
