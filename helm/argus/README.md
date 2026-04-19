@@ -165,6 +165,42 @@ Three clean deployment shapes:
    server. Disable the chart's Ingress (`ingress.enabled: false`) and
    apply your own.
 
+## Ingress shape
+
+The chart renders **one Ingress object per service** when both
+`ingress.web.host` and `ingress.server.host` are set — `<release>-web`
+and `<release>-server`. This split exists primarily because the
+[Tailscale Kubernetes operator](https://tailscale.com/kb/1236/kubernetes-operator)
+maps one Ingress to one tailnet device (named from `tls.hosts[0]`); a
+single two-rule Ingress would collapse both endpoints onto one
+device. nginx-ingress / traefik / haproxy users get the same effective
+behaviour as a two-rule Ingress, just spread across two manifests, so
+per-service annotations and TLS Secrets stay independent.
+
+### Example: Tailscale
+
+A ready-to-`-f` example that serves web at `argus` and API at
+`argus-api`, both auto-HTTPS via Tailscale, and reuses one external
+Secret for all credentials lives in
+[`examples/values.tailscale.yaml`](./examples/values.tailscale.yaml).
+Create the Secret first, then:
+
+```bash
+kubectl -n argus create secret generic argus-secret \
+  --from-literal=DATABASE_URL='postgresql://...' \
+  --from-literal=REDIS_URL='rediss://...' \
+  --from-literal=JWT_SECRET="$(openssl rand -hex 32)" \
+  --from-literal=ADMIN_PASSWORD='change-me-now' \
+  --from-literal=SIDECAR_LINK_TOKEN="$(openssl rand -hex 32)"
+
+helm install argus argus/argus \
+  --namespace argus --create-namespace \
+  -f helm/argus/examples/values.tailscale.yaml
+```
+
+Edit the `your-tailnet` placeholder in `web.config.apiUrl` first — find
+it with `tailscale status --json | jq -r .MagicDNSSuffix`.
+
 ## Sidecars
 
 Sidecars are not a Kubernetes workload; they live on the operator's
