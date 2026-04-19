@@ -62,6 +62,23 @@
     content: '▍';
     @apply ml-[2px] animate-blink text-neutral-400;
   }
+  /* Hide the scrollbar while leaving scroll behaviour (mouse wheel,
+     trackpad, keyboard) fully intact. Used on horizontal-only strips
+     like FileChips where the visible scrollbar would add noise without
+     much affordance value (the chips themselves clip and the user
+     learns to swipe). Cross-browser pieces:
+       - Firefox  → scrollbar-width: none
+       - IE/Edge  → -ms-overflow-style: none
+       - WebKit   → ::-webkit-scrollbar { display: none }
+     Defining it as a component class (not a utility) so Tailwind keeps
+     it through purge regardless of where it's used. */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 .markdown p {
