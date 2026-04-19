@@ -108,6 +108,21 @@ cp ../../deploy/sidecar.claude.example.yaml ./sidecar.yaml
 The cross-compiled binaries are fully static (no cgo, no glibc
 dependency) — scp them straight onto the target machine and run.
 
+To upgrade an installed sidecar in place to the latest published release
+for its OS/arch, run:
+
+```bash
+./argus-sidecar update                # downloads, sha256-verifies, swaps
+./argus-sidecar update --prerelease   # also consider pre-release tags
+./argus-sidecar update --force        # reinstall even if already current
+./argus-sidecar version               # print the baked-in version
+```
+
+The update is atomic (`os.Rename` over the running executable). Restart
+your launchd/systemd unit afterwards to pick up the new binary. If the
+GitHub repo is private, set `GITHUB_TOKEN` in the environment so the
+update can read the release asset list.
+
 Once the sidecar registers you'll see it appear in the dashboard's sidebar.
 Click `+ new session` under it to start a streaming chat.
 

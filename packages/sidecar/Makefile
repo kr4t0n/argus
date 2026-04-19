@@ -15,9 +15,16 @@ PKG       := ./cmd/sidecar
 BIN_DIR   := bin
 BIN_NAME  := argus-sidecar
 
+# Version baked into the binary via -ldflags. The `update` subcommand uses
+# this for the "already on latest" check. Override on the command line:
+#   make build VERSION=argus-sidecar-v0.1.0
+# The release workflow always sets this to the git tag name.
+VERSION   ?= dev
+
 # -s -w: strip debug symbols & DWARF (smaller binary).
 # -trimpath: drop absolute paths from the binary for reproducibility.
-GOFLAGS   := -trimpath -ldflags="-s -w"
+# -X main.Version: bake the version string into the binary.
+GOFLAGS   := -trimpath -ldflags="-s -w -X main.Version=$(VERSION)"
 
 # CGO off → fully static; creack/pty uses pure-Go syscalls so this works on
 # every target we care about (linux/darwin × amd64/arm64).
