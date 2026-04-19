@@ -1,6 +1,9 @@
 id: codex-1
 type: codex
-machine: local
+# machine is optional; defaults to the host's `os.Hostname()` (with the
+# macOS `.local` mDNS suffix stripped). Pin it only if you want a
+# friendlier label, or to disambiguate two sidecars on the same host.
+# machine: local
 # version: '0.121.0'   # optional; auto-detected from `codex --version` at boot
 workingDir: ~/code/my-project
 bus:

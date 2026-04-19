@@ -396,7 +396,7 @@ one matching your CLI and edit. The minimal valid file is ~10 lines.
 # /etc/argus/sidecar.yaml on the agent machine
 id: claude-build-box-1                    # stable identity in the dashboard
 type: claude-code                         # adapter type (built-in)
-machine: build-box-1                      # human label for the host
+# machine: build-box-1                    # optional; defaults to `os.Hostname()` (`.local` stripped)
 workingDir: /home/ci/projects/api         # CLI runs here; tools resolve relative to it
 
 bus:
@@ -422,7 +422,7 @@ adapter:
 ```yaml
 id: codex-build-box-1
 type: codex
-machine: build-box-1
+# machine: build-box-1                    # optional; defaults to `os.Hostname()` (`.local` stripped)
 workingDir: /home/ci/projects/api
 
 bus:
@@ -441,7 +441,7 @@ adapter:
 ```yaml
 id: cursor-build-box-1
 type: cursor-cli
-machine: build-box-1
+# machine: build-box-1                    # optional; defaults to `os.Hostname()` (`.local` stripped)
 workingDir: /home/ci/projects/api
 
 bus:
@@ -460,7 +460,7 @@ adapter:
 | ------------------- | -------- | ---------------------------------------------------------------------------------------------- |
 | `id`                | yes      | Stable identity. The sidebar groups sessions under this. Don't change it after first register. |
 | `type`              | yes      | Adapter selector: `claude-code`                                                                |
-| `machine`           | yes      | Free-form label shown in the dashboard. Often `${HOSTNAME}` or a logical name like `build-1`.  |
+| `machine`           | no       | Label shown in the dashboard. Defaults to `os.Hostname()` with the macOS `.local` suffix stripped. Pin only to override (e.g. two sidecars on the same host). |
 | `version`           | no       | Pinned version string. Omit and the sidecar runs `<binary> --version` at boot to detect it.    |
 | `workingDir`        | no       | The CLI's `$CWD`. Supports `~` and `${ENV}` expansion. Defaults to the sidecar's own CWD.      |
 | `bus.url`           | yes      | Redis URL. Must be reachable from this host. Use `rediss://` for TLS.                          |
