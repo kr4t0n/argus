@@ -118,6 +118,16 @@ jobs:
           rm -f *.sha256
           cat SHASUMS256.txt
 
+      - name: Stage installer script for release
+        run: |
+          # Ship the same install.sh that lives at HEAD as a release asset.
+          # End-users normally consume it via the raw URL on `main`, but the
+          # tagged copy is useful for: (a) auditing what shipped with a
+          # specific release, (b) air-gapped envs that mirror release
+          # tarballs, and (c) policy-restricted hosts that can't curl-pipe.
+          cp scripts/install.sh dist/install.sh
+          chmod +x dist/install.sh
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -131,3 +141,4 @@ jobs:
             dist/argus-sidecar-darwin-amd64
             dist/argus-sidecar-darwin-arm64
             dist/SHASUMS256.txt
+            dist/install.sh

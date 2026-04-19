@@ -282,11 +282,51 @@ sidecars (typically with the same YAML except for the `id` and
 
 Three ways to get the binary onto the agent machine. Pick whichever fits.
 
-#### Option A — Download a pre-built binary (recommended)
+#### Option A — One-line installer (recommended)
 
-Each release publishes static, dependency-free binaries for darwin/linux
-× amd64/arm64 to GitHub Releases. Detect your platform and grab the
-matching asset:
+```bash
+curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh | sh
+```
+
+This script:
+
+1. Detects your OS (`darwin`/`linux`) and arch (`amd64`/`arm64`).
+2. Resolves the latest `argus-sidecar-v*` release via the GitHub API.
+3. Downloads the matching binary **and** the release's
+   `SHASUMS256.txt`, verifies the SHA-256 before installing.
+4. Drops the binary in `/usr/local/bin` (or `$HOME/.local/bin` if that
+   isn't writable, with a `PATH` reminder printed at the end).
+5. Performs an atomic `mv` over any existing copy, so re-running the
+   installer is a safe upgrade path.
+
+Common overrides:
+
+```bash
+# Pin a specific release
+curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh \
+  | ARGUS_VERSION=0.1.0 sh
+
+# Install somewhere bespoke
+curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh \
+  | ARGUS_INSTALL_DIR=/opt/argus/bin sh
+
+# Private repo — pass a GitHub token (PAT or `gh auth token`)
+curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh \
+  | GITHUB_TOKEN=ghp_xxx sh
+```
+
+The installer is POSIX `sh` (no bashisms) and works on Alpine, Debian,
+RHEL, macOS — anywhere `curl` (or `wget`) and `sha256sum` (or
+`shasum`) exist. Inspect the script before piping to a shell if your
+threat model requires it: it lives at
+[`scripts/install.sh`](scripts/install.sh) in the repo, and the
+release workflow attaches a copy to every release for tagged-version
+auditability.
+
+#### Option B — Manual download
+
+Same artifacts, no script. Useful when curl-pipe-sh is disallowed by
+policy or the host is air-gapped.
 
 ```bash
 # On the agent machine:
@@ -303,8 +343,10 @@ argus-sidecar version
 > If the repo is private, the unauthenticated download will 404. Either
 > make releases public, or `export GH_TOKEN=...` and use
 > `gh release download argus-sidecar-${VERSION} -p "argus-sidecar-${OS}-${ARCH}"`.
+> The Option A installer handles private repos transparently as long as
+> `GITHUB_TOKEN` is set.
 
-#### Option B — Build from source
+#### Option C — Build from source
 
 Useful if you want to bake in custom adapters. Requires Go 1.23+.
 
@@ -327,7 +369,7 @@ scp bin/argus-sidecar-linux-amd64 user@build-box:/usr/local/bin/argus-sidecar
 These binaries are fully static (`CGO_ENABLED=0`), so they run on any
 glibc/musl Linux without dependencies.
 
-#### Option C — In-place upgrades
+#### Option D — In-place upgrades
 
 Once installed, the sidecar updates itself:
 

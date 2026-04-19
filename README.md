@@ -118,29 +118,65 @@ step. The web image is generic — `host.ts` derives the API base URL
 from the browser's hostname at runtime, so the same image works behind
 any reverse proxy.
 
-### 2. Build and run a sidecar
+### 2. Install and run a sidecar
 
 The sidecar is **not** part of compose on purpose: you run it on whatever
-machine actually has the CLI you want to expose.
+machine actually has the CLI you want to expose. There are three ways
+to get the binary onto that machine — pick whichever fits.
+
+#### Option A — one-line installer (recommended)
 
 ```bash
-# Build the binary for the host machine
+curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh | sh
+```
+
+That detects your OS/arch (`darwin`/`linux`, `amd64`/`arm64`),
+resolves the latest `argus-sidecar-v*` release, downloads the matching
+binary, **verifies its SHA-256 against the release's `SHASUMS256.txt`**,
+and drops it in `/usr/local/bin` (or `$HOME/.local/bin` if that isn't
+writable). Knobs:
+
+```bash
+# Pin a specific version
+curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh | ARGUS_VERSION=0.1.0 sh
+
+# Install somewhere else
+curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh | ARGUS_INSTALL_DIR=$HOME/bin sh
+
+# Private repo? Use a token (gh auth token works on dev machines)
+curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh | GITHUB_TOKEN=ghp_xxx sh
+```
+
+#### Option B — download a published binary
+
+Grab the right asset from the [latest sidecar release](https://github.com/kr4t0n/argus/releases?q=argus-sidecar)
+(`argus-sidecar-{darwin,linux}-{amd64,arm64}`), `chmod +x` it, and
+move it onto your `$PATH`. Verify the checksum against the release's
+`SHASUMS256.txt`.
+
+#### Option C — build from source
+
+```bash
 cd packages/sidecar && make              # → bin/argus-sidecar
 
 # Or cross-compile a static binary for a remote Linux box
 make linux-amd64                         # → bin/argus-sidecar-linux-amd64
 make linux-arm64                         # → bin/argus-sidecar-linux-arm64
 make cross                               # builds all supported GOOS/GOARCH
-
-# Edit a config (one per machine/adapter)
-cp ../../deploy/sidecar.claude.example.yaml ./sidecar.yaml
-
-# Run it
-./bin/argus-sidecar --config sidecar.yaml
 ```
 
 The cross-compiled binaries are fully static (no cgo, no glibc
 dependency) — scp them straight onto the target machine and run.
+
+#### Configure and run
+
+```bash
+# Edit a config (one per machine/adapter)
+cp deploy/sidecar.claude.example.yaml ./sidecar.yaml
+
+# Run it
+argus-sidecar --config sidecar.yaml
+```
 
 To upgrade an installed sidecar in place to the latest published release
 for its OS/arch, run:
