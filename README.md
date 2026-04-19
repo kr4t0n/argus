@@ -86,13 +86,23 @@ credentials (`admin@argus.local` / `changeme` by default — change them in
 
 #### Pulling pre-built images instead of building locally
 
-Tagged commits and pushes to `main` publish multi-arch (amd64 + arm64)
-images to Docker Hub via `.github/workflows/docker-publish.yml`:
+Tagged commits and pushes to `main` publish multi-arch (linux/amd64 +
+linux/arm64) images to Docker Hub via `.github/workflows/docker-publish.yml`:
 
+- [`kr4t0n/argus-server`](https://hub.docker.com/r/kr4t0n/argus-server)
+- [`kr4t0n/argus-web`](https://hub.docker.com/r/kr4t0n/argus-web)
+
+```bash
+docker pull kr4t0n/argus-server:latest    # tracks main
+docker pull kr4t0n/argus-web:latest
+
+# Or pin to a specific release:
+docker pull kr4t0n/argus-server:0.1.0
+docker pull kr4t0n/argus-web:0.1.0
 ```
-docker pull <DOCKERHUB_USERNAME>/argus-server:latest
-docker pull <DOCKERHUB_USERNAME>/argus-web:latest
-```
+
+Tag schedule per image: `:latest` (main), `:<branch>`, `:<X.Y.Z>` and
+`:<X.Y>` (semver from `v*` tags), and `:sha-<short>` for every build.
 
 Override the `image:` field in `deploy/docker-compose.yml` (or use a
 `docker-compose.override.yml`) to skip the local `build:` and pull
