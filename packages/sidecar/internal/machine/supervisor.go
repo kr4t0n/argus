@@ -37,6 +37,12 @@ type supervisor struct {
 
 	cancels sync.Map // commandID → context.CancelFunc
 	busy    int64
+
+	// Per-agent filesystem watcher. nil until run() starts it (and nil
+	// again if the agent has no WorkingDir, or the watch itself failed
+	// to register — in which case the tree works in manual-refresh
+	// mode without live updates).
+	fsw *fsWatcher
 }
 
 const (
@@ -130,6 +136,8 @@ func (s *supervisor) run(ctx context.Context) {
 		// the dashboard's view of the agent.
 	}
 
+	s.startFSWatcher(ctx)
+
 	cmdStream := protocol.CommandStream(s.spec.AgentID)
 	group := protocol.SidecarConsumerGroup(s.spec.AgentID)
 	if err := s.bus.EnsureGroup(ctx, cmdStream, group); err != nil {
@@ -185,6 +193,10 @@ func (s *supervisor) run(ctx context.Context) {
 			s.handleCommand(ctx, c)
 			_ = s.bus.Ack(ctx, cmdStream, group, id)
 		}(cmd, msgID)
+	}
+
+	if s.fsw != nil {
+		s.fsw.Close()
 	}
 
 	// Best-effort deregister so the dashboard reflects the change
@@ -296,6 +308,66 @@ func (s *supervisor) handleCommand(parent context.Context, cmd protocol.Command)
 			TS:        time.Now().UnixMilli(),
 			IsFinal:   c.IsFinal,
 		})
+	}
+}
+
+// startFSWatcher brings up the per-agent recursive file watcher if the
+// agent has a workingDir. Failures are logged and ignored — the tree
+// UI degrades to manual refresh but otherwise keeps working.
+func (s *supervisor) startFSWatcher(ctx context.Context) {
+	if s.spec.WorkingDir == "" {
+		return
+	}
+	w, err := newFSWatcher(ctx, s.spec.WorkingDir, func(relDir string) {
+		_ = s.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSChangedEvent{
+			Kind:      "fs-changed",
+			MachineID: s.machine,
+			AgentID:   s.spec.AgentID,
+			Path:      relDir,
+			TS:        time.Now().UnixMilli(),
+		})
+	}, s.log)
+	if err != nil {
+		s.log.Printf("agent %s: fs watcher disabled: %v", s.spec.AgentID, err)
+		return
+	}
+	s.fsw = w
+}
+
+// HandleFSList executes a list-directory request for this agent and
+// publishes the response back on the lifecycle stream. Invoked by the
+// daemon's control-plane dispatcher; kept on the supervisor because
+// this is where per-agent state (workingDir jail) lives.
+func (s *supervisor) HandleFSList(ctx context.Context, req protocol.FSListRequestCommand) {
+	entries, err := ListDir(ListDirRequest{
+		WorkingDir: s.spec.WorkingDir,
+		Path:       req.Path,
+		ShowAll:    req.ShowAll,
+	})
+	resp := protocol.FSListResponseEvent{
+		Kind:      "fs-list-response",
+		MachineID: s.machine,
+		AgentID:   s.spec.AgentID,
+		RequestID: req.RequestID,
+		Path:      req.Path,
+		TS:        time.Now().UnixMilli(),
+	}
+	if err != nil {
+		resp.Error = err.Error()
+	} else {
+		resp.Entries = make([]protocol.FSEntry, len(entries))
+		for i, e := range entries {
+			resp.Entries[i] = protocol.FSEntry{
+				Name:       e.Name,
+				Kind:       e.Kind,
+				Size:       e.Size,
+				MTime:      e.MTime,
+				Gitignored: e.Gitignored,
+			}
+		}
+	}
+	if err := s.bus.Publish(ctx, protocol.LifecycleStream(), resp); err != nil {
+		s.log.Printf("agent %s: fs-list-response publish failed: %v", s.spec.AgentID, err)
 	}
 }
 

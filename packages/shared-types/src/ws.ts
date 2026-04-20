@@ -52,4 +52,9 @@ export interface ServerToClientEvents {
   'terminal:updated': (terminal: TerminalDTO) => void;
   'terminal:output': (msg: TerminalOutputMessage) => void;
   'terminal:closed': (msg: TerminalClosedMessage) => void;
+  /** One of the agent's working-directory paths changed on disk
+   *  (coalesced by the sidecar's debounced fsnotify). The dashboard
+   *  re-fetches the listing for `path` if it's currently expanded in
+   *  the right-pane file tree. */
+  'fs:changed': (payload: { agentId: string; path: string }) => void;
 }

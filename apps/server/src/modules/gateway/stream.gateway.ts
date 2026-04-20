@@ -162,4 +162,15 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
   emitTerminalClosed(msg: TerminalClosedMessage) {
     this.server.to(`terminal:${msg.terminalId}`).emit('terminal:closed', msg);
   }
+
+  // ------- Filesystem events -------
+
+  /**
+   * Broadcast a dir-level change from the sidecar's fsnotify watcher.
+   * Scoped to the agent room so only clients actually viewing that
+   * agent's file tree get poked.
+   */
+  emitFSChanged(payload: { agentId: string; path: string }) {
+    this.server.to(`agent:${payload.agentId}`).emit('fs:changed', payload);
+  }
 }

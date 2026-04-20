@@ -24,6 +24,7 @@ import {
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
+import { FSService } from './fs.service';
 
 const CONSUMER = 'server-1';
 const STALE_AFTER_MS = 30_000;
@@ -61,6 +62,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly gateway: StreamGateway,
+    private readonly fs: FSService,
   ) {}
 
   async onModuleInit() {
@@ -412,6 +414,19 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         // Sidecar acked the destroy. The row was already deleted by
         // destroyAgent; nothing more to do.
         this.logger.log(`agent-destroyed ${ev.agentId} on ${ev.machineId}`);
+        break;
+      }
+      case 'fs-list-response': {
+        // Forwarded to FSService which resolves the pending REST call.
+        // No-op if the request already timed out (late response).
+        this.fs.handleResponse(ev);
+        break;
+      }
+      case 'fs-changed': {
+        // Debounced notification from the sidecar's fsnotify watcher.
+        // Broadcast into the agent room so connected dashboards can
+        // invalidate their cached tree listings.
+        this.gateway.emitFSChanged({ agentId: ev.agentId, path: ev.path });
         break;
       }
     }

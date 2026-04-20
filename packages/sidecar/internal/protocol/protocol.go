@@ -112,6 +112,50 @@ type SyncAgentsCommand struct {
 	TS     int64       `json:"ts"`
 }
 
+// ─────────── Filesystem browsing ───────────
+//
+// Request (server → sidecar) rides the machine control stream; the
+// response and the unsolicited fsnotify change events both ride the
+// shared lifecycle stream so the server's single lifecycle consumer
+// ingests them alongside every other sidecar → server event.
+
+// FSEntry is one entry in a directory listing.
+type FSEntry struct {
+	Name       string `json:"name"`
+	Kind       string `json:"kind"` // "file" | "dir" | "symlink"
+	Size       int64  `json:"size"`
+	MTime      int64  `json:"mtime"`
+	Gitignored bool   `json:"gitignored,omitempty"`
+}
+
+type FSListRequestCommand struct {
+	Kind      string `json:"kind"` // "fs-list"
+	RequestID string `json:"requestId"`
+	AgentID   string `json:"agentId"`
+	Path      string `json:"path"`
+	ShowAll   bool   `json:"showAll"`
+	TS        int64  `json:"ts"`
+}
+
+type FSListResponseEvent struct {
+	Kind      string    `json:"kind"` // "fs-list-response"
+	MachineID string    `json:"machineId"`
+	AgentID   string    `json:"agentId"`
+	RequestID string    `json:"requestId"`
+	Path      string    `json:"path"`
+	Entries   []FSEntry `json:"entries,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	TS        int64     `json:"ts"`
+}
+
+type FSChangedEvent struct {
+	Kind      string `json:"kind"` // "fs-changed"
+	MachineID string `json:"machineId"`
+	AgentID   string `json:"agentId"`
+	Path      string `json:"path"`
+	TS        int64  `json:"ts"`
+}
+
 // ─────────── Sidecar acks (sidecar → server, on agent:lifecycle) ───────────
 
 type AgentSpawnedEvent struct {
