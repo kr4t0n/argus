@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AlertCircle } from 'lucide-react';
 import type { CommandDTO, ResultChunkDTO } from '@argus/shared-types';
 import { splitDeltas } from '../lib/deltaSplit';
-import { ActivityPill } from './ActivityPill';
+import { ActivityPanel, ActivityPill } from './ActivityPill';
 import { FileChips, extractFiles } from './FileChips';
 
 type Props = {
@@ -46,21 +46,22 @@ export function StreamViewer({ commands, chunks, running, workingDir }: Props) {
     <div
       ref={ref}
       onScroll={onScroll}
-      className="h-full overflow-y-auto px-6 py-6"
+      className="h-full overflow-y-auto px-6 pb-6"
     >
-      <div className="mx-auto max-w-3xl space-y-8">
+      <div className="mx-auto max-w-3xl">
         {grouped.length === 0 && (
           <div className="flex h-full items-center justify-center pt-32 text-sm text-neutral-500">
             Send a prompt to start the conversation.
           </div>
         )}
-        {grouped.map((g) => (
+        {grouped.map((g, i) => (
           <CommandBlock
             key={g.command.id}
             command={g.command}
             chunks={g.chunks}
             running={running && isLast(g, grouped)}
             workingDir={workingDir}
+            isFirst={i === 0}
           />
         ))}
       </div>
@@ -104,11 +105,13 @@ function CommandBlock({
   chunks,
   running,
   workingDir,
+  isFirst,
 }: {
   command: CommandDTO;
   chunks: ResultChunkDTO[];
   running: boolean;
   workingDir?: string | null;
+  isFirst: boolean;
 }) {
   // Only deltas AFTER the last tool/output chunk count as the user-facing
   // answer — earlier deltas are "thinking" the model emitted between tool
@@ -133,19 +136,96 @@ function CommandBlock({
   const startedAt = new Date(command.createdAt).getTime();
   const endedAt = command.completedAt ? new Date(command.completedAt).getTime() : null;
 
-  return (
-    <div className="space-y-4">
-      {command.prompt && <UserMessage text={command.prompt} />}
+  // Activity panel open-state lives here (lifted out of ActivityPill) so
+  // the capsule can ride inside a sticky header band while the expanded
+  // panel scrolls naturally below it.
+  const [activityOpen, setActivityOpen] = useState(false);
+  const bandRef = useRef<HTMLDivElement>(null);
 
-      <ActivityPill
-        chunks={chunks}
-        running={running && !finalChunk && !errorChunk}
-        startedAt={startedAt}
-        endedAt={endedAt}
-      />
+  // Snap THIS turn's band to the top of the scrollport on every toggle,
+  // in both directions:
+  //
+  //   • Collapse while scrolled deep: the panel (which sat between the
+  //     band and the body) unmounts, so scrollTop would leave the user
+  //     looking at the middle of the body (or past it entirely).
+  //   • Expand while scrolled deep in the body: the panel mounts ABOVE
+  //     the current scroll position, so the user either ends up with
+  //     the panel above the viewport (browser scroll anchoring) or
+  //     lands mid-panel — either way, not where the tool results
+  //     actually are.
+  //
+  // Snapping to the band's natural y puts the band at top:0 with the
+  // panel (or body, when collapsing) picking up right under it.
+  const handleActivityToggle = useCallback(() => {
+    setActivityOpen((wasOpen) => {
+      const next = !wasOpen;
+      const band = bandRef.current;
+      const scroller = band ? findScrollParent(band) : null;
+      if (!band || !scroller) return next;
+      // `position: sticky` doesn't change layout, but its current PAINT
+      // position can mask the band's natural in-flow location once it's
+      // stuck at top:0. Toggle to `static` for a beat to read the real
+      // in-flow rect; the two style writes happen synchronously so no
+      // intermediate frame is painted. The band's natural y is
+      // unaffected by the panel mount/unmount (panel is AFTER the band
+      // in DOM), so this measurement is valid for both directions.
+      const prev = band.style.position;
+      band.style.position = 'static';
+      const bandRect = band.getBoundingClientRect();
+      const scrollerRect = scroller.getBoundingClientRect();
+      const naturalTop = scroller.scrollTop + bandRect.top - scrollerRect.top;
+      band.style.position = prev;
+      // Defer one frame so React has committed the mount/unmount before
+      // we scroll — otherwise scrollTo runs against the pre-commit
+      // layout and we land in the wrong place.
+      requestAnimationFrame(() => {
+        scroller.scrollTo({ top: naturalTop });
+      });
+      return next;
+    });
+  }, []);
+
+  // Per-turn WRAPPER (vs a fragment) is what gives the sticky bands a
+  // PUSH transition between turns. Each band's containing block is its
+  // own turn, so as the user scrolls down through turn N, the wrapper's
+  // bottom edge eventually crosses `top:0` and pushes band N up out of
+  // the scrollport. Turn N+1's wrapper top is at exactly that same y,
+  // so band N+1 sticks at `top:0` glued to where band N just left —
+  // the result is a continuous "card slides up, next card slides in"
+  // motion rather than the new band ghosting on top of the old one
+  // (which is what a shared containing block produces, because both
+  // bands try to stick at `top:0` at once and the later DOM wins paint).
+  //
+  // Spacing between turns lives entirely INSIDE the band's bg
+  // (`pt-6` / `pt-2` for the first turn) so there's no uncovered gap
+  // at the boundary — wrapper itself has no margin/padding, otherwise
+  // a sliver of body bg would briefly show between turns where neither
+  // band is pinned.
+  return (
+    <div>
+      <div
+        ref={bandRef}
+        className={`sticky top-0 z-10 space-y-3 bg-neutral-950 pb-3 ${isFirst ? 'pt-2' : 'pt-6'}`}
+      >
+        {command.prompt && <UserMessage text={command.prompt} />}
+        <ActivityPill
+          chunks={chunks}
+          running={running && !finalChunk && !errorChunk}
+          startedAt={startedAt}
+          endedAt={endedAt}
+          open={activityOpen}
+          onToggle={handleActivityToggle}
+        />
+      </div>
+
+      {activityOpen && (
+        <div className="mt-4">
+          <ActivityPanel chunks={chunks} />
+        </div>
+      )}
 
       {bodyText && (
-        <div className="markdown text-sm leading-relaxed text-neutral-200 max-w-none">
+        <div className="markdown mt-4 text-sm leading-relaxed text-neutral-200 max-w-none">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{bodyText}</ReactMarkdown>
           {running && !finalChunk && !errorChunk && (
             <span className="typewriter-cursor" />
@@ -153,10 +233,14 @@ function CommandBlock({
         </div>
       )}
 
-      <FileChips files={files} workingDir={workingDir} />
+      {files.length > 0 && (
+        <div className="mt-4">
+          <FileChips files={files} workingDir={workingDir} />
+        </div>
+      )}
 
       {errorChunk && (
-        <div className="flex items-start gap-2.5 rounded-md border border-red-900/50 bg-red-950/20 px-3 py-2">
+        <div className="mt-4 flex items-start gap-2.5 rounded-md border border-red-900/50 bg-red-950/20 px-3 py-2">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
           <pre className="text-xs font-mono text-red-300 whitespace-pre-wrap">
             {errorChunk.content ?? 'error'}
@@ -165,6 +249,17 @@ function CommandBlock({
       )}
     </div>
   );
+}
+
+/** Walk up to the nearest ancestor that actually scrolls vertically. */
+function findScrollParent(el: HTMLElement): HTMLElement | null {
+  let p: HTMLElement | null = el.parentElement;
+  while (p) {
+    const o = getComputedStyle(p).overflowY;
+    if (o === 'auto' || o === 'scroll') return p;
+    p = p.parentElement;
+  }
+  return null;
 }
 
 function UserMessage({ text }: { text: string }) {

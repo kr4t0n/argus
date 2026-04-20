@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { ChevronDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -12,17 +12,26 @@ type Props = {
   running: boolean;
   startedAt: number;
   endedAt: number | null;
+  /** Whether the timeline panel is expanded. Controlled by the parent so
+   *  the parent can render the capsule (this component) inside a sticky
+   *  header band while rendering the panel separately, below the band. */
+  open: boolean;
+  onToggle: () => void;
 };
 
 /**
  * Compact summary capsule for everything the agent did between user prompt
- * and final answer: tool count + elapsed time, with a click-to-expand panel
- * that shows the original chronological tool / stdout / progress trace.
+ * and final answer: tool count + elapsed time, plus a chevron that flips
+ * the parent-controlled `open` state.
+ *
+ * The capsule is intentionally *just* the button — the expanded timeline
+ * lives in `<ActivityPanel>` so the capsule can stay pinned to the top of
+ * the viewport while the panel scrolls naturally with the rest of the
+ * turn's content.
  *
  * Inspired by the activity pill in vercel-labs/open-agents.
  */
-export function ActivityPill({ chunks, running, startedAt, endedAt }: Props) {
-  const [open, setOpen] = useState(false);
+export function ActivityPill({ chunks, running, startedAt, endedAt, open, onToggle }: Props) {
   const tools = chunks.filter((c) => c.kind === 'tool');
   const items: TimelineItem[] = useMemo(() => buildTimeline(chunks), [chunks]);
   if (items.length === 0 && !running) return null;
@@ -32,79 +41,90 @@ export function ActivityPill({ chunks, running, startedAt, endedAt }: Props) {
   const lastTool = tools[tools.length - 1];
 
   return (
-    <div className="space-y-2">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className={cn(
-          'inline-flex items-center gap-3 rounded-full border border-neutral-800 bg-neutral-900/60 px-3.5 py-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60 hover:text-neutral-200 transition-colors',
-          open && 'bg-neutral-800/60 text-neutral-200',
-        )}
-      >
-        <span className="tabular-nums">
-          {tools.length} {tools.length === 1 ? 'tool' : 'tools'}
-        </span>
-        <Sep />
-        <span className="flex items-center gap-1.5">
-          {running ? (
-            <span className="flex gap-1">
-              <Dot delay="0ms" />
-              <Dot delay="160ms" />
-              <Dot delay="320ms" />
-            </span>
-          ) : (
-            <span className="truncate max-w-[180px] font-mono text-neutral-500">
-              {lastTool ? summarizeTool(lastTool) : 'done'}
-            </span>
-          )}
-        </span>
-        <Sep />
-        <span className="tabular-nums text-neutral-500">{elapsed}</span>
-        <ChevronDown
-          className={cn('h-3 w-3 text-neutral-500 transition-transform', open && 'rotate-180')}
-        />
-      </button>
-
-      {open && (
-        <div className="ml-1 space-y-2 border-l border-neutral-800/80 pl-4">
-          {items.map((it) => {
-            if (it.kind === 'tool') {
-              return <ToolPill key={it.tool.id} tool={it.tool} result={it.result} />;
-            }
-            if (it.kind === 'output') {
-              const c = it.chunk;
-              return (
-                <pre
-                  key={c.id}
-                  className="overflow-x-auto rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2 text-xs font-mono whitespace-pre-wrap leading-relaxed"
-                >
-                  <span className={c.kind === 'stderr' ? 'text-red-400' : 'text-neutral-400'}>
-                    {c.content}
-                  </span>
-                </pre>
-              );
-            }
-            if (it.kind === 'thought') {
-              // Intermediate assistant text — model "thinking out loud" in
-              // between tool calls. Rendered with markdown so code blocks
-              // and lists stay legible, but with subdued color so the eye
-              // routes to the final answer below the activity capsule.
-              return (
-                <div
-                  key={it.id}
-                  className="markdown text-xs leading-relaxed text-neutral-400 max-w-none"
-                >
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{it.text}</ReactMarkdown>
-                </div>
-              );
-            }
-            return (
-              <div key={it.chunk.id} className="text-xs text-neutral-500 italic">
-                {it.chunk.content ?? 'working…'}
-              </div>
-            );
-          })}
-        </div>
+    <button
+      onClick={onToggle}
+      className={cn(
+        'inline-flex items-center gap-3 rounded-full border border-neutral-800 bg-neutral-900/60 px-3.5 py-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60 hover:text-neutral-200 transition-colors',
+        open && 'bg-neutral-800/60 text-neutral-200',
       )}
+    >
+      <span className="tabular-nums">
+        {tools.length} {tools.length === 1 ? 'tool' : 'tools'}
+      </span>
+      <Sep />
+      <span className="flex items-center gap-1.5">
+        {running ? (
+          <span className="flex gap-1">
+            <Dot delay="0ms" />
+            <Dot delay="160ms" />
+            <Dot delay="320ms" />
+          </span>
+        ) : (
+          <span className="truncate max-w-[180px] font-mono text-neutral-500">
+            {lastTool ? summarizeTool(lastTool) : 'done'}
+          </span>
+        )}
+      </span>
+      <Sep />
+      <span className="tabular-nums text-neutral-500">{elapsed}</span>
+      <ChevronDown
+        className={cn('h-3 w-3 text-neutral-500 transition-transform', open && 'rotate-180')}
+      />
+    </button>
+  );
+}
+
+/**
+ * Expanded timeline that lists every tool + output + intermediate
+ * "thought" delta in chronological order. Rendered as a separate
+ * component (rather than a child of `<ActivityPill>`) so the parent can
+ * pin the capsule via `position: sticky` while letting the panel scroll
+ * normally with the rest of the turn — pinning the panel too would
+ * defeat the purpose since a long timeline is usually taller than the
+ * viewport itself.
+ */
+export function ActivityPanel({ chunks }: { chunks: ResultChunkDTO[] }) {
+  const items: TimelineItem[] = useMemo(() => buildTimeline(chunks), [chunks]);
+  if (items.length === 0) return null;
+  return (
+    <div className="ml-1 space-y-2 border-l border-neutral-800/80 pl-4">
+      {items.map((it) => {
+        if (it.kind === 'tool') {
+          return <ToolPill key={it.tool.id} tool={it.tool} result={it.result} />;
+        }
+        if (it.kind === 'output') {
+          const c = it.chunk;
+          return (
+            <pre
+              key={c.id}
+              className="overflow-x-auto rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2 text-xs font-mono whitespace-pre-wrap leading-relaxed"
+            >
+              <span className={c.kind === 'stderr' ? 'text-red-400' : 'text-neutral-400'}>
+                {c.content}
+              </span>
+            </pre>
+          );
+        }
+        if (it.kind === 'thought') {
+          // Intermediate assistant text — model "thinking out loud" in
+          // between tool calls. Rendered with markdown so code blocks
+          // and lists stay legible, but with subdued color so the eye
+          // routes to the final answer below the activity capsule.
+          return (
+            <div
+              key={it.id}
+              className="markdown text-xs leading-relaxed text-neutral-400 max-w-none"
+            >
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{it.text}</ReactMarkdown>
+            </div>
+          );
+        }
+        return (
+          <div key={it.chunk.id} className="text-xs text-neutral-500 italic">
+            {it.chunk.content ?? 'working…'}
+          </div>
+        );
+      })}
     </div>
   );
 }
