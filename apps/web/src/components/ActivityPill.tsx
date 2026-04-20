@@ -1,7 +1,10 @@
 import { useMemo, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { ResultChunkDTO } from '@argus/shared-types';
 import { cn } from '../lib/utils';
+import { splitDeltas } from '../lib/deltaSplit';
 import { ToolPill } from './ToolPill';
 
 type Props = {
@@ -62,7 +65,7 @@ export function ActivityPill({ chunks, running, startedAt, endedAt }: Props) {
       </button>
 
       {open && (
-        <div className="ml-1 space-y-1.5 border-l border-neutral-800/80 pl-4">
+        <div className="ml-1 space-y-2 border-l border-neutral-800/80 pl-4">
           {items.map((it) => {
             if (it.kind === 'tool') {
               return <ToolPill key={it.tool.id} tool={it.tool} result={it.result} />;
@@ -80,6 +83,20 @@ export function ActivityPill({ chunks, running, startedAt, endedAt }: Props) {
                 </pre>
               );
             }
+            if (it.kind === 'thought') {
+              // Intermediate assistant text — model "thinking out loud" in
+              // between tool calls. Rendered with markdown so code blocks
+              // and lists stay legible, but with subdued color so the eye
+              // routes to the final answer below the activity capsule.
+              return (
+                <div
+                  key={it.id}
+                  className="markdown text-xs leading-relaxed text-neutral-400 max-w-none"
+                >
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{it.text}</ReactMarkdown>
+                </div>
+              );
+            }
             return (
               <div key={it.chunk.id} className="text-xs text-neutral-500 italic">
                 {it.chunk.content ?? 'working…'}
@@ -95,15 +112,22 @@ export function ActivityPill({ chunks, running, startedAt, endedAt }: Props) {
 type TimelineItem =
   | { kind: 'tool'; tool: ResultChunkDTO; result?: ResultChunkDTO }
   | { kind: 'output'; chunk: ResultChunkDTO }
-  | { kind: 'progress'; chunk: ResultChunkDTO };
+  | { kind: 'progress'; chunk: ResultChunkDTO }
+  | { kind: 'thought'; id: string; text: string };
 
 /**
  * Pair every `tool` chunk with its matching `stdout` / `stderr` result
  * (matched by tool_use_id), so the renderer can show them as a single
  * Cursor-style card. Anything left over (free-floating output / progress)
- * is preserved in chronological order.
+ * is preserved in chronological order. Intermediate `delta` chunks (any
+ * delta whose seq is at-or-before the last tool/output chunk) become
+ * 'thought' items here; deltas after the last tool are the final
+ * assistant answer and are intentionally NOT in the timeline — the
+ * StreamViewer body renders those as the message proper.
  */
 function buildTimeline(chunks: ResultChunkDTO[]): TimelineItem[] {
+  const { boundarySeq } = splitDeltas(chunks);
+
   const resultByToolId = new Map<string, ResultChunkDTO>();
   const consumed = new Set<string>();
   for (const c of chunks) {
@@ -113,8 +137,27 @@ function buildTimeline(chunks: ResultChunkDTO[]): TimelineItem[] {
   }
 
   const out: TimelineItem[] = [];
+  // Pending thought accumulator — adjacent intermediate deltas (no tool
+  // separating them) belong to the same conceptual model utterance, so we
+  // coalesce them into a single 'thought' item rather than rendering each
+  // as its own bubble. Flushed whenever a non-delta chunk comes in.
+  let buf: { ids: string[]; texts: string[] } | null = null;
+  const flushThought = () => {
+    if (!buf) return;
+    out.push({ kind: 'thought', id: `thought:${buf.ids[0]}`, text: buf.texts.join('') });
+    buf = null;
+  };
+
   for (const c of chunks) {
+    if (c.kind === 'delta') {
+      if (c.seq > boundarySeq) continue; // final answer, rendered by StreamViewer body
+      if (!buf) buf = { ids: [], texts: [] };
+      buf.ids.push(c.id);
+      buf.texts.push(c.delta ?? '');
+      continue;
+    }
     if (c.kind === 'tool') {
+      flushThought();
       const id = (c.meta as Record<string, unknown> | null | undefined)?.id;
       const result = typeof id === 'string' ? resultByToolId.get(id) : undefined;
       if (result) consumed.add(result.id);
@@ -122,14 +165,17 @@ function buildTimeline(chunks: ResultChunkDTO[]): TimelineItem[] {
       continue;
     }
     if (c.kind === 'stdout' || c.kind === 'stderr') {
+      flushThought();
       if (consumed.has(c.id)) continue;
       out.push({ kind: 'output', chunk: c });
       continue;
     }
     if (c.kind === 'progress') {
+      flushThought();
       out.push({ kind: 'progress', chunk: c });
     }
   }
+  flushThought();
   return out;
 }
 

@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AlertCircle } from 'lucide-react';
 import type { CommandDTO, ResultChunkDTO } from '@argus/shared-types';
+import { splitDeltas } from '../lib/deltaSplit';
 import { ActivityPill } from './ActivityPill';
 import { FileChips, extractFiles } from './FileChips';
 
@@ -109,17 +110,25 @@ function CommandBlock({
   running: boolean;
   workingDir?: string | null;
 }) {
-  const deltaText = useMemo(
-    () => chunks.filter((c) => c.kind === 'delta').map((c) => c.delta ?? '').join(''),
-    [chunks],
-  );
+  // Only deltas AFTER the last tool/output chunk count as the user-facing
+  // answer — earlier deltas are "thinking" the model emitted between tool
+  // calls and are rendered inline by ActivityPill instead. See
+  // `lib/deltaSplit.ts` for the full rationale; this lets adapters that
+  // emit one assistant text per reasoning step (cursor-cli, claude-code)
+  // surface a clean final answer instead of a glued-together transcript.
+  const finalDeltaText = useMemo(() => {
+    const { finalDeltas } = splitDeltas(chunks);
+    return finalDeltas.map((c) => c.delta ?? '').join('');
+  }, [chunks]);
   const finalChunk = chunks.find((c) => c.kind === 'final');
   const errorChunk = chunks.find((c) => c.kind === 'error');
   const files = useMemo(() => extractFiles(chunks), [chunks]);
 
-  // Use the streamed delta text as the assistant body. If no deltas were
-  // produced (some adapters only emit a `final`), fall back to final.content.
-  const bodyText = deltaText || finalChunk?.content?.trim() || '';
+  // Fall back to `final.content` only when no post-tool deltas exist at
+  // all — covers adapters that publish a single result event with no
+  // streamed deltas, plus the (rare) case of a turn that ended on a tool
+  // call with no closing assistant message.
+  const bodyText = finalDeltaText || finalChunk?.content?.trim() || '';
 
   const startedAt = new Date(command.createdAt).getTime();
   const endedAt = command.completedAt ? new Date(command.completedAt).getTime() : null;
