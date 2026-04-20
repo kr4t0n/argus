@@ -3,6 +3,7 @@ import type {
   AgentType,
   AvailableAdapter,
   CommandStatus,
+  FSEntry,
   ResultChunk,
   SessionStatus,
 } from './protocol';
@@ -171,4 +172,15 @@ export interface TerminalClosedMessage {
   terminalId: string;
   exitCode: number;
   reason?: string;
+}
+
+/**
+ * REST response for `GET /agents/:id/fs/list`. The controller waits for
+ * the sidecar's fs-list-response on the lifecycle stream and surfaces
+ * exactly one of `entries` (success) or `error` (sidecar rejected the
+ * path, or the agent is offline and the request timed out).
+ */
+export interface FSListResponse {
+  path: string;
+  entries: FSEntry[];
 }

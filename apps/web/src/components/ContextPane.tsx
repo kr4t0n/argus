@@ -5,9 +5,10 @@ import type {
   ResultChunkDTO,
   SessionDTO,
 } from '@argus/shared-types';
-import { Terminal as TerminalIcon } from 'lucide-react';
+import { FolderTree, Terminal as TerminalIcon } from 'lucide-react';
 import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
 import { StatusDot } from './ui/StatusDot';
+import { FileTree } from './FileTree';
 import { TerminalPane } from './TerminalPane';
 import { relativeTime } from '../lib/utils';
 import { useSessionModel } from '../lib/usage';
@@ -131,6 +132,16 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
         </Section>
       )}
 
+      {/* File tree sits above Terminal — it's read-only context that
+          benefits from always being visible (user scans the workspace
+          while chatting), whereas Terminal is intentionally below the
+          fold because it owns a lot of vertical space when expanded. */}
+      {agent.workingDir && (
+        <Section title="Files" icon={<FolderTree className="h-3 w-3" />}>
+          <FileTree key={agent.id} agentId={agent.id} rootLabel={agent.workingDir} />
+        </Section>
+      )}
+
       {/* Terminal sits last because it's the only section users actively
           interact with; putting it at the bottom keeps the read-only
           context (agent / session / recent turns) above the fold and
@@ -148,11 +159,20 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  icon,
+  children,
+}: {
+  title: string;
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <div className="mb-4">
-      <div className="text-[10px] uppercase tracking-widest text-neutral-600 mb-1.5">
-        {title}
+      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-neutral-600">
+        {icon}
+        <span>{title}</span>
       </div>
       <div className="space-y-1">{children}</div>
     </div>

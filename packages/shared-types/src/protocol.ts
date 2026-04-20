@@ -164,10 +164,71 @@ export interface SyncAgentsCommand {
   ts: number;
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Filesystem browsing (right-pane file tree)
+//
+// The dashboard asks a sidecar to list an agent's working directory so
+// it can render a lazy-expanding tree next to the session. Requests
+// ride the existing per-machine control stream (one new `kind`), and
+// responses (plus unsolicited fsnotify change notifications) come back
+// on the shared `agent:lifecycle` stream — same ingress point the
+// server already consumes for machine + agent events.
+//
+// Paths are ALWAYS relative to the agent's workingDir. The sidecar
+// jails every resolved path to that root (rejects absolute paths, `..`
+// escapes, and symlink chases); the server/dashboard don't need to
+// independently validate. Empty string or "." means the root.
+// ─────────────────────────────────────────────────────────────────────
+
+export interface FSEntry {
+  name: string;
+  kind: 'file' | 'dir' | 'symlink';
+  size: number;
+  /** Unix millis. */
+  mtime: number;
+  /** Only meaningful when `showAll` was true — lets the UI render
+   *  ignored entries in a dimmer style while still showing them. */
+  gitignored?: boolean;
+}
+
+export interface FSListRequestCommand {
+  kind: 'fs-list';
+  requestId: string;
+  agentId: string;
+  path: string;
+  showAll: boolean;
+  ts: number;
+}
+
 export type MachineControlCommand =
   | CreateAgentCommand
   | DestroyAgentCommand
-  | SyncAgentsCommand;
+  | SyncAgentsCommand
+  | FSListRequestCommand;
+
+export interface FSListResponseEvent {
+  kind: 'fs-list-response';
+  machineId: string;
+  agentId: string;
+  requestId: string;
+  path: string;
+  entries?: FSEntry[];
+  error?: string;
+  ts: number;
+}
+
+/** Unsolicited change notification from the sidecar's per-agent
+ *  fsnotify watcher. `path` is the directory whose contents changed;
+ *  the dashboard invalidates that level in the tree if it's currently
+ *  expanded. Coalesced on the sidecar side with a ~250ms debounce so a
+ *  noisy build doesn't flood the stream. */
+export interface FSChangedEvent {
+  kind: 'fs-changed';
+  machineId: string;
+  agentId: string;
+  path: string;
+  ts: number;
+}
 
 /** Sidecar acks (back on agent:lifecycle). Server uses these to flip
  *  the Agent row's status promptly and surface spawn failures in the UI. */
@@ -208,7 +269,9 @@ export type AnyLifecycleEvent =
   | MachineHeartbeatEvent
   | AgentSpawnedEvent
   | AgentSpawnFailedEvent
-  | AgentDestroyedEvent;
+  | AgentDestroyedEvent
+  | FSListResponseEvent
+  | FSChangedEvent;
 
 /** Server → sidecar */
 export interface Command {

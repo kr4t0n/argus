@@ -210,9 +210,39 @@ func (d *Daemon) dispatchControl(ctx context.Context, payload map[string]any) {
 			return
 		}
 		d.handleSyncAgents(ctx, ev.Agents)
+	case "fs-list":
+		var ev protocol.FSListRequestCommand
+		if err := remarshal(payload, &ev); err != nil {
+			d.log.Printf("control: bad fs-list: %v", err)
+			return
+		}
+		d.handleFSList(ctx, ev)
 	default:
 		d.log.Printf("control: unknown kind=%q", kindStr)
 	}
+}
+
+// handleFSList routes an fs-list request to the target agent's
+// supervisor. If the agent is unknown (race: deleted between server
+// publish and sidecar read) we publish a synthetic error response so
+// the server-side pending request resolves instead of timing out.
+func (d *Daemon) handleFSList(ctx context.Context, req protocol.FSListRequestCommand) {
+	d.mu.Lock()
+	s, ok := d.supervisors[req.AgentID]
+	d.mu.Unlock()
+	if !ok {
+		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSListResponseEvent{
+			Kind:      "fs-list-response",
+			MachineID: d.cache.MachineID,
+			AgentID:   req.AgentID,
+			RequestID: req.RequestID,
+			Path:      req.Path,
+			Error:     "agent not running on this machine",
+			TS:        time.Now().UnixMilli(),
+		})
+		return
+	}
+	s.HandleFSList(ctx, req)
 }
 
 func (d *Daemon) handleCreateAgent(ctx context.Context, spec protocol.AgentSpec) {

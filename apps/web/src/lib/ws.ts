@@ -38,6 +38,7 @@ type Handler = {
   onTerminalUpdated?: (t: TerminalDTO) => void;
   onTerminalOutput?: (m: TerminalOutputMessage) => void;
   onTerminalClosed?: (m: TerminalClosedMessage) => void;
+  onFSChanged?: (p: { agentId: string; path: string }) => void;
   onConnect?: () => void;
   onDisconnect?: () => void;
 };
@@ -75,6 +76,7 @@ export function ensureSocket(): WSSocket {
   socket.on('terminal:updated', (t) => handlers.forEach((h) => h.onTerminalUpdated?.(t)));
   socket.on('terminal:output', (m) => handlers.forEach((h) => h.onTerminalOutput?.(m)));
   socket.on('terminal:closed', (m) => handlers.forEach((h) => h.onTerminalClosed?.(m)));
+  socket.on('fs:changed', (p) => handlers.forEach((h) => h.onFSChanged?.(p)));
   return socket;
 }
 

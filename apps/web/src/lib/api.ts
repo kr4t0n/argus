@@ -4,6 +4,7 @@ import type {
   CreateAgentRequest,
   CreateCommandRequest,
   CreateSessionRequest,
+  FSListResponse,
   LoginResponse,
   MachineDTO,
   OpenTerminalRequest,
@@ -128,4 +129,15 @@ export const api = {
     http<TerminalDTO[]>(`/agents/${agentId}/terminals`),
   closeTerminal: (id: string) =>
     http<TerminalDTO>(`/terminals/${id}`, { method: 'DELETE' }),
+
+  // Filesystem browsing (right-pane tree)
+  listAgentDir: (agentId: string, path: string, showAll: boolean) => {
+    const q = new URLSearchParams();
+    if (path) q.set('path', path);
+    if (showAll) q.set('showAll', 'true');
+    const qs = q.toString();
+    return http<FSListResponse>(
+      `/agents/${agentId}/fs/list${qs ? `?${qs}` : ''}`,
+    );
+  },
 };
