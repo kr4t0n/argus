@@ -83,7 +83,7 @@ export function ToolPill({ tool, result }: Props) {
       ) : (
         <pre
           className={cn(
-            'max-h-72 overflow-auto border-t border-neutral-800/80 bg-neutral-950/40 px-3 py-2 text-[11px] font-mono leading-relaxed whitespace-pre-wrap',
+            'max-h-36 overflow-auto border-t border-neutral-800/80 bg-neutral-950/40 px-3 py-2 text-[11px] font-mono leading-relaxed whitespace-pre-wrap',
             isError ? 'text-red-400' : 'text-neutral-400',
           )}
         >
@@ -103,7 +103,7 @@ export function ToolPill({ tool, result }: Props) {
 function DiffBlock({ text }: { text: string }) {
   const lines = text.split('\n');
   return (
-    <div className="max-h-72 overflow-auto border-t border-neutral-800/80 bg-neutral-950/40 px-0 py-1 text-[11px] font-mono leading-relaxed">
+    <div className="max-h-36 overflow-auto border-t border-neutral-800/80 bg-neutral-950/40 px-0 py-1 text-[11px] font-mono leading-relaxed">
       {lines.map((line, i) => {
         if (line.startsWith('--- ') || line.startsWith('+++ ')) return null;
         let cls = 'text-neutral-400';
