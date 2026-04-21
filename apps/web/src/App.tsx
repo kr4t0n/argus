@@ -9,6 +9,7 @@ import { useSessionStore } from './stores/sessionStore';
 import { useSidecarUpdateStore } from './stores/sidecarUpdateStore';
 import { ensureSocket, resetSocket, subscribeHandler } from './lib/ws';
 import { api } from './lib/api';
+import { migrateLocalMachineIconsToServer } from './lib/migrateMachineIcons';
 import { SidecarUpdateToasts } from './components/SidecarUpdateToasts';
 
 function ProtectedRoutes() {
@@ -49,7 +50,11 @@ export default function App() {
 
   useEffect(() => {
     if (!token) return;
-    loadMachines();
+    // Kick off loads first, then run the one-shot localStorage →
+    // server migration for machine icons once the machines list has
+    // landed (the migration needs to know which machineIds are still
+    // valid to avoid 404-spamming for destroyed hosts).
+    loadMachines().then(() => migrateLocalMachineIconsToServer());
     loadAgents();
     loadSessions();
     const socket = ensureSocket();

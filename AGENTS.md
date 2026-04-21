@@ -321,6 +321,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   shell. If you need replay, add a separate, opt-in `TerminalTranscript`
   table gated behind a per-agent flag (mirror the existing
   `supportsTerminal` plumbing).
+- **Machine icons live on the Machine row, not in localStorage**: the
+  picker in `MachineIcon.tsx` writes to `Machine.iconKey` via PATCH
+  `/machines/:id/icon`, and the server emits `machine:upsert` so every
+  connected dashboard re-renders the glyph in lockstep. We migrated
+  this off `useUIStore.machineIcons` (localStorage-backed) so a user's
+  picks roam between devices and teammates see the same icons. A
+  one-shot helper (`apps/web/src/lib/migrateMachineIcons.ts`) runs
+  on the first authenticated boot after the upgrade, pushes any
+  leftover localStorage entries to the server (only when the
+  server-side `iconKey` is still null — local never clobbers
+  remote), then strips the field out of `argus.ui` so the helper is
+  effectively idempotent on subsequent loads.
 - **Remote sidecar update — restart mode is auto-detected, not chosen**:
   the dashboard's `Update sidecar` action publishes
   `update-sidecar` on the host's Redis control stream. The sidecar

@@ -5,11 +5,19 @@ import {
   Get,
   HttpCode,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { IsBoolean, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsObject,
+  IsOptional,
+  IsString,
+  MaxLength,
+  ValidateIf,
+} from 'class-validator';
 import { Transform } from 'class-transformer';
 import type { CreateAgentRequest } from '@argus/shared-types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -21,6 +29,20 @@ class ListMachinesQueryDto {
   @Transform(({ value }) => value === true || value === 'true' || value === '1')
   @IsBoolean()
   includeArchived?: boolean;
+}
+
+/**
+ * Body of PATCH /machines/:id/icon. `iconKey` is one of the curated
+ * keys baked into the frontend's CATALOG (`MachineIcon.tsx`); we
+ * validate length but not the membership server-side so adding a new
+ * glyph never requires a server deploy. Pass `null` to reset to the
+ * default.
+ */
+class SetMachineIconDto {
+  @ValidateIf((_, value) => value !== null)
+  @IsString()
+  @MaxLength(64)
+  iconKey!: string | null;
 }
 
 class CreateAgentDto implements CreateAgentRequest {
@@ -98,5 +120,10 @@ export class MachineController {
   @HttpCode(202)
   updateSidecar(@Param('id') id: string) {
     return this.sidecarUpdate.updateOne(id);
+  }
+
+  @Patch(':id/icon')
+  setIcon(@Param('id') id: string, @Body() body: SetMachineIconDto) {
+    return this.service.setIcon(id, body.iconKey);
   }
 }

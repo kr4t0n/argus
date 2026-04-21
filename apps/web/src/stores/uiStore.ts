@@ -13,9 +13,6 @@ interface UIState {
   /** Global toggle: show archived agents in the sidebar. */
   showArchivedAgents: boolean;
   drafts: Record<string, string>;
-  /** machineId → icon key chosen via the machine-icon picker. Unset
-   *  means "use the default" (Server). */
-  machineIcons: Record<string, string>;
   toggleSidebar: () => void;
   setSidebarWidth: (w: number) => void;
   toggleContextPane: () => void;
@@ -24,7 +21,6 @@ interface UIState {
   toggleShowArchived: (agentId: string) => void;
   toggleShowArchivedAgents: () => void;
   setDraft: (agentId: string, v: string) => void;
-  setMachineIcon: (machineId: string, iconKey: string) => void;
 }
 
 export const SIDEBAR_MIN = 220;
@@ -43,7 +39,6 @@ export const useUIStore = create<UIState>()(
       showArchived: {},
       showArchivedAgents: false,
       drafts: {},
-      machineIcons: {},
       toggleSidebar() {
         set({ sidebarOpen: !get().sidebarOpen });
       },
@@ -78,9 +73,6 @@ export const useUIStore = create<UIState>()(
       },
       setDraft(agentId, v) {
         set({ drafts: { ...get().drafts, [agentId]: v } });
-      },
-      setMachineIcon(machineId, iconKey) {
-        set({ machineIcons: { ...get().machineIcons, [machineId]: iconKey } });
       },
     }),
     { name: 'argus.ui' },

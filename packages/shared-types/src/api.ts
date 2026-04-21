@@ -49,6 +49,11 @@ export interface MachineDTO {
   archivedAt: string | null;
   /** Convenience count for the sidebar; full agent list lives in agentStore. */
   agentCount: number;
+  /** User-chosen icon glyph key (e.g. "server-cog"). Null = use the
+   *  frontend's default. Set via PATCH /machines/:id/icon — the
+   *  server stores it on the machine row so all dashboards see the
+   *  same icon for the same host. */
+  iconKey: string | null;
 }
 
 export interface AgentDTO {
