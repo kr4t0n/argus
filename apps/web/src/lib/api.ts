@@ -145,6 +145,16 @@ export const api = {
       method: 'POST',
     }),
 
+  // Per-machine icon. Pass `null` to reset to the frontend default.
+  // The server emits machine:upsert on success so every connected
+  // dashboard refreshes the glyph; we still optimistically update
+  // machineStore at the call site to avoid the round-trip blink.
+  setMachineIcon: (machineId: string, iconKey: string | null) =>
+    http<MachineDTO>(`/machines/${machineId}/icon`, {
+      method: 'PATCH',
+      body: JSON.stringify({ iconKey }),
+    }),
+
   // Filesystem browsing (right-pane tree)
   listAgentDir: (agentId: string, path: string, showAll: boolean) => {
     const q = new URLSearchParams();

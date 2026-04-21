@@ -103,6 +103,35 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     return MachineService.toDto(row, row._count.agents);
   }
 
+  /**
+   * Persist the user's icon choice for `machineId` and broadcast the
+   * resulting MachineDTO so every connected dashboard refreshes the
+   * glyph in lockstep. We accept null as "reset to default" rather
+   * than introducing a separate DELETE endpoint — the picker only
+   * exposes "pick a glyph", and a future "reset" affordance can hit
+   * the same endpoint with `{ iconKey: null }`.
+   */
+  async setIcon(machineId: string, iconKey: string | null): Promise<MachineDTO> {
+    const trimmed =
+      typeof iconKey === 'string' ? iconKey.trim() : null;
+    const next = trimmed ? trimmed : null;
+
+    const exists = await this.prisma.machine.findUnique({
+      where: { id: machineId },
+      select: { id: true },
+    });
+    if (!exists) throw new NotFoundException('machine not found');
+
+    const updated = await this.prisma.machine.update({
+      where: { id: machineId },
+      data: { iconKey: next },
+      include: { _count: { select: { agents: true } } },
+    });
+    const dto = MachineService.toDto(updated, updated._count.agents);
+    this.gateway.emitMachineUpsert(dto);
+    return dto;
+  }
+
   async listAgentsForMachine(machineId: string): Promise<AgentDTO[]> {
     const rows = await this.prisma.agent.findMany({
       where: { machineId, archivedAt: null },
@@ -514,6 +543,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
       registeredAt: m.registeredAt.toISOString(),
       archivedAt: m.archivedAt ? m.archivedAt.toISOString() : null,
       agentCount,
+      iconKey: m.iconKey ?? null,
     };
   }
 

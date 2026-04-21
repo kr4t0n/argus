@@ -37,6 +37,12 @@ model Machine {
   // Json shape: [{ "type": "claude-code", "binary": "claude", "version": "1.2.3" }, ...]
   availableAdapters Json
   status            String   @default("offline") // online | offline
+  // User-chosen icon glyph (one of MachineIcon's CATALOG keys, e.g.
+  // "server-cog"). Null falls back to the default in the UI. Lives on
+  // Machine itself rather than a per-user table because everyone in
+  // the workspace should see the same icon for the same host — it's
+  // metadata, not preference.
+  iconKey           String?
   lastSeenAt        DateTime
   registeredAt      DateTime @default(now())
   archivedAt        DateTime?

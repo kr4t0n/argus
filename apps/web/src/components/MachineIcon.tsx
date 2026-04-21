@@ -14,7 +14,8 @@ import {
   ServerCog,
   Terminal,
 } from 'lucide-react';
-import { useUIStore } from '../stores/uiStore';
+import { useMachineStore } from '../stores/machineStore';
+import { api } from '../lib/api';
 import { cn } from '../lib/utils';
 
 type IconComponent = React.ComponentType<{ className?: string }>;
@@ -54,7 +55,7 @@ export function MachineIconGlyph({
   machineId: string;
   className?: string;
 }) {
-  const iconKey = useUIStore((s) => s.machineIcons[machineId]);
+  const iconKey = useMachineStore((s) => s.machines[machineId]?.iconKey ?? undefined);
   const Icon = resolve(iconKey);
   return <Icon className={className} />;
 }
@@ -66,8 +67,10 @@ type Props = {
 
 /**
  * Persisted machine icon. Clicking opens a picker anchored to the
- * icon with the curated catalog above. Selection is stored per
- * machine in localStorage via the Zustand `uiStore.machineIcons` map.
+ * icon with the curated catalog above. Selection lives on the
+ * Machine row server-side (`MachineDTO.iconKey`) and is broadcast
+ * to every connected dashboard via `machine:upsert` — so a teammate
+ * sees the same glyph the moment you pick it.
  *
  * The icon is a `<button>` (not a static glyph inside the enclosing
  * Link/Row) so it can intercept the click without triggering the
@@ -75,7 +78,7 @@ type Props = {
  * call site.
  */
 export function MachineIcon({ machineId, className }: Props) {
-  const iconKey = useUIStore((s) => s.machineIcons[machineId]);
+  const iconKey = useMachineStore((s) => s.machines[machineId]?.iconKey ?? undefined);
   const Icon = resolve(iconKey);
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLButtonElement>(null);
@@ -123,8 +126,28 @@ function MachineIconPicker({
   anchor: React.RefObject<HTMLElement | null>;
   onClose: () => void;
 }) {
-  const setMachineIcon = useUIStore((s) => s.setMachineIcon);
+  const upsertMachine = useMachineStore((s) => s.upsert);
+  const machine = useMachineStore((s) => s.machines[machineId]);
   const popRef = useRef<HTMLDivElement>(null);
+
+  // Optimistically reflect the user's pick in the local store, then
+  // persist to the server. The server will emit machine:upsert on
+  // success which redundantly converges the same value — and on
+  // failure we roll back the local store.
+  function applyIcon(key: string) {
+    if (!machine || machine.iconKey === key) {
+      onClose();
+      return;
+    }
+    const previous = machine.iconKey ?? null;
+    upsertMachine({ ...machine, iconKey: key });
+    onClose();
+    api.setMachineIcon(machineId, key).catch((err) => {
+      const current = useMachineStore.getState().machines[machineId];
+      if (current) upsertMachine({ ...current, iconKey: previous });
+      console.warn('failed to set machine icon', err);
+    });
+  }
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
   useLayoutEffect(() => {
@@ -189,10 +212,7 @@ function MachineIconPicker({
             <button
               key={key}
               type="button"
-              onClick={() => {
-                setMachineIcon(machineId, key);
-                onClose();
-              }}
+              onClick={() => applyIcon(key)}
               title={key}
               className={cn(
                 'flex h-7 w-7 items-center justify-center rounded-sm transition-colors',
