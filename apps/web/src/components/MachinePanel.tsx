@@ -100,7 +100,6 @@ export function MachinePanel() {
           <span className="text-xs text-neutral-500 truncate">
             · {machine.os}/{machine.arch} · sidecar {machine.sidecarVersion}
           </span>
-          <SidecarVersionBadge machineId={machineId} machineName={machine.name} />
           <StatusDot status={machine.status === 'online' ? 'online' : 'offline'} />
         </div>
         <div className="ml-auto flex items-center gap-2">
@@ -129,7 +128,15 @@ export function MachinePanel() {
           <KV k="hostname" v={<span className="font-mono">{machine.hostname}</span>} />
           <KV k="os" v={machine.os} />
           <KV k="arch" v={machine.arch} />
-          <KV k="sidecar" v={machine.sidecarVersion} />
+          <KV
+            k="sidecar"
+            v={
+              <span className="inline-flex items-center gap-1.5">
+                {machine.sidecarVersion}
+                <SidecarVersionBadge machineId={machineId} machineName={machine.name} />
+              </span>
+            }
+          />
           <KV
             k="registered"
             v={<span title={machine.registeredAt}>{relativeTime(machine.registeredAt)} ago</span>}
