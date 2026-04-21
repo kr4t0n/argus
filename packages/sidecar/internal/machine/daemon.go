@@ -50,6 +50,14 @@ type Daemon struct {
 	// to decide which adapter types to offer in the create-agent UI.
 	availableAdapters []protocol.AvailableAdapter
 	hostname          string
+
+	// Remote-update bookkeeping. update gates concurrent updates and
+	// tracks the post-shutdown restart action; runCancel is the
+	// installed cancel func for the run-scoped ctx so the update
+	// handler can ask the main loop to exit without spoofing a signal.
+	update    *UpdateState
+	cancelMu  sync.Mutex
+	runCancel context.CancelFunc
 }
 
 // New builds a Daemon from a loaded cache and version string. Does NOT
@@ -63,6 +71,7 @@ func New(cachePath string, cache *Cache, sidecarVersion string, logger *log.Logg
 		log:            logger,
 		supervisors:    make(map[string]*supervisor),
 		hostname:       hn,
+		update:         &UpdateState{},
 	}
 }
 
@@ -84,6 +93,16 @@ func (d *Daemon) Lookup(agentID string) (terminal.AgentInfo, bool) {
 
 // Run is the daemon main loop. Blocks until ctx is cancelled.
 func (d *Daemon) Run(ctx context.Context) error {
+	// Install a child cancel so internal paths (e.g. self-update)
+	// can ask for a clean shutdown without sending a signal. The
+	// parent ctx (driven by SIGTERM) still propagates here.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	d.cancelMu.Lock()
+	d.runCancel = cancel
+	d.cancelMu.Unlock()
+	ctx = runCtx
+
 	b, err := bus.Dial(ctx, d.cache.Bus)
 	if err != nil {
 		return fmt.Errorf("bus dial: %w", err)
@@ -217,6 +236,13 @@ func (d *Daemon) dispatchControl(ctx context.Context, payload map[string]any) {
 			return
 		}
 		d.handleFSList(ctx, ev)
+	case "update-sidecar":
+		var ev protocol.UpdateSidecarCommand
+		if err := remarshal(payload, &ev); err != nil {
+			d.log.Printf("control: bad update-sidecar: %v", err)
+			return
+		}
+		d.handleUpdateSidecar(ctx, ev)
 	default:
 		d.log.Printf("control: unknown kind=%q", kindStr)
 	}

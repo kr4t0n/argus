@@ -14,6 +14,7 @@ import { Transform } from 'class-transformer';
 import type { CreateAgentRequest } from '@argus/shared-types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { MachineService } from './machine.service';
+import { SidecarUpdateService } from './sidecar-update.service';
 
 class ListMachinesQueryDto {
   @IsOptional()
@@ -48,11 +49,23 @@ class CreateAgentDto implements CreateAgentRequest {
 @UseGuards(JwtAuthGuard)
 @Controller('machines')
 export class MachineController {
-  constructor(private readonly service: MachineService) {}
+  constructor(
+    private readonly service: MachineService,
+    private readonly sidecarUpdate: SidecarUpdateService,
+  ) {}
 
   @Get()
   list(@Query() q: ListMachinesQueryDto) {
     return this.service.listMachines(q.includeArchived ?? false);
+  }
+
+  // Bulk routes must come BEFORE the dynamic :id ones so Nest's route
+  // matcher doesn't grab `sidecar` as a machine id.
+
+  @Post('sidecar/update-all')
+  @HttpCode(202)
+  updateAllSidecars() {
+    return this.sidecarUpdate.updateAll();
   }
 
   @Get(':id')
@@ -74,5 +87,16 @@ export class MachineController {
   @HttpCode(204)
   async destroyAgent(@Param('id') id: string, @Param('agentId') agentId: string) {
     await this.service.destroyAgent(id, agentId);
+  }
+
+  @Get(':id/sidecar/version')
+  getSidecarVersion(@Param('id') id: string) {
+    return this.sidecarUpdate.getVersionInfo(id);
+  }
+
+  @Post(':id/sidecar/update')
+  @HttpCode(202)
+  updateSidecar(@Param('id') id: string) {
+    return this.sidecarUpdate.updateOne(id);
   }
 }

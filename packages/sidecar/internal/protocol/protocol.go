@@ -112,6 +112,57 @@ type SyncAgentsCommand struct {
 	TS     int64       `json:"ts"`
 }
 
+// UpdateSidecarCommand asks the sidecar to run its self-updater (same
+// code path as `argus-sidecar update`) and restart itself with the new
+// binary. Originated by the dashboard's per-machine "Update sidecar"
+// button or fleet-wide "Update all sidecars" action; the server fans
+// it out one machine at a time on the relevant machine:M:control
+// stream. See SidecarUpdate*Event for the progress reporting back.
+type UpdateSidecarCommand struct {
+	Kind      string `json:"kind"` // "update-sidecar"
+	RequestID string `json:"requestId"`
+	TS        int64  `json:"ts"`
+}
+
+// ─────────── Sidecar update lifecycle (sidecar → server) ───────────
+//
+// Three events scoped by (machineId, requestId) report progress on a
+// remote-triggered self-update. The "successfully restarted on the new
+// version" signal isn't a dedicated event — the fresh sidecar's normal
+// machine-register carries the new SidecarVersion, which the server
+// matches against the in-flight request to close the loop.
+
+type SidecarUpdateStartedEvent struct {
+	Kind        string `json:"kind"` // "sidecar-update-started"
+	MachineID   string `json:"machineId"`
+	RequestID   string `json:"requestId"`
+	FromVersion string `json:"fromVersion"`
+	TS          int64  `json:"ts"`
+}
+
+type SidecarUpdateDownloadedEvent struct {
+	Kind        string `json:"kind"` // "sidecar-update-downloaded"
+	MachineID   string `json:"machineId"`
+	RequestID   string `json:"requestId"`
+	FromVersion string `json:"fromVersion"`
+	ToVersion   string `json:"toVersion"`
+	// "self" | "supervisor" | "manual" — see the TS twin for the
+	// dashboard-side semantics. The sidecar fills this in based on
+	// runtime mode detection (TTY ⇒ manual, env ⇒ supervisor, else
+	// background ⇒ self).
+	RestartMode string `json:"restartMode"`
+	TS          int64  `json:"ts"`
+}
+
+type SidecarUpdateFailedEvent struct {
+	Kind        string `json:"kind"` // "sidecar-update-failed"
+	MachineID   string `json:"machineId"`
+	RequestID   string `json:"requestId"`
+	FromVersion string `json:"fromVersion"`
+	Reason      string `json:"reason"`
+	TS          int64  `json:"ts"`
+}
+
 // ─────────── Filesystem browsing ───────────
 //
 // Request (server → sidecar) rides the machine control stream; the

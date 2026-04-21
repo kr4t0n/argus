@@ -16,6 +16,7 @@ import type {
   MachineDTO,
   ResultChunkDTO,
   SessionDTO,
+  SidecarUpdatePlanEntry,
   TerminalDTO,
   TerminalOutputMessage,
   TerminalClosedMessage,
@@ -172,5 +173,57 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
    */
   emitFSChanged(payload: { agentId: string; path: string }) {
     this.server.to(`agent:${payload.agentId}`).emit('fs:changed', payload);
+  }
+
+  // ------- Sidecar remote-update events -------
+  //
+  // Broadcast globally rather than scoping to a per-machine room: the
+  // machines list, machine kebab menu, batch progress strip, and any
+  // open machine detail pane all want the same event, and there's no
+  // existing per-machine room to piggy-back on. The events are tiny
+  // and infrequent (one update can take ~5–10s), so the fan-out cost
+  // is negligible compared with terminal traffic.
+
+  emitSidecarUpdateStarted(payload: {
+    machineId: string;
+    requestId: string;
+    fromVersion: string;
+  }) {
+    this.server.emit('sidecar-update:started', payload);
+  }
+
+  emitSidecarUpdateDownloaded(payload: {
+    machineId: string;
+    requestId: string;
+    fromVersion: string;
+    toVersion: string;
+    restartMode: 'self' | 'supervisor' | 'manual';
+  }) {
+    this.server.emit('sidecar-update:downloaded', payload);
+  }
+
+  emitSidecarUpdateCompleted(payload: {
+    machineId: string;
+    requestId: string;
+    fromVersion: string;
+    toVersion: string;
+  }) {
+    this.server.emit('sidecar-update:completed', payload);
+  }
+
+  emitSidecarUpdateFailed(payload: {
+    machineId: string;
+    requestId: string;
+    fromVersion: string;
+    reason: string;
+  }) {
+    this.server.emit('sidecar-update:failed', payload);
+  }
+
+  emitSidecarUpdateBatchProgress(payload: {
+    batchId: string;
+    plan: SidecarUpdatePlanEntry[];
+  }) {
+    this.server.emit('sidecar-update:batch-progress', payload);
   }
 }

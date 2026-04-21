@@ -113,6 +113,20 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ### `packages/sidecar/internal/`
 
+- `cmd/sidecar/` — entrypoint and CLI. `main.go` dispatches to subcommands
+  (`init`, `update`, `version`, `start`/`stop`/`restart`/`status`, plus the
+  bare/`run` foreground daemon). `daemonize.go` re-execs the binary with a
+  `__daemon` sentinel arg under `setsid` and dups stdout/stderr onto
+  `$XDG_STATE_HOME/argus/sidecar.log` for `start`. `pidfile.go` resolves the
+  pidfile + log path under `$XDG_STATE_HOME/argus/` and takes an exclusive
+  `flock(2)` that is the *single source of truth* for "is a daemon running?"
+  — both the foreground and the spawned child grab it at boot, so two
+  sidecars can never share one cache (and therefore one `machineId`).
+  `control.go` implements `stop` (SIGTERM → wait `--timeout` → SIGKILL),
+  `status` (LSB exit codes: 0 running, 1 stale pidfile, 3 stopped), and
+  `restart`. None of the control verbs touch Redis or the server — they
+  operate purely on the local pidfile + process table, which keeps them
+  fast and useful even when the network is down.
 - `protocol/` — wire structs (mirror of shared-types).
 - `machine/` — daemon, on-disk cache, and adapter discovery.
   - `cache.go` persists `~/.config/argus/sidecar.json` (machine id,
@@ -160,7 +174,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `updater/` — self-update: reads the GitHub Releases API for
   `argus-sidecar-v*` tags, picks the matching `OS-arch` asset,
   verifies it against `SHASUMS256.txt`, and atomically `os.Rename`s
-  over the running binary. Drives `argus-sidecar update`.
+  over the running binary. Drives both `argus-sidecar update` (CLI)
+  and remote `update-sidecar` commands from the dashboard
+  (`machine/update.go`). On the remote path the daemon detects its
+  restart mode (`self`, `supervisor`, `manual` — see the gotcha
+  below) and either re-execs in place via `syscall.Exec`, exits 0
+  for systemd/launchd, or stays put and asks the operator to
+  restart manually.
 - `cmd/sidecar/main.go` — subcommand dispatch (`init`, `update`,
   `version`, default = run daemon), flag parsing, signal handling,
   runner glue.
@@ -301,6 +321,38 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   shell. If you need replay, add a separate, opt-in `TerminalTranscript`
   table gated behind a per-agent flag (mirror the existing
   `supportsTerminal` plumbing).
+- **Remote sidecar update — restart mode is auto-detected, not chosen**:
+  the dashboard's `Update sidecar` action publishes
+  `update-sidecar` on the host's Redis control stream. The sidecar
+  re-uses `internal/updater` to fetch + verify + atomically rename
+  the new binary, then picks one of three handoff strategies
+  *itself* based on environment hints — the server has no say:
+    - **`self`**: nothing supervises us. The daemon `syscall.Exec`s
+      the freshly installed binary in-place. PID stays the same and
+      the `flock(2)` hold on the pidfile is preserved across `exec`
+      (BSD flock semantics: the lock is per-fd, fd survives exec
+      because we don't set `FD_CLOEXEC`). This is the **only**
+      strategy where there's literally zero gap during which a stale
+      `argus-sidecar start` could squeeze in.
+    - **`supervisor`**: detected via `INVOCATION_ID` /
+      `NOTIFY_SOCKET` (systemd) or `XPC_SERVICE_NAME` (launchd). The
+      daemon releases the pidfile lock and `os.Exit(0)`s; the
+      supervisor respawns the unit which picks up the new bytes.
+    - **`manual`**: stdin/stderr is a TTY (a developer running
+      `argus-sidecar` in the foreground). The daemon does NOT
+      restart — it logs a notice and the dashboard's toast surfaces
+      "restart needed" so the operator can ^C and re-run.
+  Bulk-update (`POST /machines/sidecar/update-all`) walks the fleet
+  sequentially and stops on the first failure so a bad release
+  doesn't cascade across every host. Per-machine single-flight is
+  enforced server-side (`SidecarUpdateService.machineLocks`); a
+  click + bulk run targeting the same machine simply 400s the
+  loser. The "update available" badge polls
+  `GET /machines/:id/sidecar/version`, which is backed by a
+  30-minute in-process cache of the latest GitHub release tag —
+  set `GITHUB_TOKEN` on the **server** to dodge the
+  unauthenticated rate limit when the badge fans out across many
+  dashboards.
 - **Terminal output binary safety**: PTYs emit raw bytes (escape
   sequences, control chars, partial UTF-8 across read boundaries). We
   base64-encode `data` in both directions so JSON serialization can't

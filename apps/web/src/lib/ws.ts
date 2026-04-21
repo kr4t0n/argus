@@ -7,6 +7,7 @@ import type {
   ResultChunkDTO,
   ServerToClientEvents,
   SessionDTO,
+  SidecarUpdatePlanEntry,
   TerminalClosedMessage,
   TerminalDTO,
   TerminalOutputMessage,
@@ -39,6 +40,34 @@ type Handler = {
   onTerminalOutput?: (m: TerminalOutputMessage) => void;
   onTerminalClosed?: (m: TerminalClosedMessage) => void;
   onFSChanged?: (p: { agentId: string; path: string }) => void;
+  onSidecarUpdateStarted?: (p: {
+    machineId: string;
+    requestId: string;
+    fromVersion: string;
+  }) => void;
+  onSidecarUpdateDownloaded?: (p: {
+    machineId: string;
+    requestId: string;
+    fromVersion: string;
+    toVersion: string;
+    restartMode: 'self' | 'supervisor' | 'manual';
+  }) => void;
+  onSidecarUpdateCompleted?: (p: {
+    machineId: string;
+    requestId: string;
+    fromVersion: string;
+    toVersion: string;
+  }) => void;
+  onSidecarUpdateFailed?: (p: {
+    machineId: string;
+    requestId: string;
+    fromVersion: string;
+    reason: string;
+  }) => void;
+  onSidecarUpdateBatchProgress?: (p: {
+    batchId: string;
+    plan: SidecarUpdatePlanEntry[];
+  }) => void;
   onConnect?: () => void;
   onDisconnect?: () => void;
 };
@@ -77,6 +106,21 @@ export function ensureSocket(): WSSocket {
   socket.on('terminal:output', (m) => handlers.forEach((h) => h.onTerminalOutput?.(m)));
   socket.on('terminal:closed', (m) => handlers.forEach((h) => h.onTerminalClosed?.(m)));
   socket.on('fs:changed', (p) => handlers.forEach((h) => h.onFSChanged?.(p)));
+  socket.on('sidecar-update:started', (p) =>
+    handlers.forEach((h) => h.onSidecarUpdateStarted?.(p)),
+  );
+  socket.on('sidecar-update:downloaded', (p) =>
+    handlers.forEach((h) => h.onSidecarUpdateDownloaded?.(p)),
+  );
+  socket.on('sidecar-update:completed', (p) =>
+    handlers.forEach((h) => h.onSidecarUpdateCompleted?.(p)),
+  );
+  socket.on('sidecar-update:failed', (p) =>
+    handlers.forEach((h) => h.onSidecarUpdateFailed?.(p)),
+  );
+  socket.on('sidecar-update:batch-progress', (p) =>
+    handlers.forEach((h) => h.onSidecarUpdateBatchProgress?.(p)),
+  );
   return socket;
 }
 
