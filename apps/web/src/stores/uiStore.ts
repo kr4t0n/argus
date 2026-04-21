@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 interface UIState {
+  sidebarOpen: boolean;
   sidebarWidth: number;
   contextPaneOpen: boolean;
   /** Persisted width of the right-hand context pane in pixels. */
@@ -12,6 +13,7 @@ interface UIState {
   /** Global toggle: show archived agents in the sidebar. */
   showArchivedAgents: boolean;
   drafts: Record<string, string>;
+  toggleSidebar: () => void;
   setSidebarWidth: (w: number) => void;
   toggleContextPane: () => void;
   setContextPaneWidth: (w: number) => void;
@@ -21,12 +23,15 @@ interface UIState {
   setDraft: (agentId: string, v: string) => void;
 }
 
+export const SIDEBAR_MIN = 220;
+export const SIDEBAR_MAX = 520;
 export const CONTEXT_PANE_MIN = 240;
 export const CONTEXT_PANE_MAX = 720;
 
 export const useUIStore = create<UIState>()(
   persist(
     (set, get) => ({
+      sidebarOpen: true,
       sidebarWidth: 320,
       contextPaneOpen: true,
       contextPaneWidth: 320,
@@ -34,8 +39,11 @@ export const useUIStore = create<UIState>()(
       showArchived: {},
       showArchivedAgents: false,
       drafts: {},
+      toggleSidebar() {
+        set({ sidebarOpen: !get().sidebarOpen });
+      },
       setSidebarWidth(w) {
-        set({ sidebarWidth: Math.max(220, Math.min(520, w)) });
+        set({ sidebarWidth: Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, Math.round(w))) });
       },
       toggleContextPane() {
         set({ contextPaneOpen: !get().contextPaneOpen });

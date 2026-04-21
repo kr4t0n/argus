@@ -7,6 +7,7 @@ import {
   Eye,
   EyeOff,
   LogOut,
+  PanelLeftClose,
   Pencil,
   Plus,
   Server,
@@ -37,6 +38,7 @@ export function Sidebar() {
   const showArchivedAgents = useUIStore((s) => s.showArchivedAgents);
   const toggleShowArchivedAgents = useUIStore((s) => s.toggleShowArchivedAgents);
   const upsertAgent = useAgentStore((s) => s.upsert);
+  const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const logout = useAuthStore((s) => s.logout);
   const user = useAuthStore((s) => s.user);
 
@@ -61,13 +63,22 @@ export function Sidebar() {
           <div className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
           <span className="text-sm font-semibold tracking-tight">Argus</span>
         </div>
-        <button
-          onClick={logout}
-          className="text-neutral-500 hover:text-neutral-200 transition-colors"
-          title={user?.email ?? 'sign out'}
-        >
-          <LogOut className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={toggleSidebar}
+            className="text-neutral-500 hover:text-neutral-200 transition-colors"
+            title="hide sidebar"
+          >
+            <PanelLeftClose className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={logout}
+            className="text-neutral-500 hover:text-neutral-200 transition-colors"
+            title={user?.email ?? 'sign out'}
+          >
+            <LogOut className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto py-2 px-1">
