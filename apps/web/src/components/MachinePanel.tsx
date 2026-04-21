@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Server, Trash2 } from 'lucide-react';
+import { Menu, Server, Trash2 } from 'lucide-react';
 import type { AgentDTO, AvailableAdapter } from '@argus/shared-types';
 import { useMachineStore } from '../stores/machineStore';
 import { useAgentStore } from '../stores/agentStore';
+import { useUIStore } from '../stores/uiStore';
 import { api, ApiError } from '../lib/api';
 import { StatusDot } from './ui/StatusDot';
 import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
@@ -45,6 +46,7 @@ export function MachinePanel() {
   );
   const [showCreate, setShowCreate] = useState(false);
   const createBtnRef = useRef<HTMLDivElement>(null);
+  const toggleSidebar = useUIStore((s) => s.toggleSidebar);
 
   if (!machineId) return null;
   if (!machine) {
@@ -60,6 +62,13 @@ export function MachinePanel() {
   return (
     <div className="flex h-full flex-col">
       <div className="h-12 shrink-0 flex items-center gap-3 px-5 border-b border-neutral-900">
+        <button
+          onClick={toggleSidebar}
+          className="md:hidden text-neutral-500 hover:text-neutral-200 transition-colors"
+          title="show sidebar"
+        >
+          <Menu className="h-4 w-4" />
+        </button>
         <Server className="h-4 w-4 text-neutral-400" />
         <div className="flex items-center gap-2 min-w-0">
           <div className="text-sm font-medium text-neutral-100 truncate">
