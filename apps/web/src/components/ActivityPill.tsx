@@ -192,6 +192,11 @@ function buildTimeline(chunks: ResultChunkDTO[]): TimelineItem[] {
     }
     if (c.kind === 'progress') {
       flushThought();
+      // Drop content-less progress chunks — the claude-code sidecar emits
+      // these for meta events (e.g. unknown stream-json types) that carry
+      // no user-visible signal; rendering them as "working…" rows just
+      // clutters the timeline.
+      if (!c.content) continue;
       out.push({ kind: 'progress', chunk: c });
     }
   }
