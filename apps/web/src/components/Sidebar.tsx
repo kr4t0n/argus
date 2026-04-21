@@ -522,6 +522,20 @@ function AgentRow({
             <StatusDot status={agent.status} />
           </span>
         </button>
+        {/* New-session action, hover-only. Hidden when the agent is
+            archived or offline since the create would be rejected anyway. */}
+        {!archived && agent.status !== 'offline' && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onNewSession();
+            }}
+            className="flex items-center px-1.5 text-neutral-600 opacity-0 transition-colors hover:text-neutral-200 group-hover:opacity-100"
+            title="new session"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        )}
         {/* Per-agent archive toggle (for the AGENT itself). */}
         <button
           onClick={toggleAgentArchive}
@@ -593,19 +607,6 @@ function AgentRow({
               {hiddenArchivedCount} archived
             </button>
           )}
-          <button
-            onClick={onNewSession}
-            disabled={agent.status === 'offline' || archived}
-            className={cn(
-              'flex items-center gap-1.5 px-2 py-1 w-full text-left text-xs rounded-md transition-colors',
-              'text-neutral-500 hover:text-neutral-200 hover:bg-neutral-900',
-              'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent',
-            )}
-            title={archived ? 'restore the agent before starting a new session' : undefined}
-          >
-            <Plus className="h-3 w-3" />
-            new session
-          </button>
         </div>
       )}
     </div>
