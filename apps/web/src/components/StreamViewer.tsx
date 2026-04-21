@@ -265,7 +265,7 @@ function findScrollParent(el: HTMLElement): HTMLElement | null {
 function UserMessage({ text }: { text: string }) {
   return (
     <div className="flex justify-end">
-      <div className="max-w-[80%] rounded-2xl bg-neutral-800/80 px-4 py-2 text-sm text-neutral-100 whitespace-pre-wrap leading-relaxed">
+      <div className="max-h-36 max-w-[80%] overflow-y-auto no-scrollbar rounded-2xl bg-neutral-800/80 px-4 py-2 text-sm text-neutral-100 whitespace-pre-wrap leading-relaxed">
         {text}
       </div>
     </div>
