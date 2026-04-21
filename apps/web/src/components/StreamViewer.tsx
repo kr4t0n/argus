@@ -162,6 +162,13 @@ function CommandBlock({
       const band = bandRef.current;
       const scroller = band ? findScrollParent(band) : null;
       if (!band || !scroller) return next;
+      // Skip the snap when the user is browsing history (scrolled away
+      // from the live edge). Snapping to this turn's band would yank
+      // their view to a turn they didn't ask to visit. The 48px mirrors
+      // the StreamViewer `stickBottom` threshold.
+      const nearBottom =
+        scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48;
+      if (!nearBottom) return next;
       // `position: sticky` doesn't change layout, but its current PAINT
       // position can mask the band's natural in-flow location once it's
       // stuck at top:0. Toggle to `static` for a beat to read the real
