@@ -5,12 +5,13 @@ import { FSController } from './fs.controller';
 import { FSService } from './fs.service';
 import { MachineController } from './machine.controller';
 import { MachineService } from './machine.service';
+import { SidecarUpdateService } from './sidecar-update.service';
 
 @Global()
 @Module({
   imports: [AuthModule, GatewayModule],
-  providers: [MachineService, FSService],
+  providers: [MachineService, FSService, SidecarUpdateService],
   controllers: [MachineController, FSController],
-  exports: [MachineService, FSService],
+  exports: [MachineService, FSService, SidecarUpdateService],
 })
 export class MachineModule {}

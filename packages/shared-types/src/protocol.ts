@@ -200,11 +200,37 @@ export interface FSListRequestCommand {
   ts: number;
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Remote sidecar update (server → sidecar)
+//
+// The dashboard exposes an "Update sidecar" action per machine and a
+// fleet-wide "Update all sidecars" button. Both publish this command on
+// the per-machine control stream. The sidecar reuses the same updater
+// `argus-sidecar update` runs locally (download → sha256-verify → swap
+// binary) and then restarts itself; the restart strategy depends on
+// how the sidecar is being supervised (foreground TTY, background mode
+// from `argus-sidecar start`, or systemd/launchd).
+//
+// Progress is reported back on the agent:lifecycle stream as a small
+// state machine: started → downloaded → (process exit + new register
+// with the new sidecarVersion). Failures terminate at `-failed`.
+// `requestId` correlates a started/downloaded/failed triple back to
+// the originating API call so the dashboard can match a progress
+// toast to a specific click.
+// ─────────────────────────────────────────────────────────────────────
+
+export interface UpdateSidecarCommand {
+  kind: 'update-sidecar';
+  requestId: string;
+  ts: number;
+}
+
 export type MachineControlCommand =
   | CreateAgentCommand
   | DestroyAgentCommand
   | SyncAgentsCommand
-  | FSListRequestCommand;
+  | FSListRequestCommand
+  | UpdateSidecarCommand;
 
 export interface FSListResponseEvent {
   kind: 'fs-list-response';
@@ -227,6 +253,47 @@ export interface FSChangedEvent {
   machineId: string;
   agentId: string;
   path: string;
+  ts: number;
+}
+
+/** Sidecar update lifecycle (back on agent:lifecycle). The triple is
+ *  scoped by (machineId, requestId): `started` lands once the sidecar
+ *  picks up the verb; `downloaded` lands after sha256-verify + swap,
+ *  immediately before the sidecar exits to restart; `failed` lands at
+ *  any failed step with a human-readable reason. The "successfully
+ *  running on the new version" signal isn't a dedicated event — the
+ *  fresh sidecar's existing `machine-register` carries the new
+ *  `sidecarVersion`, which the server matches against the request to
+ *  close the loop. */
+export interface SidecarUpdateStartedEvent {
+  kind: 'sidecar-update-started';
+  machineId: string;
+  requestId: string;
+  fromVersion: string;
+  ts: number;
+}
+
+export interface SidecarUpdateDownloadedEvent {
+  kind: 'sidecar-update-downloaded';
+  machineId: string;
+  requestId: string;
+  fromVersion: string;
+  toVersion: string;
+  /** How the sidecar plans to restart: 'self' = sidecar re-spawns itself
+   *  via `argus-sidecar start` (background mode), 'supervisor' = exits 0
+   *  and lets systemd/launchd restart it, 'manual' = TTY foreground,
+   *  the operator must restart by hand. The dashboard renders different
+   *  copy on the toast for the manual case. */
+  restartMode: 'self' | 'supervisor' | 'manual';
+  ts: number;
+}
+
+export interface SidecarUpdateFailedEvent {
+  kind: 'sidecar-update-failed';
+  machineId: string;
+  requestId: string;
+  fromVersion: string;
+  reason: string;
   ts: number;
 }
 
@@ -271,7 +338,10 @@ export type AnyLifecycleEvent =
   | AgentSpawnFailedEvent
   | AgentDestroyedEvent
   | FSListResponseEvent
-  | FSChangedEvent;
+  | FSChangedEvent
+  | SidecarUpdateStartedEvent
+  | SidecarUpdateDownloadedEvent
+  | SidecarUpdateFailedEvent;
 
 /** Server → sidecar */
 export interface Command {

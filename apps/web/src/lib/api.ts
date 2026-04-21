@@ -10,6 +10,9 @@ import type {
   OpenTerminalRequest,
   ResultChunkDTO,
   SessionDTO,
+  SidecarUpdateAccepted,
+  SidecarUpdateBatchAccepted,
+  SidecarVersionInfo,
   TerminalDTO,
 } from '@argus/shared-types';
 import { getToken } from './auth';
@@ -129,6 +132,18 @@ export const api = {
     http<TerminalDTO[]>(`/agents/${agentId}/terminals`),
   closeTerminal: (id: string) =>
     http<TerminalDTO>(`/terminals/${id}`, { method: 'DELETE' }),
+
+  // Sidecar version + remote update
+  getSidecarVersion: (machineId: string) =>
+    http<SidecarVersionInfo>(`/machines/${machineId}/sidecar/version`),
+  updateSidecar: (machineId: string) =>
+    http<SidecarUpdateAccepted>(`/machines/${machineId}/sidecar/update`, {
+      method: 'POST',
+    }),
+  updateAllSidecars: () =>
+    http<SidecarUpdateBatchAccepted>(`/machines/sidecar/update-all`, {
+      method: 'POST',
+    }),
 
   // Filesystem browsing (right-pane tree)
   listAgentDir: (agentId: string, path: string, showAll: boolean) => {

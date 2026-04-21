@@ -25,6 +25,7 @@ import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 import { FSService } from './fs.service';
+import { SidecarUpdateService } from './sidecar-update.service';
 
 const CONSUMER = 'server-1';
 const STALE_AFTER_MS = 30_000;
@@ -63,6 +64,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     private readonly redis: RedisService,
     private readonly gateway: StreamGateway,
     private readonly fs: FSService,
+    private readonly sidecarUpdate: SidecarUpdateService,
   ) {}
 
   async onModuleInit() {
@@ -320,6 +322,10 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(
           `machine-register ${ev.machineId} (${ev.name} / ${ev.os}/${ev.arch}, sidecar ${ev.sidecarVersion}, ${adapters.length} adapter(s))`,
         );
+        // If a remote-triggered self-update was waiting for this
+        // machine to come back on the new binary, fire `completed`
+        // and resolve the bulk-loop promise.
+        this.sidecarUpdate.observeMachineRegister(ev.machineId, ev.sidecarVersion);
         await this.syncAgents(ev.machineId);
         break;
       }
@@ -427,6 +433,15 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         // Broadcast into the agent room so connected dashboards can
         // invalidate their cached tree listings.
         this.gateway.emitFSChanged({ agentId: ev.agentId, path: ev.path });
+        break;
+      }
+      case 'sidecar-update-started':
+      case 'sidecar-update-downloaded':
+      case 'sidecar-update-failed': {
+        // Three-phase progress for a remote-triggered self-update.
+        // SidecarUpdateService fans this out to the dashboard and
+        // resolves the per-machine + bulk-loop promises.
+        this.sidecarUpdate.handleUpdateEvent(ev);
         break;
       }
     }

@@ -4,6 +4,7 @@ import type {
   MachineDTO,
   ResultChunkDTO,
   SessionDTO,
+  SidecarUpdatePlanEntry,
   TerminalClosedMessage,
   TerminalDTO,
   TerminalInputMessage,
@@ -57,4 +58,40 @@ export interface ServerToClientEvents {
    *  re-fetches the listing for `path` if it's currently expanded in
    *  the right-pane file tree. */
   'fs:changed': (payload: { agentId: string; path: string }) => void;
+  /** Sidecar update lifecycle (per-machine room). The triple matches
+   *  on requestId; the dashboard renders progress in a toast that
+   *  resolves on `completed` (machine re-registered with the new
+   *  version) or `failed`. `restartMode` lets the toast tell the user
+   *  whether to expect an automatic restart or do it themselves. */
+  'sidecar-update:started': (payload: {
+    machineId: string;
+    requestId: string;
+    fromVersion: string;
+  }) => void;
+  'sidecar-update:downloaded': (payload: {
+    machineId: string;
+    requestId: string;
+    fromVersion: string;
+    toVersion: string;
+    restartMode: 'self' | 'supervisor' | 'manual';
+  }) => void;
+  'sidecar-update:completed': (payload: {
+    machineId: string;
+    requestId: string;
+    fromVersion: string;
+    toVersion: string;
+  }) => void;
+  'sidecar-update:failed': (payload: {
+    machineId: string;
+    requestId: string;
+    fromVersion: string;
+    reason: string;
+  }) => void;
+  /** Bulk-update aggregated progress (one event per per-machine state
+   *  transition). The dashboard renders a single progress strip and
+   *  updates row badges from `plan`. */
+  'sidecar-update:batch-progress': (payload: {
+    batchId: string;
+    plan: SidecarUpdatePlanEntry[];
+  }) => void;
 }

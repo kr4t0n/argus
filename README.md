@@ -261,6 +261,52 @@ your launchd/systemd unit afterwards to pick up the new binary. If the
 GitHub repo is private, set `GITHUB_TOKEN` in the environment so the
 update can read the release asset list.
 
+##### Remote updates from the dashboard
+
+You can also trigger the same self-update remotely from the dashboard so
+you don't have to SSH into every host when you cut a new release.
+
+- **Per-machine** — open a machine's focus pane (click its row in the
+  bottom-of-sidebar machines list), then use the kebab menu (⋮) next to
+  **new agent** and pick **Update sidecar**. A small green badge appears
+  next to the title whenever the host is running a sidecar older than
+  the latest published release.
+- **Whole fleet** — hover the **machines** header in the sidebar and use
+  the kebab menu's **Update all sidecars…** action. A modal previews
+  which hosts will be updated, which are already current, and which are
+  offline (and therefore skipped). Confirm to start; the runner walks
+  the fleet sequentially and stops on the first failure so a bad
+  release doesn't cascade.
+
+Both paths use the same machinery: the server publishes an
+`update-sidecar` command on the host's Redis control stream, the sidecar
+reuses its existing `argus-sidecar update` flow to download + verify +
+swap the binary, then chooses how to bring up the new image:
+
+- **`self`** — the daemon was started by `argus-sidecar start` (or any
+  other non-supervised invocation). It re-execs the freshly installed
+  binary in-place via `syscall.Exec`, preserving the PID and the
+  `flock(2)` hold on its pidfile so there's a zero-gap handoff.
+- **`supervisor`** — the daemon detected systemd / launchd
+  (`INVOCATION_ID`, `XPC_SERVICE_NAME`, …). It exits cleanly with
+  status 0 and the supervisor respawns it with the new bytes.
+- **`manual`** — the daemon is attached to a TTY (a developer running
+  `argus-sidecar` foreground in a terminal). It logs a "restart needed"
+  notice and stays on the old version; the dashboard's toast surfaces
+  the same message.
+
+Active sessions stay connected across the restart: the dashboard
+re-establishes the supervisor link as soon as the new sidecar
+re-registers, and pty/terminal sessions reattach without losing
+scrollback. The "update available" badge is driven by a 30-minute cache
+of the latest GitHub release tag on the server (set `GITHUB_TOKEN` in
+the server env to dodge the unauthenticated rate limit).
+
+If you want to gate this action behind admin-only RBAC later it's
+straightforward — the endpoints (`POST /machines/:id/sidecar/update`
+and `POST /machines/sidecar/update-all`) live in `MachineController`
+and inherit the same auth guard as everything else under `/machines`.
+
 #### Creating agents from the dashboard
 
 Once a machine has registered, hover over its row in the bottom-of-the-

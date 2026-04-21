@@ -3,10 +3,12 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   Archive,
   ArchiveRestore,
+  ArrowUpCircle,
   ChevronRight,
   Eye,
   EyeOff,
   LogOut,
+  MoreVertical,
   PanelLeftClose,
   Pencil,
   Plus,
@@ -17,10 +19,12 @@ import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
 import { useAuthStore } from '../stores/authStore';
+import { useSidecarUpdateStore } from '../stores/sidecarUpdateStore';
 import { cn, relativeTime } from '../lib/utils';
 import { StatusDot } from './ui/StatusDot';
 import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
 import { CreateAgentPopover } from './CreateAgentPopover';
+import { BulkUpdateModal } from './BulkUpdateModal';
 import { MachineIcon } from './MachineIcon';
 import { api } from '../lib/api';
 
@@ -176,8 +180,16 @@ function MachineList() {
 
   return (
     <div className="shrink-0 py-1.5 px-1 max-h-[40%] overflow-y-auto">
-      <div className="px-3 py-1 text-[10px] uppercase tracking-widest text-neutral-600">
-        machines
+      <div className="group flex items-center px-3 py-1">
+        <span className="text-[10px] uppercase tracking-widest text-neutral-600">
+          machines
+        </span>
+        <span className="ml-1.5 text-[10px] text-neutral-700">
+          ({order.length})
+        </span>
+        <span className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+          <MachinesHeaderMenu />
+        </span>
       </div>
       {order.map((id) => {
         const m = machines[id];
@@ -192,6 +204,73 @@ function MachineList() {
           />
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * Top-of-machines kebab. Currently exposes "Update all sidecars …" only;
+ * we keep it as a menu so future fleet-wide actions (collect logs,
+ * health check, …) have an obvious home.
+ *
+ * Clicking the action opens BulkUpdateModal, which fetches the current
+ * plan from POST /machines/sidecar/update-all (the server returns the
+ * full plan with each row's pre-flight `status` set), lets the user
+ * confirm, and then either confirms execution or cancels the batch.
+ */
+function MachinesHeaderMenu() {
+  const [open, setOpen] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const batch = useSidecarUpdateStore((s) => s.batch);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [open]);
+
+  // While a bulk update is in flight (we have a non-dismissed batch),
+  // we disable the entry to discourage starting a parallel run; the
+  // server's single-flight per machine would catch overlap anyway.
+  const batchInFlight =
+    !!batch &&
+    !batch.dismissed &&
+    batch.plan.some((p) => p.status === 'queued' || p.status === 'in-progress');
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="rounded p-0.5 text-neutral-500 hover:bg-neutral-900 hover:text-neutral-200"
+        title="machine actions"
+      >
+        <MoreVertical className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-1 w-56 overflow-hidden rounded-md border border-neutral-800 bg-neutral-950 shadow-lg">
+          <button
+            onClick={() => {
+              setOpen(false);
+              setShowModal(true);
+            }}
+            disabled={batchInFlight}
+            className={cn(
+              'flex w-full items-center gap-2 px-3 py-2 text-left text-xs',
+              'text-neutral-200 hover:bg-neutral-900',
+              'disabled:cursor-not-allowed disabled:opacity-40',
+            )}
+            title={batchInFlight ? 'a bulk update is already in progress' : undefined}
+          >
+            <ArrowUpCircle className="h-3.5 w-3.5" />
+            Update all sidecars…
+          </button>
+        </div>
+      )}
+      {showModal && <BulkUpdateModal onClose={() => setShowModal(false)} />}
     </div>
   );
 }

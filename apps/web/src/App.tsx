@@ -6,8 +6,10 @@ import { useAuthStore } from './stores/authStore';
 import { useAgentStore } from './stores/agentStore';
 import { useMachineStore } from './stores/machineStore';
 import { useSessionStore } from './stores/sessionStore';
+import { useSidecarUpdateStore } from './stores/sidecarUpdateStore';
 import { ensureSocket, resetSocket, subscribeHandler } from './lib/ws';
 import { api } from './lib/api';
+import { SidecarUpdateToasts } from './components/SidecarUpdateToasts';
 
 function ProtectedRoutes() {
   const token = useAuthStore((s) => s.token);
@@ -52,6 +54,8 @@ export default function App() {
     loadSessions();
     const socket = ensureSocket();
 
+    const updateStore = useSidecarUpdateStore.getState();
+
     const unsub = subscribeHandler({
       onMachineUpsert: upsertMachine,
       onMachineStatus: (p) => setMachineStatus(p.id, p.status),
@@ -68,6 +72,21 @@ export default function App() {
       onCommandCreated: upsertCommand,
       onCommandUpdated: upsertCommand,
       onChunk: appendChunk,
+      onSidecarUpdateStarted: (p) =>
+        updateStore.setStarted(p.machineId, p.fromVersion),
+      onSidecarUpdateDownloaded: (p) =>
+        updateStore.setDownloaded(
+          p.machineId,
+          p.fromVersion,
+          p.toVersion,
+          p.restartMode,
+        ),
+      onSidecarUpdateCompleted: (p) =>
+        updateStore.setCompleted(p.machineId, p.fromVersion, p.toVersion),
+      onSidecarUpdateFailed: (p) =>
+        updateStore.setFailed(p.machineId, p.fromVersion, p.reason),
+      onSidecarUpdateBatchProgress: (p) =>
+        useSidecarUpdateStore.getState().updateBatch(p.batchId, p.plan),
       onConnect: async () => {
         // re-sync machines/agents/sessions + backfill active sessions.
         await Promise.all([loadMachines(), loadAgents(), loadSessions()]).catch(() => {});
@@ -92,9 +111,12 @@ export default function App() {
   }, [token]);
 
   return (
-    <Routes location={location}>
-      <Route path="/login" element={<Login />} />
-      <Route path="/*" element={<ProtectedRoutes />} />
-    </Routes>
+    <>
+      <Routes location={location}>
+        <Route path="/login" element={<Login />} />
+        <Route path="/*" element={<ProtectedRoutes />} />
+      </Routes>
+      <SidecarUpdateToasts />
+    </>
   );
 }

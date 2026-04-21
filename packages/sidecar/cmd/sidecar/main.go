@@ -219,6 +219,43 @@ func runDaemon(args []string) {
 	if err := d.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Fatalf("daemon: %v", err)
 	}
+
+	// If a remote-triggered self-update finished while we were
+	// running, hand off to the freshly installed binary now that
+	// the main loop is fully torn down (and the bus/link goroutines
+	// are unwinding via deferred Close()s).
+	switch d.RestartMode() {
+	case machine.RestartSelf:
+		// Re-exec the binary in-place. Linux + macOS preserve
+		// flock(2) holds across exec(2) (BSD flock semantics:
+		// the lock is per-fd, and the fd survives exec unless
+		// FD_CLOEXEC is set — which we don't), so the new
+		// image inherits our pidfile lock with zero gap. New
+		// invocations of `argus-sidecar` get the new bytes via
+		// the atomic rename updater.Update() already did.
+		exe, err := os.Executable()
+		if err != nil {
+			logger.Fatalf("self-restart: locate self: %v", err)
+		}
+		logger.Printf("self-restart: exec %s %v", exe, os.Args[1:])
+		// Deliberately do NOT call pidfile.Release(): exec
+		// preserves the flock and we want the new image to
+		// inherit the same hold. PID stored in the file is
+		// still correct (exec preserves PID).
+		if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
+			logger.Fatalf("self-restart: exec: %v", err)
+		}
+	case machine.RestartSupervisor:
+		logger.Println("supervisor-restart: exit(0); systemd/launchd will respawn with the new binary")
+		// Releasing the pidfile lock here so the supervisor's
+		// fresh start finds a clean slot. The deferred
+		// pidfile.Release() at the top of runDaemon would do
+		// the same, but the explicit os.Exit() below would
+		// skip defers.
+		pidfile.Release()
+		os.Exit(0)
+	}
+
 	logger.Println("bye")
 }
 
