@@ -1,5 +1,6 @@
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { LogOut, PanelLeftOpen, Server } from 'lucide-react';
+import { LogOut, PanelLeftOpen } from 'lucide-react';
+import { MachineIconGlyph } from './MachineIcon';
 import { useAgentStore } from '../stores/agentStore';
 import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
@@ -110,7 +111,7 @@ export function SidebarRail() {
                   offline && 'opacity-60',
                 )}
               >
-                <Server className="h-4 w-4 text-neutral-400" />
+                <MachineIconGlyph machineId={m.id} className="h-4 w-4 text-neutral-400" />
                 <span className="absolute -bottom-0.5 -right-0.5">
                   <StatusDot status={m.status === 'online' ? 'online' : 'offline'} />
                 </span>
