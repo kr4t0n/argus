@@ -152,15 +152,23 @@ export function parseUsage(
       }
       break;
 
-    case 'codex':
+    case 'codex': {
+      // OpenAI's Responses API reports `input_tokens` as the TOTAL prompt
+      // (cached + fresh), with `cached_input_tokens` as the cached subset.
+      // Anthropic's claude-code reports them as disjoint buckets. Normalize
+      // codex to the disjoint convention so `inputTokens + cacheReadTokens`
+      // is a meaningful sum across every adapter.
+      const totalIn = pickNumber(usage, 'input_tokens');
+      const cached = pickNumber(usage, 'cached_input_tokens');
       parsed = {
-        inputTokens: pickNumber(usage, 'input_tokens'),
+        inputTokens: Math.max(0, totalIn - cached),
         outputTokens: pickNumber(usage, 'output_tokens'),
-        // OpenAI exposes only "cached input"; no cache-write concept.
-        cacheReadTokens: pickNumber(usage, 'cached_input_tokens'),
+        cacheReadTokens: cached,
+        // OpenAI has no cache-write concept.
         cacheWriteTokens: 0,
       };
       break;
+    }
 
     case 'cursor-cli':
       parsed = {
