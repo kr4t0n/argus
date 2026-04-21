@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { PanelRightClose, PanelRightOpen, Square } from 'lucide-react';
+import { Menu, PanelRightClose, PanelRightOpen, Square } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
@@ -27,6 +27,7 @@ export function SessionPanel() {
     entry?.session ? s.agents[entry.session.agentId] : undefined,
   );
 
+  const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const contextPaneOpen = useUIStore((s) => s.contextPaneOpen);
   const toggleContextPane = useUIStore((s) => s.toggleContextPane);
   const contextPaneWidth = useUIStore((s) => s.contextPaneWidth);
@@ -59,7 +60,14 @@ export function SessionPanel() {
 
   if (!sessionId) {
     return (
-      <div className="flex h-full items-center justify-center text-neutral-500 text-sm">
+      <div className="relative flex h-full items-center justify-center text-neutral-500 text-sm">
+        <button
+          onClick={toggleSidebar}
+          className="absolute left-4 top-3.5 md:hidden text-neutral-500 hover:text-neutral-200 transition-colors"
+          title="show sidebar"
+        >
+          <Menu className="h-4 w-4" />
+        </button>
         Select or start a session from the left.
       </div>
     );
@@ -94,6 +102,13 @@ export function SessionPanel() {
     <div className="flex h-full">
       <div className="flex flex-col flex-1 min-w-0">
         <div className="h-12 shrink-0 flex items-center gap-3 px-5 border-b border-neutral-900">
+          <button
+            onClick={toggleSidebar}
+            className="md:hidden text-neutral-500 hover:text-neutral-200 transition-colors"
+            title="show sidebar"
+          >
+            <Menu className="h-4 w-4" />
+          </button>
           {agent && <AgentTypeIcon type={agent.type} />}
           <div className="flex items-center gap-2 min-w-0">
             <div className="text-sm font-medium text-neutral-100 truncate">
@@ -120,6 +135,7 @@ export function SessionPanel() {
               variant="ghost"
               onClick={toggleContextPane}
               title={contextPaneOpen ? 'hide context' : 'show context'}
+              className="hidden md:inline-flex"
             >
               {contextPaneOpen ? (
                 <PanelRightClose className="h-3.5 w-3.5" />

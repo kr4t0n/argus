@@ -6,8 +6,11 @@ import { useAuthStore } from './stores/authStore';
 import { useAgentStore } from './stores/agentStore';
 import { useMachineStore } from './stores/machineStore';
 import { useSessionStore } from './stores/sessionStore';
+import { useSidecarUpdateStore } from './stores/sidecarUpdateStore';
 import { ensureSocket, resetSocket, subscribeHandler } from './lib/ws';
 import { api } from './lib/api';
+import { migrateLocalMachineIconsToServer } from './lib/migrateMachineIcons';
+import { SidecarUpdateToasts } from './components/SidecarUpdateToasts';
 
 function ProtectedRoutes() {
   const token = useAuthStore((s) => s.token);
@@ -47,10 +50,16 @@ export default function App() {
 
   useEffect(() => {
     if (!token) return;
-    loadMachines();
+    // Kick off loads first, then run the one-shot localStorage →
+    // server migration for machine icons once the machines list has
+    // landed (the migration needs to know which machineIds are still
+    // valid to avoid 404-spamming for destroyed hosts).
+    loadMachines().then(() => migrateLocalMachineIconsToServer());
     loadAgents();
     loadSessions();
     const socket = ensureSocket();
+
+    const updateStore = useSidecarUpdateStore.getState();
 
     const unsub = subscribeHandler({
       onMachineUpsert: upsertMachine,
@@ -68,6 +77,21 @@ export default function App() {
       onCommandCreated: upsertCommand,
       onCommandUpdated: upsertCommand,
       onChunk: appendChunk,
+      onSidecarUpdateStarted: (p) =>
+        updateStore.setStarted(p.machineId, p.fromVersion),
+      onSidecarUpdateDownloaded: (p) =>
+        updateStore.setDownloaded(
+          p.machineId,
+          p.fromVersion,
+          p.toVersion,
+          p.restartMode,
+        ),
+      onSidecarUpdateCompleted: (p) =>
+        updateStore.setCompleted(p.machineId, p.fromVersion, p.toVersion),
+      onSidecarUpdateFailed: (p) =>
+        updateStore.setFailed(p.machineId, p.fromVersion, p.reason),
+      onSidecarUpdateBatchProgress: (p) =>
+        useSidecarUpdateStore.getState().updateBatch(p.batchId, p.plan),
       onConnect: async () => {
         // re-sync machines/agents/sessions + backfill active sessions.
         await Promise.all([loadMachines(), loadAgents(), loadSessions()]).catch(() => {});
@@ -92,9 +116,12 @@ export default function App() {
   }, [token]);
 
   return (
-    <Routes location={location}>
-      <Route path="/login" element={<Login />} />
-      <Route path="/*" element={<ProtectedRoutes />} />
-    </Routes>
+    <>
+      <Routes location={location}>
+        <Route path="/login" element={<Login />} />
+        <Route path="/*" element={<ProtectedRoutes />} />
+      </Routes>
+      <SidecarUpdateToasts />
+    </>
   );
 }

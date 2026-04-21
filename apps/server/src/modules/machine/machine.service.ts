@@ -25,6 +25,7 @@ import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 import { FSService } from './fs.service';
+import { SidecarUpdateService } from './sidecar-update.service';
 
 const CONSUMER = 'server-1';
 const STALE_AFTER_MS = 30_000;
@@ -63,6 +64,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     private readonly redis: RedisService,
     private readonly gateway: StreamGateway,
     private readonly fs: FSService,
+    private readonly sidecarUpdate: SidecarUpdateService,
   ) {}
 
   async onModuleInit() {
@@ -99,6 +101,35 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     });
     if (!row) throw new NotFoundException('machine not found');
     return MachineService.toDto(row, row._count.agents);
+  }
+
+  /**
+   * Persist the user's icon choice for `machineId` and broadcast the
+   * resulting MachineDTO so every connected dashboard refreshes the
+   * glyph in lockstep. We accept null as "reset to default" rather
+   * than introducing a separate DELETE endpoint — the picker only
+   * exposes "pick a glyph", and a future "reset" affordance can hit
+   * the same endpoint with `{ iconKey: null }`.
+   */
+  async setIcon(machineId: string, iconKey: string | null): Promise<MachineDTO> {
+    const trimmed =
+      typeof iconKey === 'string' ? iconKey.trim() : null;
+    const next = trimmed ? trimmed : null;
+
+    const exists = await this.prisma.machine.findUnique({
+      where: { id: machineId },
+      select: { id: true },
+    });
+    if (!exists) throw new NotFoundException('machine not found');
+
+    const updated = await this.prisma.machine.update({
+      where: { id: machineId },
+      data: { iconKey: next },
+      include: { _count: { select: { agents: true } } },
+    });
+    const dto = MachineService.toDto(updated, updated._count.agents);
+    this.gateway.emitMachineUpsert(dto);
+    return dto;
   }
 
   async listAgentsForMachine(machineId: string): Promise<AgentDTO[]> {
@@ -320,6 +351,10 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(
           `machine-register ${ev.machineId} (${ev.name} / ${ev.os}/${ev.arch}, sidecar ${ev.sidecarVersion}, ${adapters.length} adapter(s))`,
         );
+        // If a remote-triggered self-update was waiting for this
+        // machine to come back on the new binary, fire `completed`
+        // and resolve the bulk-loop promise.
+        this.sidecarUpdate.observeMachineRegister(ev.machineId, ev.sidecarVersion);
         await this.syncAgents(ev.machineId);
         break;
       }
@@ -429,6 +464,15 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         this.gateway.emitFSChanged({ agentId: ev.agentId, path: ev.path });
         break;
       }
+      case 'sidecar-update-started':
+      case 'sidecar-update-downloaded':
+      case 'sidecar-update-failed': {
+        // Three-phase progress for a remote-triggered self-update.
+        // SidecarUpdateService fans this out to the dashboard and
+        // resolves the per-machine + bulk-loop promises.
+        this.sidecarUpdate.handleUpdateEvent(ev);
+        break;
+      }
     }
   }
 
@@ -499,6 +543,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
       registeredAt: m.registeredAt.toISOString(),
       archivedAt: m.archivedAt ? m.archivedAt.toISOString() : null,
       agentCount,
+      iconKey: m.iconKey ?? null,
     };
   }
 

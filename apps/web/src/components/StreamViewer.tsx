@@ -46,7 +46,7 @@ export function StreamViewer({ commands, chunks, running, workingDir }: Props) {
     <div
       ref={ref}
       onScroll={onScroll}
-      className="h-full overflow-y-auto px-6 pb-6"
+      className="h-full overflow-y-auto overflow-x-hidden px-6 pb-6"
     >
       <div className="mx-auto max-w-3xl">
         {grouped.length === 0 && (
@@ -162,6 +162,13 @@ function CommandBlock({
       const band = bandRef.current;
       const scroller = band ? findScrollParent(band) : null;
       if (!band || !scroller) return next;
+      // Skip the snap when the user is browsing history (scrolled away
+      // from the live edge). Snapping to this turn's band would yank
+      // their view to a turn they didn't ask to visit. The 48px mirrors
+      // the StreamViewer `stickBottom` threshold.
+      const nearBottom =
+        scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48;
+      if (!nearBottom) return next;
       // `position: sticky` doesn't change layout, but its current PAINT
       // position can mask the band's natural in-flow location once it's
       // stuck at top:0. Toggle to `static` for a beat to read the real
@@ -265,7 +272,7 @@ function findScrollParent(el: HTMLElement): HTMLElement | null {
 function UserMessage({ text }: { text: string }) {
   return (
     <div className="flex justify-end">
-      <div className="max-w-[80%] rounded-2xl bg-neutral-800/80 px-4 py-2 text-sm text-neutral-100 whitespace-pre-wrap leading-relaxed">
+      <div className="max-h-36 max-w-[80%] overflow-y-auto no-scrollbar rounded-2xl bg-neutral-800/80 px-4 py-2 text-sm text-neutral-100 whitespace-pre-wrap leading-relaxed">
         {text}
       </div>
     </div>

@@ -49,6 +49,11 @@ export interface MachineDTO {
   archivedAt: string | null;
   /** Convenience count for the sidebar; full agent list lives in agentStore. */
   agentCount: number;
+  /** User-chosen icon glyph key (e.g. "server-cog"). Null = use the
+   *  frontend's default. Set via PATCH /machines/:id/icon — the
+   *  server stores it on the machine row so all dashboards see the
+   *  same icon for the same host. */
+  iconKey: string | null;
 }
 
 export interface AgentDTO {
@@ -183,4 +188,55 @@ export interface TerminalClosedMessage {
 export interface FSListResponse {
   path: string;
   entries: FSEntry[];
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Sidecar version + remote update
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Latest tag the server resolved from GitHub Releases (cached server-side
+ * for ~30 min). `current` is the version this machine's sidecar reported
+ * at register time. `updateAvailable` is a convenience: true when both
+ * are non-empty and they differ.
+ */
+export interface SidecarVersionInfo {
+  current: string;
+  latest: string | null;
+  /** When the server last successfully fetched the latest tag (ISO). */
+  latestCheckedAt: string | null;
+  updateAvailable: boolean;
+}
+
+/** 202 ACCEPTED body for POST /machines/:id/sidecar/update. The
+ *  dashboard listens for matching sidecar-update-* WS events keyed on
+ *  `requestId`; the request returns immediately and the loop closes
+ *  when the new sidecar re-registers with `toVersion`. */
+export interface SidecarUpdateAccepted {
+  requestId: string;
+  machineId: string;
+  fromVersion: string;
+}
+
+/** One row in the bulk update plan. Returned both at acceptance time
+ *  (everything `queued` or `skipped`) and via batch-progress updates. */
+export interface SidecarUpdatePlanEntry {
+  machineId: string;
+  machineName: string;
+  fromVersion: string;
+  status:
+    | 'queued'
+    | 'in-progress'
+    | 'completed'
+    | 'failed'
+    | 'skipped-offline'
+    | 'skipped-already-current';
+  toVersion?: string;
+  error?: string;
+}
+
+/** 202 body for POST /machines/sidecar/update-all. */
+export interface SidecarUpdateBatchAccepted {
+  batchId: string;
+  plan: SidecarUpdatePlanEntry[];
 }

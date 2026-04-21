@@ -3,13 +3,15 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   Archive,
   ArchiveRestore,
+  ArrowUpCircle,
   ChevronRight,
   Eye,
   EyeOff,
   LogOut,
+  MoreVertical,
+  PanelLeftClose,
   Pencil,
   Plus,
-  Server,
 } from 'lucide-react';
 import type { AgentDTO, MachineDTO, SessionDTO } from '@argus/shared-types';
 import { useAgentStore } from '../stores/agentStore';
@@ -17,10 +19,13 @@ import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
 import { useAuthStore } from '../stores/authStore';
+import { useSidecarUpdateStore } from '../stores/sidecarUpdateStore';
 import { cn, relativeTime } from '../lib/utils';
 import { StatusDot } from './ui/StatusDot';
 import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
 import { CreateAgentPopover } from './CreateAgentPopover';
+import { BulkUpdateModal } from './BulkUpdateModal';
+import { MachineIcon } from './MachineIcon';
 import { api } from '../lib/api';
 
 export function Sidebar() {
@@ -37,6 +42,7 @@ export function Sidebar() {
   const showArchivedAgents = useUIStore((s) => s.showArchivedAgents);
   const toggleShowArchivedAgents = useUIStore((s) => s.toggleShowArchivedAgents);
   const upsertAgent = useAgentStore((s) => s.upsert);
+  const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const logout = useAuthStore((s) => s.logout);
   const user = useAuthStore((s) => s.user);
 
@@ -61,13 +67,22 @@ export function Sidebar() {
           <div className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
           <span className="text-sm font-semibold tracking-tight">Argus</span>
         </div>
-        <button
-          onClick={logout}
-          className="text-neutral-500 hover:text-neutral-200 transition-colors"
-          title={user?.email ?? 'sign out'}
-        >
-          <LogOut className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={toggleSidebar}
+            className="text-neutral-500 hover:text-neutral-200 transition-colors"
+            title="hide sidebar"
+          >
+            <PanelLeftClose className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={logout}
+            className="text-neutral-500 hover:text-neutral-200 transition-colors"
+            title={user?.email ?? 'sign out'}
+          >
+            <LogOut className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto py-2 px-1">
@@ -165,8 +180,16 @@ function MachineList() {
 
   return (
     <div className="shrink-0 py-1.5 px-1 max-h-[40%] overflow-y-auto">
-      <div className="px-3 py-1 text-[10px] uppercase tracking-widest text-neutral-600">
-        machines
+      <div className="group flex items-center px-3 py-1">
+        <span className="text-[10px] uppercase tracking-widest text-neutral-600">
+          machines
+        </span>
+        <span className="ml-1.5 text-[10px] text-neutral-700">
+          ({order.length})
+        </span>
+        <span className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+          <MachinesHeaderMenu />
+        </span>
       </div>
       {order.map((id) => {
         const m = machines[id];
@@ -181,6 +204,73 @@ function MachineList() {
           />
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * Top-of-machines kebab. Currently exposes "Update all sidecars …" only;
+ * we keep it as a menu so future fleet-wide actions (collect logs,
+ * health check, …) have an obvious home.
+ *
+ * Clicking the action opens BulkUpdateModal, which fetches the current
+ * plan from POST /machines/sidecar/update-all (the server returns the
+ * full plan with each row's pre-flight `status` set), lets the user
+ * confirm, and then either confirms execution or cancels the batch.
+ */
+function MachinesHeaderMenu() {
+  const [open, setOpen] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const batch = useSidecarUpdateStore((s) => s.batch);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [open]);
+
+  // While a bulk update is in flight (we have a non-dismissed batch),
+  // we disable the entry to discourage starting a parallel run; the
+  // server's single-flight per machine would catch overlap anyway.
+  const batchInFlight =
+    !!batch &&
+    !batch.dismissed &&
+    batch.plan.some((p) => p.status === 'queued' || p.status === 'in-progress');
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="rounded p-0.5 text-neutral-500 hover:bg-neutral-900 hover:text-neutral-200"
+        title="machine actions"
+      >
+        <MoreVertical className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-1 w-56 overflow-hidden rounded-md border border-neutral-800 bg-neutral-950 shadow-lg">
+          <button
+            onClick={() => {
+              setOpen(false);
+              setShowModal(true);
+            }}
+            disabled={batchInFlight}
+            className={cn(
+              'flex w-full items-center gap-2 px-3 py-2 text-left text-xs',
+              'text-neutral-200 hover:bg-neutral-900',
+              'disabled:cursor-not-allowed disabled:opacity-40',
+            )}
+            title={batchInFlight ? 'a bulk update is already in progress' : undefined}
+          >
+            <ArrowUpCircle className="h-3.5 w-3.5" />
+            Update all sidecars…
+          </button>
+        </div>
+      )}
+      {showModal && <BulkUpdateModal onClose={() => setShowModal(false)} />}
     </div>
   );
 }
@@ -215,7 +305,7 @@ function MachineRow({
         offline && 'opacity-60',
       )}
     >
-      <Server className="h-3 w-3 shrink-0 text-neutral-500" />
+      <MachineIcon machineId={machine.id} className="text-neutral-500" />
       <Link
         to={`/machines/${machine.id}`}
         className="min-w-0 flex-1 outline-none"
@@ -511,6 +601,20 @@ function AgentRow({
             <StatusDot status={agent.status} />
           </span>
         </button>
+        {/* New-session action, hover-only. Hidden when the agent is
+            archived or offline since the create would be rejected anyway. */}
+        {!archived && agent.status !== 'offline' && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onNewSession();
+            }}
+            className="flex items-center px-1.5 text-neutral-600 opacity-0 transition-colors hover:text-neutral-200 group-hover:opacity-100"
+            title="new session"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        )}
         {/* Per-agent archive toggle (for the AGENT itself). */}
         <button
           onClick={toggleAgentArchive}
@@ -573,28 +677,6 @@ function AgentRow({
           {visibleSessions.map((s) => (
             <SessionRow key={s.id} session={s} active={activeSessionId === s.id} />
           ))}
-          {!showArchived && hiddenArchivedCount > 0 && (
-            <button
-              onClick={onToggleArchived}
-              className="flex items-center gap-1.5 px-2 py-1 w-full text-left text-[11px] rounded-md text-neutral-600 hover:text-neutral-300 hover:bg-neutral-900 transition-colors"
-            >
-              <Archive className="h-3 w-3" />
-              {hiddenArchivedCount} archived
-            </button>
-          )}
-          <button
-            onClick={onNewSession}
-            disabled={agent.status === 'offline' || archived}
-            className={cn(
-              'flex items-center gap-1.5 px-2 py-1 w-full text-left text-xs rounded-md transition-colors',
-              'text-neutral-500 hover:text-neutral-200 hover:bg-neutral-900',
-              'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent',
-            )}
-            title={archived ? 'restore the agent before starting a new session' : undefined}
-          >
-            <Plus className="h-3 w-3" />
-            new session
-          </button>
         </div>
       )}
     </div>

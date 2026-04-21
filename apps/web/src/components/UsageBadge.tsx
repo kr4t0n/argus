@@ -23,7 +23,12 @@ export function UsageBadge({
   // The two visible numbers — kept terse so the badge fits on the same
   // line as the title even on a narrow window. Cache + cost go in the
   // tooltip because they're "drill-down" detail, not glanceable.
-  const inOut = `↑ ${formatTokensShort(total.inputTokens)} ↓ ${formatTokensShort(total.outputTokens)}`;
+  // ↑ rolls in cache reads + writes since both are prompt-side tokens;
+  // showing only `inputTokens` understates real usage by ~10x once
+  // caching kicks in (claude-code, cursor). Codex reports everything
+  // under inputTokens already, so this sum is a no-op there.
+  const promptTotal = total.inputTokens + total.cacheReadTokens + total.cacheWriteTokens;
+  const inOut = `↑ ${formatTokensShort(promptTotal)} ↓ ${formatTokensShort(total.outputTokens)}`;
 
   return (
     <Tooltip content={<UsageBreakdown u={total} />}>

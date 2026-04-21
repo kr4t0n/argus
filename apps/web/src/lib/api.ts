@@ -10,6 +10,9 @@ import type {
   OpenTerminalRequest,
   ResultChunkDTO,
   SessionDTO,
+  SidecarUpdateAccepted,
+  SidecarUpdateBatchAccepted,
+  SidecarVersionInfo,
   TerminalDTO,
 } from '@argus/shared-types';
 import { getToken } from './auth';
@@ -129,6 +132,28 @@ export const api = {
     http<TerminalDTO[]>(`/agents/${agentId}/terminals`),
   closeTerminal: (id: string) =>
     http<TerminalDTO>(`/terminals/${id}`, { method: 'DELETE' }),
+
+  // Sidecar version + remote update
+  getSidecarVersion: (machineId: string) =>
+    http<SidecarVersionInfo>(`/machines/${machineId}/sidecar/version`),
+  updateSidecar: (machineId: string) =>
+    http<SidecarUpdateAccepted>(`/machines/${machineId}/sidecar/update`, {
+      method: 'POST',
+    }),
+  updateAllSidecars: () =>
+    http<SidecarUpdateBatchAccepted>(`/machines/sidecar/update-all`, {
+      method: 'POST',
+    }),
+
+  // Per-machine icon. Pass `null` to reset to the frontend default.
+  // The server emits machine:upsert on success so every connected
+  // dashboard refreshes the glyph; we still optimistically update
+  // machineStore at the call site to avoid the round-trip blink.
+  setMachineIcon: (machineId: string, iconKey: string | null) =>
+    http<MachineDTO>(`/machines/${machineId}/icon`, {
+      method: 'PATCH',
+      body: JSON.stringify({ iconKey }),
+    }),
 
   // Filesystem browsing (right-pane tree)
   listAgentDir: (agentId: string, path: string, showAll: boolean) => {

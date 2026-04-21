@@ -68,11 +68,14 @@ export function selectAgentsForMachine(
 }
 
 function sortOrder(order: string[], agents: Record<string, AgentDTO>): string[] {
+  // Only reachable-vs-offline matters for ordering. Bucketing `busy` /
+  // `error` alongside `online` keeps a row from jumping every time the
+  // user sends a command (online → busy → online) or an adapter hiccups.
   const statusWeight: Record<AgentDTO['status'], number> = {
     online: 0,
-    busy: 1,
-    error: 2,
-    offline: 3,
+    busy: 0,
+    error: 0,
+    offline: 1,
   };
   return [...new Set(order)].sort((aId, bId) => {
     const a = agents[aId];
