@@ -113,6 +113,20 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ### `packages/sidecar/internal/`
 
+- `cmd/sidecar/` — entrypoint and CLI. `main.go` dispatches to subcommands
+  (`init`, `update`, `version`, `start`/`stop`/`restart`/`status`, plus the
+  bare/`run` foreground daemon). `daemonize.go` re-execs the binary with a
+  `__daemon` sentinel arg under `setsid` and dups stdout/stderr onto
+  `$XDG_STATE_HOME/argus/sidecar.log` for `start`. `pidfile.go` resolves the
+  pidfile + log path under `$XDG_STATE_HOME/argus/` and takes an exclusive
+  `flock(2)` that is the *single source of truth* for "is a daemon running?"
+  — both the foreground and the spawned child grab it at boot, so two
+  sidecars can never share one cache (and therefore one `machineId`).
+  `control.go` implements `stop` (SIGTERM → wait `--timeout` → SIGKILL),
+  `status` (LSB exit codes: 0 running, 1 stale pidfile, 3 stopped), and
+  `restart`. None of the control verbs touch Redis or the server — they
+  operate purely on the local pidfile + process table, which keeps them
+  fast and useful even when the network is down.
 - `protocol/` — wire structs (mirror of shared-types).
 - `machine/` — daemon, on-disk cache, and adapter discovery.
   - `cache.go` persists `~/.config/argus/sidecar.json` (machine id,

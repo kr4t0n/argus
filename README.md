@@ -195,6 +195,42 @@ argus-sidecar init \
   --token "$SIDECAR_LINK_TOKEN"   # only needed if you set the server-side token
 ```
 
+##### Daemon control
+
+For interactive use, the sidecar ships its own background-mode wrapper —
+no `systemd`/`launchd` unit required to keep it alive after you close the
+terminal:
+
+```bash
+argus-sidecar start               # detach + log to ~/.local/state/argus/sidecar.log
+argus-sidecar status              # running pid, uptime, configured agents, log path
+argus-sidecar restart             # graceful stop + start
+argus-sidecar stop                # SIGTERM, then SIGKILL after --timeout (default 10s)
+argus-sidecar stop --force        # SIGKILL immediately
+```
+
+State files (`sidecar.pid`, `sidecar.log`) live under
+`$XDG_STATE_HOME/argus/` (default: `~/.local/state/argus/`); both paths are
+overridable via `--pid-file` / `--log-file`. The bare `argus-sidecar`
+invocation (and the explicit `argus-sidecar run` alias) is unchanged and
+remains the right `ExecStart=` for `systemd`/`launchd` units. Both modes
+take the same advisory `flock(2)` on the pidfile, so you can't accidentally
+run two daemons against one cache (which would share a `machineId` and
+confuse the server).
+
+The log file is append-only — wire it into `newsyslog` (macOS) or
+`logrotate` (Linux) if you want rotation. Example `logrotate`:
+
+```
+~/.local/state/argus/sidecar.log {
+    weekly
+    rotate 4
+    missingok
+    notifempty
+    copytruncate
+}
+```
+
 On boot the daemon:
 
 1. Probes `PATH` for every adapter it knows about (`claude`, `codex`,
