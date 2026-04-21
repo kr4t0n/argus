@@ -598,15 +598,6 @@ function AgentRow({
           {visibleSessions.map((s) => (
             <SessionRow key={s.id} session={s} active={activeSessionId === s.id} />
           ))}
-          {!showArchived && hiddenArchivedCount > 0 && (
-            <button
-              onClick={onToggleArchived}
-              className="flex items-center gap-1.5 px-2 py-1 w-full text-left text-[11px] rounded-md text-neutral-600 hover:text-neutral-300 hover:bg-neutral-900 transition-colors"
-            >
-              <Archive className="h-3 w-3" />
-              {hiddenArchivedCount} archived
-            </button>
-          )}
         </div>
       )}
     </div>
