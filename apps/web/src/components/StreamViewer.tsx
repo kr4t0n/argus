@@ -46,7 +46,7 @@ export function StreamViewer({ commands, chunks, running, workingDir }: Props) {
     <div
       ref={ref}
       onScroll={onScroll}
-      className="h-full overflow-y-auto px-6 pb-6"
+      className="h-full overflow-y-auto overflow-x-hidden px-6 pb-6"
     >
       <div className="mx-auto max-w-3xl">
         {grouped.length === 0 && (

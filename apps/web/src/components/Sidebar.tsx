@@ -10,7 +10,6 @@ import {
   PanelLeftClose,
   Pencil,
   Plus,
-  Server,
 } from 'lucide-react';
 import type { AgentDTO, MachineDTO, SessionDTO } from '@argus/shared-types';
 import { useAgentStore } from '../stores/agentStore';
@@ -22,6 +21,7 @@ import { cn, relativeTime } from '../lib/utils';
 import { StatusDot } from './ui/StatusDot';
 import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
 import { CreateAgentPopover } from './CreateAgentPopover';
+import { MachineIcon } from './MachineIcon';
 import { api } from '../lib/api';
 
 export function Sidebar() {
@@ -226,7 +226,7 @@ function MachineRow({
         offline && 'opacity-60',
       )}
     >
-      <Server className="h-3 w-3 shrink-0 text-neutral-500" />
+      <MachineIcon machineId={machine.id} className="text-neutral-500" />
       <Link
         to={`/machines/${machine.id}`}
         className="min-w-0 flex-1 outline-none"
