@@ -1,13 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import {
-  ArrowUpCircle,
-  Loader2,
-  Menu,
-  MoreVertical,
-  Server,
-  Trash2,
-} from 'lucide-react';
+import { ArrowUpCircle, Loader2, Menu, Server, Trash2 } from 'lucide-react';
 import type { AgentDTO, AvailableAdapter } from '@argus/shared-types';
 import { useMachineStore } from '../stores/machineStore';
 import { useAgentStore } from '../stores/agentStore';
@@ -107,7 +100,7 @@ export function MachinePanel() {
           <span className="text-xs text-neutral-500 truncate">
             · {machine.os}/{machine.arch} · sidecar {machine.sidecarVersion}
           </span>
-          <SidecarVersionBadge machineId={machineId} />
+          <SidecarVersionBadge machineId={machineId} machineName={machine.name} />
           <StatusDot status={machine.status === 'online' ? 'online' : 'offline'} />
         </div>
         <div className="ml-auto flex items-center gap-2">
@@ -128,7 +121,6 @@ export function MachinePanel() {
               />
             )}
           </div>
-          <MachineKebab machineId={machineId} machineName={machine.name} />
         </div>
       </div>
 
@@ -257,29 +249,11 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
 }
 
 /**
- * Small "update available" badge next to the machine title. Reads from
- * the cached version info populated by MachinePanel's effect — we don't
- * fetch here so multiple consumers of the badge can share the cache.
- */
-function SidecarVersionBadge({ machineId }: { machineId: string }) {
-  const info = useSidecarUpdateStore((s) => s.versions[machineId]);
-  if (!info?.updateAvailable || !info.latest) return null;
-  return (
-    <span
-      title={`new sidecar available: ${info.latest} (current: ${info.current})`}
-      className="inline-flex items-center gap-1 rounded-full border border-emerald-700/60 bg-emerald-900/30 px-1.5 py-[1px] text-[10px] font-medium text-emerald-300"
-    >
-      <ArrowUpCircle className="h-3 w-3" />
-      {info.latest}
-    </span>
-  );
-}
-
-/**
- * Per-machine action menu. Today the only entry is "Update sidecar"; we
- * keep it as a true menu rather than an inline button so the surface
- * stays uncluttered as we add more host-level actions (logs, restart,
- * remove, …).
+ * Clickable "update available" badge next to the machine title. Reads
+ * from the cached version info populated by MachinePanel's effect (we
+ * don't fetch here so multiple consumers share the cache) and doubles
+ * as the trigger for the remote sidecar update — clicking it kicks off
+ * the same flow that used to live behind the kebab menu.
  *
  * Update flow:
  *   1. user clicks → confirm dialog
@@ -287,9 +261,11 @@ function SidecarVersionBadge({ machineId }: { machineId: string }) {
  *   3. store.begin() seeds a 'pending' toast
  *   4. WS lifecycle events flip the toast through started → downloaded
  *      → completed (or failed). MachinePanel's useEffect refetches the
- *      version badge once the machine re-registers with the new tag.
+ *      version badge once the machine re-registers with the new tag,
+ *      which causes this component to unmount once `updateAvailable`
+ *      flips back to false.
  */
-function MachineKebab({
+function SidecarVersionBadge({
   machineId,
   machineName,
 }: {
@@ -297,46 +273,31 @@ function MachineKebab({
   machineName: string;
 }) {
   const machine = useMachineStore((s) => s.machines[machineId]);
-  const versionInfo = useSidecarUpdateStore((s) => s.versions[machineId]);
+  const info = useSidecarUpdateStore((s) => s.versions[machineId]);
   const update = useSidecarUpdateStore((s) => s.updates[machineId]);
   const begin = useSidecarUpdateStore((s) => s.begin);
   const setFailed = useSidecarUpdateStore((s) => s.setFailed);
 
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
-    };
-    window.addEventListener('mousedown', close);
-    return () => window.removeEventListener('mousedown', close);
-  }, [open]);
+  if (!info?.updateAvailable || !info.latest) return null;
 
   const offline = machine?.status === 'offline';
-  // We treat anything that hasn't reached completed/failed as "in
-  // flight" — the server's single-flight guard would reject a duplicate
-  // anyway, but disabling the menu item gives clearer feedback.
+  // Anything pre-completed/pre-failed counts as "in flight" — the
+  // server's single-flight guard would reject a duplicate anyway, but
+  // disabling the badge gives clearer feedback.
   const inFlight =
-    !!update &&
-    update.phase !== 'completed' &&
-    update.phase !== 'failed';
+    !!update && update.phase !== 'completed' && update.phase !== 'failed';
 
   async function doUpdate() {
-    setOpen(false);
-    const current = versionInfo?.current ?? machine?.sidecarVersion ?? 'unknown';
-    const latest = versionInfo?.latest;
-    const msg = latest
-      ? `Update sidecar on "${machineName}" from ${current} to ${latest}?\n\nThe sidecar will download the new binary and restart. Active sessions stay connected (the daemon re-attaches on restart).`
-      : `Update sidecar on "${machineName}"?\n\nThe sidecar will check GitHub for the latest release, download it, and restart. Active sessions stay connected.`;
+    if (offline || inFlight || !info?.latest) return;
+    const current = info.current ?? machine?.sidecarVersion ?? 'unknown';
+    const msg = `Update sidecar on "${machineName}" from ${current} to ${info.latest}?\n\nThe sidecar will download the new binary and restart. Active sessions stay connected (the daemon re-attaches on restart).`;
     if (!confirm(msg)) return;
 
     begin(machineId, machineName, current);
     try {
       await api.updateSidecar(machineId);
-      // Server returns 202 immediately — the toast progression is
-      // driven entirely by WS lifecycle events from here on.
+      // Server returns 202 immediately — toast progression is driven
+      // entirely by WS lifecycle events from here on.
     } catch (e) {
       const reason =
         e instanceof ApiError ? e.message : 'failed to start update';
@@ -344,48 +305,31 @@ function MachineKebab({
     }
   }
 
+  const title = offline
+    ? `machine is offline — sidecar update ${info.latest} available`
+    : inFlight
+      ? `update to ${info.latest} in progress…`
+      : `click to update sidecar to ${info.latest} (current: ${info.current})`;
+
   return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="rounded p-1 text-neutral-500 hover:bg-neutral-900 hover:text-neutral-200"
-        title="machine actions"
-      >
-        <MoreVertical className="h-4 w-4" />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 w-56 overflow-hidden rounded-md border border-neutral-800 bg-neutral-950 shadow-lg">
-          <button
-            onClick={doUpdate}
-            disabled={offline || inFlight}
-            className={cn(
-              'flex w-full items-center gap-2 px-3 py-2 text-left text-xs',
-              'text-neutral-200 hover:bg-neutral-900',
-              'disabled:cursor-not-allowed disabled:opacity-40',
-            )}
-            title={
-              offline
-                ? 'machine is offline'
-                : inFlight
-                  ? 'update already in progress'
-                  : undefined
-            }
-          >
-            {inFlight ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <ArrowUpCircle className="h-3.5 w-3.5" />
-            )}
-            <span className="flex-1">Update sidecar</span>
-            {versionInfo?.updateAvailable && versionInfo.latest && (
-              <span className="font-mono text-[10px] text-emerald-400">
-                {versionInfo.latest}
-              </span>
-            )}
-          </button>
-        </div>
+    <button
+      type="button"
+      onClick={doUpdate}
+      disabled={offline || inFlight}
+      title={title}
+      className={cn(
+        'inline-flex items-center gap-1 rounded-full border border-emerald-700/60 bg-emerald-900/30 px-1.5 py-[1px] text-[10px] font-medium text-emerald-300 transition-colors',
+        'hover:border-emerald-500/70 hover:bg-emerald-800/50 hover:text-emerald-100',
+        'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-emerald-700/60 disabled:hover:bg-emerald-900/30 disabled:hover:text-emerald-300',
       )}
-    </div>
+    >
+      {inFlight ? (
+        <Loader2 className="h-3 w-3 animate-spin" />
+      ) : (
+        <ArrowUpCircle className="h-3 w-3" />
+      )}
+      {info.latest}
+    </button>
   );
 }
 
