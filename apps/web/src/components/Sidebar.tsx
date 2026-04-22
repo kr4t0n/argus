@@ -592,11 +592,6 @@ function AgentRow({
             {agent.name || agent.id}{' '}
             <span className="text-neutral-500">· {agent.machineName}</span>
           </span>
-          {visibleSessions.length > 0 && (
-            <span className="ml-auto text-[10px] text-neutral-500">
-              {visibleSessions.length}
-            </span>
-          )}
         </button>
         {/* New-session action, hover-only. Hidden when the agent is
             archived or offline since the create would be rejected anyway. */}
