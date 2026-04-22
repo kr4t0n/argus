@@ -392,6 +392,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   scope back to `<image>` only or you'll silently halve cache
   hit-rate (the per-platform scopes won't be read by a combined
   build).
+- **`detectRestartMode` must use `term.IsTerminal`, not `os.ModeCharDevice`**:
+  the daemon child of `argus-sidecar start` has its stdin dup2'd to
+  `/dev/null`, which *is* a character device — so the original
+  `(st.Mode() & os.ModeCharDevice) != 0` check classified backgrounded
+  sidecars as foreground TTYs and silently demoted them to `manual`
+  restart mode. Net effect: remote updates downloaded the new binary
+  but the running process never reloaded. Fixed in
+  `argus-sidecar-v0.1.6` by switching to the proper TTY ioctl via
+  `golang.org/x/term`. Pinned by
+  `internal/machine/update_test.go:TestDetectRestartMode_DaemonChildIsSelf`
+  — if you ever rewrite this with a homegrown FD check, run that test
+  first.
 - **GHA cache budget cap**: GitHub enforces ~10 GB of cache per repo.
   Buildx with `mode=max` writes every intermediate stage; tag pushes
   (`refs/heads/refs/tags/v*`) write under their own ref scope and are
