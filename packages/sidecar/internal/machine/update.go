@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/kyley/argus/sidecar/internal/protocol"
 	"github.com/kyley/argus/sidecar/internal/updater"
 )
@@ -59,10 +61,18 @@ type UpdateState struct {
 //     INVOCATION_ID is a stable systemd marker (since v232);
 //     NOTIFY_SOCKET is set when Type=notify; XPC_SERVICE_NAME is set
 //     for launchd jobs.
-//   - Otherwise, check for a controlling TTY on stdin/stderr. A
-//     daemonized child of `argus-sidecar start` has neither (we
-//     dup2'd /dev/null + the log file), so absence ⇒ background.
-//   - Anything else ⇒ foreground TTY ⇒ manual.
+//   - Otherwise, check whether stdin/stderr is an actual TTY. A
+//     daemonized child of `argus-sidecar start` has its stdio dup2'd
+//     to /dev/null + the log file, so neither is a TTY ⇒ background.
+//   - A live TTY on either fd ⇒ foreground ⇒ manual.
+//
+// IMPORTANT: this used to gate on os.ModeCharDevice, which matches
+// /dev/null too — so the daemon child got mis-classified as a
+// foreground TTY and silently fell into manual mode. The bug shipped
+// in argus-sidecar-v0.1.5 and was caught only by user reports.
+// term.IsTerminal does the proper TIOCGETA/TCGETS ioctl, which is
+// the only reliable cross-platform "is this a TTY?" check. See the
+// regression test in update_test.go (TestDetectRestartMode_DaemonChildIsSelf).
 func detectRestartMode() string {
 	for _, k := range []string{
 		"INVOCATION_ID",
@@ -73,18 +83,14 @@ func detectRestartMode() string {
 			return RestartSupervisor
 		}
 	}
-	if isCharDevice(os.Stdin) || isCharDevice(os.Stderr) {
+	if isTerminal(os.Stdin) || isTerminal(os.Stderr) {
 		return RestartManual
 	}
 	return RestartSelf
 }
 
-func isCharDevice(f *os.File) bool {
-	st, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return (st.Mode() & os.ModeCharDevice) != 0
+func isTerminal(f *os.File) bool {
+	return term.IsTerminal(int(f.Fd()))
 }
 
 // handleUpdateSidecar is the core update flow. Called from
