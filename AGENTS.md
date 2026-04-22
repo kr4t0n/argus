@@ -147,6 +147,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     chunks back on `agent:{id}:result`, heartbeats, and gracefully
     drains on destroy. There is no per-agent process — supervisors are
     goroutines inside the single daemon.
+  - `fs.go` / `fswatch.go` / `git.go` — workingDir browsing for the
+    dashboard's right-pane file tree. `ListDir` jails to the agent's
+    workingDir and applies gitignore (always strips `.git`).
+    `fsWatcher` registers one fsnotify watch per non-ignored dir and
+    coalesces events into 250 ms-debounced fs-changed emits. `git.go`
+    reads `.git/HEAD` (and resolves the worktree-pointer file form)
+    without shelling out to `git` or pulling in a Go git lib — its
+    output is attached to every fs-list response so the dashboard's
+    branch badge refreshes for free on every tree refetch.
 - `bus/` — go-redis wrapper with `Publish`, `EnsureGroup`, `ReadMessage`, `Ack`.
 - `adapter/` — `Adapter` interface and process-level **registry**. Each
   adapter file calls `Register(type, &Plugin{Factory, DefaultBinary})`

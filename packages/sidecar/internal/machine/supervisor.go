@@ -365,6 +365,14 @@ func (s *supervisor) HandleFSList(ctx context.Context, req protocol.FSListReques
 				Gitignored: e.Gitignored,
 			}
 		}
+		// Best-effort: attach git HEAD if the workingDir is a repo.
+		// Only logged on unexpected errors — non-repo workingDirs are
+		// the common case and return (nil, nil).
+		if git, gitErr := ReadGitStatus(s.spec.WorkingDir); gitErr != nil {
+			s.log.Printf("agent %s: read git status: %v", s.spec.AgentID, gitErr)
+		} else if git != nil {
+			resp.Git = git
+		}
 	}
 	if err := s.bus.Publish(ctx, protocol.LifecycleStream(), resp); err != nil {
 		s.log.Printf("agent %s: fs-list-response publish failed: %v", s.spec.AgentID, err)

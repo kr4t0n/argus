@@ -179,6 +179,21 @@ type FSEntry struct {
 	Gitignored bool   `json:"gitignored,omitempty"`
 }
 
+// GitStatus is a snapshot of the workingDir's git HEAD as observed by
+// the sidecar. Branch is empty in detached-HEAD states (rebase,
+// cherry-pick, `git checkout <sha>`); Head is then the short SHA the
+// working tree is parked at. The dashboard uses this to render the
+// branch badge above the file tree.
+//
+// We attach this to FSListResponseEvent rather than a dedicated RPC so
+// every fs-list refresh — manual or fsnotify-driven — also refreshes
+// the badge. See FSListResponseEvent.Git below.
+type GitStatus struct {
+	Branch   string `json:"branch,omitempty"`
+	Head     string `json:"head"`
+	Detached bool   `json:"detached"`
+}
+
 type FSListRequestCommand struct {
 	Kind      string `json:"kind"` // "fs-list"
 	RequestID string `json:"requestId"`
@@ -196,7 +211,10 @@ type FSListResponseEvent struct {
 	Path      string    `json:"path"`
 	Entries   []FSEntry `json:"entries,omitempty"`
 	Error     string    `json:"error,omitempty"`
-	TS        int64     `json:"ts"`
+	// Git is set when the agent's workingDir is a git repo. Cheap to
+	// produce (one .git/HEAD read) so we attach it to every response.
+	Git *GitStatus `json:"git,omitempty"`
+	TS  int64      `json:"ts"`
 }
 
 type FSChangedEvent struct {

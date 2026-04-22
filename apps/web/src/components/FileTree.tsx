@@ -6,10 +6,11 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  GitBranch,
   Loader2,
   RefreshCw,
 } from 'lucide-react';
-import type { FSEntry } from '@argus/shared-types';
+import type { FSEntry, GitStatus } from '@argus/shared-types';
 import { api, ApiError } from '../lib/api';
 import { joinAgent, leaveAgent, subscribeHandler } from '../lib/ws';
 import { cn } from '../lib/utils';
@@ -45,6 +46,12 @@ export function FileTree({ agentId, rootLabel }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']));
   const [showAll, setShowAll] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  // Latest git HEAD snapshot the sidecar attached to an fs-list
+  // response. Refreshed on every successful listing — both manual
+  // refresh and fsnotify-driven refetches — so a `git checkout` flips
+  // the badge as soon as the next refresh lands. `undefined` means we
+  // haven't fetched yet; `null` means the workingDir is not a repo.
+  const [gitStatus, setGitStatus] = useState<GitStatus | null | undefined>(undefined);
 
   // Keep the latest `showAll` in a ref so the `fs:changed` handler
   // (closed over at subscribe time) always refetches with the current
@@ -71,6 +78,10 @@ export function FileTree({ agentId, rootLabel }: Props) {
           next.set(path, { entries: res.entries, loading: false });
           return next;
         });
+        // Sidecar omits `git` for non-repo workingDirs; coerce to null
+        // so we can distinguish "not a repo" (no badge) from "haven't
+        // fetched yet" (still undefined).
+        setGitStatus(res.git ?? null);
       } catch (err) {
         const msg =
           err instanceof ApiError
@@ -97,6 +108,7 @@ export function FileTree({ agentId, rootLabel }: Props) {
     setDirs(new Map());
     setExpanded(new Set(['']));
     setSelected(null);
+    setGitStatus(undefined);
     fetchDir('');
   }, [agentId, fetchDir]);
 
@@ -166,16 +178,19 @@ export function FileTree({ agentId, rootLabel }: Props) {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        {rootLabel ? (
-          <span
-            title={rootLabel}
-            className="truncate font-mono text-[10px] text-neutral-500"
-          >
-            {rootLabel}
-          </span>
-        ) : (
-          <span className="text-[10px] text-neutral-600">root</span>
-        )}
+        <div className="flex min-w-0 items-center gap-1.5">
+          {rootLabel ? (
+            <span
+              title={rootLabel}
+              className="truncate font-mono text-[10px] text-neutral-500"
+            >
+              {rootLabel}
+            </span>
+          ) : (
+            <span className="text-[10px] text-neutral-600">root</span>
+          )}
+          <GitBranchBadge status={gitStatus} />
+        </div>
         <div className="flex items-center gap-1">
           <IconButton
             title={showAll ? 'Hide gitignored' : 'Show gitignored'}
@@ -340,6 +355,37 @@ function DirNode({
         );
       })}
     </ul>
+  );
+}
+
+/**
+ * Tiny pill showing the git branch (or short SHA when detached) for
+ * the agent's workingDir. Self-hides for non-repos and while we're
+ * still waiting for the first listing to come back. Informational
+ * only — no click behavior in v1.
+ */
+function GitBranchBadge({ status }: { status: GitStatus | null | undefined }) {
+  if (!status) return null;
+  const label = status.detached ? status.head : status.branch;
+  if (!label) return null;
+  const tooltip = status.detached
+    ? `detached HEAD @ ${status.head}`
+    : status.head
+      ? `${status.branch} @ ${status.head}`
+      : (status.branch ?? '');
+  return (
+    <span
+      title={tooltip}
+      className={cn(
+        'inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-[1px] font-mono text-[10px]',
+        status.detached
+          ? 'border-amber-700/60 bg-amber-900/20 text-amber-300'
+          : 'border-neutral-700/60 bg-neutral-900/60 text-neutral-300',
+      )}
+    >
+      <GitBranch className="h-2.5 w-2.5" />
+      {label}
+    </span>
   );
 }
 

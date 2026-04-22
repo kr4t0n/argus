@@ -191,6 +191,23 @@ export interface FSEntry {
   gitignored?: boolean;
 }
 
+/**
+ * Snapshot of the workingDir's git HEAD as observed by the sidecar.
+ * Carried on every FSListResponseEvent so the dashboard can flip the
+ * branch badge as soon as the next listing comes back — pure-checkout
+ * scenarios (no file content changes) are the only miss-case and they
+ * are vanishingly rare.
+ *
+ * `branch` is null in detached-HEAD states (rebase, cherry-pick,
+ * `git checkout <sha>`); `head` is then the short SHA the working tree
+ * is parked at.
+ */
+export interface GitStatus {
+  branch: string | null;
+  head: string;
+  detached: boolean;
+}
+
 export interface FSListRequestCommand {
   kind: 'fs-list';
   requestId: string;
@@ -240,6 +257,11 @@ export interface FSListResponseEvent {
   path: string;
   entries?: FSEntry[];
   error?: string;
+  /** Present when the agent's workingDir is a git repo. Sent on every
+   *  fs-list response (cheap: one .git/HEAD read per call), so any tree
+   *  refresh — manual or fsnotify-driven — also refreshes the branch
+   *  badge. Absent for non-repos. */
+  git?: GitStatus;
   ts: number;
 }
 
