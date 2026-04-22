@@ -44,6 +44,12 @@ actually installed on that machine. New adapters are ~30 lines + an
 sidebar without losing history. The data stays in Postgres and can be
 restored with one click; archived agents stay archived even if the
 sidecar restarts.
+- **Live workingDir file tree**: the right panel shows a lazy-expanding,
+gitignore-aware tree of the agent's working directory. Stays in sync
+via the sidecar's `fsnotify` watcher (250 ms-debounced). The header
+also shows the current git branch (or short SHA when detached) — the
+sidecar reads `.git/HEAD` on every listing so the badge flips as soon
+as the next refresh lands.
 - **Interactive terminal per agent (opt-in)**: tick the "attach
 interactive terminal" box when creating an agent and the dashboard's
 right panel grows a real PTY shell on that machine — full ANSI

@@ -4,6 +4,7 @@ import type {
   AvailableAdapter,
   CommandStatus,
   FSEntry,
+  GitStatus,
   ResultChunk,
   SessionStatus,
 } from './protocol';
@@ -188,6 +189,10 @@ export interface TerminalClosedMessage {
 export interface FSListResponse {
   path: string;
   entries: FSEntry[];
+  /** Present when the agent's workingDir is a git repo. Refreshed on
+   *  every listing (the sidecar reads .git/HEAD per call) so any tree
+   *  refetch also refreshes the branch indicator in the dashboard. */
+  git?: GitStatus;
 }
 
 // ─────────────────────────────────────────────────────────────────────
