@@ -470,6 +470,9 @@ export class SidecarUpdateService implements OnModuleDestroy {
 
     const timer = setTimeout(() => {
       const reason = `sidecar update timed out after ${Math.round(UPDATE_TIMEOUT_MS / 1000)}s`;
+      this.logger.warn(
+        `update ${requestId} (machine=${machineId}, from=${fromVersion}) ${reason}`,
+      );
       rejectAccepted(new BadRequestException(reason));
       rejectCompletion(new Error(reason));
       this.cleanupPending(requestId);
@@ -492,6 +495,20 @@ export class SidecarUpdateService implements OnModuleDestroy {
       rejectCompletion,
       timer,
     });
+
+    // The single-update REST path (`updateOne` → `dispatch`) only
+    // awaits `accepted`; nothing attaches a handler to `completion`.
+    // Without this swallow, the timeout / sidecar-update-failed /
+    // onModuleDestroy paths all call `rejectCompletion(...)` on a
+    // promise with zero handlers, which Node treats as an unhandled
+    // rejection and crashes the process.
+    //
+    // Adding `.catch()` here marks the original promise as handled
+    // for Node's tracker; it does NOT consume the rejection — the
+    // bulk runner's `await pending.completion` still receives it
+    // through its own try/catch chain. Semantics for both paths are
+    // unchanged; only the crash is gone.
+    completion.catch(() => undefined);
 
     try {
       await this.redis.publish(streamKeys.machineControl(machineId), {
