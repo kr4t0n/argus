@@ -33,7 +33,11 @@ export function StreamViewer({ commands, chunks, running, workingDir }: Props) {
     if (!stickBottom) return;
     const el = ref.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [chunks.length, stickBottom]);
+    // Track commands too: a freshly-sent prompt appends a CommandDTO
+    // (the user bubble) before any chunks land. Without this dep the
+    // bubble would render below the fold until the agent's first
+    // chunk bumped chunks.length.
+  }, [chunks.length, commands.length, stickBottom]);
 
   function onScroll() {
     const el = ref.current;

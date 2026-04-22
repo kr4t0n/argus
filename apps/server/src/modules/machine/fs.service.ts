@@ -128,6 +128,7 @@ export class FSService implements OnModuleDestroy {
     pending.resolve({
       path: ev.path,
       entries: ev.entries ?? [],
+      git: ev.git,
     });
   }
 }

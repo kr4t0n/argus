@@ -592,14 +592,6 @@ function AgentRow({
             {agent.name || agent.id}{' '}
             <span className="text-neutral-500">· {agent.machineName}</span>
           </span>
-          <span className="ml-auto flex items-center gap-2">
-            {visibleSessions.length > 0 && (
-              <span className="text-[10px] text-neutral-500">
-                {visibleSessions.length}
-              </span>
-            )}
-            <StatusDot status={agent.status} />
-          </span>
         </button>
         {/* New-session action, hover-only. Hidden when the agent is
             archived or offline since the create would be rejected anyway. */}
@@ -670,6 +662,12 @@ function AgentRow({
             )}
           </button>
         )}
+        {/* Liveness dot — pinned to the rightmost slot so it reads as a
+            persistent status indicator. The hover-revealed action icons
+            (+ archive eye) sit to its left. */}
+        <span className="flex items-center pr-2">
+          <StatusDot status={agent.status} />
+        </span>
       </div>
 
       {open && (

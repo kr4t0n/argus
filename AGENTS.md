@@ -147,6 +147,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     chunks back on `agent:{id}:result`, heartbeats, and gracefully
     drains on destroy. There is no per-agent process — supervisors are
     goroutines inside the single daemon.
+  - `fs.go` / `fswatch.go` / `git.go` — workingDir browsing for the
+    dashboard's right-pane file tree. `ListDir` jails to the agent's
+    workingDir and applies gitignore (always strips `.git`).
+    `fsWatcher` registers one fsnotify watch per non-ignored dir and
+    coalesces events into 250 ms-debounced fs-changed emits. `git.go`
+    reads `.git/HEAD` (and resolves the worktree-pointer file form)
+    without shelling out to `git` or pulling in a Go git lib — its
+    output is attached to every fs-list response so the dashboard's
+    branch badge refreshes for free on every tree refetch.
 - `bus/` — go-redis wrapper with `Publish`, `EnsureGroup`, `ReadMessage`, `Ack`.
 - `adapter/` — `Adapter` interface and process-level **registry**. Each
   adapter file calls `Register(type, &Plugin{Factory, DefaultBinary})`
@@ -372,6 +381,25 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   hands them to `term.write` — do NOT try to be clever and decode as
   UTF-8 strings server-side, you'll mangle multibyte chars at chunk
   boundaries.
+- **`docker-publish.yml` cache scoping**: builds are split per-image
+  per-platform across native runners (`ubuntu-latest` for amd64,
+  `ubuntu-24.04-arm` for arm64) — no QEMU. Each leg writes to a
+  cache scope keyed by `<image>-<platform>` so the four parallel
+  jobs never overwrite each other's BuildKit manifest in the GHA
+  cache backend. A separate `merge` job per image then assembles the
+  multi-arch manifest list with `buildx imagetools create` from the
+  per-arch digests. If you ever rejoin the matrix, drop the cache
+  scope back to `<image>` only or you'll silently halve cache
+  hit-rate (the per-platform scopes won't be read by a combined
+  build).
+- **GHA cache budget cap**: GitHub enforces ~10 GB of cache per repo.
+  Buildx with `mode=max` writes every intermediate stage; tag pushes
+  (`refs/heads/refs/tags/v*`) write under their own ref scope and are
+  unreadable from `main`, but still count toward the cap. Old PR
+  caches also linger forever unless explicitly deleted. When the
+  effective hit-rate degrades, sweep with
+  `gh api /repos/<o>/<r>/actions/caches?ref=refs/pull/<n>/merge` →
+  `DELETE`.
 
 ## Tech debt / planned
 
