@@ -6,8 +6,7 @@ import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
 import { api } from '../lib/api';
 import { joinSession, leaveSession } from '../lib/ws';
-import { StatusDot } from './ui/StatusDot';
-import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
+import { AgentTypeIcon } from './ui/AgentTypeIcon';
 import { Button } from './ui/Button';
 import { ResizeHandle } from './ui/ResizeHandle';
 import { StreamViewer } from './StreamViewer';
@@ -114,12 +113,6 @@ export function SessionPanel() {
             <div className="text-sm font-medium text-neutral-100 truncate">
               {entry.session.title}
             </div>
-            {agent && (
-              <span className="text-xs text-neutral-500 truncate">
-                · {agentTypeLabel(agent.type)} · {agent.machineName}
-              </span>
-            )}
-            {agent && <StatusDot status={agent.status} />}
             {elapsed && <span className="text-xs text-neutral-500">· {elapsed}</span>}
           </div>
           <div className="ml-auto flex items-center gap-2">
