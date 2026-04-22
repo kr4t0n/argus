@@ -1,7 +1,19 @@
 name: docker-publish
 
 # Builds the Argus web and server Docker images for linux/amd64 +
-# linux/arm64 and pushes them to Docker Hub.
+# linux/arm64 and pushes them to Docker Hub as a single multi-arch
+# manifest per tag.
+#
+# Architecture (per `image` in matrix):
+#   1. `build` jobs run *per-platform on native runners* — amd64 on
+#      ubuntu-latest, arm64 on ubuntu-24.04-arm. Each pushes by digest
+#      only (no tag) and exports its sha256 as a tiny artifact. This
+#      replaces the previous "amd64 runner emulating arm64 via QEMU"
+#      setup, which dominated wall-clock time on every cache-miss.
+#   2. `merge` jobs (one per image) wait for both platforms, download
+#      the digests, and run `docker buildx imagetools create` to bind
+#      the metadata-action's tag list to the per-arch digests as a
+#      single manifest list. No re-build, no re-push of layers.
 #
 # Triggers:
 #   - push to main → publishes :latest, :main, :sha-<short>
@@ -10,6 +22,7 @@ name: docker-publish
 #   - manual workflow_dispatch → publishes :manual-<run_id> alongside the
 #     usual branch/sha tags. Useful for cutting an out-of-band image
 #     without touching git.
+#   - PR against main (paths-filtered) → build-only smoke test, no push.
 #
 # Image names default to `${DOCKERHUB_USERNAME}/argus-web` and
 # `${DOCKERHUB_USERNAME}/argus-server`. Override `IMAGE_NAMESPACE` below
@@ -53,32 +66,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ── Stage 1: per-platform build (native runners) ────────────────────
   build:
-    name: build & push (${{ matrix.image }})
-    runs-on: ubuntu-latest
+    name: build (${{ matrix.image }} / ${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
+        # Explicit `include` (rather than two cartesian dimensions) so
+        # platform/runner stay paired and the YAML reads as a list of
+        # concrete jobs.
         include:
           - image: argus-server
             dockerfile: deploy/server.Dockerfile
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - image: argus-server
+            dockerfile: deploy/server.Dockerfile
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
           - image: argus-web
             dockerfile: deploy/web.Dockerfile
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - image: argus-web
+            dockerfile: deploy/web.Dockerfile
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
-      # buildx + qemu enable cross-arch builds from the amd64 runner so
-      # one workflow produces both linux/amd64 and linux/arm64 manifests
-      # under a single tag.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
+      # No QEMU here — each job runs on a runner whose CPU matches its
+      # platform, so binfmt translation is unnecessary. That's the
+      # whole point of the split.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Login is only required when we're going to push. workflow_dispatch
-      # with `push: false` skips it so a fork without secrets can still
-      # smoke-test the build.
       - name: Resolve push flag
         id: pushflag
         run: |
@@ -98,17 +121,122 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Compute tags & labels
+      # We only need labels here — the per-platform build writes by
+      # digest with no tags. The `merge` job reads metadata again to
+      # produce the actual tagged manifest list.
+      - name: Compute labels
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}
-          # Tag schedule:
-          #   - latest on default branch & semver tags
-          #   - branch name (main)
-          #   - semver pieces from `v*` tags
-          #   - short sha for traceability on every build
-          #   - manual-<run_id> for ad-hoc dispatches
+          labels: |
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+
+      # On push runs: build for one platform and push by digest. The
+      # `name-canonical=true,push-by-digest=true` outputs option tells
+      # buildx to put the per-arch image into the registry under just
+      # its sha256 — no tag yet — so the merge step can stitch the
+      # final manifest list without a second build.
+      #
+      # On PR / dispatch-without-push runs: just `load=true,push=false`
+      # the local builder for a smoke test. We don't need to publish
+      # the digest because there's no merge job in that path.
+      - name: Build and push by digest
+        id: build
+        if: steps.pushflag.outputs.push == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          # GHA cache, scoped per (image, platform). Splitting the
+          # scope prevents the two parallel jobs for one image from
+          # racing to overwrite each other's manifest in the cache
+          # backend, which used to silently halve our hit-rate.
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.platform }}
+          provenance: false
+
+      - name: Build (smoke test, no push)
+        if: steps.pushflag.outputs.push != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.platform }}
+          provenance: false
+
+      # Persist the digest as a zero-byte file named after the sha so
+      # the merge job can collect digests from every matrix leg via
+      # `actions/download-artifact` + `merge-multiple: true` without
+      # having to parse anything.
+      - name: Export digest
+        if: steps.pushflag.outputs.push == 'true'
+        run: |
+          mkdir -p "${{ runner.temp }}/digests/${{ matrix.image }}"
+          digest='${{ steps.build.outputs.digest }}'
+          touch "${{ runner.temp }}/digests/${{ matrix.image }}/${digest#sha256:}"
+
+      - name: Upload digest
+        if: steps.pushflag.outputs.push == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          # Encode platform in the artifact name so the per-image merge
+          # job can pull all platforms with `pattern: digests-<image>-*`.
+          # `/` in the platform string is replaced with `-` for the
+          # artifact name (artifact names can't contain `/`).
+          name: digests-${{ matrix.image }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          path: ${{ runner.temp }}/digests/${{ matrix.image }}/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Stage 2: assemble multi-arch manifest list ──────────────────────
+  # One merge job per image. Skipped on PRs / dispatch-without-push
+  # (the build jobs in those paths don't push or upload digests).
+  merge:
+    name: merge manifest (${{ matrix.image }})
+    needs: build
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.push)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: argus-server
+          - image: argus-web
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ matrix.image }}-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Same tag schedule as before, just resolved here in the merge
+      # job (which is the only place that needs to talk about tags).
+      - name: Compute tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}
           tags: |
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
             type=ref,event=branch
@@ -116,24 +244,23 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short,prefix=sha-
             type=raw,value=manual-${{ github.run_id }},enable=${{ github.event_name == 'workflow_dispatch' }}
-          labels: |
-            org.opencontainers.image.title=${{ matrix.image }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.licenses=MIT
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
-          push: ${{ steps.pushflag.outputs.push == 'true' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # GitHub Actions cache backend: pulls the previous build's
-          # layers in, writes the new layers back. Keeps incremental
-          # rebuilds fast (~1 min) without leaning on a registry mirror.
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
-          provenance: false
+      # Stitch the per-arch digests into one manifest list per tag.
+      # `imagetools create -t <tag>...` adds every tag as an alias of
+      # the same manifest list, so all tags resolve to the same digest
+      # — exactly what `docker/build-push-action` used to produce in a
+      # single shot, just without the second build.
+      - name: Create multi-arch manifest
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          # Word-splitting is intentional: imagetools wants one CLI arg
+          # per `-t TAG` and one per `<image>@<digest>` source.
+          # shellcheck disable=SC2046
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}@sha256:%s ' *)
+
+      - name: Inspect published image
+        run: |
+          docker buildx imagetools inspect \
+            "${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}:${{ steps.meta.outputs.version }}"
