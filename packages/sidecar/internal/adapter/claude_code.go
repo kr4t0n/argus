@@ -170,16 +170,26 @@ func mapClaudeLine(line string, state *fileEditState, workingDir string) []Chunk
 	t, _ := ev["type"].(string)
 	switch t {
 	case "system":
-		// first system event carries session_id
-		if sub, _ := ev["subtype"].(string); sub == "init" {
-			sid, _ := ev["session_id"].(string)
-			if sid != "" {
+		sub, _ := ev["subtype"].(string)
+		switch sub {
+		case "init":
+			// first system event carries session_id
+			if sid, _ := ev["session_id"].(string); sid != "" {
 				return []Chunk{{
 					Kind:       protocol.KindProgress,
 					Content:    "session initialised",
 					Meta:       ev,
 					ExternalID: sid,
 				}}
+			}
+		case "task_progress":
+			// Claude emits these between tool_use/tool_result pairs as a
+			// running narration ("Reading X", "Editing Y"). Surface the
+			// human-readable description as the pill content; full event
+			// (usage counters, tool_use_id, task_id, last_tool_name) stays
+			// in Meta for any UI that wants to render richer detail.
+			if desc, _ := ev["description"].(string); desc != "" {
+				return []Chunk{{Kind: protocol.KindProgress, Content: desc, Meta: ev}}
 			}
 		}
 		return []Chunk{{Kind: protocol.KindProgress, Content: t, Meta: ev}}
