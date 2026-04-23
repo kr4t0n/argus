@@ -139,3 +139,15 @@
 .markdown tbody tr:nth-child(even) {
   @apply bg-neutral-900/30;
 }
+
+/* shiki output for the file preview tabs. We let shiki keep its own
+ * theme background (matches github-dark) and just normalize the
+ * surrounding box so long lines scroll horizontally inside the tab
+ * pane instead of stretching the whole layout. */
+.shiki-host pre.shiki {
+  @apply m-0 px-4 py-3 text-[13px] leading-relaxed;
+  min-height: 100%;
+}
+.shiki-host pre.shiki code {
+  @apply font-mono;
+}

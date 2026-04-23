@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Menu, PanelRightClose, PanelRightOpen, Square } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
+import { useFileTabsStore } from '../stores/fileTabsStore';
 import { api } from '../lib/api';
 import { joinSession, leaveSession } from '../lib/ws';
 import { AgentTypeIcon } from './ui/AgentTypeIcon';
@@ -12,8 +13,16 @@ import { ResizeHandle } from './ui/ResizeHandle';
 import { StreamViewer } from './StreamViewer';
 import { Composer } from './Composer';
 import { ContextPane } from './ContextPane';
+import { FileTabStrip } from './FileTabStrip';
 import { UsageBadge } from './UsageBadge';
 import { relativeTime } from '../lib/utils';
+
+// FileViewer pulls in shiki + grammars (~600 KB of WASM + per-grammar
+// chunks). Lazy-load it so the main session page bundle stays lean —
+// users that never preview a file never pay the cost.
+const FileViewer = lazy(() =>
+  import('./FileViewer').then((m) => ({ default: m.FileViewer })),
+);
 
 export function SessionPanel() {
   const { sessionId } = useParams();
@@ -56,6 +65,20 @@ export function SessionPanel() {
       ['pending', 'sent', 'running'].includes(c.status),
     );
   }, [entry]);
+
+  // File tabs: filtered to the current agent so the strip stays in
+  // context. The active tab is "the chat" when nothing's selected OR
+  // when the selection points to a different agent's file (those tabs
+  // are hidden but the store still remembers them, so navigating back
+  // to the original agent restores the selection).
+  const openFiles = useFileTabsStore((s) => s.openFiles);
+  const activeFileKey = useFileTabsStore((s) => s.activeKey);
+  const activeFile = useMemo(() => {
+    if (!agent || !activeFileKey) return null;
+    return openFiles.find(
+      (f) => f.key === activeFileKey && f.agentId === agent.id,
+    ) ?? null;
+  }, [openFiles, activeFileKey, agent?.id]);
 
   if (!sessionId) {
     return (
@@ -139,28 +162,46 @@ export function SessionPanel() {
           </div>
         </div>
 
+        <FileTabStrip agentId={agent?.id} />
+
         <div className="flex-1 min-h-0">
-          <StreamViewer
-            commands={entry.commands}
-            chunks={entry.chunks}
-            running={running}
-            workingDir={agent?.workingDir}
-          />
+          {activeFile ? (
+            <Suspense
+              fallback={
+                <div className="flex h-full items-center justify-center text-xs text-neutral-500">
+                  loading viewer…
+                </div>
+              }
+            >
+              <FileViewer file={activeFile} />
+            </Suspense>
+          ) : (
+            <StreamViewer
+              commands={entry.commands}
+              chunks={entry.chunks}
+              running={running}
+              workingDir={agent?.workingDir}
+            />
+          )}
         </div>
 
-        <Composer
-          onSend={onSend}
-          onCancel={onCancel}
-          running={running}
-          disabled={!agent || agent.status === 'offline'}
-          initial={draft}
-          onChange={(v) => agent && setDraft(agent.id, v)}
-          placeholder={
-            agent?.status === 'offline'
-              ? `${agent.machineName} is offline`
-              : 'Request changes or ask a question…'
-          }
-        />
+        {/* Composer is the chat surface — only show it on the chat
+            tab. File tabs are read-only previews. */}
+        {!activeFile && (
+          <Composer
+            onSend={onSend}
+            onCancel={onCancel}
+            running={running}
+            disabled={!agent || agent.status === 'offline'}
+            initial={draft}
+            onChange={(v) => agent && setDraft(agent.id, v)}
+            placeholder={
+              agent?.status === 'offline'
+                ? `${agent.machineName} is offline`
+                : 'Request changes or ask a question…'
+            }
+          />
+        )}
       </div>
 
       {contextPaneOpen && (

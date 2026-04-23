@@ -5,6 +5,7 @@ import type {
   CreateCommandRequest,
   CreateSessionRequest,
   FSListResponse,
+  FSReadResponse,
   LoginResponse,
   MachineDTO,
   OpenTerminalRequest,
@@ -164,5 +165,9 @@ export const api = {
     return http<FSListResponse>(
       `/agents/${agentId}/fs/list${qs ? `?${qs}` : ''}`,
     );
+  },
+  readAgentFile: (agentId: string, path: string) => {
+    const q = new URLSearchParams({ path });
+    return http<FSReadResponse>(`/agents/${agentId}/fs/read?${q.toString()}`);
   },
 };

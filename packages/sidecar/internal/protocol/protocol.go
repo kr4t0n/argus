@@ -203,6 +203,21 @@ type FSListRequestCommand struct {
 	TS        int64  `json:"ts"`
 }
 
+// FSReadRequestCommand asks the sidecar to read one file's contents
+// for preview. The sidecar enforces FSReadMaxBytes and the workingDir
+// jail; over the cap is returned as Result="error" rather than
+// truncated. See FSReadResponseEvent for the wire-flat reply shape.
+type FSReadRequestCommand struct {
+	Kind      string `json:"kind"` // "fs-read"
+	RequestID string `json:"requestId"`
+	AgentID   string `json:"agentId"`
+	Path      string `json:"path"`
+	TS        int64  `json:"ts"`
+}
+
+// FSReadMaxBytes mirrors FS_READ_MAX_BYTES on the TS side. Keep in sync.
+const FSReadMaxBytes = 1_048_576
+
 type FSListResponseEvent struct {
 	Kind      string    `json:"kind"` // "fs-list-response"
 	MachineID string    `json:"machineId"`
@@ -222,6 +237,24 @@ type FSChangedEvent struct {
 	MachineID string `json:"machineId"`
 	AgentID   string `json:"agentId"`
 	Path      string `json:"path"`
+	TS        int64  `json:"ts"`
+}
+
+// FSReadResponseEvent is the sidecar's reply to FSReadRequestCommand.
+// Result is the discriminator the dashboard switches on; only the
+// fields relevant to that variant are populated.
+type FSReadResponseEvent struct {
+	Kind      string `json:"kind"` // "fs-read-response"
+	MachineID string `json:"machineId"`
+	AgentID   string `json:"agentId"`
+	RequestID string `json:"requestId"`
+	Path      string `json:"path"`
+	Result    string `json:"result"` // "text" | "image" | "binary" | "error"
+	Content   string `json:"content,omitempty"`
+	MIME      string `json:"mime,omitempty"`
+	Base64    string `json:"base64,omitempty"`
+	Size      int64  `json:"size,omitempty"`
+	Error     string `json:"error,omitempty"`
 	TS        int64  `json:"ts"`
 }
 

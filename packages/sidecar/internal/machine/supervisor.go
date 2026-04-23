@@ -379,6 +379,42 @@ func (s *supervisor) HandleFSList(ctx context.Context, req protocol.FSListReques
 	}
 }
 
+// HandleFSRead executes a file-read request for this agent and
+// publishes the response back on the lifecycle stream. Mirrors
+// HandleFSList — same workingDir jail, same fire-and-forget reply
+// path. Hard errors (missing file, path escape, I/O) become
+// Result="error" so the dashboard always gets a structured reply
+// within the server's timeout window.
+func (s *supervisor) HandleFSRead(ctx context.Context, req protocol.FSReadRequestCommand) {
+	res, err := ReadFile(ReadFileRequest{
+		WorkingDir: s.spec.WorkingDir,
+		Path:       req.Path,
+		MaxBytes:   protocol.FSReadMaxBytes,
+	})
+	resp := protocol.FSReadResponseEvent{
+		Kind:      "fs-read-response",
+		MachineID: s.machine,
+		AgentID:   s.spec.AgentID,
+		RequestID: req.RequestID,
+		Path:      req.Path,
+		TS:        time.Now().UnixMilli(),
+	}
+	if err != nil {
+		resp.Result = "error"
+		resp.Error = err.Error()
+	} else {
+		resp.Result = res.Result
+		resp.Content = res.Content
+		resp.MIME = res.MIME
+		resp.Base64 = res.Base64
+		resp.Size = res.Size
+		resp.Error = res.Error
+	}
+	if err := s.bus.Publish(ctx, protocol.LifecycleStream(), resp); err != nil {
+		s.log.Printf("agent %s: fs-read-response publish failed: %v", s.spec.AgentID, err)
+	}
+}
+
 func decodeCommand(payload map[string]any) (protocol.Command, error) {
 	b, err := json.Marshal(payload)
 	if err != nil {

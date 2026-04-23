@@ -13,6 +13,7 @@ import {
 import type { FSEntry, GitStatus } from '@argus/shared-types';
 import { api, ApiError } from '../lib/api';
 import { joinAgent, leaveAgent, subscribeHandler } from '../lib/ws';
+import { useFileTabsStore } from '../stores/fileTabsStore';
 import { cn } from '../lib/utils';
 
 type DirState = {
@@ -34,8 +35,8 @@ type Props = {
  * `fs:changed` WebSocket event and re-fetches any loaded level whose
  * path fires — so the tree stays live as the agent edits files.
  *
- * Double-click preview is intentionally not wired yet; selecting a
- * file today is a no-op (reserved for the v2 preview drawer).
+ * Double-clicking a file opens it as a preview tab in the main pane
+ * (see FileTabStrip + FileViewer).
  */
 export function FileTree({ agentId, rootLabel }: Props) {
   // Keyed by path (empty string = root). We never delete entries on
@@ -52,6 +53,13 @@ export function FileTree({ agentId, rootLabel }: Props) {
   // the badge as soon as the next refresh lands. `undefined` means we
   // haven't fetched yet; `null` means the workingDir is not a repo.
   const [gitStatus, setGitStatus] = useState<GitStatus | null | undefined>(undefined);
+
+  // Bound to this agent so DirNode doesn't need to know about it.
+  const openFile = useFileTabsStore((s) => s.openFile);
+  const onOpenFile = useCallback(
+    (path: string) => openFile({ agentId, path }),
+    [agentId, openFile],
+  );
 
   // Keep the latest `showAll` in a ref so the `fs:changed` handler
   // (closed over at subscribe time) always refetches with the current
@@ -235,6 +243,7 @@ export function FileTree({ agentId, rootLabel }: Props) {
             selected={selected}
             onToggle={toggleDir}
             onSelect={setSelected}
+            onOpenFile={onOpenFile}
           />
         )}
       </div>
@@ -251,6 +260,7 @@ type DirNodeProps = {
   selected: string | null;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
+  onOpenFile: (path: string) => void;
 };
 
 function DirNode({
@@ -262,6 +272,7 @@ function DirNode({
   selected,
   onToggle,
   onSelect,
+  onOpenFile,
 }: DirNodeProps) {
   return (
     <ul>
@@ -278,6 +289,9 @@ function DirNode({
               onClick={() => {
                 onSelect(entryPath);
                 if (isDir) onToggle(entryPath);
+              }}
+              onDoubleClick={() => {
+                if (!isDir) onOpenFile(entryPath);
               }}
               className={cn(
                 'group flex w-full items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-neutral-900',
@@ -347,6 +361,7 @@ function DirNode({
                     selected={selected}
                     onToggle={onToggle}
                     onSelect={onSelect}
+                    onOpenFile={onOpenFile}
                   />
                 )}
               </>
