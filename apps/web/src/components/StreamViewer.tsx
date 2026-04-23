@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, Check, Copy } from 'lucide-react';
 import type { CommandDTO, ResultChunkDTO } from '@argus/shared-types';
 import { splitDeltas } from '../lib/deltaSplit';
 import { ActivityPanel, ActivityPill } from './ActivityPill';
 import { FileChips, extractFiles } from './FileChips';
+import { Tooltip } from './ui/Tooltip';
 
 type Props = {
   commands: CommandDTO[];
@@ -235,19 +236,13 @@ function CommandBlock({
         </div>
       )}
 
-      {bodyText && (
-        <div className="markdown mt-4 text-sm leading-relaxed text-neutral-200 max-w-none">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{bodyText}</ReactMarkdown>
-          {running && !finalChunk && !errorChunk && (
-            <span className="typewriter-cursor" />
-          )}
-        </div>
-      )}
-
-      {files.length > 0 && (
-        <div className="mt-4">
-          <FileChips files={files} workingDir={workingDir} />
-        </div>
+      {(bodyText || files.length > 0) && (
+        <AnswerBlock
+          bodyText={bodyText}
+          files={files}
+          workingDir={workingDir}
+          streaming={running && !finalChunk && !errorChunk}
+        />
       )}
 
       {errorChunk && (
@@ -271,6 +266,114 @@ function findScrollParent(el: HTMLElement): HTMLElement | null {
     p = p.parentElement;
   }
   return null;
+}
+
+// `navigator.clipboard` is undefined outside secure contexts — which
+// includes LAN access over plain http (e.g. http://192.168.x.x:5174).
+// Fall back to the legacy selection+execCommand path so the button
+// still works when the dev server is visited from a phone or another
+// machine on the network.
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // permissions denied / not allowed — try the fallback
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '0';
+    ta.style.left = '0';
+    ta.style.opacity = '0';
+    ta.style.pointerEvents = 'none';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function AnswerBlock({
+  bodyText,
+  files,
+  workingDir,
+  streaming,
+}: {
+  bodyText: string;
+  files: ReturnType<typeof extractFiles>;
+  workingDir?: string | null;
+  streaming: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    },
+    [],
+  );
+
+  const handleCopy = useCallback(async () => {
+    const ok = await copyTextToClipboard(bodyText);
+    if (!ok) return;
+    setCopied(true);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setCopied(false), 1500);
+  }, [bodyText]);
+
+  // Touch devices don't have hover, and tapping a `tabIndex=0` div
+  // doesn't reliably focus it across mobile browsers — focus explicitly
+  // on touch-originated pointers only, so mouse-selection isn't hijacked.
+  const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'touch') e.currentTarget.focus();
+  }, []);
+
+  return (
+    <div
+      className="group relative mt-4 focus:outline-none"
+      tabIndex={0}
+      onPointerUp={handlePointerUp}
+    >
+      {bodyText && (
+        <div className="markdown text-sm leading-relaxed text-neutral-200 max-w-none">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{bodyText}</ReactMarkdown>
+          {streaming && <span className="typewriter-cursor" />}
+        </div>
+      )}
+      {files.length > 0 && (
+        <div className={bodyText ? 'mt-4' : ''}>
+          <FileChips files={files} workingDir={workingDir} />
+        </div>
+      )}
+      {!streaming && bodyText && (
+        <div className="mt-2 flex items-center gap-1 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
+          <Tooltip content={copied ? 'Copied' : 'Copy as markdown'}>
+            <button
+              type="button"
+              onClick={handleCopy}
+              aria-label="Copy response as markdown"
+              className="inline-flex h-6 w-6 items-center justify-center rounded text-neutral-600 transition-colors hover:bg-neutral-800/60 hover:text-neutral-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-500"
+            >
+              {copied ? (
+                <Check className="h-3 w-3 text-emerald-500/80" />
+              ) : (
+                <Copy className="h-3 w-3" />
+              )}
+            </button>
+          </Tooltip>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function UserMessage({ text }: { text: string }) {
