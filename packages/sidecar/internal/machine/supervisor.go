@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+	gitignore "github.com/sabhiram/go-gitignore"
 
 	"github.com/kyley/argus/sidecar/internal/adapter"
 	"github.com/kyley/argus/sidecar/internal/bus"
@@ -43,6 +46,18 @@ type supervisor struct {
 	// to register — in which case the tree works in manual-refresh
 	// mode without live updates).
 	fsw *fsWatcher
+
+	// Cached compiled .gitignore matcher for this agent's workingDir.
+	// Invalidated by mtime check on every resolveGitignore() call —
+	// one extra stat per fs-list is cheap compared to re-parsing a
+	// multi-hundred-line .gitignore on every directory expansion.
+	// `giLoaded=false` distinguishes "never loaded" from "loaded but
+	// no file exists"; when `gi == nil && giLoaded == true` we treat
+	// it as "no .gitignore here, don't filter".
+	giMu     sync.Mutex
+	gi       *gitignore.GitIgnore
+	giMtime  time.Time
+	giLoaded bool
 }
 
 const (
@@ -334,15 +349,71 @@ func (s *supervisor) startFSWatcher(ctx context.Context) {
 	s.fsw = w
 }
 
+// resolveGitignore returns a cached compiled .gitignore matcher for
+// this agent's workingDir, reloading only when the file's mtime has
+// changed since the last load. Returns nil when the workingDir has
+// no .gitignore (ListDir treats nil as "no filtering"). Safe for
+// concurrent callers — the mutex serializes reloads.
+//
+// Cache semantics:
+//   - First call: stat the file, compile, remember (matcher, mtime).
+//   - File removed later: return nil and clear cache.
+//   - File edited: detect via mtime change, reload.
+//   - Compile error: log and return the previous matcher (if any),
+//     so a mid-edit malformed .gitignore doesn't suddenly flood the
+//     tree with hidden build artifacts.
+func (s *supervisor) resolveGitignore() *gitignore.GitIgnore {
+	if s.spec.WorkingDir == "" {
+		return nil
+	}
+	path := filepath.Join(s.spec.WorkingDir, ".gitignore")
+	info, statErr := os.Stat(path)
+
+	s.giMu.Lock()
+	defer s.giMu.Unlock()
+
+	if statErr != nil {
+		if s.gi != nil || !s.giLoaded {
+			s.gi = nil
+			s.giMtime = time.Time{}
+			s.giLoaded = true
+		}
+		return nil
+	}
+	if s.giLoaded && s.gi != nil && s.giMtime.Equal(info.ModTime()) {
+		return s.gi
+	}
+	matcher, err := gitignore.CompileIgnoreFile(path)
+	if err != nil {
+		s.log.Printf("agent %s: gitignore reload failed: %v", s.spec.AgentID, err)
+		// Keep whatever we had — a transient malformed edit shouldn't
+		// regress filtering behavior.
+		if s.giLoaded {
+			return s.gi
+		}
+		return nil
+	}
+	s.gi = matcher
+	s.giMtime = info.ModTime()
+	s.giLoaded = true
+	return matcher
+}
+
 // HandleFSList executes a list-directory request for this agent and
 // publishes the response back on the lifecycle stream. Invoked by the
 // daemon's control-plane dispatcher; kept on the supervisor because
-// this is where per-agent state (workingDir jail) lives.
+// this is where per-agent state (workingDir jail, gitignore cache)
+// lives.
 func (s *supervisor) HandleFSList(ctx context.Context, req protocol.FSListRequestCommand) {
+	var matcher *gitignore.GitIgnore
+	if !req.ShowAll {
+		matcher = s.resolveGitignore()
+	}
 	entries, err := ListDir(ListDirRequest{
 		WorkingDir: s.spec.WorkingDir,
 		Path:       req.Path,
 		ShowAll:    req.ShowAll,
+		Matcher:    matcher,
 	})
 	resp := protocol.FSListResponseEvent{
 		Kind:      "fs-list-response",
