@@ -45,6 +45,27 @@ class ChunkQueryDto {
   @IsInt()
   @Min(0)
   afterSeq?: number;
+
+  /** Page size for the initial load — only return the last N commands
+   *  (and their chunks) instead of the full session history. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  tailCommands?: number;
+}
+
+class HistoryQueryDto {
+  /** Cursor command id: return the N commands created strictly before this. */
+  @IsString()
+  @MinLength(1)
+  before!: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  limit?: number;
 }
 
 class ListSessionsQueryDto {
@@ -93,7 +114,12 @@ export class SessionController {
     @Param('id') id: string,
     @Query() q: ChunkQueryDto,
   ) {
-    return this.sessions.getWithChunks(req.user.id, id, q.afterSeq ?? 0);
+    return this.sessions.getWithChunks(
+      req.user.id,
+      id,
+      q.afterSeq ?? 0,
+      q.tailCommands,
+    );
   }
 
   @Get(':id/chunks')
@@ -108,6 +134,20 @@ export class SessionController {
       q.afterSeq ?? 0,
     );
     return { commands, chunks };
+  }
+
+  @Get(':id/history')
+  async history(
+    @Req() req: AuthedRequest,
+    @Param('id') id: string,
+    @Query() q: HistoryQueryDto,
+  ) {
+    return this.sessions.getOlderHistory(
+      req.user.id,
+      id,
+      q.before,
+      q.limit ?? 20,
+    );
   }
 
   @Patch(':id')

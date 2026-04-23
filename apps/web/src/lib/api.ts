@@ -89,16 +89,29 @@ export const api = {
     http<SessionDTO[]>(
       `/sessions${opts?.includeArchived ? '?includeArchived=true' : ''}`,
     ),
-  getSession: (id: string) =>
-    http<{
+  getSession: (id: string, opts?: { tailCommands?: number }) => {
+    const q = new URLSearchParams();
+    if (opts?.tailCommands) q.set('tailCommands', String(opts.tailCommands));
+    const qs = q.toString();
+    return http<{
       session: SessionDTO;
       commands: CommandDTO[];
       chunks: ResultChunkDTO[];
-    }>(`/sessions/${id}`),
+      hasMore: boolean;
+    }>(`/sessions/${id}${qs ? `?${qs}` : ''}`);
+  },
   getSessionChunks: (id: string, afterSeq = 0) =>
     http<{ commands: CommandDTO[]; chunks: ResultChunkDTO[] }>(
       `/sessions/${id}/chunks?afterSeq=${afterSeq}`,
     ),
+  getSessionHistory: (id: string, beforeCommandId: string, limit = 20) => {
+    const q = new URLSearchParams({ before: beforeCommandId, limit: String(limit) });
+    return http<{
+      commands: CommandDTO[];
+      chunks: ResultChunkDTO[];
+      hasMore: boolean;
+    }>(`/sessions/${id}/history?${q.toString()}`);
+  },
   createSession: (body: CreateSessionRequest) =>
     http<{ session: SessionDTO; command: CommandDTO | null }>(`/sessions`, {
       method: 'POST',

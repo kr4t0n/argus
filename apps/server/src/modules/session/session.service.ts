@@ -136,13 +136,46 @@ export class SessionService {
     this.gateway.emitSessionUpdated(SessionService.toDto(s));
   }
 
-  /** Return the session + its commands, plus the chunks since `afterSeq` (0 = all). */
-  async getWithChunks(userId: string, id: string, afterSeq = 0) {
+  /**
+   * Return the session + its commands + their chunks.
+   *
+   *   • `afterSeq` filters chunks by seq (reconnect backfill path — fetches
+   *     everything new across all commands since the last seen seq).
+   *   • `tailCommands` limits the response to the N most recent commands
+   *     (and only their chunks) for the initial page-load path. The web UI
+   *     uses this to avoid downloading the entire history of long sessions
+   *     up front; older turns stream in on scroll-up. `hasMore` signals
+   *     whether older commands exist.
+   *
+   *  These two are independent: reconnect callers pass just `afterSeq`
+   *  and leave `tailCommands` undefined (full-width backfill), while the
+   *  page loader passes `tailCommands` and leaves `afterSeq` at 0.
+   */
+  async getWithChunks(
+    userId: string,
+    id: string,
+    afterSeq = 0,
+    tailCommands?: number,
+  ) {
     const session = await this.get(userId, id);
-    const commands = await this.prisma.command.findMany({
-      where: { sessionId: id },
-      orderBy: { createdAt: 'asc' },
-    });
+    let commands;
+    let hasMore = false;
+    if (tailCommands && tailCommands > 0) {
+      // Take N+1 to detect whether older rows exist without a separate
+      // count query; drop the overflow row and reverse to ascending.
+      const recent = await this.prisma.command.findMany({
+        where: { sessionId: id },
+        orderBy: { createdAt: 'desc' },
+        take: tailCommands + 1,
+      });
+      hasMore = recent.length > tailCommands;
+      commands = recent.slice(0, tailCommands).reverse();
+    } else {
+      commands = await this.prisma.command.findMany({
+        where: { sessionId: id },
+        orderBy: { createdAt: 'asc' },
+      });
+    }
     const commandIds = commands.map((c) => c.id);
     const chunks = commandIds.length
       ? await this.prisma.resultChunk.findMany({
@@ -150,6 +183,41 @@ export class SessionService {
           orderBy: [{ commandId: 'asc' }, { seq: 'asc' }],
         })
       : [];
-    return { session: SessionService.toDto(session), commands, chunks };
+    return { session: SessionService.toDto(session), commands, chunks, hasMore };
+  }
+
+  /**
+   * Fetch the N commands older than `beforeCommandId` (and their chunks),
+   * used by the UI to stream history in as the user scrolls up. Returns
+   * commands in ascending createdAt order to match the normal feed.
+   */
+  async getOlderHistory(
+    userId: string,
+    id: string,
+    beforeCommandId: string,
+    limit: number,
+  ) {
+    await this.get(userId, id); // auth guard
+
+    // Cursor-based pagination on (createdAt desc, id). Prisma's `cursor`
+    // needs a unique field — id works — and `skip: 1` excludes the anchor
+    // itself so we only return commands strictly older than it.
+    const older = await this.prisma.command.findMany({
+      where: { sessionId: id },
+      orderBy: { createdAt: 'desc' },
+      cursor: { id: beforeCommandId },
+      skip: 1,
+      take: limit + 1,
+    });
+    const hasMore = older.length > limit;
+    const commands = older.slice(0, limit).reverse();
+    const commandIds = commands.map((c) => c.id);
+    const chunks = commandIds.length
+      ? await this.prisma.resultChunk.findMany({
+          where: { commandId: { in: commandIds } },
+          orderBy: [{ commandId: 'asc' }, { seq: 'asc' }],
+        })
+      : [];
+    return { commands, chunks, hasMore };
   }
 }
