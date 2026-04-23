@@ -457,6 +457,12 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         this.fs.handleResponse(ev);
         break;
       }
+      case 'fs-read-response': {
+        // Same fan-in as fs-list-response — FSService keeps a single
+        // pending map keyed by requestId for both kinds.
+        this.fs.handleReadResponse(ev);
+        break;
+      }
       case 'fs-changed': {
         // Debounced notification from the sidecar's fsnotify watcher.
         // Broadcast into the agent room so connected dashboards can

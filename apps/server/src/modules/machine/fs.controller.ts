@@ -1,7 +1,7 @@
 import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
 import { Transform } from 'class-transformer';
-import type { FSListResponse } from '@argus/shared-types';
+import type { FSListResponse, FSReadResponse } from '@argus/shared-types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FSService } from './fs.service';
 
@@ -20,6 +20,14 @@ class FSListQueryDto {
   showAll?: boolean;
 }
 
+class FSReadQueryDto {
+  /** Path relative to the agent's workingDir. Required (unlike list,
+   *  there's no "read root" semantic). */
+  @IsString()
+  @MaxLength(2048)
+  path!: string;
+}
+
 /**
  * Thin REST face over FSService. Lives in `agents/:id/fs/*` rather
  * than `machines/:id/...` because the client only knows the agent id
@@ -33,5 +41,10 @@ export class FSController {
   @Get('list')
   list(@Param('id') id: string, @Query() q: FSListQueryDto): Promise<FSListResponse> {
     return this.service.listDir(id, q.path ?? '', q.showAll ?? false);
+  }
+
+  @Get('read')
+  read(@Param('id') id: string, @Query() q: FSReadQueryDto): Promise<FSReadResponse> {
+    return this.service.readFile(id, q.path);
   }
 }

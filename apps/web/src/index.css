@@ -139,3 +139,17 @@
 .markdown tbody tr:nth-child(even) {
   @apply bg-neutral-900/30;
 }
+
+/* shiki output for the file preview tabs. The github-dark theme paints
+ * its own background (~#24292e) via an inline style on `pre.shiki`;
+ * we override it to transparent so the surrounding `bg-neutral-950`
+ * shows through, keeping the viewer visually aligned with the rest of
+ * the dashboard rather than introducing a second "dark" surface. */
+.shiki-host pre.shiki {
+  @apply m-0 px-4 py-3 text-[13px] leading-relaxed;
+  background-color: transparent !important;
+  min-height: 100%;
+}
+.shiki-host pre.shiki code {
+  @apply font-mono;
+}

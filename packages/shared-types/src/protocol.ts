@@ -217,6 +217,27 @@ export interface FSListRequestCommand {
   ts: number;
 }
 
+/**
+ * Read one file's contents. Path is jailed to the agent's workingDir
+ * (sidecar enforces) and capped at FS_READ_MAX_BYTES — over the cap is
+ * returned as `result: 'error'` with a "file too large" message rather
+ * than truncating, since a partial highlight is misleading. Binary
+ * detection happens in the sidecar (extension allowlist for text /
+ * image, magic-byte sniff otherwise).
+ */
+export interface FSReadRequestCommand {
+  kind: 'fs-read';
+  requestId: string;
+  agentId: string;
+  path: string;
+  ts: number;
+}
+
+/** Hard cap (in bytes) the dashboard advertises and the sidecar enforces.
+ *  Same number for text and image — over the cap, the sidecar returns
+ *  an error rather than truncating. */
+export const FS_READ_MAX_BYTES = 1_048_576;
+
 // ─────────────────────────────────────────────────────────────────────
 // Remote sidecar update (server → sidecar)
 //
@@ -247,6 +268,7 @@ export type MachineControlCommand =
   | DestroyAgentCommand
   | SyncAgentsCommand
   | FSListRequestCommand
+  | FSReadRequestCommand
   | UpdateSidecarCommand;
 
 export interface FSListResponseEvent {
@@ -262,6 +284,32 @@ export interface FSListResponseEvent {
    *  refresh — manual or fsnotify-driven — also refreshes the branch
    *  badge. Absent for non-repos. */
   git?: GitStatus;
+  ts: number;
+}
+
+/**
+ * Sidecar's reply to an `fs-read` request. Wire-flat (no tagged union)
+ * because the Go side has no ergonomic way to model one — the dashboard
+ * normalizes this into the discriminated `FSReadResult` shape via the
+ * server's REST face.
+ *
+ *   - result === 'text'   → `content` carries UTF-8 text, `size` set
+ *   - result === 'image'  → `mime` + `base64` carry the image, `size` set
+ *   - result === 'binary' → no content (cannot preview), `size` set
+ *   - result === 'error'  → `error` carries human-readable reason
+ */
+export interface FSReadResponseEvent {
+  kind: 'fs-read-response';
+  machineId: string;
+  agentId: string;
+  requestId: string;
+  path: string;
+  result: 'text' | 'image' | 'binary' | 'error';
+  content?: string;
+  mime?: string;
+  base64?: string;
+  size?: number;
+  error?: string;
   ts: number;
 }
 
@@ -360,6 +408,7 @@ export type AnyLifecycleEvent =
   | AgentSpawnFailedEvent
   | AgentDestroyedEvent
   | FSListResponseEvent
+  | FSReadResponseEvent
   | FSChangedEvent
   | SidecarUpdateStartedEvent
   | SidecarUpdateDownloadedEvent

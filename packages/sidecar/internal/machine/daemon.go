@@ -236,6 +236,13 @@ func (d *Daemon) dispatchControl(ctx context.Context, payload map[string]any) {
 			return
 		}
 		d.handleFSList(ctx, ev)
+	case "fs-read":
+		var ev protocol.FSReadRequestCommand
+		if err := remarshal(payload, &ev); err != nil {
+			d.log.Printf("control: bad fs-read: %v", err)
+			return
+		}
+		d.handleFSRead(ctx, ev)
 	case "update-sidecar":
 		var ev protocol.UpdateSidecarCommand
 		if err := remarshal(payload, &ev); err != nil {
@@ -269,6 +276,30 @@ func (d *Daemon) handleFSList(ctx context.Context, req protocol.FSListRequestCom
 		return
 	}
 	s.HandleFSList(ctx, req)
+}
+
+// handleFSRead routes an fs-read request to the target agent's
+// supervisor. Same race window as handleFSList — publish a synthetic
+// error response if the agent is gone, so the server-side pending
+// request resolves instead of timing out.
+func (d *Daemon) handleFSRead(ctx context.Context, req protocol.FSReadRequestCommand) {
+	d.mu.Lock()
+	s, ok := d.supervisors[req.AgentID]
+	d.mu.Unlock()
+	if !ok {
+		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSReadResponseEvent{
+			Kind:      "fs-read-response",
+			MachineID: d.cache.MachineID,
+			AgentID:   req.AgentID,
+			RequestID: req.RequestID,
+			Path:      req.Path,
+			Result:    "error",
+			Error:     "agent not running on this machine",
+			TS:        time.Now().UnixMilli(),
+		})
+		return
+	}
+	s.HandleFSRead(ctx, req)
 }
 
 func (d *Daemon) handleCreateAgent(ctx context.Context, spec protocol.AgentSpec) {

@@ -9,6 +9,7 @@
 package machine
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -191,6 +192,143 @@ func ListDir(req ListDirRequest) ([]FSEntry, error) {
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
 	return out, nil
+}
+
+// ReadFileRequest is the validated input ReadFile expects. MaxBytes is
+// the hard cap above which ReadFile returns Result="error" rather than
+// truncating — partial highlight is misleading and large reads also
+// blow out the JSON envelope on the lifecycle stream.
+type ReadFileRequest struct {
+	WorkingDir string
+	Path       string
+	MaxBytes   int64
+}
+
+// ReadFileResult is the wire-shaped reply, matching protocol.FSReadResponseEvent's
+// Result discriminator. Only the fields relevant to the chosen variant
+// are populated.
+type ReadFileResult struct {
+	Result  string // "text" | "image" | "binary" | "error"
+	Content string // text only
+	MIME    string // image only
+	Base64  string // image only
+	Size    int64
+	Error   string
+}
+
+// imageMIMEByExt is an explicit allowlist of formats the dashboard
+// renders inline. Anything else falls through to text/binary detection
+// (an SVG, despite being text, is treated as an image so the user sees
+// the rendered shape rather than markup).
+var imageMIMEByExt = map[string]string{
+	".png":  "image/png",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif":  "image/gif",
+	".webp": "image/webp",
+	".svg":  "image/svg+xml",
+	".bmp":  "image/bmp",
+	".ico":  "image/x-icon",
+	".avif": "image/avif",
+}
+
+// ReadFile loads one file for preview. Jails to WorkingDir, refuses
+// directories, caps at MaxBytes, classifies into text / image / binary
+// based on extension allowlist + a content sniff. The error variant is
+// returned as a value (not an error) when the failure is a soft
+// "can't preview" — over-cap or refused symlink — so the dashboard can
+// render a meaningful placeholder rather than treating it as an RPC
+// failure. Hard errors (path escape, missing file, read I/O) are
+// surfaced as Go errors and the caller propagates them as result=error.
+func ReadFile(req ReadFileRequest) (ReadFileResult, error) {
+	if req.WorkingDir == "" {
+		return ReadFileResult{}, errors.New("agent has no working directory")
+	}
+	abs, err := resolvePath(req.WorkingDir, req.Path)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	if info.IsDir() {
+		return ReadFileResult{}, fmt.Errorf("%q is a directory", req.Path)
+	}
+	if !info.Mode().IsRegular() {
+		// Sockets, devices, fifos — refuse rather than block on read.
+		return ReadFileResult{
+			Result: "error",
+			Size:   info.Size(),
+			Error:  "cannot preview non-regular file",
+		}, nil
+	}
+
+	size := info.Size()
+	if size > req.MaxBytes {
+		return ReadFileResult{
+			Result: "error",
+			Size:   size,
+			Error:  fmt.Sprintf("file is too large to preview (%d bytes, max %d)", size, req.MaxBytes),
+		}, nil
+	}
+
+	ext := strings.ToLower(filepath.Ext(abs))
+	if mime, ok := imageMIMEByExt[ext]; ok {
+		data, err := os.ReadFile(abs)
+		if err != nil {
+			return ReadFileResult{}, err
+		}
+		return ReadFileResult{
+			Result: "image",
+			MIME:   mime,
+			Base64: base64.StdEncoding.EncodeToString(data),
+			Size:   int64(len(data)),
+		}, nil
+	}
+
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	if isLikelyText(data) {
+		return ReadFileResult{
+			Result:  "text",
+			Content: string(data),
+			Size:    int64(len(data)),
+		}, nil
+	}
+	return ReadFileResult{
+		Result: "binary",
+		Size:   int64(len(data)),
+	}, nil
+}
+
+// isLikelyText returns true when the buffer reads like text. The
+// heuristic: any NUL byte ⇒ binary; otherwise ≥ 90% of the first 8 KiB
+// are printable ASCII, common whitespace, or high bytes (covers UTF-8
+// multibyte continuation). Cheap, no allocations, and good enough for
+// the preview gating decision — false positives just show garbled text
+// in the viewer, false negatives show a "binary" placeholder.
+func isLikelyText(b []byte) bool {
+	if len(b) == 0 {
+		return true
+	}
+	n := len(b)
+	if n > 8192 {
+		n = 8192
+	}
+	var printable int
+	for i := 0; i < n; i++ {
+		c := b[i]
+		if c == 0 {
+			return false
+		}
+		if c >= 0x20 || c == '\n' || c == '\r' || c == '\t' {
+			printable++
+		}
+	}
+	return float64(printable)/float64(n) >= 0.9
 }
 
 // loadGitignore builds a matcher rooted at `root`. Missing .gitignore
