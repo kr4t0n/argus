@@ -182,14 +182,23 @@ func mapClaudeLine(line string, state *fileEditState, workingDir string) []Chunk
 					ExternalID: sid,
 				}}
 			}
-		case "task_progress":
-			// Claude emits these between tool_use/tool_result pairs as a
-			// running narration ("Reading X", "Editing Y"). Surface the
-			// human-readable description as the pill content; full event
-			// (usage counters, tool_use_id, task_id, last_tool_name) stays
-			// in Meta for any UI that wants to render richer detail.
+		case "task_started", "task_progress":
+			// Claude emits `task_started` when it kicks off a sub-agent /
+			// tool task, with a one-line `description` of what's about to
+			// happen. `task_progress` is the older name some Claude
+			// versions still emit for the same shape — collapsed here.
+			// Full event (task_id, task_type, tool_use_id, …) stays in
+			// Meta so a richer UI can render counters/links if it wants.
 			if desc, _ := ev["description"].(string); desc != "" {
 				return []Chunk{{Kind: protocol.KindProgress, Content: desc, Meta: ev}}
+			}
+		case "task_notification":
+			// Counterpart to `task_started`: posted on completion (status
+			// is in `status`, e.g. "completed") with a `summary` of what
+			// the task did. Surface that as the pill content; status +
+			// task_id + output_file ride along in Meta.
+			if sum, _ := ev["summary"].(string); sum != "" {
+				return []Chunk{{Kind: protocol.KindProgress, Content: sum, Meta: ev}}
 			}
 		}
 		return []Chunk{{Kind: protocol.KindProgress, Content: t, Meta: ev}}

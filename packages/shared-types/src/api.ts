@@ -195,6 +195,22 @@ export interface FSListResponse {
   git?: GitStatus;
 }
 
+/**
+ * REST response for `GET /agents/:id/fs/read`. Discriminated union: the
+ * dashboard switches the viewer based on `result.kind`. The error path
+ * (path escaped jail, file too large, agent offline, sidecar refused)
+ * surfaces as an HTTP error and never reaches this shape.
+ */
+export type FSReadResult =
+  | { kind: 'text'; content: string; size: number }
+  | { kind: 'image'; mime: string; base64: string; size: number }
+  | { kind: 'binary'; size: number };
+
+export interface FSReadResponse {
+  path: string;
+  result: FSReadResult;
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Sidecar version + remote update
 // ─────────────────────────────────────────────────────────────────────
