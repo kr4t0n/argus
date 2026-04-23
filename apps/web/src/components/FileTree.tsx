@@ -67,15 +67,8 @@ export function FileTree({ agentId, rootLabel }: Props) {
   const showAllRef = useRef(showAll);
   showAllRef.current = showAll;
 
-  // Mirror of the `dirs` map for async callbacks (prefetch, below)
-  // that close over a stale `dirs` via useCallback deps. Reading from
-  // the ref lets us check "is this child already cached?" against the
-  // latest render rather than the closure snapshot.
-  const dirsRef = useRef(dirs);
-  dirsRef.current = dirs;
-
   const fetchDir = useCallback(
-    async (path: string, opts?: { prefetchChildren?: boolean }) => {
+    async (path: string) => {
       setDirs((prev) => {
         const next = new Map(prev);
         const existing = next.get(path);
@@ -97,27 +90,6 @@ export function FileTree({ agentId, rootLabel }: Props) {
         // so we can distinguish "not a repo" (no badge) from "haven't
         // fetched yet" (still undefined).
         setGitStatus(res.git ?? null);
-
-        // One-level prefetch: the user almost always expands one of
-        // the sub-directories they just revealed, so warm those
-        // listings now. We intentionally DON'T recurse — each child
-        // fetch is spawned without `prefetchChildren`, so the
-        // prefetch wave stays flat and the sidecar isn't hit with an
-        // O(tree-size) stampede on the first click.
-        if (opts?.prefetchChildren) {
-          for (const e of res.entries) {
-            if (e.kind !== 'dir') continue;
-            const childPath = path ? `${path}/${e.name}` : e.name;
-            // Skip already-cached children (including those mid-fetch
-            // from a concurrent call — fetchDir sets {loading:true}
-            // synchronously before awaiting). dirsRef gives us the
-            // freshest view here; a stale check just costs one
-            // redundant RPC, no correctness issue.
-            if (!dirsRef.current.has(childPath)) {
-              void fetchDir(childPath);
-            }
-          }
-        }
       } catch (err) {
         const msg =
           err instanceof ApiError
@@ -145,9 +117,7 @@ export function FileTree({ agentId, rootLabel }: Props) {
     setExpanded(new Set(['']));
     setSelected(null);
     setGitStatus(undefined);
-    // Root is always expanded — prefetch its direct sub-dirs so the
-    // first click the user makes is instant.
-    void fetchDir('', { prefetchChildren: true });
+    fetchDir('');
   }, [agentId, fetchDir]);
 
   // When the filter toggle flips we clear cached listings (they were
@@ -196,11 +166,7 @@ export function FileTree({ agentId, rootLabel }: Props) {
         } else {
           next.add(path);
           if (!dirs.has(path)) {
-            // Prefetch children on user-initiated expand only — so
-            // the next click down the tree is free. Refresh + filter
-            // toggles intentionally skip this to avoid stampeding
-            // the sidecar.
-            void fetchDir(path, { prefetchChildren: true });
+            void fetchDir(path);
           }
         }
         return next;

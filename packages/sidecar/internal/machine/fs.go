@@ -43,14 +43,6 @@ type ListDirRequest struct {
 	// NOT expose `.git` itself — that directory is never useful in a
 	// tree view and rendering it only adds noise.
 	ShowAll bool
-	// Matcher is an optional pre-compiled gitignore matcher. Callers
-	// that can cache the matcher across calls (see supervisor.go)
-	// should pass it here to skip the per-call ReadFile + parse —
-	// compiling a fat .gitignore is tens of ms, dominating the listing
-	// itself on fast disks. When nil AND ShowAll=false, ListDir falls
-	// back to loading on demand so the package stays usable in tests
-	// without supervisor plumbing.
-	Matcher *gitignore.GitIgnore
 }
 
 // resolvePath validates `rel` lives inside `root` and returns the
@@ -129,18 +121,13 @@ func ListDir(req ListDirRequest) ([]FSEntry, error) {
 		return nil, fmt.Errorf("%q is not a directory", req.Path)
 	}
 
-	// Prefer a caller-provided matcher (see ListDirRequest.Matcher) —
-	// supervisor.go caches one per agent and invalidates on mtime
-	// change, which is a meaningful win for repos with a fat
-	// .gitignore. When nil, fall back to loading on demand so the
-	// package stays self-contained for tests and direct callers.
+	// We re-read .gitignore on every call rather than caching it on the
+	// daemon. The listing itself dominates the cost (ReadDir + per-entry
+	// stat), and rereading means edits surface immediately without us
+	// needing an invalidation path.
 	var matcher *gitignore.GitIgnore
 	if !req.ShowAll {
-		if req.Matcher != nil {
-			matcher = req.Matcher
-		} else {
-			matcher, _ = loadGitignore(req.WorkingDir)
-		}
+		matcher, _ = loadGitignore(req.WorkingDir)
 	}
 
 	entries, err := os.ReadDir(abs)
