@@ -205,6 +205,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `components/StreamViewer.tsx` — the streaming display. Groups chunks by
   command, concatenates `delta`s, renders tool pills, stdout, errors, and a
   cursor while running.
+- `components/TodoWindow.tsx` — per-turn task tracker rendered inside the
+  sticky band right under `<ActivityPill>`. Sources its rows from the
+  *latest* `TodoWrite`-style tool chunk in the command's chunks
+  (`meta.tool ∈ {todowrite, todo, task}`, `meta.input.todos`); each call
+  replaces the full list, no merging. Open by default, user-collapsible
+  via the chevron — there is intentionally no auto-collapse when all
+  todos complete (we want the finished plan to stay visible next to the
+  assistant's answer). Returns null for codex sessions / any turn
+  without a TodoWrite chunk. Shape parsing is deliberately defensive —
+  see the AGENTS.md note on stream-json drift.
 - `components/Sidebar.tsx` — agent-first tree: each agent is a top-level row
   with its sessions nested underneath and a `+ new session` affordance.
 - `components/TerminalPane.tsx` — xterm.js bound to one agent. Owns the

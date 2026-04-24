@@ -6,6 +6,7 @@ import type { CommandDTO, ResultChunkDTO } from '@argus/shared-types';
 import { splitDeltas } from '../lib/deltaSplit';
 import { ActivityPanel, ActivityPill } from './ActivityPill';
 import { FileChips, extractFiles } from './FileChips';
+import { TodoWindow } from './TodoWindow';
 import { Tooltip } from './ui/Tooltip';
 
 type Props = {
@@ -353,6 +354,7 @@ const CommandBlock = memo(function CommandBlock({
           open={activityOpen}
           onToggle={handleActivityToggle}
         />
+        <TodoWindow chunks={chunks} />
       </div>
 
       {activityOpen && (
