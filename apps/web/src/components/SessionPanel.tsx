@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Menu, PanelRightClose, PanelRightOpen, Square } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
@@ -31,6 +31,7 @@ export function SessionPanel() {
 
   const entry = useSessionStore((s) => (sessionId ? s.entries[sessionId] : undefined));
   const loadSession = useSessionStore((s) => s.loadSession);
+  const loadOlder = useSessionStore((s) => s.loadOlder);
   const agent = useAgentStore((s) =>
     entry?.session ? s.agents[entry.session.agentId] : undefined,
   );
@@ -65,6 +66,12 @@ export function SessionPanel() {
       ['pending', 'sent', 'running'].includes(c.status),
     );
   }, [entry]);
+
+  // Stable callback so <StreamViewer>'s useCallback/useEffect deps don't
+  // churn on every parent render; the store closure already captures id.
+  const onLoadOlder = useCallback(() => {
+    if (sessionId) void loadOlder(sessionId);
+  }, [sessionId, loadOlder]);
 
   // File tabs: filtered to the current agent so the strip stays in
   // context. The active tab is "the chat" when nothing's selected OR
@@ -181,6 +188,9 @@ export function SessionPanel() {
               chunks={entry.chunks}
               running={running}
               workingDir={agent?.workingDir}
+              hasMore={entry.hasMore}
+              loadingOlder={entry.loadingOlder}
+              onLoadOlder={onLoadOlder}
             />
           )}
         </div>

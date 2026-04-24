@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AlertCircle, Check, Copy } from 'lucide-react';
+import { AlertCircle, Check, Copy, Loader2 } from 'lucide-react';
 import type { CommandDTO, ResultChunkDTO } from '@argus/shared-types';
 import { splitDeltas } from '../lib/deltaSplit';
 import { ActivityPanel, ActivityPill } from './ActivityPill';
@@ -14,7 +14,16 @@ type Props = {
   running: boolean;
   /** Anchor used to relativize file chip paths (`AgentDTO.workingDir`). */
   workingDir?: string | null;
+  /** True iff more history exists on the server (tail-window pagination). */
+  hasMore?: boolean;
+  loadingOlder?: boolean;
+  /** Called when the user scrolls near the top and we should fetch the
+   *  next page of older commands. */
+  onLoadOlder?: () => void;
 };
+
+/** How close to the top (px) before we trigger a fetch of older history. */
+const LOAD_OLDER_THRESHOLD = 200;
 
 /**
  * Open-Agents-style chronological feed:
@@ -24,11 +33,39 @@ type Props = {
  *   • file chips for files the agent touched
  *   • errors surfaced inline.
  */
-export function StreamViewer({ commands, chunks, running, workingDir }: Props) {
+export function StreamViewer({
+  commands,
+  chunks,
+  running,
+  workingDir,
+  hasMore = false,
+  loadingOlder = false,
+  onLoadOlder,
+}: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [stickBottom, setStickBottom] = useState(true);
 
-  const grouped = useMemo(() => groupByCommand(commands, chunks), [commands, chunks]);
+  // Per-group stabilization: if a command's identity and chunk count are
+  // both unchanged across renders, reuse the same group object (and its
+  // chunks array). That gives React.memo on <CommandBlock> stable prop
+  // references so untouched turns don't re-render when WS events append
+  // to the live turn or prepend older history.
+  const prevGroupsRef = useRef(new Map<string, Group>());
+  const grouped = useMemo<Group[]>(() => {
+    const next = groupByCommand(commands, chunks);
+    const prev = prevGroupsRef.current;
+    const stable = next.map((g) => {
+      const p = prev.get(g.command.id);
+      if (p && p.command === g.command && p.chunks.length === g.chunks.length) {
+        return p;
+      }
+      return g;
+    });
+    const nextMap = new Map<string, Group>();
+    for (const g of stable) nextMap.set(g.command.id, g);
+    prevGroupsRef.current = nextMap;
+    return stable;
+  }, [commands, chunks]);
 
   useEffect(() => {
     if (!stickBottom) return;
@@ -40,11 +77,77 @@ export function StreamViewer({ commands, chunks, running, workingDir }: Props) {
     // chunk bumped chunks.length.
   }, [chunks.length, commands.length, stickBottom]);
 
+  // Scroll-preservation on prepend.
+  //
+  // When loadOlder() resolves and the store prepends N commands, the
+  // viewport's scrollTop stays numerically the same but the content
+  // above the user's view just grew — so everything they were looking
+  // at jumps DOWN by the prepended block's height. We fix this by
+  // anchoring to the oldest command that was visible BEFORE the fetch
+  // and, once React has committed the new DOM, bumping scrollTop by
+  // whatever delta kept that anchor at its original y.
+  //
+  // Anchor-relative (rather than raw scrollHeight delta) is important
+  // because WS chunks may append to the live turn mid-fetch; those
+  // grow scrollHeight below the viewport and would inflate a naive
+  // delta calc, yanking the user past where they meant to be.
+  const pendingAnchorRef = useRef<{ id: string; topBefore: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const pending = pendingAnchorRef.current;
+    if (!pending) return;
+    pendingAnchorRef.current = null;
+    const el = ref.current;
+    if (!el) return;
+    const anchorEl = el.querySelector<HTMLElement>(
+      `[data-cmd-id="${CSS.escape(pending.id)}"]`,
+    );
+    if (!anchorEl) return;
+    const topAfter = anchorEl.getBoundingClientRect().top;
+    const delta = topAfter - pending.topBefore;
+    // Only compensate for DOWNWARD shifts (prepend); upward shifts
+    // would mean content shrunk above the anchor, which shouldn't
+    // happen on this codepath and would be unsafe to act on.
+    if (delta > 1) el.scrollTop += delta;
+  }, [commands]);
+
+  const maybeLoadOlder = useCallback(() => {
+    if (!onLoadOlder || !hasMore || loadingOlder) return;
+    const el = ref.current;
+    if (!el) return;
+    if (el.scrollTop >= LOAD_OLDER_THRESHOLD) return;
+    const anchor = commands[0];
+    if (!anchor) return;
+    // Capture the first rendered command's current y BEFORE we kick
+    // off the fetch — the useLayoutEffect above uses this to keep the
+    // same element pinned visually once prepend lands.
+    const anchorEl = el.querySelector<HTMLElement>(
+      `[data-cmd-id="${CSS.escape(anchor.id)}"]`,
+    );
+    const topBefore = anchorEl?.getBoundingClientRect().top ?? 0;
+    pendingAnchorRef.current = { id: anchor.id, topBefore };
+    onLoadOlder();
+  }, [commands, hasMore, loadingOlder, onLoadOlder]);
+
+  // Cover the case where the initial tail fits inside the viewport with
+  // no scrollbar: the user can't scroll to the top because they're
+  // already there, so the scroll handler never fires. We auto-page
+  // older history in that scenario until the viewport fills.
+  useEffect(() => {
+    if (!hasMore || loadingOlder) return;
+    const el = ref.current;
+    if (!el) return;
+    if (el.scrollHeight <= el.clientHeight + LOAD_OLDER_THRESHOLD) {
+      maybeLoadOlder();
+    }
+  }, [hasMore, loadingOlder, commands, maybeLoadOlder]);
+
   function onScroll() {
     const el = ref.current;
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
     setStickBottom(nearBottom);
+    maybeLoadOlder();
   }
 
   return (
@@ -54,6 +157,18 @@ export function StreamViewer({ commands, chunks, running, workingDir }: Props) {
       className="h-full overflow-y-auto overflow-x-hidden px-6 pb-6"
     >
       <div className="mx-auto max-w-3xl">
+        {(loadingOlder || hasMore) && (
+          <div className="flex items-center justify-center py-4 text-xs text-neutral-500">
+            {loadingOlder ? (
+              <span className="inline-flex items-center gap-2">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                loading earlier turns…
+              </span>
+            ) : (
+              <span className="text-neutral-700">scroll up for earlier turns</span>
+            )}
+          </div>
+        )}
         {grouped.length === 0 && (
           <div className="flex h-full items-center justify-center pt-32 text-sm text-neutral-500">
             Send a prompt to start the conversation.
@@ -74,12 +189,14 @@ export function StreamViewer({ commands, chunks, running, workingDir }: Props) {
   );
 }
 
+type Group = { command: CommandDTO; chunks: ResultChunkDTO[] };
+
 function isLast<T>(x: T, arr: T[]) {
   return arr[arr.length - 1] === x;
 }
 
-function groupByCommand(commands: CommandDTO[], chunks: ResultChunkDTO[]) {
-  const map = new Map<string, { command: CommandDTO; chunks: ResultChunkDTO[] }>();
+function groupByCommand(commands: CommandDTO[], chunks: ResultChunkDTO[]): Group[] {
+  const map = new Map<string, Group>();
   for (const c of commands) map.set(c.id, { command: c, chunks: [] });
   for (const ch of chunks) {
     let entry = map.get(ch.commandId);
@@ -105,19 +222,27 @@ function groupByCommand(commands: CommandDTO[], chunks: ResultChunkDTO[]) {
   return out;
 }
 
-function CommandBlock({
-  command,
-  chunks,
-  running,
-  workingDir,
-  isFirst,
-}: {
+type CommandBlockProps = {
   command: CommandDTO;
   chunks: ResultChunkDTO[];
   running: boolean;
   workingDir?: string | null;
   isFirst: boolean;
-}) {
+};
+
+// memo so unchanged turns don't re-render when a chunk lands on the
+// live turn or older history prepends at the top. Default shallow
+// equality is what we want: <StreamViewer>'s group-stabilization
+// reuses the same chunks array ref when count is unchanged, command
+// ref is unchanged when the command object is, and primitives are
+// primitives.
+const CommandBlock = memo(function CommandBlock({
+  command,
+  chunks,
+  running,
+  workingDir,
+  isFirst,
+}: CommandBlockProps) {
   // Only deltas AFTER the last tool/output chunk count as the user-facing
   // answer — earlier deltas are "thinking" the model emitted between tool
   // calls and are rendered inline by ActivityPill instead. See
@@ -214,7 +339,7 @@ function CommandBlock({
   // a sliver of body bg would briefly show between turns where neither
   // band is pinned.
   return (
-    <div>
+    <div data-cmd-id={command.id}>
       <div
         ref={bandRef}
         className={`sticky top-0 z-10 space-y-3 bg-neutral-950 pb-3 ${isFirst ? 'pt-2' : 'pt-6'}`}
@@ -255,7 +380,7 @@ function CommandBlock({
       )}
     </div>
   );
-}
+});
 
 /** Walk up to the nearest ancestor that actually scrolls vertically. */
 function findScrollParent(el: HTMLElement): HTMLElement | null {
