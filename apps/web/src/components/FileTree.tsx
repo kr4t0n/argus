@@ -149,20 +149,18 @@ export function FileTree({ agentId, rootLabel }: Props) {
     void fetchDir('', TREE_PREFETCH_DEPTH);
   }, [agentId, fetchDir]);
 
-  // When the filter toggle flips we clear cached listings (they were
-  // fetched with the old filter) and refetch the prefetch window plus
-  // any expanded path that fell outside it. The root depth-N fetch
-  // covers most cases; deeper expanded paths get a targeted depth-1
-  // refetch so they reappear immediately rather than after a click.
+  // Filter toggle flips → collapse back to the unexpanded root view
+  // and re-fetch the prefetch window with the new filter. Same
+  // simpler model as refreshAll: one depth-N request, no fan-out, no
+  // risk of N parallel depth-1's piling onto the sidecar past the
+  // server's fs-list timeout on bigger trees. The user loses their
+  // expanded state on toggle, which is fine — flipping "show
+  // gitignored" changes what's meaningful to browse anyway.
   useEffect(() => {
+    setExpanded(new Set(['']));
     setDirs(new Map());
+    setSelected(null);
     void fetchDir('', TREE_PREFETCH_DEPTH);
-    for (const p of expanded) {
-      if (p === '') continue;
-      void fetchDir(p);
-    }
-    // expanded isn't in deps by design — re-toggling showAll is the
-    // trigger; expanded-set churn shouldn't refetch everything.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showAll]);
 
@@ -224,14 +222,18 @@ export function FileTree({ agentId, rootLabel }: Props) {
   );
 
   const refreshAll = useCallback(() => {
-    // Re-pull the prefetch window at the root; cover anything expanded
-    // deeper than that with a targeted depth-1 refresh.
+    // Collapse back to the unexpanded root view and re-pull the
+    // prefetch window. A single depth-N walk can never race N
+    // concurrent siblings past the server's fs-list timeout, and
+    // "refresh = start over" matches every other tree UI. Cached
+    // entries below the prefetch window are discarded — stale
+    // entries would only re-appear on explicit re-expansion, which
+    // will re-fetch anyway.
+    setExpanded(new Set(['']));
+    setDirs(new Map());
+    setSelected(null);
     void fetchDir('', TREE_PREFETCH_DEPTH);
-    for (const p of expanded) {
-      if (p === '') continue;
-      void fetchDir(p);
-    }
-  }, [expanded, fetchDir]);
+  }, [fetchDir]);
 
   const rootState = dirs.get('');
   const rootEmpty =
