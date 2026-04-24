@@ -85,7 +85,12 @@ export class FSService implements OnModuleDestroy {
    * the sidecar-side error (e.g. path escapes workingDir, permission
    * denied) verbatim if the sidecar rejected the request.
    */
-  async listDir(agentId: string, path: string, showAll: boolean): Promise<FSListResponse> {
+  async listDir(
+    agentId: string,
+    path: string,
+    showAll: boolean,
+    depth: number = 1,
+  ): Promise<FSListResponse> {
     const agent = await this.prisma.agent.findUnique({
       where: { id: agentId },
       select: { id: true, machineId: true, workingDir: true },
@@ -115,6 +120,11 @@ export class FSService implements OnModuleDestroy {
         agentId,
         path: path ?? '',
         showAll: !!showAll,
+        // Only send `depth` when the caller asked for a multi-level
+        // listing — keeps the wire payload unchanged for the common
+        // single-level case and avoids confusing older sidecars that
+        // don't know the field.
+        ...(depth > 1 ? { depth } : {}),
         ts: Date.now(),
       });
     } catch (err) {
@@ -198,6 +208,7 @@ export class FSService implements OnModuleDestroy {
     pending.resolve({
       path: ev.path,
       entries: ev.entries ?? [],
+      listings: ev.listings,
       git: ev.git,
     });
   }

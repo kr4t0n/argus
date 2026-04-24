@@ -200,7 +200,15 @@ type FSListRequestCommand struct {
 	AgentID   string `json:"agentId"`
 	Path      string `json:"path"`
 	ShowAll   bool   `json:"showAll"`
-	TS        int64  `json:"ts"`
+	// Depth is the number of directory levels to include in the
+	// response, counting Path itself as level 1. 0 or 1 means the
+	// historical single-level listing. >1 asks the sidecar to walk
+	// non-ignored subdirectories breadth-first so the dashboard can
+	// hydrate its cache in one round trip. The sidecar caps the total
+	// entries returned (see FSListRecursiveMaxEntries) to keep payloads
+	// bounded on pathological trees.
+	Depth int   `json:"depth,omitempty"`
+	TS    int64 `json:"ts"`
 }
 
 // FSReadRequestCommand asks the sidecar to read one file's contents
@@ -225,12 +233,25 @@ type FSListResponseEvent struct {
 	RequestID string    `json:"requestId"`
 	Path      string    `json:"path"`
 	Entries   []FSEntry `json:"entries,omitempty"`
-	Error     string    `json:"error,omitempty"`
+	// Listings is populated when the request asked for Depth > 1.
+	// Keys are paths relative to the agent's workingDir (empty string =
+	// root); each value is that directory's listing. Always includes
+	// an entry for the requested Path that duplicates Entries so
+	// clients can consume either field uniformly.
+	Listings map[string][]FSEntry `json:"listings,omitempty"`
+	Error    string               `json:"error,omitempty"`
 	// Git is set when the agent's workingDir is a git repo. Cheap to
 	// produce (one .git/HEAD read) so we attach it to every response.
 	Git *GitStatus `json:"git,omitempty"`
 	TS  int64      `json:"ts"`
 }
+
+// FSListRecursiveMaxEntries caps the total number of entries a single
+// depth>1 listing returns. Protects the lifecycle stream and the
+// dashboard from a pathological `ShowAll` walk through node_modules.
+// Breadth-first traversal means shallower levels are always populated
+// first, so partial results are still useful when we hit the cap.
+const FSListRecursiveMaxEntries = 5000
 
 type FSChangedEvent struct {
 	Kind      string `json:"kind"` // "fs-changed"

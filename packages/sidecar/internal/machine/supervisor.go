@@ -338,12 +338,12 @@ func (s *supervisor) startFSWatcher(ctx context.Context) {
 // publishes the response back on the lifecycle stream. Invoked by the
 // daemon's control-plane dispatcher; kept on the supervisor because
 // this is where per-agent state (workingDir jail) lives.
+//
+// When req.Depth > 1 the reply carries every listing up to that depth
+// in Listings so the dashboard can hydrate its tree cache in a single
+// round trip. Entries is still populated with the root path's listing
+// so clients that don't consume Listings keep working.
 func (s *supervisor) HandleFSList(ctx context.Context, req protocol.FSListRequestCommand) {
-	entries, err := ListDir(ListDirRequest{
-		WorkingDir: s.spec.WorkingDir,
-		Path:       req.Path,
-		ShowAll:    req.ShowAll,
-	})
 	resp := protocol.FSListResponseEvent{
 		Kind:      "fs-list-response",
 		MachineID: s.machine,
@@ -352,31 +352,69 @@ func (s *supervisor) HandleFSList(ctx context.Context, req protocol.FSListReques
 		Path:      req.Path,
 		TS:        time.Now().UnixMilli(),
 	}
-	if err != nil {
-		resp.Error = err.Error()
-	} else {
-		resp.Entries = make([]protocol.FSEntry, len(entries))
-		for i, e := range entries {
-			resp.Entries[i] = protocol.FSEntry{
-				Name:       e.Name,
-				Kind:       e.Kind,
-				Size:       e.Size,
-				MTime:      e.MTime,
-				Gitignored: e.Gitignored,
+
+	listReq := ListDirRequest{
+		WorkingDir: s.spec.WorkingDir,
+		Path:       req.Path,
+		ShowAll:    req.ShowAll,
+	}
+
+	if req.Depth > 1 {
+		listings, err := ListDirs(listReq, req.Depth, protocol.FSListRecursiveMaxEntries)
+		if err != nil {
+			resp.Error = err.Error()
+		} else {
+			resp.Listings = make(map[string][]protocol.FSEntry, len(listings))
+			for path, entries := range listings {
+				resp.Listings[path] = toProtocolEntries(entries)
 			}
+			// Duplicate the requested path's listing into Entries so
+			// consumers reading only Entries still see the root level.
+			if root, ok := listings[req.Path]; ok {
+				resp.Entries = toProtocolEntries(root)
+			}
+			s.attachGit(&resp)
 		}
-		// Best-effort: attach git HEAD if the workingDir is a repo.
-		// Only logged on unexpected errors — non-repo workingDirs are
-		// the common case and return (nil, nil).
-		if git, gitErr := ReadGitStatus(s.spec.WorkingDir); gitErr != nil {
-			s.log.Printf("agent %s: read git status: %v", s.spec.AgentID, gitErr)
-		} else if git != nil {
-			resp.Git = git
+	} else {
+		entries, err := ListDir(listReq)
+		if err != nil {
+			resp.Error = err.Error()
+		} else {
+			resp.Entries = toProtocolEntries(entries)
+			s.attachGit(&resp)
 		}
 	}
+
 	if err := s.bus.Publish(ctx, protocol.LifecycleStream(), resp); err != nil {
 		s.log.Printf("agent %s: fs-list-response publish failed: %v", s.spec.AgentID, err)
 	}
+}
+
+// attachGit best-effort fills resp.Git. Non-repo workingDirs return
+// (nil, nil) and silently no-op; real errors are logged but not fatal.
+func (s *supervisor) attachGit(resp *protocol.FSListResponseEvent) {
+	git, err := ReadGitStatus(s.spec.WorkingDir)
+	if err != nil {
+		s.log.Printf("agent %s: read git status: %v", s.spec.AgentID, err)
+		return
+	}
+	if git != nil {
+		resp.Git = git
+	}
+}
+
+func toProtocolEntries(entries []FSEntry) []protocol.FSEntry {
+	out := make([]protocol.FSEntry, len(entries))
+	for i, e := range entries {
+		out[i] = protocol.FSEntry{
+			Name:       e.Name,
+			Kind:       e.Kind,
+			Size:       e.Size,
+			MTime:      e.MTime,
+			Gitignored: e.Gitignored,
+		}
+	}
+	return out
 }
 
 // HandleFSRead executes a file-read request for this agent and

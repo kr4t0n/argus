@@ -22,6 +22,15 @@ type DirState = {
   error?: string;
 };
 
+// How many directory levels we ask the sidecar to walk in a single
+// round trip. 3 means: root + its subdirs + their subdirs are all
+// populated before the user clicks anything, so the first two levels
+// of expansion render synchronously from cache. Raising this trades
+// larger payloads and more sidecar stat calls for deeper instant
+// expansion; the sidecar itself caps the total entries (see
+// FSListRecursiveMaxEntries) so a pathological tree still terminates.
+const TREE_PREFETCH_DEPTH = 3;
+
 type Props = {
   agentId: string;
   /** Cosmetic only: shown as a dim caption above the tree. */
@@ -68,7 +77,7 @@ export function FileTree({ agentId, rootLabel }: Props) {
   showAllRef.current = showAll;
 
   const fetchDir = useCallback(
-    async (path: string) => {
+    async (path: string, depth: number = 1) => {
       setDirs((prev) => {
         const next = new Map(prev);
         const existing = next.get(path);
@@ -80,10 +89,28 @@ export function FileTree({ agentId, rootLabel }: Props) {
         return next;
       });
       try {
-        const res = await api.listAgentDir(agentId, path, showAllRef.current);
+        const res = await api.listAgentDir(agentId, path, showAllRef.current, depth);
         setDirs((prev) => {
           const next = new Map(prev);
-          next.set(path, { entries: res.entries, loading: false });
+          // When the sidecar returned a multi-level listing, hydrate
+          // every path it sent in one setState so expanding those
+          // folders is synchronous from cache. The requested path
+          // itself is always covered by `res.listings` (duplicated from
+          // `entries`), so the fallback to `res.entries` only fires
+          // when depth=1.
+          if (res.listings) {
+            for (const [p, entries] of Object.entries(res.listings)) {
+              next.set(p, { entries, loading: false });
+            }
+            if (!res.listings[path]) {
+              // Paranoia: if the sidecar didn't include the requested
+              // path for some reason, fall back to `entries` so the
+              // loading spinner clears.
+              next.set(path, { entries: res.entries, loading: false });
+            }
+          } else {
+            next.set(path, { entries: res.entries, loading: false });
+          }
           return next;
         });
         // Sidecar omits `git` for non-repo workingDirs; coerce to null
@@ -112,20 +139,26 @@ export function FileTree({ agentId, rootLabel }: Props) {
 
   // Reset everything when the agent changes — different agents have
   // different working dirs, entries from one are nonsense for another.
+  // The initial fetch pulls TREE_PREFETCH_DEPTH levels so the first
+  // couple of expansion clicks are instant.
   useEffect(() => {
     setDirs(new Map());
     setExpanded(new Set(['']));
     setSelected(null);
     setGitStatus(undefined);
-    fetchDir('');
+    void fetchDir('', TREE_PREFETCH_DEPTH);
   }, [agentId, fetchDir]);
 
   // When the filter toggle flips we clear cached listings (they were
-  // fetched with the old filter) and refetch whichever levels are
-  // currently expanded. Keeps the tree honest without a full remount.
+  // fetched with the old filter) and refetch the prefetch window plus
+  // any expanded path that fell outside it. The root depth-N fetch
+  // covers most cases; deeper expanded paths get a targeted depth-1
+  // refetch so they reappear immediately rather than after a click.
   useEffect(() => {
     setDirs(new Map());
+    void fetchDir('', TREE_PREFETCH_DEPTH);
     for (const p of expanded) {
+      if (p === '') continue;
       void fetchDir(p);
     }
     // expanded isn't in deps by design — re-toggling showAll is the
@@ -165,8 +198,23 @@ export function FileTree({ agentId, rootLabel }: Props) {
           next.delete(path);
         } else {
           next.add(path);
-          if (!dirs.has(path)) {
-            void fetchDir(path);
+          const cached = dirs.get(path);
+          if (!cached) {
+            // Cold expansion — the user clicked outside the prefetch
+            // window. Pull TREE_PREFETCH_DEPTH more levels starting
+            // here so the next few clicks are instant too.
+            void fetchDir(path, TREE_PREFETCH_DEPTH);
+          } else if (
+            !cached.loading &&
+            hasUnwalkedSubdir(cached.entries, path, dirs)
+          ) {
+            // Cached — the folder itself renders instantly, but at
+            // least one of its subdirs hasn't been walked yet. Fire a
+            // background depth-N fetch so the frontier slides with
+            // the user and their next click stays on warm cache. The
+            // spinner next to the folder name honestly reflects that
+            // deeper levels are loading.
+            void fetchDir(path, TREE_PREFETCH_DEPTH);
           }
         }
         return next;
@@ -176,7 +224,13 @@ export function FileTree({ agentId, rootLabel }: Props) {
   );
 
   const refreshAll = useCallback(() => {
-    for (const p of expanded) void fetchDir(p);
+    // Re-pull the prefetch window at the root; cover anything expanded
+    // deeper than that with a targeted depth-1 refresh.
+    void fetchDir('', TREE_PREFETCH_DEPTH);
+    for (const p of expanded) {
+      if (p === '') continue;
+      void fetchDir(p);
+    }
   }, [expanded, fetchDir]);
 
   const rootState = dirs.get('');
@@ -249,6 +303,27 @@ export function FileTree({ agentId, rootLabel }: Props) {
       </div>
     </div>
   );
+}
+
+/**
+ * True when at least one of `entries`'s subdirectories doesn't have a
+ * cached listing in `dirs`. Used to decide whether expanding a
+ * cached folder should fire a background prefetch — if every child
+ * dir is already walked, the user's next click is already instant and
+ * we can stay quiet. Ignored entries are skipped to match the
+ * sidecar's BFS, which also refuses to descend into them.
+ */
+function hasUnwalkedSubdir(
+  entries: FSEntry[],
+  parentPath: string,
+  dirs: Map<string, DirState>,
+): boolean {
+  for (const e of entries) {
+    if (e.kind !== 'dir' || e.gitignored) continue;
+    const childPath = parentPath ? `${parentPath}/${e.name}` : e.name;
+    if (!dirs.has(childPath)) return true;
+  }
+  return false;
 }
 
 type DirNodeProps = {
