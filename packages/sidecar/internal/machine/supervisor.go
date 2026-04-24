@@ -354,11 +354,17 @@ func (s *supervisor) HandleFSList(ctx context.Context, req protocol.FSListReques
 	if depth < 1 {
 		depth = 1
 	}
+	// Match ListDirs' root-path normalization so the root-listing
+	// lookup below hits the canonical "" key it produces.
+	rootKey := req.Path
+	if rootKey == "." {
+		rootKey = ""
+	}
 	listings, err := ListDirs(ListDirRequest{
 		WorkingDir: s.spec.WorkingDir,
 		Path:       req.Path,
 		ShowAll:    req.ShowAll,
-	}, depth, protocol.FSListRecursiveMaxEntries)
+	}, depth, protocol.FSListRecursiveDescentBudget)
 
 	if err != nil {
 		resp.Error = err.Error()
@@ -368,7 +374,7 @@ func (s *supervisor) HandleFSList(ctx context.Context, req protocol.FSListReques
 		}
 		for path, entries := range listings {
 			pe := toProtocolEntries(entries)
-			if path == req.Path {
+			if path == rootKey {
 				resp.Entries = pe
 			}
 			if depth > 1 {

@@ -148,8 +148,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     drains on destroy. There is no per-agent process — supervisors are
     goroutines inside the single daemon.
   - `fs.go` / `fswatch.go` / `git.go` — workingDir browsing for the
-    dashboard's right-pane file tree. `ListDir` jails to the agent's
-    workingDir and applies gitignore (always strips `.git`).
+    dashboard's right-pane file tree. `ListDirs` BFS-walks up to
+    `maxDepth` levels (reusing a single `listDirWith` core + one
+    preloaded gitignore matcher) and returns a `path → entries` map
+    so depth-N prefetch lands in one round trip. Both jail to the
+    agent's workingDir, always strip `.git`, and respect gitignore.
     `fsWatcher` registers one fsnotify watch per non-ignored dir and
     coalesces events into 250 ms-debounced fs-changed emits. `git.go`
     reads `.git/HEAD` (and resolves the worktree-pointer file form)

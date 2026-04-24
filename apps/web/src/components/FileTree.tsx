@@ -27,8 +27,9 @@ type DirState = {
 // populated before the user clicks anything, so the first two levels
 // of expansion render synchronously from cache. Raising this trades
 // larger payloads and more sidecar stat calls for deeper instant
-// expansion; the sidecar itself caps the total entries (see
-// FSListRecursiveMaxEntries) so a pathological tree still terminates.
+// expansion; the sidecar bounds deeper traversal via
+// FSListRecursiveDescentBudget so a pathological tree still
+// terminates.
 const TREE_PREFETCH_DEPTH = 3;
 
 type Props = {

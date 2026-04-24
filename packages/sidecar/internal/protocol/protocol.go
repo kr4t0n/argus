@@ -204,9 +204,10 @@ type FSListRequestCommand struct {
 	// response, counting Path itself as level 1. 0 or 1 means the
 	// historical single-level listing. >1 asks the sidecar to walk
 	// non-ignored subdirectories breadth-first so the dashboard can
-	// hydrate its cache in one round trip. The sidecar caps the total
-	// entries returned (see FSListRecursiveMaxEntries) to keep payloads
-	// bounded on pathological trees.
+	// hydrate its cache in one round trip. The sidecar caps how far
+	// the BFS descends once it's already seen a lot of entries (see
+	// FSListRecursiveDescentBudget) to keep payloads bounded on
+	// pathological trees.
 	Depth int   `json:"depth,omitempty"`
 	TS    int64 `json:"ts"`
 }
@@ -246,12 +247,14 @@ type FSListResponseEvent struct {
 	TS  int64      `json:"ts"`
 }
 
-// FSListRecursiveMaxEntries caps the total number of entries a single
-// depth>1 listing returns. Protects the lifecycle stream and the
-// dashboard from a pathological `ShowAll` walk through node_modules.
-// Breadth-first traversal means shallower levels are always populated
-// first, so partial results are still useful when we hit the cap.
-const FSListRecursiveMaxEntries = 5000
+// FSListRecursiveDescentBudget bounds how deep the BFS expands: once
+// the total entries collected so far reaches this budget, the walk
+// stops enqueueing new subdirectories but still returns the current
+// directory's full listing. A wide root (more than the budget worth
+// of direct children) therefore still returns everything in the
+// root — the cap only protects against pathological `ShowAll` walks
+// that would otherwise sprawl across node_modules / vendor / etc.
+const FSListRecursiveDescentBudget = 5000
 
 type FSChangedEvent struct {
 	Kind      string `json:"kind"` // "fs-changed"

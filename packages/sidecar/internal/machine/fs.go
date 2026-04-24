@@ -194,24 +194,26 @@ func listDirWith(workingDir, relPath string, showAll bool, matcher *gitignore.Gi
 // subdirectories — both blow up the walk (symlink loops, whole
 // node_modules trees) for no user benefit.
 //
-// The walk stops enqueueing new children once totalCap entries have
-// been collected. BFS means shallow levels are always filled first,
-// so a truncated response is still useful: the root and its direct
-// children — the folders the user is likeliest to click — are always
-// present even if a deep subtree is cut off.
+// `descentBudget` bounds how deep the walk expands: once the total
+// entries collected so far reaches the budget, the BFS stops
+// enqueueing new subdirectories. It is NOT a hard cap on the
+// response size — the directory being listed when the budget is
+// reached still contributes its full entry list. BFS ordering means
+// shallow levels fill first, so a truncated response still contains
+// the folders the user is likeliest to click.
 //
 // Errors on the root path are fatal. Errors on subdirectories are
 // silently skipped — better to show a partial tree than refuse the
 // whole prefetch over one permission-denied subdir.
-func ListDirs(req ListDirRequest, maxDepth, totalCap int) (map[string][]FSEntry, error) {
+func ListDirs(req ListDirRequest, maxDepth, descentBudget int) (map[string][]FSEntry, error) {
 	if req.WorkingDir == "" {
 		return nil, errors.New("agent has no working directory")
 	}
 	if maxDepth < 1 {
 		maxDepth = 1
 	}
-	if totalCap <= 0 {
-		totalCap = 1 << 30 // effectively uncapped
+	if descentBudget <= 0 {
+		descentBudget = 1 << 30 // effectively uncapped
 	}
 
 	var matcher *gitignore.GitIgnore
@@ -219,12 +221,22 @@ func ListDirs(req ListDirRequest, maxDepth, totalCap int) (map[string][]FSEntry,
 		matcher, _ = loadGitignore(req.WorkingDir)
 	}
 
+	// Normalize the starting path: protocol says root is "" but
+	// callers may hand us "." interchangeably. Collapsing both to ""
+	// keeps listings keys canonical — without this, "." seeds the
+	// queue and child paths render as "./src", breaking the root-is-
+	// empty-string contract the dashboard hydrates against.
+	rootPath := req.Path
+	if rootPath == "." {
+		rootPath = ""
+	}
+
 	type queueItem struct {
 		path  string
 		level int
 	}
 	listings := make(map[string][]FSEntry)
-	queue := []queueItem{{path: req.Path, level: 1}}
+	queue := []queueItem{{path: rootPath, level: 1}}
 	total := 0
 
 	for len(queue) > 0 {
@@ -233,7 +245,7 @@ func ListDirs(req ListDirRequest, maxDepth, totalCap int) (map[string][]FSEntry,
 
 		entries, err := listDirWith(req.WorkingDir, item.path, req.ShowAll, matcher)
 		if err != nil {
-			if item.path == req.Path {
+			if item.path == rootPath {
 				return nil, err
 			}
 			// Subdirectory failure (permission, gone between walk and
@@ -243,7 +255,7 @@ func ListDirs(req ListDirRequest, maxDepth, totalCap int) (map[string][]FSEntry,
 		listings[item.path] = entries
 		total += len(entries)
 
-		if item.level >= maxDepth || total >= totalCap {
+		if item.level >= maxDepth || total >= descentBudget {
 			continue
 		}
 		for _, e := range entries {

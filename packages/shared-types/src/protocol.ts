@@ -219,8 +219,11 @@ export interface FSListRequestCommand {
    *  path (the historical behavior). >1 asks the sidecar to BFS into
    *  non-ignored subdirectories and return every level's listing in
    *  `listings`, so the dashboard can hydrate its cache in one round
-   *  trip and expand folders instantly. The sidecar caps the total
-   *  number of entries returned to avoid pathological payloads. */
+   *  trip and expand folders instantly. The sidecar bounds how deep
+   *  the walk expands once it's already collected a lot of entries
+   *  (see `FSListRecursiveDescentBudget` in protocol.go) — this
+   *  limits further descent, not the size of any single directory's
+   *  listing. */
   depth?: number;
   ts: number;
 }

@@ -22,8 +22,10 @@ class FSListQueryDto {
   /** How many directory levels to include in the response (1 = just
    *  the requested path, the historical behavior). Higher values let
    *  the dashboard prefetch multiple levels in a single round trip so
-   *  expanding cached folders is instant. Capped to keep payloads
-   *  bounded on huge trees. */
+   *  expanding cached folders is instant. The sidecar applies a
+   *  descent budget that stops the BFS from going deeper once enough
+   *  entries have been collected — individual directory listings are
+   *  not truncated. */
   @IsOptional()
   @Type(() => Number)
   @IsInt()
