@@ -143,11 +143,15 @@ export function FileTree({ agentId, rootLabel }: Props) {
   }, [agentId, fetchDir]);
 
   // Filter toggle collapses back to the root and refetches with the
-  // new filter — same shape as refreshAll. Cleaner than refetching
-  // every previously-expanded level: the user has to re-open them,
-  // but flipping "show gitignored" already changes what's worth
-  // browsing so re-exploration is the natural next step.
+  // new filter — same shape as refreshAll. Skip the initial-render
+  // fire so we don't double up with the agent-change effect above,
+  // which already fetches the root on mount.
+  const showAllMounted = useRef(false);
   useEffect(() => {
+    if (!showAllMounted.current) {
+      showAllMounted.current = true;
+      return;
+    }
     setExpanded(new Set(['']));
     setDirs(new Map());
     setSelected(null);
