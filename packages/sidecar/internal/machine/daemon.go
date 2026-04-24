@@ -22,6 +22,14 @@ import (
 const (
 	machineHeartbeatInterval = 5 * time.Second
 	controlReadBlock         = 2 * time.Second
+	// fsConcurrencyLimit caps how many fs-list / fs-read handlers run
+	// in parallel across all agents. Picked empirically: high enough
+	// that a tree refresh of ~20 expanded folders drains in parallel
+	// instead of serializing through the control loop, low enough
+	// that a malicious or buggy client can't fork-bomb the disk.
+	// Goroutines that don't get a slot just queue at the channel
+	// send — no requests are dropped.
+	fsConcurrencyLimit = 16
 )
 
 // Daemon is the long-lived per-machine process. It owns a single bus
@@ -58,6 +66,13 @@ type Daemon struct {
 	update    *UpdateState
 	cancelMu  sync.Mutex
 	runCancel context.CancelFunc
+
+	// Bounded-concurrency gate for fs-list / fs-read handlers. A
+	// depth-N fs-list can walk thousands of directory entries; if we
+	// ran it on the control goroutine, a tree refresh with multiple
+	// expansions serialized past the server's 5 s fs-list timeout.
+	// Send blocks when full so excess requests queue rather than drop.
+	fsSlots chan struct{}
 }
 
 // New builds a Daemon from a loaded cache and version string. Does NOT
@@ -72,6 +87,7 @@ func New(cachePath string, cache *Cache, sidecarVersion string, logger *log.Logg
 		supervisors:    make(map[string]*supervisor),
 		hostname:       hn,
 		update:         &UpdateState{},
+		fsSlots:        make(chan struct{}, fsConcurrencyLimit),
 	}
 }
 
@@ -259,11 +275,19 @@ func (d *Daemon) dispatchControl(ctx context.Context, payload map[string]any) {
 // supervisor. If the agent is unknown (race: deleted between server
 // publish and sidecar read) we publish a synthetic error response so
 // the server-side pending request resolves instead of timing out.
+//
+// The actual listing runs in a goroutine bounded by fsSlots so the
+// control loop returns immediately. Without this, a tree refresh
+// with N expanded folders — or a single depth>1 prefetch walk —
+// serialized past the server's 5 s timeout and surfaced as
+// "agent did not respond" in the dashboard.
 func (d *Daemon) handleFSList(ctx context.Context, req protocol.FSListRequestCommand) {
 	d.mu.Lock()
 	s, ok := d.supervisors[req.AgentID]
 	d.mu.Unlock()
 	if !ok {
+		// Synthetic-error path is fast and Bus.Publish is thread-safe,
+		// but we still publish inline here — there's no work to gate.
 		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSListResponseEvent{
 			Kind:      "fs-list-response",
 			MachineID: d.cache.MachineID,
@@ -275,13 +299,18 @@ func (d *Daemon) handleFSList(ctx context.Context, req protocol.FSListRequestCom
 		})
 		return
 	}
-	s.HandleFSList(ctx, req)
+	go func() {
+		d.fsSlots <- struct{}{}
+		defer func() { <-d.fsSlots }()
+		s.HandleFSList(ctx, req)
+	}()
 }
 
 // handleFSRead routes an fs-read request to the target agent's
 // supervisor. Same race window as handleFSList — publish a synthetic
 // error response if the agent is gone, so the server-side pending
-// request resolves instead of timing out.
+// request resolves instead of timing out. Async dispatch + shared
+// fsSlots gate, same rationale as handleFSList.
 func (d *Daemon) handleFSRead(ctx context.Context, req protocol.FSReadRequestCommand) {
 	d.mu.Lock()
 	s, ok := d.supervisors[req.AgentID]
@@ -299,7 +328,11 @@ func (d *Daemon) handleFSRead(ctx context.Context, req protocol.FSReadRequestCom
 		})
 		return
 	}
-	s.HandleFSRead(ctx, req)
+	go func() {
+		d.fsSlots <- struct{}{}
+		defer func() { <-d.fsSlots }()
+		s.HandleFSRead(ctx, req)
+	}()
 }
 
 func (d *Daemon) handleCreateAgent(ctx context.Context, spec protocol.AgentSpec) {
