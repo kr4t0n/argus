@@ -189,6 +189,12 @@ export interface TerminalClosedMessage {
 export interface FSListResponse {
   path: string;
   entries: FSEntry[];
+  /** Populated when the caller passed `depth > 1`. Keys are paths
+   *  relative to the agent's workingDir (empty string = root); each
+   *  value is that directory's listing. Lets the dashboard hydrate its
+   *  tree cache in one round trip. The entry for the requested `path`
+   *  duplicates `entries` so consumers can read from either field. */
+  listings?: Record<string, FSEntry[]>;
   /** Present when the agent's workingDir is a git repo. Refreshed on
    *  every listing (the sidecar reads .git/HEAD per call) so any tree
    *  refetch also refreshes the branch indicator in the dashboard. */

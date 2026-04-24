@@ -22,6 +22,16 @@ type DirState = {
   error?: string;
 };
 
+// How many directory levels we ask the sidecar to walk in a single
+// round trip. 3 means: root + its subdirs + their subdirs are all
+// populated before the user clicks anything, so the first two levels
+// of expansion render synchronously from cache. Raising this trades
+// larger payloads and more sidecar stat calls for deeper instant
+// expansion; the sidecar bounds deeper traversal via
+// FSListRecursiveDescentBudget so a pathological tree still
+// terminates.
+const TREE_PREFETCH_DEPTH = 3;
+
 type Props = {
   agentId: string;
   /** Cosmetic only: shown as a dim caption above the tree. */
@@ -29,11 +39,12 @@ type Props = {
 };
 
 /**
- * Lazy-expanding file tree for the agent's working directory. Fetches
- * one directory at a time from `GET /agents/:id/fs/list` and keeps a
- * flat `Map<path, DirState>` of loaded levels. Subscribes to the
- * `fs:changed` WebSocket event and re-fetches any loaded level whose
- * path fires — so the tree stays live as the agent edits files.
+ * Lazy-expanding file tree for the agent's working directory. On
+ * mount and on cold expansions, fetches TREE_PREFETCH_DEPTH levels
+ * in one round trip from `GET /agents/:id/fs/list` and hydrates a
+ * flat `Map<path, DirState>` cache, so the next few expansions
+ * render synchronously. Subscribes to `fs:changed` to re-fetch any
+ * loaded level as the agent edits files.
  *
  * Double-clicking a file opens it as a preview tab in the main pane
  * (see FileTabStrip + FileViewer).
@@ -68,7 +79,7 @@ export function FileTree({ agentId, rootLabel }: Props) {
   showAllRef.current = showAll;
 
   const fetchDir = useCallback(
-    async (path: string) => {
+    async (path: string, depth: number = 1) => {
       setDirs((prev) => {
         const next = new Map(prev);
         const existing = next.get(path);
@@ -80,10 +91,20 @@ export function FileTree({ agentId, rootLabel }: Props) {
         return next;
       });
       try {
-        const res = await api.listAgentDir(agentId, path, showAllRef.current);
+        const res = await api.listAgentDir(agentId, path, showAllRef.current, depth);
         setDirs((prev) => {
           const next = new Map(prev);
-          next.set(path, { entries: res.entries, loading: false });
+          // Depth>1 responses hydrate every level the sidecar walked
+          // in one setState so the next N expansions render from
+          // cache. Depth=1 responses land in `entries` only.
+          if (res.listings) {
+            for (const [p, entries] of Object.entries(res.listings)) {
+              next.set(p, { entries, loading: false });
+            }
+          }
+          if (!res.listings || !res.listings[path]) {
+            next.set(path, { entries: res.entries, loading: false });
+          }
           return next;
         });
         // Sidecar omits `git` for non-repo workingDirs; coerce to null
@@ -112,24 +133,30 @@ export function FileTree({ agentId, rootLabel }: Props) {
 
   // Reset everything when the agent changes — different agents have
   // different working dirs, entries from one are nonsense for another.
+  // The initial fetch pulls TREE_PREFETCH_DEPTH levels so the first
+  // couple of expansion clicks are instant.
   useEffect(() => {
     setDirs(new Map());
     setExpanded(new Set(['']));
     setSelected(null);
     setGitStatus(undefined);
-    fetchDir('');
+    void fetchDir('', TREE_PREFETCH_DEPTH);
   }, [agentId, fetchDir]);
 
-  // When the filter toggle flips we clear cached listings (they were
-  // fetched with the old filter) and refetch whichever levels are
-  // currently expanded. Keeps the tree honest without a full remount.
+  // Filter toggle collapses back to the root and refetches with the
+  // new filter — same shape as refreshAll. Skip the initial-render
+  // fire so we don't double up with the agent-change effect above,
+  // which already fetches the root on mount.
+  const showAllMounted = useRef(false);
   useEffect(() => {
-    setDirs(new Map());
-    for (const p of expanded) {
-      void fetchDir(p);
+    if (!showAllMounted.current) {
+      showAllMounted.current = true;
+      return;
     }
-    // expanded isn't in deps by design — re-toggling showAll is the
-    // trigger; expanded-set churn shouldn't refetch everything.
+    setExpanded(new Set(['']));
+    setDirs(new Map());
+    setSelected(null);
+    void fetchDir('', TREE_PREFETCH_DEPTH);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showAll]);
 
@@ -165,8 +192,23 @@ export function FileTree({ agentId, rootLabel }: Props) {
           next.delete(path);
         } else {
           next.add(path);
-          if (!dirs.has(path)) {
-            void fetchDir(path);
+          const cached = dirs.get(path);
+          if (!cached) {
+            // Cold expansion — the user clicked outside the prefetch
+            // window. Pull TREE_PREFETCH_DEPTH more levels starting
+            // here so the next few clicks are instant too.
+            void fetchDir(path, TREE_PREFETCH_DEPTH);
+          } else if (
+            !cached.loading &&
+            hasUnwalkedSubdir(cached.entries, path, dirs)
+          ) {
+            // Cached — the folder itself renders instantly, but at
+            // least one of its subdirs hasn't been walked yet. Fire a
+            // background depth-N fetch so the frontier slides with
+            // the user and their next click stays on warm cache. The
+            // spinner next to the folder name honestly reflects that
+            // deeper levels are loading.
+            void fetchDir(path, TREE_PREFETCH_DEPTH);
           }
         }
         return next;
@@ -175,9 +217,15 @@ export function FileTree({ agentId, rootLabel }: Props) {
     [dirs, fetchDir],
   );
 
+  // Refresh = start over: collapse to the root and re-pull the
+  // prefetch window. Simpler than refetching every expanded level in
+  // parallel, and matches what most tree explorers do.
   const refreshAll = useCallback(() => {
-    for (const p of expanded) void fetchDir(p);
-  }, [expanded, fetchDir]);
+    setExpanded(new Set(['']));
+    setDirs(new Map());
+    setSelected(null);
+    void fetchDir('', TREE_PREFETCH_DEPTH);
+  }, [fetchDir]);
 
   const rootState = dirs.get('');
   const rootEmpty =
@@ -249,6 +297,27 @@ export function FileTree({ agentId, rootLabel }: Props) {
       </div>
     </div>
   );
+}
+
+/**
+ * True when at least one of `entries`'s subdirectories doesn't have a
+ * cached listing in `dirs`. Used to decide whether expanding a
+ * cached folder should fire a background prefetch — if every child
+ * dir is already walked, the user's next click is already instant and
+ * we can stay quiet. Ignored entries are skipped to match the
+ * sidecar's BFS, which also refuses to descend into them.
+ */
+function hasUnwalkedSubdir(
+  entries: FSEntry[],
+  parentPath: string,
+  dirs: Map<string, DirState>,
+): boolean {
+  for (const e of entries) {
+    if (e.kind !== 'dir' || e.gitignored) continue;
+    const childPath = parentPath ? `${parentPath}/${e.name}` : e.name;
+    if (!dirs.has(childPath)) return true;
+  }
+  return false;
 }
 
 type DirNodeProps = {

@@ -214,6 +214,17 @@ export interface FSListRequestCommand {
   agentId: string;
   path: string;
   showAll: boolean;
+  /** How many directory levels to include in the response, counting the
+   *  requested path as level 1. Omitted / 0 / 1 means only the requested
+   *  path (the historical behavior). >1 asks the sidecar to BFS into
+   *  non-ignored subdirectories and return every level's listing in
+   *  `listings`, so the dashboard can hydrate its cache in one round
+   *  trip and expand folders instantly. The sidecar bounds how deep
+   *  the walk expands once it's already collected a lot of entries
+   *  (see `FSListRecursiveDescentBudget` in protocol.go) — this
+   *  limits further descent, not the size of any single directory's
+   *  listing. */
+  depth?: number;
   ts: number;
 }
 
@@ -278,6 +289,12 @@ export interface FSListResponseEvent {
   requestId: string;
   path: string;
   entries?: FSEntry[];
+  /** Populated when the request asked for `depth > 1`. Keys are paths
+   *  relative to the agent's workingDir (empty string = root), values
+   *  are that directory's listing. Always includes an entry for the
+   *  requested `path` when present; duplicates what's in `entries` so
+   *  clients can consume either field uniformly. */
+  listings?: Record<string, FSEntry[]>;
   error?: string;
   /** Present when the agent's workingDir is a git repo. Sent on every
    *  fs-list response (cheap: one .git/HEAD read per call), so any tree
