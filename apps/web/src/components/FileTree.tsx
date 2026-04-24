@@ -38,11 +38,12 @@ type Props = {
 };
 
 /**
- * Lazy-expanding file tree for the agent's working directory. Fetches
- * one directory at a time from `GET /agents/:id/fs/list` and keeps a
- * flat `Map<path, DirState>` of loaded levels. Subscribes to the
- * `fs:changed` WebSocket event and re-fetches any loaded level whose
- * path fires — so the tree stays live as the agent edits files.
+ * Lazy-expanding file tree for the agent's working directory. On
+ * mount and on cold expansions, fetches TREE_PREFETCH_DEPTH levels
+ * in one round trip from `GET /agents/:id/fs/list` and hydrates a
+ * flat `Map<path, DirState>` cache, so the next few expansions
+ * render synchronously. Subscribes to `fs:changed` to re-fetch any
+ * loaded level as the agent edits files.
  *
  * Double-clicking a file opens it as a preview tab in the main pane
  * (see FileTabStrip + FileViewer).
@@ -92,23 +93,15 @@ export function FileTree({ agentId, rootLabel }: Props) {
         const res = await api.listAgentDir(agentId, path, showAllRef.current, depth);
         setDirs((prev) => {
           const next = new Map(prev);
-          // When the sidecar returned a multi-level listing, hydrate
-          // every path it sent in one setState so expanding those
-          // folders is synchronous from cache. The requested path
-          // itself is always covered by `res.listings` (duplicated from
-          // `entries`), so the fallback to `res.entries` only fires
-          // when depth=1.
+          // Depth>1 responses hydrate every level the sidecar walked
+          // in one setState so the next N expansions render from
+          // cache. Depth=1 responses land in `entries` only.
           if (res.listings) {
             for (const [p, entries] of Object.entries(res.listings)) {
               next.set(p, { entries, loading: false });
             }
-            if (!res.listings[path]) {
-              // Paranoia: if the sidecar didn't include the requested
-              // path for some reason, fall back to `entries` so the
-              // loading spinner clears.
-              next.set(path, { entries: res.entries, loading: false });
-            }
-          } else {
+          }
+          if (!res.listings || !res.listings[path]) {
             next.set(path, { entries: res.entries, loading: false });
           }
           return next;
@@ -149,13 +142,11 @@ export function FileTree({ agentId, rootLabel }: Props) {
     void fetchDir('', TREE_PREFETCH_DEPTH);
   }, [agentId, fetchDir]);
 
-  // Filter toggle flips → collapse back to the unexpanded root view
-  // and re-fetch the prefetch window with the new filter. Same
-  // simpler model as refreshAll: one depth-N request, no fan-out, no
-  // risk of N parallel depth-1's piling onto the sidecar past the
-  // server's fs-list timeout on bigger trees. The user loses their
-  // expanded state on toggle, which is fine — flipping "show
-  // gitignored" changes what's meaningful to browse anyway.
+  // Filter toggle collapses back to the root and refetches with the
+  // new filter — same shape as refreshAll. Cleaner than refetching
+  // every previously-expanded level: the user has to re-open them,
+  // but flipping "show gitignored" already changes what's worth
+  // browsing so re-exploration is the natural next step.
   useEffect(() => {
     setExpanded(new Set(['']));
     setDirs(new Map());
@@ -221,14 +212,10 @@ export function FileTree({ agentId, rootLabel }: Props) {
     [dirs, fetchDir],
   );
 
+  // Refresh = start over: collapse to the root and re-pull the
+  // prefetch window. Simpler than refetching every expanded level in
+  // parallel, and matches what most tree explorers do.
   const refreshAll = useCallback(() => {
-    // Collapse back to the unexpanded root view and re-pull the
-    // prefetch window. A single depth-N walk can never race N
-    // concurrent siblings past the server's fs-list timeout, and
-    // "refresh = start over" matches every other tree UI. Cached
-    // entries below the prefetch window are discarded — stale
-    // entries would only re-appear on explicit re-expansion, which
-    // will re-fetch anyway.
     setExpanded(new Set(['']));
     setDirs(new Map());
     setSelected(null);

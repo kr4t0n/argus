@@ -335,14 +335,11 @@ func (s *supervisor) startFSWatcher(ctx context.Context) {
 }
 
 // HandleFSList executes a list-directory request for this agent and
-// publishes the response back on the lifecycle stream. Invoked by the
-// daemon's control-plane dispatcher; kept on the supervisor because
-// this is where per-agent state (workingDir jail) lives.
-//
-// When req.Depth > 1 the reply carries every listing up to that depth
-// in Listings so the dashboard can hydrate its tree cache in a single
-// round trip. Entries is still populated with the root path's listing
-// so clients that don't consume Listings keep working.
+// publishes the response back on the lifecycle stream. When req.Depth
+// > 1 the reply carries every listing up to that depth in Listings so
+// the dashboard can hydrate its tree cache in a single round trip.
+// Entries always carries the requested path's listing so clients that
+// don't consume Listings keep working.
 func (s *supervisor) HandleFSList(ctx context.Context, req protocol.FSListRequestCommand) {
 	resp := protocol.FSListResponseEvent{
 		Kind:      "fs-list-response",
@@ -353,36 +350,32 @@ func (s *supervisor) HandleFSList(ctx context.Context, req protocol.FSListReques
 		TS:        time.Now().UnixMilli(),
 	}
 
-	listReq := ListDirRequest{
+	depth := req.Depth
+	if depth < 1 {
+		depth = 1
+	}
+	listings, err := ListDirs(ListDirRequest{
 		WorkingDir: s.spec.WorkingDir,
 		Path:       req.Path,
 		ShowAll:    req.ShowAll,
-	}
+	}, depth, protocol.FSListRecursiveMaxEntries)
 
-	if req.Depth > 1 {
-		listings, err := ListDirs(listReq, req.Depth, protocol.FSListRecursiveMaxEntries)
-		if err != nil {
-			resp.Error = err.Error()
-		} else {
-			resp.Listings = make(map[string][]protocol.FSEntry, len(listings))
-			for path, entries := range listings {
-				resp.Listings[path] = toProtocolEntries(entries)
-			}
-			// Duplicate the requested path's listing into Entries so
-			// consumers reading only Entries still see the root level.
-			if root, ok := listings[req.Path]; ok {
-				resp.Entries = toProtocolEntries(root)
-			}
-			s.attachGit(&resp)
-		}
+	if err != nil {
+		resp.Error = err.Error()
 	} else {
-		entries, err := ListDir(listReq)
-		if err != nil {
-			resp.Error = err.Error()
-		} else {
-			resp.Entries = toProtocolEntries(entries)
-			s.attachGit(&resp)
+		if depth > 1 {
+			resp.Listings = make(map[string][]protocol.FSEntry, len(listings))
 		}
+		for path, entries := range listings {
+			pe := toProtocolEntries(entries)
+			if path == req.Path {
+				resp.Entries = pe
+			}
+			if depth > 1 {
+				resp.Listings[path] = pe
+			}
+		}
+		s.attachGit(&resp)
 	}
 
 	if err := s.bus.Publish(ctx, protocol.LifecycleStream(), resp); err != nil {
