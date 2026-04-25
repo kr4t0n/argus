@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"sync"
 
-	"github.com/kyley/argus/sidecar/internal/protocol"
+	"github.com/kr4t0n/argus/sidecar/internal/protocol"
 )
 
 // CursorCLIAdapter wraps the Cursor agent CLI (`cursor-agent`) using

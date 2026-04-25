@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kyley/argus/sidecar/internal/machine"
+	"github.com/kr4t0n/argus/sidecar/internal/machine"
 )
 
 const (

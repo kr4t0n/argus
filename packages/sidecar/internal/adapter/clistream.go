@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kyley/argus/sidecar/internal/protocol"
+	"github.com/kr4t0n/argus/sidecar/internal/protocol"
 )
 
 // Mapper turns a raw line (possibly JSON) from the CLI into a Chunk.

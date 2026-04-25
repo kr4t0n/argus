@@ -36,9 +36,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/kyley/argus/sidecar/internal/adapter"
-	"github.com/kyley/argus/sidecar/internal/machine"
-	"github.com/kyley/argus/sidecar/internal/updater"
+	"github.com/kr4t0n/argus/sidecar/internal/adapter"
+	"github.com/kr4t0n/argus/sidecar/internal/machine"
+	"github.com/kr4t0n/argus/sidecar/internal/updater"
 )
 
 // Version is injected at build time via -ldflags="-X main.Version=…".

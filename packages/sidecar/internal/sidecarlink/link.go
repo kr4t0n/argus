@@ -26,7 +26,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/kyley/argus/sidecar/internal/protocol"
+	"github.com/kr4t0n/argus/sidecar/internal/protocol"
 )
 
 const (

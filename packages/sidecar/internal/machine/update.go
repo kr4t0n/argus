@@ -10,8 +10,8 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/kyley/argus/sidecar/internal/protocol"
-	"github.com/kyley/argus/sidecar/internal/updater"
+	"github.com/kr4t0n/argus/sidecar/internal/protocol"
+	"github.com/kr4t0n/argus/sidecar/internal/updater"
 )
 
 // RestartMode describes how the sidecar will swap to the freshly
