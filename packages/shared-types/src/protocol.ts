@@ -607,6 +607,20 @@ export const streamKeys = {
   machineControl: (machineId: string) => `machine:${machineId}:control`,
 };
 
+/** Per-stream MAXLEN cap (entries) used with `XADD ... MAXLEN ~ N`.
+ *  Sized for a memory-constrained Redis (~30 MB) and a small fleet
+ *  (~10 agents). Trimmed entries that haven't been XACK'd are
+ *  silently dropped — see the "Stream MAXLEN is silent message loss"
+ *  gotcha in AGENTS.md. Mirror this in
+ *  `packages/sidecar/internal/protocol/protocol.go::StreamMaxLen`. */
+export const streamMaxLen = (streamKey: string): number => {
+  if (streamKey === streamKeys.lifecycle) return 500;
+  if (streamKey.endsWith(':cmd')) return 200;
+  if (streamKey.endsWith(':result')) return 500;
+  if (streamKey.endsWith(':control')) return 200;
+  return 500;
+};
+
 export const consumerGroups = {
   /** server-side consumer group reading result streams */
   server: 'server',
