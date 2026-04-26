@@ -3,12 +3,11 @@ import { AlertTriangle, X } from 'lucide-react';
 import { useCloneFailureStore } from '../stores/cloneFailureStore';
 
 /**
- * Bottom-right toast stack for failed session-clone-from-turn attempts.
- * Mirrors SidecarUpdateToasts in placement and styling so a clone
- * failure landing concurrently with a sidecar update reads as one
- * stack rather than two competing layers. Auto-dismisses after 8s
- * (failure copy is short, not actionable beyond "next prompt starts
- * fresh", so leaving it sticky would just be visual debt).
+ * Failed session-clone-from-turn toast items. Returns a Fragment so the
+ * host (`AppToasts`) can interleave these with other toast types in
+ * one shared bottom-right column. Auto-dismisses after 8s (failure
+ * copy is short and not actionable beyond "next prompt starts fresh",
+ * so leaving it sticky would just be visual debt).
  */
 const AUTO_DISMISS_MS = 8_000;
 
@@ -26,10 +25,8 @@ export function SessionCloneFailedToasts() {
     return () => timers.forEach(window.clearTimeout);
   }, [visible, dismiss]);
 
-  if (visible.length === 0) return null;
-
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col gap-2">
+    <>
       {visible.map((f) => (
         <div
           key={f.sessionId}
@@ -63,6 +60,6 @@ export function SessionCloneFailedToasts() {
           </div>
         </div>
       ))}
-    </div>
+    </>
   );
 }

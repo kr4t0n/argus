@@ -11,7 +11,10 @@ import { useCloneFailureStore } from './stores/cloneFailureStore';
 import { ensureSocket, resetSocket, subscribeHandler } from './lib/ws';
 import { api } from './lib/api';
 import { migrateLocalMachineIconsToServer } from './lib/migrateMachineIcons';
-import { SidecarUpdateToasts } from './components/SidecarUpdateToasts';
+import {
+  SidecarUpdateBatchDismissAll,
+  SidecarUpdateToasts,
+} from './components/SidecarUpdateToasts';
 import { SessionCloneFailedToasts } from './components/SessionCloneFailedToasts';
 
 function ProtectedRoutes() {
@@ -129,8 +132,17 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/*" element={<ProtectedRoutes />} />
       </Routes>
-      <SidecarUpdateToasts />
-      <SessionCloneFailedToasts />
+      {/* Single host for every transient bottom-right toast type so
+          stacks combine into one column instead of overlapping at the
+          same screen coords. Toast components return Fragments of items
+          and inherit layout from this wrapper. The "dismiss all"
+          affordance for sidecar-update batches lives last so it always
+          sits at the bottom edge of the combined stack. */}
+      <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col gap-2">
+        <SidecarUpdateToasts />
+        <SessionCloneFailedToasts />
+        <SidecarUpdateBatchDismissAll />
+      </div>
     </>
   );
 }
