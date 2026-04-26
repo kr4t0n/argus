@@ -105,6 +105,103 @@ export class SessionService {
     await this.prisma.session.delete({ where: { id } });
   }
 
+  /**
+   * Fork a session at a given command. The new session reproduces every
+   * command (and its chunks) up to and including `forkAtCommandId`, then
+   * starts fresh on the CLI side: `externalId` stays null, so the next
+   * prompt the user sends spawns a fresh CLI conversation. The visible
+   * history is preserved so the user can read prior context, but the
+   * underlying agent has no memory of it. A future iteration can teach
+   * the sidecar adapters to clone+truncate the on-disk session file so
+   * the CLI itself continues from the chosen turn.
+   */
+  async fork(userId: string, sessionId: string, forkAtCommandId: string, title?: string) {
+    const src = await this.get(userId, sessionId);
+    const anchor = await this.prisma.command.findUnique({
+      where: { id: forkAtCommandId },
+    });
+    if (!anchor || anchor.sessionId !== sessionId) {
+      throw new BadRequestException('command does not belong to this session');
+    }
+
+    // Take everything up to and including the anchor, ordered the same
+    // way the chat view renders it. Tie-breaker on id keeps the order
+    // deterministic if two commands share a createdAt millisecond.
+    const prefix = await this.prisma.command.findMany({
+      where: {
+        sessionId,
+        OR: [
+          { createdAt: { lt: anchor.createdAt } },
+          { createdAt: anchor.createdAt, id: { lte: anchor.id } },
+        ],
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+
+    const chunks = prefix.length
+      ? await this.prisma.resultChunk.findMany({
+          where: { commandId: { in: prefix.map((c) => c.id) } },
+          orderBy: [{ commandId: 'asc' }, { seq: 'asc' }],
+        })
+      : [];
+    const chunksByCommand = new Map<string, typeof chunks>();
+    for (const ch of chunks) {
+      const arr = chunksByCommand.get(ch.commandId) ?? [];
+      arr.push(ch);
+      chunksByCommand.set(ch.commandId, arr);
+    }
+
+    const forkTitle = title?.trim() || `Fork of ${src.title}`.slice(0, 200);
+
+    const newSession = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.session.create({
+        data: {
+          userId,
+          agentId: src.agentId,
+          title: forkTitle,
+          status: 'idle',
+        },
+      });
+      for (const c of prefix) {
+        const newCmd = await tx.command.create({
+          data: {
+            sessionId: created.id,
+            agentId: c.agentId,
+            kind: c.kind,
+            prompt: c.prompt,
+            // Force-completed: the fork has no live runner to drive
+            // this command to its real status, and replaying it as
+            // pending would leave a phantom spinner.
+            status:
+              c.status === 'pending' || c.status === 'sent' || c.status === 'running'
+                ? 'completed'
+                : c.status,
+            createdAt: c.createdAt,
+            completedAt: c.completedAt ?? c.createdAt,
+          },
+        });
+        const cmdChunks = chunksByCommand.get(c.id) ?? [];
+        if (cmdChunks.length === 0) continue;
+        await tx.resultChunk.createMany({
+          data: cmdChunks.map((ch) => ({
+            commandId: newCmd.id,
+            seq: ch.seq,
+            kind: ch.kind,
+            delta: ch.delta,
+            content: ch.content,
+            meta: ch.meta ?? undefined,
+            ts: ch.ts,
+          })),
+        });
+      }
+      return created;
+    });
+
+    const dto = SessionService.toDto(newSession);
+    this.gateway.emitSessionCreated(dto);
+    return dto;
+  }
+
   async setStatus(id: string, status: SessionDTO['status']) {
     const s = await this.prisma.session.update({
       where: { id },
@@ -151,12 +248,7 @@ export class SessionService {
    *  and leave `tailCommands` undefined (full-width backfill), while the
    *  page loader passes `tailCommands` and leaves `afterSeq` at 0.
    */
-  async getWithChunks(
-    userId: string,
-    id: string,
-    afterSeq = 0,
-    tailCommands?: number,
-  ) {
+  async getWithChunks(userId: string, id: string, afterSeq = 0, tailCommands?: number) {
     const session = await this.get(userId, id);
     let commands;
     let hasMore = false;
@@ -191,12 +283,7 @@ export class SessionService {
    * used by the UI to stream history in as the user scrolls up. Returns
    * commands in ascending createdAt order to match the normal feed.
    */
-  async getOlderHistory(
-    userId: string,
-    id: string,
-    beforeCommandId: string,
-    limit: number,
-  ) {
+  async getOlderHistory(userId: string, id: string, beforeCommandId: string, limit: number) {
     await this.get(userId, id); // auth guard
 
     // Cursor-based pagination on (createdAt desc, id). Prisma's `cursor`

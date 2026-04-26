@@ -1,8 +1,11 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AlertCircle, Check, Copy, Loader2 } from 'lucide-react';
+import { AlertCircle, Check, Copy, GitFork, Loader2 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import type { CommandDTO, ResultChunkDTO } from '@argus/shared-types';
+import { api, ApiError } from '../lib/api';
+import { useSessionStore } from '../stores/sessionStore';
 import { splitDeltas } from '../lib/deltaSplit';
 import { ActivityPanel, ActivityPill } from './ActivityPill';
 import { FileChips, extractFiles } from './FileChips';
@@ -100,9 +103,7 @@ export function StreamViewer({
     pendingAnchorRef.current = null;
     const el = ref.current;
     if (!el) return;
-    const anchorEl = el.querySelector<HTMLElement>(
-      `[data-cmd-id="${CSS.escape(pending.id)}"]`,
-    );
+    const anchorEl = el.querySelector<HTMLElement>(`[data-cmd-id="${CSS.escape(pending.id)}"]`);
     if (!anchorEl) return;
     const topAfter = anchorEl.getBoundingClientRect().top;
     const delta = topAfter - pending.topBefore;
@@ -122,9 +123,7 @@ export function StreamViewer({
     // Capture the first rendered command's current y BEFORE we kick
     // off the fetch — the useLayoutEffect above uses this to keep the
     // same element pinned visually once prepend lands.
-    const anchorEl = el.querySelector<HTMLElement>(
-      `[data-cmd-id="${CSS.escape(anchor.id)}"]`,
-    );
+    const anchorEl = el.querySelector<HTMLElement>(`[data-cmd-id="${CSS.escape(anchor.id)}"]`);
     const topBefore = anchorEl?.getBoundingClientRect().top ?? 0;
     pendingAnchorRef.current = { id: anchor.id, topBefore };
     onLoadOlder();
@@ -297,8 +296,7 @@ const CommandBlock = memo(function CommandBlock({
       // from the live edge). Snapping to this turn's band would yank
       // their view to a turn they didn't ask to visit. The 48px mirrors
       // the StreamViewer `stickBottom` threshold.
-      const nearBottom =
-        scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48;
+      const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48;
       if (!nearBottom) return next;
       // `position: sticky` doesn't change layout, but its current PAINT
       // position can mask the band's natural in-flow location once it's
@@ -369,6 +367,8 @@ const CommandBlock = memo(function CommandBlock({
           files={files}
           workingDir={workingDir}
           streaming={running && !finalChunk && !errorChunk}
+          sessionId={command.sessionId}
+          commandId={command.id}
         />
       )}
 
@@ -433,14 +433,22 @@ function AnswerBlock({
   files,
   workingDir,
   streaming,
+  sessionId,
+  commandId,
 }: {
   bodyText: string;
   files: ReturnType<typeof extractFiles>;
   workingDir?: string | null;
   streaming: boolean;
+  sessionId: string;
+  commandId: string;
 }) {
   const [copied, setCopied] = useState(false);
+  const [forking, setForking] = useState(false);
+  const [forkError, setForkError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const navigate = useNavigate();
+  const upsertSession = useSessionStore((s) => s.upsertSession);
 
   useEffect(
     () => () => {
@@ -456,6 +464,26 @@ function AnswerBlock({
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => setCopied(false), 1500);
   }, [bodyText]);
+
+  const handleFork = useCallback(async () => {
+    if (forking) return;
+    setForking(true);
+    setForkError(null);
+    try {
+      const session = await api.forkSession(sessionId, { commandId });
+      upsertSession(session);
+      navigate(`/sessions/${session.id}`);
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : 'fork failed';
+      setForkError(msg);
+      // Clear the inline error after a beat — same cadence as the copy
+      // confirmation so the surrounding hover affordance settles.
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => setForkError(null), 2500);
+    } finally {
+      setForking(false);
+    }
+  }, [forking, sessionId, commandId, upsertSession, navigate]);
 
   // Touch devices don't have hover, and tapping a `tabIndex=0` div
   // doesn't reliably focus it across mobile browsers — focus explicitly
@@ -494,6 +522,21 @@ function AnswerBlock({
                 <Check className="h-3 w-3 text-emerald-500/80" />
               ) : (
                 <Copy className="h-3 w-3" />
+              )}
+            </button>
+          </Tooltip>
+          <Tooltip content={forkError ?? (forking ? 'Forking…' : 'Fork session from this turn')}>
+            <button
+              type="button"
+              onClick={handleFork}
+              disabled={forking}
+              aria-label="Fork session from this turn"
+              className="inline-flex h-6 w-6 items-center justify-center rounded text-neutral-600 transition-colors hover:bg-neutral-800/60 hover:text-neutral-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-500 disabled:opacity-50"
+            >
+              {forking ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <GitFork className="h-3 w-3" />
               )}
             </button>
           </Tooltip>

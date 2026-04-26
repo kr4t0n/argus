@@ -84,6 +84,16 @@ class CreateCommandDto {
   options?: Record<string, unknown>;
 }
 
+class ForkSessionDto {
+  @IsString()
+  @MinLength(1)
+  commandId!: string;
+
+  @IsOptional()
+  @IsString()
+  title?: string;
+}
+
 @UseGuards(JwtAuthGuard)
 @Controller('sessions')
 export class SessionController {
@@ -182,5 +192,14 @@ export class SessionController {
     @Body() body: CreateCommandDto,
   ) {
     return this.commands.dispatch(req.user.id, id, body.prompt, body.options);
+  }
+
+  @Post(':id/fork')
+  async fork(
+    @Req() req: AuthedRequest,
+    @Param('id') id: string,
+    @Body() body: ForkSessionDto,
+  ) {
+    return this.sessions.fork(req.user.id, id, body.commandId, body.title);
   }
 }

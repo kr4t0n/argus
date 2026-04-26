@@ -61,20 +61,14 @@ export const api = {
   me: () => http<{ user: { id: string; email: string; role: string } }>('/auth/me'),
 
   listAgents: (opts?: { includeArchived?: boolean }) =>
-    http<AgentDTO[]>(
-      `/agents${opts?.includeArchived ? '?includeArchived=true' : ''}`,
-    ),
+    http<AgentDTO[]>(`/agents${opts?.includeArchived ? '?includeArchived=true' : ''}`),
   getAgent: (id: string) => http<AgentDTO>(`/agents/${id}`),
-  archiveAgent: (id: string) =>
-    http<AgentDTO>(`/agents/${id}/archive`, { method: 'POST' }),
-  unarchiveAgent: (id: string) =>
-    http<AgentDTO>(`/agents/${id}/unarchive`, { method: 'POST' }),
+  archiveAgent: (id: string) => http<AgentDTO>(`/agents/${id}/archive`, { method: 'POST' }),
+  unarchiveAgent: (id: string) => http<AgentDTO>(`/agents/${id}/unarchive`, { method: 'POST' }),
 
   // Machines
   listMachines: (opts?: { includeArchived?: boolean }) =>
-    http<MachineDTO[]>(
-      `/machines${opts?.includeArchived ? '?includeArchived=true' : ''}`,
-    ),
+    http<MachineDTO[]>(`/machines${opts?.includeArchived ? '?includeArchived=true' : ''}`),
   getMachine: (id: string) => http<MachineDTO>(`/machines/${id}`),
   listMachineAgents: (id: string) => http<AgentDTO[]>(`/machines/${id}/agents`),
   createAgent: (machineId: string, body: CreateAgentRequest) =>
@@ -86,9 +80,7 @@ export const api = {
     http<void>(`/machines/${machineId}/agents/${agentId}`, { method: 'DELETE' }),
 
   listSessions: (opts?: { includeArchived?: boolean }) =>
-    http<SessionDTO[]>(
-      `/sessions${opts?.includeArchived ? '?includeArchived=true' : ''}`,
-    ),
+    http<SessionDTO[]>(`/sessions${opts?.includeArchived ? '?includeArchived=true' : ''}`),
   getSession: (id: string, opts?: { tailCommands?: number }) => {
     const q = new URLSearchParams();
     if (opts?.tailCommands) q.set('tailCommands', String(opts.tailCommands));
@@ -122,19 +114,22 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ title }),
     }),
-  archiveSession: (id: string) =>
-    http<SessionDTO>(`/sessions/${id}/archive`, { method: 'POST' }),
+  archiveSession: (id: string) => http<SessionDTO>(`/sessions/${id}/archive`, { method: 'POST' }),
   unarchiveSession: (id: string) =>
     http<SessionDTO>(`/sessions/${id}/unarchive`, { method: 'POST' }),
   deleteSession: (id: string) => http<void>(`/sessions/${id}`, { method: 'DELETE' }),
+  forkSession: (id: string, body: { commandId: string; title?: string }) =>
+    http<SessionDTO>(`/sessions/${id}/fork`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 
   sendCommand: (sessionId: string, body: CreateCommandRequest) =>
     http<CommandDTO>(`/sessions/${sessionId}/commands`, {
       method: 'POST',
       body: JSON.stringify(body),
     }),
-  cancelCommand: (id: string) =>
-    http<CommandDTO>(`/commands/${id}/cancel`, { method: 'POST' }),
+  cancelCommand: (id: string) => http<CommandDTO>(`/commands/${id}/cancel`, { method: 'POST' }),
 
   // Terminals
   openTerminal: (agentId: string, body: OpenTerminalRequest = {}) =>
@@ -142,10 +137,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
-  listTerminals: (agentId: string) =>
-    http<TerminalDTO[]>(`/agents/${agentId}/terminals`),
-  closeTerminal: (id: string) =>
-    http<TerminalDTO>(`/terminals/${id}`, { method: 'DELETE' }),
+  listTerminals: (agentId: string) => http<TerminalDTO[]>(`/agents/${agentId}/terminals`),
+  closeTerminal: (id: string) => http<TerminalDTO>(`/terminals/${id}`, { method: 'DELETE' }),
 
   // Sidecar version + remote update
   getSidecarVersion: (machineId: string) =>
@@ -179,9 +172,7 @@ export const api = {
     if (showAll) q.set('showAll', 'true');
     if (depth && depth > 1) q.set('depth', String(depth));
     const qs = q.toString();
-    return http<FSListResponse>(
-      `/agents/${agentId}/fs/list${qs ? `?${qs}` : ''}`,
-    );
+    return http<FSListResponse>(`/agents/${agentId}/fs/list${qs ? `?${qs}` : ''}`);
   },
   readAgentFile: (agentId: string, path: string) => {
     const q = new URLSearchParams({ path });
