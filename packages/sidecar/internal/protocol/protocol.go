@@ -2,6 +2,8 @@
 // When you change one, change the other.
 package protocol
 
+import "strings"
+
 type AgentStatus string
 
 const (
@@ -433,6 +435,26 @@ func CommandStream(id string) string               { return "agent:" + id + ":cm
 func ResultStream(id string) string                { return "agent:" + id + ":result" }
 func MachineControlStream(machineID string) string { return "machine:" + machineID + ":control" }
 func MachineConsumerGroup(machineID string) string { return "machine-" + machineID }
+
+// StreamMaxLen returns the per-stream MAXLEN cap (entries) used with
+// `XADD ... MAXLEN ~ N`. Mirror of `streamMaxLen` in
+// packages/shared-types/src/protocol.ts — keep both in sync. See the
+// "Stream MAXLEN is silent message loss" gotcha in AGENTS.md before
+// changing these values.
+func StreamMaxLen(streamKey string) int64 {
+	switch {
+	case streamKey == LifecycleStream():
+		return 500
+	case strings.HasSuffix(streamKey, ":cmd"):
+		return 200
+	case strings.HasSuffix(streamKey, ":result"):
+		return 500
+	case strings.HasSuffix(streamKey, ":control"):
+		return 200
+	default:
+		return 500
+	}
+}
 
 // SidecarConsumerGroup is the consumer group name an agent supervisor
 // uses on its own per-agent command stream. We name it after the agent

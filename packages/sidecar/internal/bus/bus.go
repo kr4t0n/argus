@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/kr4t0n/argus/sidecar/internal/protocol"
 )
 
 type Bus struct {
@@ -29,6 +31,9 @@ func Dial(ctx context.Context, url string) (*Bus, error) {
 func (b *Bus) Close() error { return b.rdb.Close() }
 
 // Publish adds a JSON payload to `stream` as a single-field entry `data`.
+// The MAXLEN cap is keyed off the stream name via `protocol.StreamMaxLen`
+// so each stream class gets a size appropriate for its volume and
+// consumer-lag tolerance.
 func (b *Bus) Publish(ctx context.Context, stream string, payload any) error {
 	buf, err := json.Marshal(payload)
 	if err != nil {
@@ -36,7 +41,7 @@ func (b *Bus) Publish(ctx context.Context, stream string, payload any) error {
 	}
 	return b.rdb.XAdd(ctx, &redis.XAddArgs{
 		Stream: stream,
-		MaxLen: 10_000,
+		MaxLen: protocol.StreamMaxLen(stream),
 		Approx: true,
 		Values: map[string]any{"data": buf},
 	}).Err()

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/kyley/argus/sidecar/internal/protocol"
+	"github.com/kr4t0n/argus/sidecar/internal/protocol"
 )
 
 // CodexAdapter wraps the OpenAI `codex` CLI in non-interactive exec mode.

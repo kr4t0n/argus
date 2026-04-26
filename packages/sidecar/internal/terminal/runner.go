@@ -27,8 +27,8 @@ import (
 
 	"github.com/creack/pty"
 
-	"github.com/kyley/argus/sidecar/internal/protocol"
-	"github.com/kyley/argus/sidecar/internal/sidecarlink"
+	"github.com/kr4t0n/argus/sidecar/internal/protocol"
+	"github.com/kr4t0n/argus/sidecar/internal/sidecarlink"
 )
 
 const (

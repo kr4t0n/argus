@@ -12,9 +12,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kyley/argus/sidecar/internal/adapter"
-	"github.com/kyley/argus/sidecar/internal/bus"
-	"github.com/kyley/argus/sidecar/internal/protocol"
+	"github.com/kr4t0n/argus/sidecar/internal/adapter"
+	"github.com/kr4t0n/argus/sidecar/internal/bus"
+	"github.com/kr4t0n/argus/sidecar/internal/protocol"
 )
 
 // supervisor owns one running agent: an adapter instance, the goroutine

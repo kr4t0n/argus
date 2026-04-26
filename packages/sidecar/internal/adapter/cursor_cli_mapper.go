@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kyley/argus/sidecar/internal/protocol"
+	"github.com/kr4t0n/argus/sidecar/internal/protocol"
 )
 
 // mapCursorLine handles cursor-agent's stream-json schema, which is similar

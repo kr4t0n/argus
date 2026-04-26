@@ -258,6 +258,25 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   separate package.
 - **Two Redis connections**: do **not** call `XREADGROUP` on the shared
   `cmd` ioredis client — it parks the socket and starves every other call.
+- **Stream MAXLEN is silent message loss, not just memory pressure**:
+  every `XADD` on both sides (`apps/server/src/infra/redis/redis.service.ts`
+  and `packages/sidecar/internal/bus/bus.go`) trims with `MAXLEN ~ N`,
+  where N is per-stream and looked up from `streamMaxLen` in
+  `packages/shared-types/src/protocol.ts` (mirrored as `StreamMaxLen`
+  in `packages/sidecar/internal/protocol/protocol.go` — keep both in
+  sync). If trimming runs before a consumer `XACK`s an entry, that
+  entry is **gone** — the pending-entries list still references its
+  ID but `XREADGROUP` can never replay it. Symptoms: missing result
+  chunks mid-command, a sidecar that "didn't get" a control message,
+  unrecoverable PEL growth. Current caps are sized for a ~30 MB Redis
+  with ~10 agents: `agent:lifecycle`=500, `agent:{id}:cmd`=200,
+  `agent:{id}:result`=500, `machine:{id}:control`=200. If you scale
+  past that — more agents, chunkier terminal output, longer expected
+  consumer outages — bump the relevant entry in *both* helpers and
+  re-budget against your Redis `maxmemory`. The `~` operator means
+  Redis trims lazily on listpack boundaries, so actual stored length
+  can briefly exceed N; that's the budget headroom, not slack to
+  rely on.
 - **stream-json drift**: each CLI's NDJSON event shape changes between
   versions. The mappers (`mapClaudeLine`, `mapCodexLine`) are
   defensive — unknown events fall through as `progress` chunks rather than
