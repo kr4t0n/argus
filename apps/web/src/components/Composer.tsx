@@ -59,7 +59,7 @@ export function Composer({
     <div className="bg-neutral-950 px-4 py-3">
       <div
         className={cn(
-          'surface rounded-xl flex items-end gap-2 px-3 py-2.5',
+          'surface mx-auto max-w-3xl rounded-3xl flex items-end gap-2 px-4 py-2.5',
           disabled && 'opacity-50',
         )}
       >
@@ -83,7 +83,13 @@ export function Composer({
           {running ? 'esc to cancel · shift+↵ for newline' : '↵ to send · shift+↵ for newline'}
         </span>
         {running ? (
-          <Button size="icon" variant="subtle" onClick={onCancel} title="Cancel (esc)">
+          <Button
+            size="icon"
+            variant="subtle"
+            onClick={onCancel}
+            title="Cancel (esc)"
+            className="rounded-full"
+          >
             <Square className="h-3.5 w-3.5" />
           </Button>
         ) : (
@@ -92,6 +98,7 @@ export function Composer({
             onClick={handleSend}
             disabled={!value.trim() || disabled}
             title="Send (⏎)"
+            className="rounded-full"
           >
             <ArrowUp className="h-3.5 w-3.5" />
           </Button>
