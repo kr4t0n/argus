@@ -10,11 +10,11 @@ type: application
 # Chart version is independent of the app it ships. Bump on chart
 # changes. Releasing a new chart version only requires bumping this
 # field — see helm-publish.yml.
-version: 0.1.7
+version: 0.1.8
 # App version tracks the Docker image tags pulled by default. Bump in
 # lockstep with `version` whenever the chart starts requiring features
 # only present in newer images; otherwise it can lag.
-appVersion: "0.1.7"
+appVersion: "0.1.8"
 
 home: https://github.com/kr4t0n/argus
 sources:
