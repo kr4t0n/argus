@@ -38,14 +38,15 @@ export interface ServerToClientEvents {
   'agent:removed': (payload: { id: string }) => void;
   /** Surfaces sidecar-side spawn errors (bad workingDir, missing binary, …)
    *  so the dashboard can show inline feedback on the create-agent flow. */
-  'agent:spawn-failed': (payload: {
-    machineId: string;
-    agentId: string;
-    reason: string;
-  }) => void;
+  'agent:spawn-failed': (payload: { machineId: string; agentId: string; reason: string }) => void;
   'session:created': (session: SessionDTO) => void;
   'session:updated': (session: SessionDTO) => void;
   'session:status': (payload: { id: string; status: SessionDTO['status'] }) => void;
+  /** Sidecar couldn't fork the on-disk CLI session for a freshly-forked
+   *  Argus session — surfaced as a toast in the dashboard. The session
+   *  row remains valid (history is reproduced) but `externalId` stays
+   *  null, so the next prompt starts a fresh CLI conversation. */
+  'session:clone-failed': (payload: { sessionId: string; reason: string }) => void;
   'command:created': (command: CommandDTO) => void;
   'command:updated': (command: CommandDTO) => void;
   chunk: (chunk: ResultChunkDTO) => void;

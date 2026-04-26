@@ -187,6 +187,12 @@ func (s *supervisor) run(ctx context.Context) {
 			continue
 		}
 
+		if cmd.Kind == "clone-session" {
+			s.handleCloneSession(ctx, cmd)
+			_ = s.bus.Ack(ctx, cmdStream, group, msgID)
+			continue
+		}
+
 		wg.Add(1)
 		go func(c protocol.Command, id string) {
 			defer wg.Done()
@@ -251,6 +257,54 @@ func (s *supervisor) heartbeatLoop(ctx context.Context) {
 				s.log.Printf("agent %s: heartbeat publish failed: %v", s.spec.AgentID, err)
 			}
 		}
+	}
+}
+
+// handleCloneSession runs a fork of the agent's CLI on-disk session
+// state. Adapters opt in by implementing adapter.Cloner; if the agent's
+// adapter doesn't (or the clone otherwise fails), we publish a
+// SessionCloneFailedEvent so the dashboard can toast. A ResultChunk
+// would be wrong here — the clone-session command has no Command row
+// in the server DB, and a chunk insert would FK-violate against
+// Command.id and get silently dropped.
+//
+// Successful clones emit a SessionExternalIDEvent on the result stream,
+// which the server's result-ingestor consumes to set the new session's
+// externalId — making future commands resume the cloned conversation.
+func (s *supervisor) handleCloneSession(parent context.Context, cmd protocol.Command) {
+	resultStream := protocol.ResultStream(s.spec.AgentID)
+	publishErr := func(reason string) {
+		_ = s.bus.Publish(parent, resultStream, protocol.SessionCloneFailedEvent{
+			Kind:      "session-clone-failed",
+			SessionID: cmd.SessionID,
+			Reason:    reason,
+			TS:        time.Now().UnixMilli(),
+		})
+	}
+
+	if cmd.Clone == nil || cmd.Clone.SrcExternalID == "" {
+		publishErr("clone-session command missing CloneSpec")
+		return
+	}
+	cloner, ok := s.adapter.(adapter.Cloner)
+	if !ok {
+		publishErr(fmt.Sprintf("adapter %s does not support session cloning", s.spec.Type))
+		return
+	}
+	newID, err := cloner.CloneSession(parent, cmd.Clone.SrcExternalID, cmd.Clone.TurnIndex)
+	if err != nil {
+		s.log.Printf("agent %s: clone-session failed: %v", s.spec.AgentID, err)
+		publishErr(err.Error())
+		return
+	}
+	if err := s.bus.Publish(parent, resultStream, protocol.SessionExternalIDEvent{
+		Kind:       "session-external-id",
+		SessionID:  cmd.SessionID,
+		CommandID:  cmd.ID,
+		ExternalID: newID,
+		TS:         time.Now().UnixMilli(),
+	}); err != nil {
+		s.log.Printf("agent %s: clone-session publish external id failed: %v", s.spec.AgentID, err)
 	}
 }
 

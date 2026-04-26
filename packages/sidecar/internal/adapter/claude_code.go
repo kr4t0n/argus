@@ -2,8 +2,11 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -155,6 +158,116 @@ func (a *ClaudeCodeAdapter) Cancel(_ context.Context, commandID string) error {
 		runner.Cancel()
 	}
 	return nil
+}
+
+// CloneSession forks Claude Code's on-disk transcript for srcExternalID
+// into a new session file. Claude Code stores each session as a single
+// JSONL at ~/.claude/projects/<slug>/<sessionId>.jsonl, and EVERY line
+// carries a top-level `sessionId` field — so cloning has two parts:
+//
+//  1. Copy the file under a fresh UUID name in the same project dir.
+//  2. Rewrite every line's `sessionId` to the new UUID.
+//
+// turnIndex is 1-based; we stop emitting at the (turnIndex+1)th user
+// turn boundary. A user line whose `message.content[].type` is
+// `tool_result` is NOT a turn boundary — those are tool feedback paired
+// with the previous assistant turn. Stopping there would leave a
+// dangling tool_use without its result, which Claude refuses to resume.
+func (a *ClaudeCodeAdapter) CloneSession(
+	_ context.Context, srcExternalID string, turnIndex int,
+) (string, error) {
+	if a.workingDir == "" {
+		return "", fmtCloneError("claude-code", srcExternalID,
+			fmt.Errorf("workingDir not set; cannot derive project slug"))
+	}
+	home, err := homeDir()
+	if err != nil {
+		return "", fmtCloneError("claude-code", srcExternalID, err)
+	}
+	slug := claudeProjectSlug(a.workingDir)
+	projectDir := filepath.Join(home, ".claude", "projects", slug)
+	srcFile := filepath.Join(projectDir, srcExternalID+".jsonl")
+	if _, err := os.Stat(srcFile); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmtCloneError("claude-code", srcExternalID, errCloneSrcNotFound)
+		}
+		return "", fmtCloneError("claude-code", srcExternalID, err)
+	}
+
+	newID := newSessionUUID()
+	dstFile := filepath.Join(projectDir, newID+".jsonl")
+	out, err := os.OpenFile(dstFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return "", fmtCloneError("claude-code", srcExternalID, err)
+	}
+
+	userTextSeen := 0
+	stopped := false
+	werr := readJSONLines(srcFile, func(_ []byte, parsed map[string]any) error {
+		if stopped {
+			return nil
+		}
+		if parsed == nil {
+			return nil
+		}
+		// User-text lines are turn boundaries; tool_result-only user
+		// lines are NOT (they pair with the prior assistant tool_use).
+		if t, _ := parsed["type"].(string); t == "user" && claudeIsUserTextTurn(parsed) {
+			if userTextSeen >= turnIndex {
+				stopped = true
+				return nil
+			}
+			userTextSeen++
+		}
+		// Rewrite every line's sessionId in-place. We re-marshal the
+		// whole map rather than substring-replacing because sessionId
+		// can incidentally appear inside user prompt text and we don't
+		// want to clobber that.
+		parsed["sessionId"] = newID
+		b, err := json.Marshal(parsed)
+		if err != nil {
+			return err
+		}
+		return writeJSONLine(out, b)
+	})
+	if cerr := out.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		_ = os.Remove(dstFile)
+		return "", fmtCloneError("claude-code", srcExternalID, werr)
+	}
+	return newID, nil
+}
+
+// claudeIsUserTextTurn reports whether a `type: "user"` line represents
+// a fresh user prompt (turn boundary) vs. tool-result feedback to the
+// previous assistant turn. Treats lines with mixed content (rare: a
+// tool_result alongside text) as text turns to err on the safe side of
+// "include this turn", since under-truncation is recoverable but
+// over-truncation drops a real prompt.
+func claudeIsUserTextTurn(line map[string]any) bool {
+	msg, _ := line["message"].(map[string]any)
+	contents, _ := msg["content"].([]any)
+	if len(contents) == 0 {
+		// User lines without structured content are treated as text
+		// (older shape: `message.content` was a string).
+		return true
+	}
+	for _, c := range contents {
+		item, _ := c.(map[string]any)
+		switch item["type"] {
+		case "text", "input_text":
+			return true
+		case "tool_result":
+			// keep walking; tool_result alone means feedback, not a turn
+		default:
+			// unknown content types: treat as text to avoid dropping
+			// a real prompt.
+			return true
+		}
+	}
+	return false
 }
 
 // mapClaudeLine handles the Claude Code stream-json schema (also used by

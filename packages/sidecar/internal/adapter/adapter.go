@@ -40,6 +40,23 @@ type Versioned interface {
 	Version(ctx context.Context) (string, error)
 }
 
+// Cloner is an optional capability for adapters whose CLI persists
+// session state to disk in a format we can fork. The supervisor calls
+// CloneSession when it receives a Command with Kind=="clone-session";
+// the implementation copies the source session file, rewrites any
+// embedded session id, truncates at the chosen turn boundary, and
+// returns the new external id (which the sidecar then publishes via
+// SessionExternalIDEvent on the result stream).
+//
+// turnIndex is 1-based and may exceed the source session's actual turn
+// count — implementations should clamp by simply copying the whole file
+// in that case rather than erroring. truncate boundaries are
+// adapter-specific (Claude/Cursor: before the next user-text message;
+// Codex: before the next task_started event).
+type Cloner interface {
+	CloneSession(ctx context.Context, srcExternalID string, turnIndex int) (string, error)
+}
+
 type Factory func(cfg map[string]any) (Adapter, error)
 
 // Plugin bundles everything the registry needs to know about an adapter

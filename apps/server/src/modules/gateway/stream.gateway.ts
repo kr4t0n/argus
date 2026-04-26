@@ -133,6 +133,12 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
       .emit('session:status', { id: session.id, status: session.status });
   }
 
+  emitSessionCloneFailed(payload: { sessionId: string; userId: string; reason: string }) {
+    this.server
+      .to(`user:${payload.userId}`)
+      .emit('session:clone-failed', { sessionId: payload.sessionId, reason: payload.reason });
+  }
+
   emitCommandCreated(command: CommandDTO) {
     this.server.to(`session:${command.sessionId}`).emit('command:created', command);
   }
@@ -184,11 +190,7 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // and infrequent (one update can take ~5–10s), so the fan-out cost
   // is negligible compared with terminal traffic.
 
-  emitSidecarUpdateStarted(payload: {
-    machineId: string;
-    requestId: string;
-    fromVersion: string;
-  }) {
+  emitSidecarUpdateStarted(payload: { machineId: string; requestId: string; fromVersion: string }) {
     this.server.emit('sidecar-update:started', payload);
   }
 
@@ -220,10 +222,7 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server.emit('sidecar-update:failed', payload);
   }
 
-  emitSidecarUpdateBatchProgress(payload: {
-    batchId: string;
-    plan: SidecarUpdatePlanEntry[];
-  }) {
+  emitSidecarUpdateBatchProgress(payload: { batchId: string; plan: SidecarUpdatePlanEntry[] }) {
     this.server.emit('sidecar-update:batch-progress', payload);
   }
 }

@@ -308,16 +308,28 @@ type AgentDestroyedEvent struct {
 	TS        int64  `json:"ts"`
 }
 
+// CloneSpec rides on Command when Kind == "clone-session": tells the
+// sidecar's per-adapter Cloner to fork the CLI's on-disk session for
+// SrcExternalID into a new session whose id will be reported back via
+// SessionExternalIDEvent on the result stream. TurnIndex is 1-based; the
+// adapter must truncate at a safe boundary (before the (N+1)th user
+// turn so a dangling tool_use isn't left without its tool_result).
+type CloneSpec struct {
+	SrcExternalID string `json:"srcExternalId"`
+	TurnIndex     int    `json:"turnIndex"`
+}
+
 type Command struct {
 	ID         string         `json:"id"`
 	AgentID    string         `json:"agentId"`
 	SessionID  string         `json:"sessionId"`
 	ExternalID string         `json:"externalId,omitempty"`
-	Kind       string         `json:"kind"` // "execute" | "cancel"
+	Kind       string         `json:"kind"` // "execute" | "cancel" | "clone-session"
 	Prompt     string         `json:"prompt,omitempty"`
 	Context    map[string]any `json:"context,omitempty"`
 	TimeoutMS  int            `json:"timeoutMs,omitempty"`
 	Options    map[string]any `json:"options,omitempty"`
+	Clone      *CloneSpec     `json:"clone,omitempty"`
 }
 
 type ResultChunk struct {
@@ -340,6 +352,20 @@ type SessionExternalIDEvent struct {
 	CommandID  string `json:"commandId"`
 	ExternalID string `json:"externalId"`
 	TS         int64  `json:"ts"`
+}
+
+// SessionCloneFailedEvent is emitted when handleCloneSession can't
+// complete the on-disk fork (adapter doesn't implement Cloner, source
+// missing, IO error, etc). Mirror of SessionCloneFailedEvent in
+// packages/shared-types/src/protocol.ts. The server forwards this to
+// the owning user's WS room so the dashboard can toast; the new
+// Session row is left intact (history is still reproduced; just no
+// externalId means the next prompt starts a fresh CLI conversation).
+type SessionCloneFailedEvent struct {
+	Kind      string `json:"kind"` // "session-clone-failed"
+	SessionID string `json:"sessionId"`
+	Reason    string `json:"reason"`
+	TS        int64  `json:"ts"`
 }
 
 // ─────────── Terminal protocol ───────────

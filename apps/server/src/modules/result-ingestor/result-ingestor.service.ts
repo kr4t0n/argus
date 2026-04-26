@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import type {
   ResultChunk,
   ResultChunkDTO,
+  SessionCloneFailedEvent,
   SessionExternalIdEvent,
 } from '@argus/shared-types';
 import { consumerGroups, streamKeys } from '@argus/shared-types';
@@ -14,7 +15,7 @@ import { CommandService } from '../command/command.service';
 const CONSUMER = 'server-1';
 const REFRESH_AGENT_STREAMS_MS = 5_000;
 
-type ResultEnvelope = ResultChunk | SessionExternalIdEvent;
+type ResultEnvelope = ResultChunk | SessionExternalIdEvent | SessionCloneFailedEvent;
 
 /**
  * Consumes every agent's `agent:{id}:result` stream, persists each chunk,
@@ -80,9 +81,9 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
           ...this.streams,
           ...this.streams.map(() => '>'),
         ] as unknown as [string, ...string[]];
-        const res = (await (this.redis.read as any).xreadgroup(...args)) as
-          | Array<[string, Array<[string, string[]]>]>
-          | null;
+        const res = (await (this.redis.read as any).xreadgroup(...args)) as Array<
+          [string, Array<[string, string[]]>]
+        > | null;
         if (!res) continue;
         for (const [stream, entries] of res) {
           for (const [msgId, fields] of entries) {
@@ -90,9 +91,7 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
               const payload = parseData(fields);
               if (payload) await this.handle(payload as ResultEnvelope);
             } catch (err) {
-              this.logger.error(
-                `failed to handle result on ${stream}: ${(err as Error).message}`,
-              );
+              this.logger.error(`failed to handle result on ${stream}: ${(err as Error).message}`);
             }
             await this.redis.cmd.xack(stream, consumerGroups.server, msgId);
           }
@@ -107,28 +106,48 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async handle(ev: ResultEnvelope) {
-    if ((ev as SessionExternalIdEvent).kind === 'session-external-id') {
+    const kind = (ev as { kind?: string }).kind;
+    if (kind === 'session-external-id') {
       const e = ev as SessionExternalIdEvent;
       await this.sessions.setExternalId(e.sessionId, e.externalId);
       return;
     }
+    if (kind === 'session-clone-failed') {
+      const e = ev as SessionCloneFailedEvent;
+      // Look up the owning user so the gateway can scope the toast to
+      // their room. Sidecar doesn't know userId; the Session row does.
+      const sess = await this.prisma.session.findUnique({
+        where: { id: e.sessionId },
+        select: { userId: true },
+      });
+      if (sess) {
+        this.gateway.emitSessionCloneFailed({
+          sessionId: e.sessionId,
+          userId: sess.userId,
+          reason: e.reason,
+        });
+      }
+      return;
+    }
 
     const chunk = ev as ResultChunk;
-    await this.prisma.resultChunk.create({
-      data: {
-        id: chunk.id,
-        commandId: chunk.commandId,
-        seq: chunk.seq,
-        kind: chunk.kind,
-        delta: chunk.delta ?? null,
-        content: chunk.content ?? null,
-        meta: (chunk.meta as any) ?? undefined,
-        ts: new Date(chunk.ts),
-      },
-    }).catch((err) => {
-      // unique-key collision is fine (at-least-once delivery) — log other errors.
-      if (!String(err.message).includes('Unique')) throw err;
-    });
+    await this.prisma.resultChunk
+      .create({
+        data: {
+          id: chunk.id,
+          commandId: chunk.commandId,
+          seq: chunk.seq,
+          kind: chunk.kind,
+          delta: chunk.delta ?? null,
+          content: chunk.content ?? null,
+          meta: (chunk.meta as any) ?? undefined,
+          ts: new Date(chunk.ts),
+        },
+      })
+      .catch((err) => {
+        // unique-key collision is fine (at-least-once delivery) — log other errors.
+        if (!String(err.message).includes('Unique')) throw err;
+      });
 
     const dto: ResultChunkDTO = { ...chunk };
     this.gateway.emitChunk(dto);
