@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import {
   ChevronDown,
   FileText,
@@ -27,8 +27,13 @@ type Props = {
  * Cursor-style tool card: a single bordered box where the header row shows
  * `[icon] <verb> [chip arg]` and the body shows the tool's output. A chevron
  * on the header toggles the raw input JSON for transparency.
+ *
+ * memo-wrapped: the `tool` and `result` chunks are reused by reference
+ * across renders from the StreamViewer group-stabilization layer, so
+ * default shallow equality suffices to skip re-renders for unchanged
+ * tool cards while new chunks land on the live turn.
  */
-export function ToolPill({ tool, result }: Props) {
+export const ToolPill = memo(function ToolPill({ tool, result }: Props) {
   const [openArgs, setOpenArgs] = useState(false);
   const meta = (tool.meta ?? {}) as Record<string, unknown>;
   const name = (meta.tool as string | undefined) ?? extractToolName(tool.content ?? '');
@@ -92,7 +97,7 @@ export function ToolPill({ tool, result }: Props) {
       ))}
     </div>
   );
-}
+});
 
 /**
  * Renders a unified diff with per-line colors (green adds / red removes /

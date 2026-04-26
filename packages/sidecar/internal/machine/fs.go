@@ -31,7 +31,7 @@ type FSEntry struct {
 	Gitignored bool
 }
 
-// ListDirRequest is the validated input ListDir expects.
+// ListDirRequest is the validated input ListDirs expects.
 type ListDirRequest struct {
 	// WorkingDir is the absolute root the listing is jailed to. Any
 	// resolved absolute path outside this root is rejected.
@@ -101,15 +101,16 @@ func withinRoot(path, root string) bool {
 	return strings.HasPrefix(path, rootWithSep)
 }
 
-// ListDir reads one directory level. Applies gitignore filtering (and
-// always drops `.git`) unless ShowAll is true. Sorts dirs first, then
-// files, each alphabetical case-insensitive — the exact ordering the
-// UI renders without needing client-side sort.
-func ListDir(req ListDirRequest) ([]FSEntry, error) {
-	if req.WorkingDir == "" {
-		return nil, errors.New("agent has no working directory")
-	}
-	abs, err := resolvePath(req.WorkingDir, req.Path)
+// listDirWith reads one directory level. Applies gitignore filtering
+// (and always drops `.git`) unless matcher is nil. Sorts dirs first,
+// then files, each alphabetical case-insensitive — the exact ordering
+// the UI renders without needing client-side sort.
+//
+// The matcher is passed in rather than loaded here so ListDirs' BFS
+// reuses a single compiled matcher across every level instead of
+// re-reading .gitignore from disk N times.
+func listDirWith(workingDir, relPath string, showAll bool, matcher *gitignore.GitIgnore) ([]FSEntry, error) {
+	abs, err := resolvePath(workingDir, relPath)
 	if err != nil {
 		return nil, err
 	}
@@ -118,16 +119,7 @@ func ListDir(req ListDirRequest) ([]FSEntry, error) {
 		return nil, err
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("%q is not a directory", req.Path)
-	}
-
-	// We re-read .gitignore on every call rather than caching it on the
-	// daemon. The listing itself dominates the cost (ReadDir + per-entry
-	// stat), and rereading means edits surface immediately without us
-	// needing an invalidation path.
-	var matcher *gitignore.GitIgnore
-	if !req.ShowAll {
-		matcher, _ = loadGitignore(req.WorkingDir)
+		return nil, fmt.Errorf("%q is not a directory", relPath)
 	}
 
 	entries, err := os.ReadDir(abs)
@@ -135,7 +127,7 @@ func ListDir(req ListDirRequest) ([]FSEntry, error) {
 		return nil, err
 	}
 
-	rootAbs, _ := filepath.Abs(req.WorkingDir)
+	rootAbs, _ := filepath.Abs(workingDir)
 	rootAbs = filepath.Clean(rootAbs)
 
 	out := make([]FSEntry, 0, len(entries))
@@ -161,7 +153,7 @@ func ListDir(req ListDirRequest) ([]FSEntry, error) {
 			}
 			ignored = matcher.MatchesPath(match)
 		}
-		if !req.ShowAll && ignored {
+		if !showAll && ignored {
 			continue
 		}
 
@@ -192,6 +184,92 @@ func ListDir(req ListDirRequest) ([]FSEntry, error) {
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
 	return out, nil
+}
+
+// ListDirs breadth-first walks up to `maxDepth` levels starting at
+// req.Path and returns every directory's listing keyed by path
+// (relative to WorkingDir; empty string = root). `maxDepth` counts
+// the requested path as level 1, so maxDepth<=1 degenerates to a
+// single-level listing. Never descends into gitignored or symlinked
+// subdirectories — both blow up the walk (symlink loops, whole
+// node_modules trees) for no user benefit.
+//
+// `descentBudget` bounds how deep the walk expands: once the total
+// entries collected so far reaches the budget, the BFS stops
+// enqueueing new subdirectories. It is NOT a hard cap on the
+// response size — the directory being listed when the budget is
+// reached still contributes its full entry list. BFS ordering means
+// shallow levels fill first, so a truncated response still contains
+// the folders the user is likeliest to click.
+//
+// Errors on the root path are fatal. Errors on subdirectories are
+// silently skipped — better to show a partial tree than refuse the
+// whole prefetch over one permission-denied subdir.
+func ListDirs(req ListDirRequest, maxDepth, descentBudget int) (map[string][]FSEntry, error) {
+	if req.WorkingDir == "" {
+		return nil, errors.New("agent has no working directory")
+	}
+	if maxDepth < 1 {
+		maxDepth = 1
+	}
+	if descentBudget <= 0 {
+		descentBudget = 1 << 30 // effectively uncapped
+	}
+
+	var matcher *gitignore.GitIgnore
+	if !req.ShowAll {
+		matcher, _ = loadGitignore(req.WorkingDir)
+	}
+
+	// Normalize the starting path: protocol says root is "" but
+	// callers may hand us "." interchangeably. Collapsing both to ""
+	// keeps listings keys canonical — without this, "." seeds the
+	// queue and child paths render as "./src", breaking the root-is-
+	// empty-string contract the dashboard hydrates against.
+	rootPath := req.Path
+	if rootPath == "." {
+		rootPath = ""
+	}
+
+	type queueItem struct {
+		path  string
+		level int
+	}
+	listings := make(map[string][]FSEntry)
+	queue := []queueItem{{path: rootPath, level: 1}}
+	total := 0
+
+	for len(queue) > 0 {
+		item := queue[0]
+		queue = queue[1:]
+
+		entries, err := listDirWith(req.WorkingDir, item.path, req.ShowAll, matcher)
+		if err != nil {
+			if item.path == rootPath {
+				return nil, err
+			}
+			// Subdirectory failure (permission, gone between walk and
+			// listing): skip and continue.
+			continue
+		}
+		listings[item.path] = entries
+		total += len(entries)
+
+		if item.level >= maxDepth || total >= descentBudget {
+			continue
+		}
+		for _, e := range entries {
+			if e.Kind != "dir" || e.Gitignored {
+				continue
+			}
+			childPath := e.Name
+			if item.path != "" {
+				childPath = item.path + "/" + e.Name
+			}
+			queue = append(queue, queueItem{path: childPath, level: item.level + 1})
+		}
+	}
+	return listings, nil
 }
 
 // ReadFileRequest is the validated input ReadFile expects. MaxBytes is

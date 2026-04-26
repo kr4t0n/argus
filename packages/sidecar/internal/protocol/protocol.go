@@ -2,6 +2,8 @@
 // When you change one, change the other.
 package protocol
 
+import "strings"
+
 type AgentStatus string
 
 const (
@@ -200,7 +202,16 @@ type FSListRequestCommand struct {
 	AgentID   string `json:"agentId"`
 	Path      string `json:"path"`
 	ShowAll   bool   `json:"showAll"`
-	TS        int64  `json:"ts"`
+	// Depth is the number of directory levels to include in the
+	// response, counting Path itself as level 1. 0 or 1 means the
+	// historical single-level listing. >1 asks the sidecar to walk
+	// non-ignored subdirectories breadth-first so the dashboard can
+	// hydrate its cache in one round trip. The sidecar caps how far
+	// the BFS descends once it's already seen a lot of entries (see
+	// FSListRecursiveDescentBudget) to keep payloads bounded on
+	// pathological trees.
+	Depth int   `json:"depth,omitempty"`
+	TS    int64 `json:"ts"`
 }
 
 // FSReadRequestCommand asks the sidecar to read one file's contents
@@ -225,12 +236,27 @@ type FSListResponseEvent struct {
 	RequestID string    `json:"requestId"`
 	Path      string    `json:"path"`
 	Entries   []FSEntry `json:"entries,omitempty"`
-	Error     string    `json:"error,omitempty"`
+	// Listings is populated when the request asked for Depth > 1.
+	// Keys are paths relative to the agent's workingDir (empty string =
+	// root); each value is that directory's listing. Always includes
+	// an entry for the requested Path that duplicates Entries so
+	// clients can consume either field uniformly.
+	Listings map[string][]FSEntry `json:"listings,omitempty"`
+	Error    string               `json:"error,omitempty"`
 	// Git is set when the agent's workingDir is a git repo. Cheap to
 	// produce (one .git/HEAD read) so we attach it to every response.
 	Git *GitStatus `json:"git,omitempty"`
 	TS  int64      `json:"ts"`
 }
+
+// FSListRecursiveDescentBudget bounds how deep the BFS expands: once
+// the total entries collected so far reaches this budget, the walk
+// stops enqueueing new subdirectories but still returns the current
+// directory's full listing. A wide root (more than the budget worth
+// of direct children) therefore still returns everything in the
+// root — the cap only protects against pathological `ShowAll` walks
+// that would otherwise sprawl across node_modules / vendor / etc.
+const FSListRecursiveDescentBudget = 5000
 
 type FSChangedEvent struct {
 	Kind      string `json:"kind"` // "fs-changed"
@@ -409,6 +435,26 @@ func CommandStream(id string) string               { return "agent:" + id + ":cm
 func ResultStream(id string) string                { return "agent:" + id + ":result" }
 func MachineControlStream(machineID string) string { return "machine:" + machineID + ":control" }
 func MachineConsumerGroup(machineID string) string { return "machine-" + machineID }
+
+// StreamMaxLen returns the per-stream MAXLEN cap (entries) used with
+// `XADD ... MAXLEN ~ N`. Mirror of `streamMaxLen` in
+// packages/shared-types/src/protocol.ts — keep both in sync. See the
+// "Stream MAXLEN is silent message loss" gotcha in AGENTS.md before
+// changing these values.
+func StreamMaxLen(streamKey string) int64 {
+	switch {
+	case streamKey == LifecycleStream():
+		return 500
+	case strings.HasSuffix(streamKey, ":cmd"):
+		return 200
+	case strings.HasSuffix(streamKey, ":result"):
+		return 500
+	case strings.HasSuffix(streamKey, ":control"):
+		return 200
+	default:
+		return 500
+	}
+}
 
 // SidecarConsumerGroup is the consumer group name an agent supervisor
 // uses on its own per-agent command stream. We name it after the agent

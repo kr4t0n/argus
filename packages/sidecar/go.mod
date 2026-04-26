@@ -1,4 +1,4 @@
-module github.com/kyley/argus/sidecar
+module github.com/kr4t0n/argus/sidecar
 
 go 1.23
 

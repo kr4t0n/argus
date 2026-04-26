@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { streamMaxLen } from '@argus/shared-types';
 import Redis from 'ioredis';
 
 /**
@@ -42,13 +43,16 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     return this._read;
   }
 
-  /** Publish a JSON payload as a single-field `data` entry on a stream. */
-  async publish(stream: string, payload: unknown, maxLen = 10_000): Promise<string> {
+  /** Publish a JSON payload as a single-field `data` entry on a stream.
+   *  The MAXLEN cap is keyed off the stream name via `streamMaxLen`
+   *  so each stream class gets a size appropriate for its volume and
+   *  consumer-lag tolerance. */
+  async publish(stream: string, payload: unknown): Promise<string> {
     return (await this._cmd.xadd(
       stream,
       'MAXLEN',
       '~',
-      String(maxLen),
+      String(streamMaxLen(stream)),
       '*',
       'data',
       JSON.stringify(payload),

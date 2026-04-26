@@ -6,8 +6,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/kyley/argus/sidecar/internal/adapter"
-	"github.com/kyley/argus/sidecar/internal/protocol"
+	"github.com/kr4t0n/argus/sidecar/internal/adapter"
+	"github.com/kr4t0n/argus/sidecar/internal/protocol"
 )
 
 // Discover walks every registered adapter type, looks up its DefaultBinary

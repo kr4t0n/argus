@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/kyley/argus/sidecar/internal/adapter"
+	"github.com/kr4t0n/argus/sidecar/internal/adapter"
 )
 
 func TestDiscoverFiltersToInstalledAdapters(t *testing.T) {

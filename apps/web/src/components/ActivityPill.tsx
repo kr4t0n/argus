@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -34,9 +34,21 @@ type Props = {
 export function ActivityPill({ chunks, running, startedAt, endedAt, open, onToggle }: Props) {
   const tools = chunks.filter((c) => c.kind === 'tool');
   const items: TimelineItem[] = useMemo(() => buildTimeline(chunks), [chunks]);
+
+  // Re-render on a 100 ms tick while the turn is live so the elapsed-time
+  // readout advances smoothly instead of jumping whenever a chunk arrives.
+  // Gated on `running` — once the turn finishes, `endedAt` freezes the
+  // value and no further ticks are needed.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => setNow(Date.now()), 100);
+    return () => clearInterval(id);
+  }, [running]);
+
   if (items.length === 0 && !running) return null;
 
-  const elapsedMs = (endedAt ?? Date.now()) - startedAt;
+  const elapsedMs = (endedAt ?? now) - startedAt;
   const elapsed = formatElapsed(elapsedMs);
   const lastTool = tools[tools.length - 1];
 
@@ -229,7 +241,7 @@ function summarizeTool(c: ResultChunkDTO): string {
 function formatElapsed(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const s = Math.round(ms / 100) / 10;
-  if (s < 60) return `${s}s`;
+  if (s < 60) return `${s.toFixed(1)}s`;
   const mins = Math.floor(s / 60);
   const secs = Math.round(s - mins * 60);
   return `${mins}m ${secs}s`;

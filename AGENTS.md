@@ -148,8 +148,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     drains on destroy. There is no per-agent process — supervisors are
     goroutines inside the single daemon.
   - `fs.go` / `fswatch.go` / `git.go` — workingDir browsing for the
-    dashboard's right-pane file tree. `ListDir` jails to the agent's
-    workingDir and applies gitignore (always strips `.git`).
+    dashboard's right-pane file tree. `ListDirs` BFS-walks up to
+    `maxDepth` levels (reusing a single `listDirWith` core + one
+    preloaded gitignore matcher) and returns a `path → entries` map
+    so depth-N prefetch lands in one round trip. Both jail to the
+    agent's workingDir, always strip `.git`, and respect gitignore.
     `fsWatcher` registers one fsnotify watch per non-ignored dir and
     coalesces events into 250 ms-debounced fs-changed emits. `git.go`
     reads `.git/HEAD` (and resolves the worktree-pointer file form)
@@ -205,6 +208,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `components/StreamViewer.tsx` — the streaming display. Groups chunks by
   command, concatenates `delta`s, renders tool pills, stdout, errors, and a
   cursor while running.
+- `components/TodoWindow.tsx` — per-turn task tracker rendered inside the
+  sticky band right under `<ActivityPill>`. Sources its rows from the
+  *latest* `TodoWrite`-style tool chunk in the command's chunks
+  (`meta.tool ∈ {todowrite, todo, task}`, `meta.input.todos`); each call
+  replaces the full list, no merging. Open by default, user-collapsible
+  via the chevron — there is intentionally no auto-collapse when all
+  todos complete (we want the finished plan to stay visible next to the
+  assistant's answer). Returns null for codex sessions / any turn
+  without a TodoWrite chunk. Shape parsing is deliberately defensive —
+  see the AGENTS.md note on stream-json drift.
 - `components/Sidebar.tsx` — agent-first tree: each agent is a top-level row
   with its sessions nested underneath and a `+ new session` affordance.
 - `components/TerminalPane.tsx` — xterm.js bound to one agent. Owns the
@@ -245,6 +258,25 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   separate package.
 - **Two Redis connections**: do **not** call `XREADGROUP` on the shared
   `cmd` ioredis client — it parks the socket and starves every other call.
+- **Stream MAXLEN is silent message loss, not just memory pressure**:
+  every `XADD` on both sides (`apps/server/src/infra/redis/redis.service.ts`
+  and `packages/sidecar/internal/bus/bus.go`) trims with `MAXLEN ~ N`,
+  where N is per-stream and looked up from `streamMaxLen` in
+  `packages/shared-types/src/protocol.ts` (mirrored as `StreamMaxLen`
+  in `packages/sidecar/internal/protocol/protocol.go` — keep both in
+  sync). If trimming runs before a consumer `XACK`s an entry, that
+  entry is **gone** — the pending-entries list still references its
+  ID but `XREADGROUP` can never replay it. Symptoms: missing result
+  chunks mid-command, a sidecar that "didn't get" a control message,
+  unrecoverable PEL growth. Current caps are sized for a ~30 MB Redis
+  with ~10 agents: `agent:lifecycle`=500, `agent:{id}:cmd`=200,
+  `agent:{id}:result`=500, `machine:{id}:control`=200. If you scale
+  past that — more agents, chunkier terminal output, longer expected
+  consumer outages — bump the relevant entry in *both* helpers and
+  re-budget against your Redis `maxmemory`. The `~` operator means
+  Redis trims lazily on listpack boundaries, so actual stored length
+  can briefly exceed N; that's the budget headroom, not slack to
+  rely on.
 - **stream-json drift**: each CLI's NDJSON event shape changes between
   versions. The mappers (`mapClaudeLine`, `mapCodexLine`) are
   defensive — unknown events fall through as `progress` chunks rather than

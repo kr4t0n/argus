@@ -89,16 +89,29 @@ export const api = {
     http<SessionDTO[]>(
       `/sessions${opts?.includeArchived ? '?includeArchived=true' : ''}`,
     ),
-  getSession: (id: string) =>
-    http<{
+  getSession: (id: string, opts?: { tailCommands?: number }) => {
+    const q = new URLSearchParams();
+    if (opts?.tailCommands) q.set('tailCommands', String(opts.tailCommands));
+    const qs = q.toString();
+    return http<{
       session: SessionDTO;
       commands: CommandDTO[];
       chunks: ResultChunkDTO[];
-    }>(`/sessions/${id}`),
+      hasMore: boolean;
+    }>(`/sessions/${id}${qs ? `?${qs}` : ''}`);
+  },
   getSessionChunks: (id: string, afterSeq = 0) =>
     http<{ commands: CommandDTO[]; chunks: ResultChunkDTO[] }>(
       `/sessions/${id}/chunks?afterSeq=${afterSeq}`,
     ),
+  getSessionHistory: (id: string, beforeCommandId: string, limit = 20) => {
+    const q = new URLSearchParams({ before: beforeCommandId, limit: String(limit) });
+    return http<{
+      commands: CommandDTO[];
+      chunks: ResultChunkDTO[];
+      hasMore: boolean;
+    }>(`/sessions/${id}/history?${q.toString()}`);
+  },
   createSession: (body: CreateSessionRequest) =>
     http<{ session: SessionDTO; command: CommandDTO | null }>(`/sessions`, {
       method: 'POST',
@@ -156,11 +169,15 @@ export const api = {
       body: JSON.stringify({ iconKey }),
     }),
 
-  // Filesystem browsing (right-pane tree)
-  listAgentDir: (agentId: string, path: string, showAll: boolean) => {
+  // Filesystem browsing (right-pane tree). `depth` asks the sidecar to
+  // walk multiple levels in one round trip — the result hydrates the
+  // tree cache for every returned path so expanding those folders is
+  // instant. Omit or pass 1 for the historical single-level listing.
+  listAgentDir: (agentId: string, path: string, showAll: boolean, depth?: number) => {
     const q = new URLSearchParams();
     if (path) q.set('path', path);
     if (showAll) q.set('showAll', 'true');
+    if (depth && depth > 1) q.set('depth', String(depth));
     const qs = q.toString();
     return http<FSListResponse>(
       `/agents/${agentId}/fs/list${qs ? `?${qs}` : ''}`,
