@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AlertCircle, Check, Copy, GitFork, Loader2 } from 'lucide-react';
+import { AlertCircle, Check, Copy, GitBranch, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import type { CommandDTO, ResultChunkDTO } from '@argus/shared-types';
 import { api, ApiError } from '../lib/api';
@@ -525,18 +525,20 @@ function AnswerBlock({
               )}
             </button>
           </Tooltip>
-          <Tooltip content={forkError ?? (forking ? 'Forking…' : 'Fork session from this turn')}>
+          <Tooltip
+            content={forkError ?? (forking ? 'Branching…' : 'Branch session from this turn')}
+          >
             <button
               type="button"
               onClick={handleFork}
               disabled={forking}
-              aria-label="Fork session from this turn"
+              aria-label="Branch session from this turn"
               className="inline-flex h-6 w-6 items-center justify-center rounded text-neutral-600 transition-colors hover:bg-neutral-800/60 hover:text-neutral-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-500 disabled:opacity-50"
             >
               {forking ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
               ) : (
-                <GitFork className="h-3 w-3" />
+                <GitBranch className="h-3 w-3" />
               )}
             </button>
           </Tooltip>
