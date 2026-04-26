@@ -9,9 +9,9 @@ import { cn } from '../lib/utils';
 
 /**
  * Sidecar self-update toast items (BatchToast + per-machine UpdateToasts).
- * Returns a Fragment so the host (`AppToasts`) can stack these alongside
- * other toast types in one shared bottom-right column instead of every
- * toast type rendering its own overlapping fixed wrapper.
+ * Returns a Fragment so the toast host in `App.tsx` can stack these
+ * alongside other toast types in one shared bottom-right column instead
+ * of every toast type rendering its own overlapping fixed wrapper.
  *
  * Auto-dismiss rules:
  *   - completed (or manual) → dismiss after 6s

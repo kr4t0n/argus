@@ -4,8 +4,8 @@ import { useCloneFailureStore } from '../stores/cloneFailureStore';
 
 /**
  * Failed session-clone-from-turn toast items. Returns a Fragment so the
- * host (`AppToasts`) can interleave these with other toast types in
- * one shared bottom-right column. Auto-dismisses after 8s (failure
+ * toast host in `App.tsx` can interleave these with other toast types
+ * in one shared bottom-right column. Auto-dismisses after 8s (failure
  * copy is short and not actionable beyond "next prompt starts fresh",
  * so leaving it sticky would just be visual debt).
  */
