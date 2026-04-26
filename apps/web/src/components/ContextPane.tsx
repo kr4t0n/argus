@@ -1,14 +1,10 @@
 import { useState } from 'react';
-import type {
-  AgentDTO,
-  CommandDTO,
-  ResultChunkDTO,
-  SessionDTO,
-} from '@argus/shared-types';
+import type { AgentDTO, CommandDTO, ResultChunkDTO, SessionDTO } from '@argus/shared-types';
 import { FolderTree, Terminal as TerminalIcon } from 'lucide-react';
 import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
 import { StatusDot } from './ui/StatusDot';
 import { FileTree } from './FileTree';
+import { GitLogPanel } from './GitLogPanel';
 import { TerminalPane } from './TerminalPane';
 import { relativeTime } from '../lib/utils';
 import { useSessionModel } from '../lib/usage';
@@ -56,10 +52,7 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
           <KV
             k="working dir"
             v={
-              <span
-                title={agent.workingDir}
-                className="font-mono text-[11px] text-neutral-300"
-              >
+              <span title={agent.workingDir} className="font-mono text-[11px] text-neutral-300">
                 {agent.workingDir}
               </span>
             }
@@ -71,9 +64,7 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
         />
         <KV
           k="last seen"
-          v={
-            <span title={agent.lastHeartbeatAt}>{relativeTime(agent.lastHeartbeatAt)} ago</span>
-          }
+          v={<span title={agent.lastHeartbeatAt}>{relativeTime(agent.lastHeartbeatAt)} ago</span>}
         />
       </Section>
 
@@ -107,30 +98,36 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
       {recentCommands.length > 0 && (
         <Section title="Recent turns">
           <ul className="space-y-1 mt-1">
-            {recentCommands.slice(-5).reverse().map((c) => (
-              <li
-                key={c.id}
-                className="text-[11px] text-neutral-400 flex items-center gap-1.5"
-              >
-                <span
-                  className={
-                    c.status === 'failed'
-                      ? 'text-red-400'
-                      : c.status === 'completed'
-                        ? 'text-emerald-400'
-                        : c.status === 'cancelled'
-                          ? 'text-neutral-500'
-                          : 'text-amber-300'
-                  }
-                >
-                  ●
-                </span>
-                <span className="truncate">{c.prompt ?? `(${c.kind})`}</span>
-              </li>
-            ))}
+            {recentCommands
+              .slice(-5)
+              .reverse()
+              .map((c) => (
+                <li key={c.id} className="text-[11px] text-neutral-400 flex items-center gap-1.5">
+                  <span
+                    className={
+                      c.status === 'failed'
+                        ? 'text-red-400'
+                        : c.status === 'completed'
+                          ? 'text-emerald-400'
+                          : c.status === 'cancelled'
+                            ? 'text-neutral-500'
+                            : 'text-amber-300'
+                    }
+                  >
+                    ●
+                  </span>
+                  <span className="truncate">{c.prompt ?? `(${c.kind})`}</span>
+                </li>
+              ))}
           </ul>
         </Section>
       )}
+
+      {/* Git log sits just above Files: gives the user a glanceable
+          sense of "where is HEAD and what just happened" before they
+          dive into reading source. Self-hides for non-repo workingDirs
+          so non-git agents don't render a phantom empty section. */}
+      {agent.workingDir && <GitLogPanel key={agent.id} agentId={agent.id} />}
 
       {/* File tree sits above Terminal — it's read-only context that
           benefits from always being visible (user scans the workspace

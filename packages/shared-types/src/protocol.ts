@@ -241,6 +241,84 @@ export interface FSReadRequestCommand {
  *  an error rather than truncating. */
 export const FS_READ_MAX_BYTES = 1_048_576;
 
+/**
+ * Asks the sidecar for the most recent N commits reachable from the
+ * agent's HEAD. Same control-plane RPC pattern as fs-list / fs-read:
+ * server publishes on the per-machine control stream, sidecar replies
+ * on the lifecycle stream. The sidecar caps at GIT_LOG_MAX_LIMIT (200)
+ * regardless of what's requested.
+ */
+export interface GitLogRequestCommand {
+  kind: 'git-log';
+  requestId: string;
+  agentId: string;
+  /** Default 50, max 200. Server validates the upper bound; sidecar
+   *  applies the same cap defensively. */
+  limit?: number;
+  ts: number;
+}
+
+/** Default page size when the dashboard doesn't pass an explicit limit. */
+export const GIT_LOG_DEFAULT_LIMIT = 50;
+/** Hard cap so a buggy / hostile caller can't ask for unbounded log
+ *  output. Sized so 200 commits × ~150 wire bytes stays trivial. */
+export const GIT_LOG_MAX_LIMIT = 200;
+
+/**
+ * One row in the dashboard's "Recent commits" panel. Subject is the
+ * first line of the commit message; body / parents / diff stats are
+ * intentionally omitted to keep the wire payload compact for the
+ * panel's list rendering. Click-throughs (full message, file list)
+ * would be a follow-up RPC, not a heavier payload here.
+ */
+export interface GitCommit {
+  /** Full 40-char hash. */
+  sha: string;
+  /** 7-char display form. */
+  shortSha: string;
+  /** First line of the commit message. */
+  subject: string;
+  /** Committer display name. */
+  authorName: string;
+  /** ISO-8601 (RFC3339) author timestamp. */
+  authorDate: string;
+}
+
+/**
+ * Sidecar's reply to GitLogRequestCommand. On success `commits` is
+ * populated and `error` is empty. On failure (workingDir not a git
+ * repo, `git` missing on PATH, exec failure) `error` carries a
+ * human-readable reason and `commits` is omitted.
+ *
+ * `git` mirrors the GitStatus on FSListResponseEvent so a panel
+ * rendering recent commits can label its header (branch / detached
+ * HEAD) in one round trip — no parallel fs-list needed.
+ */
+export interface GitLogResponseEvent {
+  kind: 'git-log-response';
+  machineId: string;
+  agentId: string;
+  requestId: string;
+  commits?: GitCommit[];
+  git?: GitStatus;
+  error?: string;
+  ts: number;
+}
+
+/**
+ * Unsolicited push from the sidecar's secondary git watcher
+ * (`.git/HEAD` + `refs/heads/`) — fires when the repo's HEAD or a
+ * branch tip moved (commit, checkout, reset). Debounced on the
+ * sidecar so a rebase collapses into one event. The dashboard's
+ * GitLogPanel listens for this and re-fetches the log + branch.
+ */
+export interface GitChangedEvent {
+  kind: 'git-changed';
+  machineId: string;
+  agentId: string;
+  ts: number;
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Remote sidecar update (server → sidecar)
 //
@@ -272,6 +350,7 @@ export type MachineControlCommand =
   | SyncAgentsCommand
   | FSListRequestCommand
   | FSReadRequestCommand
+  | GitLogRequestCommand
   | UpdateSidecarCommand;
 
 export interface FSListResponseEvent {
@@ -416,6 +495,8 @@ export type AnyLifecycleEvent =
   | FSListResponseEvent
   | FSReadResponseEvent
   | FSChangedEvent
+  | GitLogResponseEvent
+  | GitChangedEvent
   | SidecarUpdateStartedEvent
   | SidecarUpdateDownloadedEvent
   | SidecarUpdateFailedEvent;

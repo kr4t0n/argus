@@ -41,6 +41,7 @@ type Handler = {
   onTerminalOutput?: (m: TerminalOutputMessage) => void;
   onTerminalClosed?: (m: TerminalClosedMessage) => void;
   onFSChanged?: (p: { agentId: string; path: string }) => void;
+  onGitChanged?: (p: { agentId: string }) => void;
   onSidecarUpdateStarted?: (p: {
     machineId: string;
     requestId: string;
@@ -103,6 +104,7 @@ export function ensureSocket(): WSSocket {
   socket.on('terminal:output', (m) => handlers.forEach((h) => h.onTerminalOutput?.(m)));
   socket.on('terminal:closed', (m) => handlers.forEach((h) => h.onTerminalClosed?.(m)));
   socket.on('fs:changed', (p) => handlers.forEach((h) => h.onFSChanged?.(p)));
+  socket.on('git:changed', (p) => handlers.forEach((h) => h.onGitChanged?.(p)));
   socket.on('sidecar-update:started', (p) =>
     handlers.forEach((h) => h.onSidecarUpdateStarted?.(p)),
   );

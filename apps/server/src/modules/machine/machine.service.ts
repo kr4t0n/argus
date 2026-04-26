@@ -6,11 +6,7 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
-import type {
-  Agent as PAgent,
-  Machine as PMachine,
-  Prisma,
-} from '@prisma/client';
+import type { Agent as PAgent, Machine as PMachine, Prisma } from '@prisma/client';
 import {
   consumerGroups,
   streamKeys,
@@ -77,10 +73,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
   async onModuleDestroy() {
     this.running = false;
     if (this.sweepTimer) clearInterval(this.sweepTimer);
-    await Promise.race([
-      this.loopPromise,
-      new Promise((r) => setTimeout(r, 6_000)),
-    ]);
+    await Promise.race([this.loopPromise, new Promise((r) => setTimeout(r, 6_000))]);
   }
 
   // ───────────────────── REST surface ─────────────────────
@@ -112,8 +105,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
    * the same endpoint with `{ iconKey: null }`.
    */
   async setIcon(machineId: string, iconKey: string | null): Promise<MachineDTO> {
-    const trimmed =
-      typeof iconKey === 'string' ? iconKey.trim() : null;
+    const trimmed = typeof iconKey === 'string' ? iconKey.trim() : null;
     const next = trimmed ? trimmed : null;
 
     const exists = await this.prisma.machine.findUnique({
@@ -149,10 +141,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
    * The agent boots into `offline` status; the sidecar's
    * RegisterEvent flips it `online` once the supervisor is up.
    */
-  async createAgent(
-    machineId: string,
-    req: CreateAgentRequest,
-  ): Promise<AgentDTO> {
+  async createAgent(machineId: string, req: CreateAgentRequest): Promise<AgentDTO> {
     const machine = await this.prisma.machine.findUnique({ where: { id: machineId } });
     if (!machine) throw new NotFoundException('machine not found');
     if (machine.archivedAt) throw new BadRequestException('machine is archived');
@@ -295,9 +284,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
               const data = parseData(fields);
               if (data) await this.handle(data as AnyLifecycleEvent);
             } catch (err) {
-              this.logger.error(
-                `failed to handle lifecycle event: ${(err as Error).message}`,
-              );
+              this.logger.error(`failed to handle lifecycle event: ${(err as Error).message}`);
             }
             await this.redis.cmd.xack(streamKeys.lifecycle, consumerGroups.lifecycle, msgId);
           }
@@ -429,9 +416,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         break;
       }
       case 'agent-spawn-failed': {
-        this.logger.error(
-          `agent-spawn-failed ${ev.agentId} on ${ev.machineId}: ${ev.reason}`,
-        );
+        this.logger.error(`agent-spawn-failed ${ev.agentId} on ${ev.machineId}: ${ev.reason}`);
         this.gateway.emitAgentSpawnFailed({
           machineId: ev.machineId,
           agentId: ev.agentId,
@@ -468,6 +453,19 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         // Broadcast into the agent room so connected dashboards can
         // invalidate their cached tree listings.
         this.gateway.emitFSChanged({ agentId: ev.agentId, path: ev.path });
+        break;
+      }
+      case 'git-log-response': {
+        // Same fan-in as fs-list-response — keyed by requestId in the
+        // shared pending map.
+        this.fs.handleGitLogResponse(ev);
+        break;
+      }
+      case 'git-changed': {
+        // Debounced notification from the sidecar's secondary git
+        // watcher (.git/HEAD + refs/heads/). Broadcast into the agent
+        // room so connected dashboards can refresh their commit panel.
+        this.gateway.emitGitChanged({ agentId: ev.agentId });
         break;
       }
       case 'sidecar-update-started':

@@ -4,6 +4,7 @@ import type {
   AvailableAdapter,
   CommandStatus,
   FSEntry,
+  GitCommit,
   GitStatus,
   ResultChunk,
   SessionStatus,
@@ -211,6 +212,23 @@ export type FSReadResult =
   | { kind: 'text'; content: string; size: number }
   | { kind: 'image'; mime: string; base64: string; size: number }
   | { kind: 'binary'; size: number };
+
+/**
+ * REST response for `GET /agents/:id/git/log`. Carries both the
+ * recent-commits list and the current GitStatus (branch / detached
+ * HEAD) so the dashboard's commit panel doesn't have to round-trip a
+ * separate fs-list call just to render its header. Empty `commits`
+ * with no `error` means the workingDir isn't a git repo, OR is a
+ * fresh repo with no commits yet — the panel renders an empty state
+ * either way.
+ */
+export interface GitLogResponse {
+  commits: GitCommit[];
+  /** Same shape as on FSListResponse — present iff the workingDir is
+   *  a git repo. Lets the panel header render the branch / detached
+   *  HEAD label without a parallel fs-list call. */
+  git?: GitStatus;
+}
 
 export interface FSReadResponse {
   path: string;

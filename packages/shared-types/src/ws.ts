@@ -59,6 +59,11 @@ export interface ServerToClientEvents {
    *  re-fetches the listing for `path` if it's currently expanded in
    *  the right-pane file tree. */
   'fs:changed': (payload: { agentId: string; path: string }) => void;
+  /** The agent's repo HEAD or one of its branch tips moved (commit,
+   *  checkout, reset, rebase). Debounced on the sidecar — a single
+   *  rebase fires one event, not one per ref bump. The dashboard's
+   *  commit panel listens for this and re-fetches the log. */
+  'git:changed': (payload: { agentId: string }) => void;
   /** Sidecar update lifecycle (per-machine room). The triple matches
    *  on requestId; the dashboard renders progress in a toast that
    *  resolves on `completed` (machine re-registered with the new
