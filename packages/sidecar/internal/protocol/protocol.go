@@ -354,6 +354,20 @@ type SessionExternalIDEvent struct {
 	TS         int64  `json:"ts"`
 }
 
+// SessionCloneFailedEvent is emitted when handleCloneSession can't
+// complete the on-disk fork (adapter doesn't implement Cloner, source
+// missing, IO error, etc). Mirror of SessionCloneFailedEvent in
+// packages/shared-types/src/protocol.ts. The server forwards this to
+// the owning user's WS room so the dashboard can toast; the new
+// Session row is left intact (history is still reproduced; just no
+// externalId means the next prompt starts a fresh CLI conversation).
+type SessionCloneFailedEvent struct {
+	Kind      string `json:"kind"` // "session-clone-failed"
+	SessionID string `json:"sessionId"`
+	Reason    string `json:"reason"`
+	TS        int64  `json:"ts"`
+}
+
 // ─────────── Terminal protocol ───────────
 //
 // Multiplexed over per-agent in/out streams, keyed by terminalId. Data

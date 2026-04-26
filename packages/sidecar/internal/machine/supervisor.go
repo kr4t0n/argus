@@ -262,26 +262,23 @@ func (s *supervisor) heartbeatLoop(ctx context.Context) {
 
 // handleCloneSession runs a fork of the agent's CLI on-disk session
 // state. Adapters opt in by implementing adapter.Cloner; if the agent's
-// adapter doesn't, we publish a single error chunk so the dashboard
-// surfaces the failure (and the new Argus session continues to exist
-// without an externalId, falling back to history-only fork semantics).
+// adapter doesn't (or the clone otherwise fails), we publish a
+// SessionCloneFailedEvent so the dashboard can toast. A ResultChunk
+// would be wrong here — the clone-session command has no Command row
+// in the server DB, and a chunk insert would FK-violate against
+// Command.id and get silently dropped.
 //
 // Successful clones emit a SessionExternalIDEvent on the result stream,
 // which the server's result-ingestor consumes to set the new session's
 // externalId — making future commands resume the cloned conversation.
 func (s *supervisor) handleCloneSession(parent context.Context, cmd protocol.Command) {
 	resultStream := protocol.ResultStream(s.spec.AgentID)
-	publishErr := func(msg string) {
-		_ = s.bus.Publish(parent, resultStream, protocol.ResultChunk{
-			ID:        uuid.NewString(),
-			CommandID: cmd.ID,
-			AgentID:   s.spec.AgentID,
+	publishErr := func(reason string) {
+		_ = s.bus.Publish(parent, resultStream, protocol.SessionCloneFailedEvent{
+			Kind:      "session-clone-failed",
 			SessionID: cmd.SessionID,
-			Seq:       1,
-			Kind:      protocol.KindError,
-			Content:   msg,
+			Reason:    reason,
 			TS:        time.Now().UnixMilli(),
-			IsFinal:   true,
 		})
 	}
 

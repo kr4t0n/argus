@@ -32,6 +32,7 @@ type Handler = {
   onSessionCreated?: (s: SessionDTO) => void;
   onSessionUpdated?: (s: SessionDTO) => void;
   onSessionStatus?: (p: { id: string; status: SessionDTO['status'] }) => void;
+  onSessionCloneFailed?: (p: { sessionId: string; reason: string }) => void;
   onCommandCreated?: (c: CommandDTO) => void;
   onCommandUpdated?: (c: CommandDTO) => void;
   onChunk?: (c: ResultChunkDTO) => void;
@@ -64,10 +65,7 @@ type Handler = {
     fromVersion: string;
     reason: string;
   }) => void;
-  onSidecarUpdateBatchProgress?: (p: {
-    batchId: string;
-    plan: SidecarUpdatePlanEntry[];
-  }) => void;
+  onSidecarUpdateBatchProgress?: (p: { batchId: string; plan: SidecarUpdatePlanEntry[] }) => void;
   onConnect?: () => void;
   onDisconnect?: () => void;
 };
@@ -92,12 +90,11 @@ export function ensureSocket(): WSSocket {
   socket.on('agent:upsert', (a) => handlers.forEach((h) => h.onAgentUpsert?.(a)));
   socket.on('agent:status', (p) => handlers.forEach((h) => h.onAgentStatus?.(p)));
   socket.on('agent:removed', (p) => handlers.forEach((h) => h.onAgentRemoved?.(p)));
-  socket.on('agent:spawn-failed', (p) =>
-    handlers.forEach((h) => h.onAgentSpawnFailed?.(p)),
-  );
+  socket.on('agent:spawn-failed', (p) => handlers.forEach((h) => h.onAgentSpawnFailed?.(p)));
   socket.on('session:created', (s) => handlers.forEach((h) => h.onSessionCreated?.(s)));
   socket.on('session:updated', (s) => handlers.forEach((h) => h.onSessionUpdated?.(s)));
   socket.on('session:status', (p) => handlers.forEach((h) => h.onSessionStatus?.(p)));
+  socket.on('session:clone-failed', (p) => handlers.forEach((h) => h.onSessionCloneFailed?.(p)));
   socket.on('command:created', (c) => handlers.forEach((h) => h.onCommandCreated?.(c)));
   socket.on('command:updated', (c) => handlers.forEach((h) => h.onCommandUpdated?.(c)));
   socket.on('chunk', (c) => handlers.forEach((h) => h.onChunk?.(c)));
@@ -115,9 +112,7 @@ export function ensureSocket(): WSSocket {
   socket.on('sidecar-update:completed', (p) =>
     handlers.forEach((h) => h.onSidecarUpdateCompleted?.(p)),
   );
-  socket.on('sidecar-update:failed', (p) =>
-    handlers.forEach((h) => h.onSidecarUpdateFailed?.(p)),
-  );
+  socket.on('sidecar-update:failed', (p) => handlers.forEach((h) => h.onSidecarUpdateFailed?.(p)));
   socket.on('sidecar-update:batch-progress', (p) =>
     handlers.forEach((h) => h.onSidecarUpdateBatchProgress?.(p)),
   );

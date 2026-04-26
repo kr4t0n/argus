@@ -486,6 +486,23 @@ export interface SessionExternalIdEvent {
   ts: number;
 }
 
+/**
+ * Reported by the sidecar when an in-flight `clone-session` command can't
+ * finish — adapter doesn't implement Cloner, source file missing, etc.
+ *
+ * The forked Session row already exists with the reproduced history, so
+ * the event isn't fatal: it's a notification that on-disk CLI state
+ * couldn't be replicated and the next prompt will start a fresh
+ * conversation. Server fans this out as `session:clone-failed` to the
+ * owning user's WS room; the dashboard surfaces a toast.
+ */
+export interface SessionCloneFailedEvent {
+  kind: 'session-clone-failed';
+  sessionId: string;
+  reason: string;
+  ts: number;
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Terminal (PTY) protocol
 //

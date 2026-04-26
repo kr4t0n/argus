@@ -7,10 +7,12 @@ import { useAgentStore } from './stores/agentStore';
 import { useMachineStore } from './stores/machineStore';
 import { useSessionStore } from './stores/sessionStore';
 import { useSidecarUpdateStore } from './stores/sidecarUpdateStore';
+import { useCloneFailureStore } from './stores/cloneFailureStore';
 import { ensureSocket, resetSocket, subscribeHandler } from './lib/ws';
 import { api } from './lib/api';
 import { migrateLocalMachineIconsToServer } from './lib/migrateMachineIcons';
 import { SidecarUpdateToasts } from './components/SidecarUpdateToasts';
+import { SessionCloneFailedToasts } from './components/SessionCloneFailedToasts';
 
 function ProtectedRoutes() {
   const token = useAuthStore((s) => s.token);
@@ -77,19 +79,25 @@ export default function App() {
       onCommandCreated: upsertCommand,
       onCommandUpdated: upsertCommand,
       onChunk: appendChunk,
-      onSidecarUpdateStarted: (p) =>
-        updateStore.setStarted(p.machineId, p.fromVersion),
+      onSessionCloneFailed: (p) => {
+        // Look the session up at push time so the toast can show the
+        // human title even if the row hasn't fully hydrated yet (the
+        // session:created event may still be in flight; fall back to
+        // the id so we never render an empty label).
+        const sess = useSessionStore.getState().entries[p.sessionId]?.session;
+        useCloneFailureStore.getState().push({
+          sessionId: p.sessionId,
+          sessionTitle: sess?.title ?? p.sessionId.slice(0, 8),
+          reason: p.reason,
+          startedAt: Date.now(),
+        });
+      },
+      onSidecarUpdateStarted: (p) => updateStore.setStarted(p.machineId, p.fromVersion),
       onSidecarUpdateDownloaded: (p) =>
-        updateStore.setDownloaded(
-          p.machineId,
-          p.fromVersion,
-          p.toVersion,
-          p.restartMode,
-        ),
+        updateStore.setDownloaded(p.machineId, p.fromVersion, p.toVersion, p.restartMode),
       onSidecarUpdateCompleted: (p) =>
         updateStore.setCompleted(p.machineId, p.fromVersion, p.toVersion),
-      onSidecarUpdateFailed: (p) =>
-        updateStore.setFailed(p.machineId, p.fromVersion, p.reason),
+      onSidecarUpdateFailed: (p) => updateStore.setFailed(p.machineId, p.fromVersion, p.reason),
       onSidecarUpdateBatchProgress: (p) =>
         useSidecarUpdateStore.getState().updateBatch(p.batchId, p.plan),
       onConnect: async () => {
@@ -122,6 +130,7 @@ export default function App() {
         <Route path="/*" element={<ProtectedRoutes />} />
       </Routes>
       <SidecarUpdateToasts />
+      <SessionCloneFailedToasts />
     </>
   );
 }
