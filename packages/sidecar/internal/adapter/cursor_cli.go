@@ -3,7 +3,9 @@ package adapter
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 
 	"github.com/kr4t0n/argus/sidecar/internal/protocol"
@@ -144,4 +146,76 @@ func (a *CursorCLIAdapter) Cancel(_ context.Context, commandID string) error {
 		r.Cancel()
 	}
 	return nil
+}
+
+// CloneSession forks the Cursor CLI's on-disk transcript for srcExternalID
+// into a new chat directory. Cursor stores each chat under
+// ~/.cursor/projects/<slug>/agent-transcripts/<chat-id>/<chat-id>.jsonl,
+// where each JSONL line is one message ({role, message}). The chat id
+// is encoded only in the filenames — never inside the line content —
+// so cloning is a pure filesystem operation: create the new directory,
+// copy lines until we hit the (turnIndex+1)th `role: "user"` line, stop.
+//
+// Returns the new chat id; errors leave nothing behind on disk.
+func (a *CursorCLIAdapter) CloneSession(
+	_ context.Context, srcExternalID string, turnIndex int,
+) (string, error) {
+	if a.workingDir == "" {
+		return "", fmtCloneError("cursor-cli", srcExternalID,
+			fmt.Errorf("workingDir not set; cannot derive project slug"))
+	}
+	home, err := homeDir()
+	if err != nil {
+		return "", fmtCloneError("cursor-cli", srcExternalID, err)
+	}
+	slug := cursorProjectSlug(a.workingDir)
+	srcDir := filepath.Join(home, ".cursor", "projects", slug, "agent-transcripts", srcExternalID)
+	srcFile := filepath.Join(srcDir, srcExternalID+".jsonl")
+	if _, err := os.Stat(srcFile); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmtCloneError("cursor-cli", srcExternalID, errCloneSrcNotFound)
+		}
+		return "", fmtCloneError("cursor-cli", srcExternalID, err)
+	}
+
+	newID := newSessionUUID()
+	dstDir := filepath.Join(home, ".cursor", "projects", slug, "agent-transcripts", newID)
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return "", fmtCloneError("cursor-cli", srcExternalID, err)
+	}
+	dstFile := filepath.Join(dstDir, newID+".jsonl")
+	out, err := os.OpenFile(dstFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		_ = os.RemoveAll(dstDir)
+		return "", fmtCloneError("cursor-cli", srcExternalID, err)
+	}
+
+	// turnIndex is 1-based: keep the first N user turns plus their
+	// assistant responses. The (N+1)th `role: "user"` line is where we
+	// stop — that's the prompt that would have started turn N+1.
+	userSeen := 0
+	stopped := false
+	werr := readJSONLines(srcFile, func(raw []byte, parsed map[string]any) error {
+		if stopped {
+			return nil
+		}
+		if parsed != nil {
+			if role, _ := parsed["role"].(string); role == "user" {
+				if userSeen >= turnIndex {
+					stopped = true
+					return nil
+				}
+				userSeen++
+			}
+		}
+		return writeJSONLine(out, raw)
+	})
+	if cerr := out.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		_ = os.RemoveAll(dstDir)
+		return "", fmtCloneError("cursor-cli", srcExternalID, werr)
+	}
+	return newID, nil
 }

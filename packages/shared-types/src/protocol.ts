@@ -15,13 +15,7 @@ export type AgentStatus = 'online' | 'offline' | 'busy' | 'error';
 
 export type SessionStatus = 'active' | 'idle' | 'done' | 'failed';
 
-export type CommandStatus =
-  | 'pending'
-  | 'sent'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'cancelled';
+export type CommandStatus = 'pending' | 'sent' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export type ResultKind =
   | 'delta' // incremental text fragment (typewriter)
@@ -105,7 +99,7 @@ export interface MachineRegisterEvent {
   /** User-friendly name; defaults to hostname (`.local` stripped). */
   name: string;
   hostname: string;
-  os: string;   // darwin | linux
+  os: string; // darwin | linux
   arch: string; // amd64 | arm64
   sidecarVersion: string;
   availableAdapters: AvailableAdapter[];
@@ -118,9 +112,7 @@ export interface MachineHeartbeatEvent {
   ts: number;
 }
 
-export type MachineLifecycleEvent =
-  | MachineRegisterEvent
-  | MachineHeartbeatEvent;
+export type MachineLifecycleEvent = MachineRegisterEvent | MachineHeartbeatEvent;
 
 // ─────────────────────────────────────────────────────────────────────
 // Machine control plane (server → sidecar)
@@ -408,10 +400,7 @@ export interface AgentDestroyedEvent {
   ts: number;
 }
 
-export type MachineLifecycleAck =
-  | AgentSpawnedEvent
-  | AgentSpawnFailedEvent
-  | AgentDestroyedEvent;
+export type MachineLifecycleAck = AgentSpawnedEvent | AgentSpawnFailedEvent | AgentDestroyedEvent;
 
 /** Anything the server expects on `agent:lifecycle`. Ordering matters:
  *  more specific kinds first so TS narrows correctly. */
@@ -431,6 +420,22 @@ export type AnyLifecycleEvent =
   | SidecarUpdateDownloadedEvent
   | SidecarUpdateFailedEvent;
 
+/**
+ * Tells the sidecar to clone an existing on-disk CLI session into a new
+ * one for the agent. Carried on Command when `kind === 'clone-session'`.
+ *
+ *   • `srcExternalId` — the upstream CLI's id for the source conversation
+ *     (matches Session.externalId on the server side).
+ *   • `turnIndex` — 1-based; clone the prefix containing turns 1..N and
+ *     drop everything after. The sidecar's per-adapter Cloner enforces
+ *     turn boundaries (truncate before the (N+1)th user turn so we don't
+ *     leave a dangling tool_use without its tool_result).
+ */
+export interface CloneSpec {
+  srcExternalId: string;
+  turnIndex: number;
+}
+
 /** Server → sidecar */
 export interface Command {
   id: string;
@@ -442,12 +447,14 @@ export interface Command {
    * previous conversation.
    */
   externalId?: string;
-  kind: 'execute' | 'cancel';
+  kind: 'execute' | 'cancel' | 'clone-session';
   prompt?: string;
   context?: Record<string, unknown>;
   timeoutMs?: number;
   /** optional adapter-specific options (model, flags, etc.) */
   options?: Record<string, unknown>;
+  /** Set when kind === 'clone-session'; ignored otherwise. */
+  clone?: CloneSpec;
 }
 
 /** Sidecar → server, streamed */

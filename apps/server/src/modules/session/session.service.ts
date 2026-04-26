@@ -1,13 +1,17 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import type { Session as PSession } from '@prisma/client';
-import type { SessionDTO } from '@argus/shared-types';
+import type { Command as WireCommand, SessionDTO } from '@argus/shared-types';
+import { streamKeys } from '@argus/shared-types';
 import { PrismaService } from '../../infra/prisma/prisma.service';
+import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 
 @Injectable()
 export class SessionService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
     private readonly gateway: StreamGateway,
   ) {}
 
@@ -107,13 +111,18 @@ export class SessionService {
 
   /**
    * Fork a session at a given command. The new session reproduces every
-   * command (and its chunks) up to and including `forkAtCommandId`, then
-   * starts fresh on the CLI side: `externalId` stays null, so the next
-   * prompt the user sends spawns a fresh CLI conversation. The visible
-   * history is preserved so the user can read prior context, but the
-   * underlying agent has no memory of it. A future iteration can teach
-   * the sidecar adapters to clone+truncate the on-disk session file so
-   * the CLI itself continues from the chosen turn.
+   * command (and its chunks) up to and including `forkAtCommandId` so
+   * the dashboard can render the prior history immediately.
+   *
+   * If the source session has an `externalId` (i.e. there's CLI-side
+   * state on the agent's host) we *also* publish a `clone-session`
+   * command to the sidecar: per-adapter Cloner implementations copy the
+   * on-disk session file, rewrite any embedded session id, and truncate
+   * at the chosen turn. The sidecar reports the new id back via a
+   * SessionExternalIDEvent which `setExternalId` lands on the new
+   * session — so the next prompt resumes the cloned conversation rather
+   * than starting fresh. Sources without an externalId (clone happened
+   * before any CLI turn ran) simply skip that path.
    */
   async fork(userId: string, sessionId: string, forkAtCommandId: string, title?: string) {
     const src = await this.get(userId, sessionId);
@@ -199,6 +208,36 @@ export class SessionService {
 
     const dto = SessionService.toDto(newSession);
     this.gateway.emitSessionCreated(dto);
+
+    // Best-effort dispatch of the on-disk clone to the sidecar. We do
+    // this AFTER the gateway emit so the dashboard can navigate
+    // immediately and the externalId fills in once the sidecar reports
+    // back; if the agent is offline or doesn't implement Cloner, the
+    // session remains a history-only fork (no externalId) and the next
+    // prompt starts a fresh CLI conversation.
+    if (src.externalId) {
+      const wire: WireCommand = {
+        id: randomUUID(),
+        agentId: src.agentId,
+        sessionId: dto.id,
+        kind: 'clone-session',
+        clone: {
+          srcExternalId: src.externalId,
+          turnIndex: prefix.length,
+        },
+      };
+      try {
+        await this.redis.publish(streamKeys.command(src.agentId), wire);
+      } catch (err) {
+        // Don't fail the fork if Redis hiccups — the session row is
+        // already there. Log via the gateway logger by re-throwing
+        // would surface to the caller; instead swallow and let the
+        // user retry by sending a prompt (which triggers a fresh CLI
+        // run regardless).
+        console.warn(`[fork] clone-session publish failed`, err);
+      }
+    }
+
     return dto;
   }
 

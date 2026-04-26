@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kr4t0n/argus/sidecar/internal/protocol"
 )
@@ -175,6 +178,100 @@ func (a *CodexAdapter) Cancel(_ context.Context, commandID string) error {
 		r.Cancel()
 	}
 	return nil
+}
+
+// CloneSession forks Codex's on-disk rollout for srcExternalID into a
+// new rollout file under today's date directory. Codex stores each
+// session at ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<sessionId>.jsonl
+// and embeds the session id only on line 1 (`session_meta.payload.id`),
+// so the file body is otherwise verbatim-copyable. Turn boundaries are
+// `event_msg` lines whose `payload.type == "task_started"` (each
+// `codex resume` invocation emits a fresh one).
+//
+// turnIndex is 1-based; we stop emitting at the (turnIndex+1)th
+// task_started event. line 1 (`session_meta`) is always kept and gets
+// `payload.id` rewritten to the new UUID.
+func (a *CodexAdapter) CloneSession(
+	_ context.Context, srcExternalID string, turnIndex int,
+) (string, error) {
+	home, err := homeDir()
+	if err != nil {
+		return "", fmtCloneError("codex", srcExternalID, err)
+	}
+	sessionsRoot := filepath.Join(home, ".codex", "sessions")
+	// Codex buckets by YYYY/MM/DD; we don't know the source's date
+	// upfront so glob across all date dirs.
+	srcFile, err := findFirstFile(sessionsRoot, filepath.Join("*", "*", "*", "rollout-*-"+srcExternalID+".jsonl"))
+	if err != nil {
+		return "", fmtCloneError("codex", srcExternalID, err)
+	}
+	if srcFile == "" {
+		return "", fmtCloneError("codex", srcExternalID, errCloneSrcNotFound)
+	}
+
+	newID := newSessionUUID()
+	now := time.Now().UTC()
+	dstDir := filepath.Join(sessionsRoot, fmt.Sprintf("%04d", now.Year()),
+		fmt.Sprintf("%02d", int(now.Month())), fmt.Sprintf("%02d", now.Day()))
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return "", fmtCloneError("codex", srcExternalID, err)
+	}
+	// Codex's filename timestamp is ISO with `:` replaced by `-`.
+	ts := now.Format("2006-01-02T15-04-05")
+	dstFile := filepath.Join(dstDir, fmt.Sprintf("rollout-%s-%s.jsonl", ts, newID))
+	out, err := os.OpenFile(dstFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return "", fmtCloneError("codex", srcExternalID, err)
+	}
+
+	taskStartedSeen := 0
+	stopped := false
+	lineNum := 0
+	werr := readJSONLines(srcFile, func(raw []byte, parsed map[string]any) error {
+		if stopped {
+			return nil
+		}
+		lineNum++
+		if parsed == nil {
+			// Unparseable line — copy verbatim if we're not yet past the
+			// header but otherwise drop. The header lines are always JSON
+			// in observed files, so this branch only catches drift.
+			return writeJSONLine(out, raw)
+		}
+		recType, _ := parsed["type"].(string)
+		// Line 1 should be session_meta; rewrite payload.id either way
+		// in case Codex ever moves the meta record.
+		if recType == "session_meta" {
+			if pl, ok := parsed["payload"].(map[string]any); ok {
+				pl["id"] = newID
+			}
+			b, err := json.Marshal(parsed)
+			if err != nil {
+				return err
+			}
+			return writeJSONLine(out, b)
+		}
+		if recType == "event_msg" {
+			if pl, ok := parsed["payload"].(map[string]any); ok {
+				if t, _ := pl["type"].(string); t == "task_started" {
+					if taskStartedSeen >= turnIndex {
+						stopped = true
+						return nil
+					}
+					taskStartedSeen++
+				}
+			}
+		}
+		return writeJSONLine(out, raw)
+	})
+	if cerr := out.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		_ = os.Remove(dstFile)
+		return "", fmtCloneError("codex", srcExternalID, werr)
+	}
+	return newID, nil
 }
 
 // mapCodexLine handles the codex 0.121+ NDJSON schema:

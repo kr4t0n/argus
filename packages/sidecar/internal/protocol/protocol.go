@@ -308,16 +308,28 @@ type AgentDestroyedEvent struct {
 	TS        int64  `json:"ts"`
 }
 
+// CloneSpec rides on Command when Kind == "clone-session": tells the
+// sidecar's per-adapter Cloner to fork the CLI's on-disk session for
+// SrcExternalID into a new session whose id will be reported back via
+// SessionExternalIDEvent on the result stream. TurnIndex is 1-based; the
+// adapter must truncate at a safe boundary (before the (N+1)th user
+// turn so a dangling tool_use isn't left without its tool_result).
+type CloneSpec struct {
+	SrcExternalID string `json:"srcExternalId"`
+	TurnIndex     int    `json:"turnIndex"`
+}
+
 type Command struct {
 	ID         string         `json:"id"`
 	AgentID    string         `json:"agentId"`
 	SessionID  string         `json:"sessionId"`
 	ExternalID string         `json:"externalId,omitempty"`
-	Kind       string         `json:"kind"` // "execute" | "cancel"
+	Kind       string         `json:"kind"` // "execute" | "cancel" | "clone-session"
 	Prompt     string         `json:"prompt,omitempty"`
 	Context    map[string]any `json:"context,omitempty"`
 	TimeoutMS  int            `json:"timeoutMs,omitempty"`
 	Options    map[string]any `json:"options,omitempty"`
+	Clone      *CloneSpec     `json:"clone,omitempty"`
 }
 
 type ResultChunk struct {
