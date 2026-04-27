@@ -96,7 +96,7 @@ function TextOrMarkdownViewer({ file, content }: { file: OpenFile; content: stri
         type="button"
         onClick={() => setShowSource((v) => !v)}
         title={showSource ? 'Show rendered preview' : 'Show source'}
-        className="absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950/80 px-2 py-1 text-[11px] text-neutral-400 backdrop-blur transition-colors hover:border-neutral-700 hover:text-neutral-200"
+        className="absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-default bg-surface-0/80 px-2 py-1 text-[11px] text-fg-tertiary backdrop-blur transition-colors hover:border-default-strong hover:text-fg-primary"
       >
         {showSource ? (
           <>
@@ -111,7 +111,7 @@ function TextOrMarkdownViewer({ file, content }: { file: OpenFile; content: stri
       {showSource ? (
         <TextViewer path={file.path} content={content} />
       ) : (
-        <div className="markdown h-full overflow-auto px-6 py-5 text-sm leading-relaxed text-neutral-200">
+        <div className="markdown h-full overflow-auto px-6 py-5 text-sm leading-relaxed text-fg-primary">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
         </div>
       )}
@@ -134,7 +134,7 @@ function TextViewer({ path, content }: { path: string; content: string }) {
 
   if (html === null) {
     return (
-      <div className="flex h-full items-center justify-center text-neutral-500 text-xs">
+      <div className="flex h-full items-center justify-center text-fg-tertiary text-xs">
         <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> highlighting…
       </div>
     );
@@ -157,11 +157,11 @@ function ImageViewer({
   name: string;
 }) {
   return (
-    <div className="flex h-full items-center justify-center overflow-auto bg-neutral-950 p-6">
+    <div className="flex h-full items-center justify-center overflow-auto bg-surface-0 p-6">
       <img
         src={`data:${mime};base64,${base64}`}
         alt={name}
-        className="max-h-full max-w-full rounded border border-neutral-900 object-contain"
+        className="max-h-full max-w-full rounded border border-default object-contain"
       />
     </div>
   );
@@ -169,10 +169,10 @@ function ImageViewer({
 
 function BinaryViewer({ name, size }: { name: string; size: number }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 text-neutral-500">
-      <FileWarning className="h-8 w-8 text-neutral-700" />
+    <div className="flex h-full flex-col items-center justify-center gap-2 text-fg-tertiary">
+      <FileWarning className="h-8 w-8 text-fg-muted" />
       <div className="text-sm">Cannot preview binary file</div>
-      <div className="font-mono text-xs text-neutral-600">
+      <div className="font-mono text-xs text-fg-muted">
         {name} · {formatBytes(size)}
       </div>
     </div>
@@ -194,7 +194,7 @@ function ErrorViewer({ message }: { message: string }) {
 
 function LoadingViewer() {
   return (
-    <div className="flex h-full items-center justify-center text-neutral-500 text-xs">
+    <div className="flex h-full items-center justify-center text-fg-tertiary text-xs">
       <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> loading…
     </div>
   );

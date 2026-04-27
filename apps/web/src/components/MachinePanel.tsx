@@ -74,7 +74,7 @@ export function MachinePanel() {
   if (!machineId) return null;
   if (!machine) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-neutral-500">
+      <div className="flex h-full items-center justify-center text-sm text-fg-tertiary">
         machine not found
       </div>
     );
@@ -84,20 +84,20 @@ export function MachinePanel() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="h-12 shrink-0 flex items-center gap-3 px-5 border-b border-neutral-900">
+      <div className="h-12 shrink-0 flex items-center gap-3 px-5 border-b border-default">
         <button
           onClick={toggleSidebar}
-          className="md:hidden text-neutral-500 hover:text-neutral-200 transition-colors"
+          className="md:hidden text-fg-tertiary hover:text-fg-primary transition-colors"
           title="show sidebar"
         >
           <Menu className="h-4 w-4" />
         </button>
-        <Server className="h-4 w-4 text-neutral-400" />
+        <Server className="h-4 w-4 text-fg-tertiary" />
         <div className="flex items-center gap-2 min-w-0">
-          <div className="text-sm font-medium text-neutral-100 truncate">
+          <div className="text-sm font-medium text-fg-primary truncate">
             {machine.name}
           </div>
-          <span className="text-xs text-neutral-500 truncate">
+          <span className="text-xs text-fg-tertiary truncate">
             · {machine.os}/{machine.arch} · sidecar {machine.sidecarVersion}
           </span>
           <StatusDot status={machine.status === 'online' ? 'online' : 'offline'} />
@@ -149,7 +149,7 @@ export function MachinePanel() {
 
         <Section title={`Available adapters (${adapters.length})`}>
           {adapters.length === 0 ? (
-            <div className="text-[11px] text-neutral-500">
+            <div className="text-[11px] text-fg-tertiary">
               no CLI adapters detected on this host's PATH
             </div>
           ) : (
@@ -157,11 +157,11 @@ export function MachinePanel() {
               {adapters.map((a) => (
                 <li
                   key={a.type}
-                  className="flex items-center gap-2 text-[12px] text-neutral-300"
+                  className="flex items-center gap-2 text-[12px] text-fg-secondary"
                 >
                   <AgentTypeIcon type={a.type} />
                   <span>{agentTypeLabel(a.type)}</span>
-                  <span className="ml-auto font-mono text-[10px] text-neutral-500">
+                  <span className="ml-auto font-mono text-[10px] text-fg-tertiary">
                     {a.binary}
                     {a.version && ` · ${a.version}`}
                   </span>
@@ -173,7 +173,7 @@ export function MachinePanel() {
 
         <Section title={`Agents (${agents.length})`}>
           {agents.length === 0 ? (
-            <div className="text-[11px] text-neutral-500">no agents on this machine yet</div>
+            <div className="text-[11px] text-fg-tertiary">no agents on this machine yet</div>
           ) : (
             <ul className="space-y-1">
               {agents.map((a) => (
@@ -210,10 +210,10 @@ function AgentLine({ machineId, agent }: { machineId: string; agent: AgentDTO })
   }
 
   return (
-    <li className="group flex items-center gap-2 rounded-md px-1 py-1 hover:bg-neutral-900">
+    <li className="group flex items-center gap-2 rounded-md px-1 py-1 hover:bg-surface-1">
       <AgentTypeIcon type={agent.type} />
-      <span className="truncate text-[12px] text-neutral-200">{agent.name}</span>
-      <span className="truncate text-[10px] text-neutral-500">
+      <span className="truncate text-[12px] text-fg-primary">{agent.name}</span>
+      <span className="truncate text-[10px] text-fg-tertiary">
         · {agentTypeLabel(agent.type)}
       </span>
       <span className="ml-auto flex items-center gap-2">
@@ -223,7 +223,7 @@ function AgentLine({ machineId, agent }: { machineId: string; agent: AgentDTO })
           onClick={destroy}
           disabled={busy}
           className={cn(
-            'text-neutral-600 transition-opacity hover:text-red-400 disabled:opacity-40',
+            'text-fg-muted transition-opacity hover:text-red-400 disabled:opacity-40',
             'opacity-0 group-hover:opacity-100',
           )}
           title="destroy agent (irreversible)"
@@ -238,7 +238,7 @@ function AgentLine({ machineId, agent }: { machineId: string; agent: AgentDTO })
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-widest text-neutral-600 mb-2">
+      <div className="text-[10px] uppercase tracking-widest text-fg-muted mb-2">
         {title}
       </div>
       <div className="space-y-1">{children}</div>
@@ -249,8 +249,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function KV({ k, v }: { k: string; v: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between text-xs">
-      <span className="text-neutral-500">{k}</span>
-      <span className="text-neutral-200 truncate max-w-[60%]">{v}</span>
+      <span className="text-fg-tertiary">{k}</span>
+      <span className="text-fg-primary truncate max-w-[60%]">{v}</span>
     </div>
   );
 }

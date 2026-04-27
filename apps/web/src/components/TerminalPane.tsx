@@ -281,11 +281,11 @@ export function TerminalPane({ agent }: Props) {
   if (!supported) {
     return (
       <div className="space-y-1">
-        <div className="text-xs text-neutral-500">
+        <div className="text-xs text-fg-tertiary">
           this agent's sidecar has not opted into terminals.
         </div>
-        <div className="text-[11px] text-neutral-600">
-          set <span className="font-mono text-neutral-400">terminal.enabled: true</span> in
+        <div className="text-[11px] text-fg-muted">
+          set <span className="font-mono text-fg-tertiary">terminal.enabled: true</span> in
           its YAML and restart.
         </div>
       </div>
@@ -294,7 +294,7 @@ export function TerminalPane({ agent }: Props) {
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between text-[11px] text-neutral-500">
+      <div className="flex items-center justify-between text-[11px] text-fg-tertiary">
         <span>
           {status.kind === 'open' && 'connected'}
           {status.kind === 'opening' && 'connecting…'}
@@ -308,19 +308,19 @@ export function TerminalPane({ agent }: Props) {
           {status.kind === 'idle' && (
             <button
               onClick={open}
-              className="inline-flex items-center gap-1 rounded-md border border-neutral-800 bg-neutral-900 px-2 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-800"
+              className="inline-flex items-center gap-1 rounded-md border border-default bg-surface-1 px-2 py-0.5 text-[11px] text-fg-secondary hover:bg-surface-2"
             >
               <TerminalIcon className="h-3 w-3" /> open
             </button>
           )}
           {status.kind === 'opening' && (
-            <Loader2 className="h-3 w-3 animate-spin text-neutral-500" />
+            <Loader2 className="h-3 w-3 animate-spin text-fg-tertiary" />
           )}
           {status.kind === 'open' && (
             <button
               onClick={close}
               title="close (sends SIGHUP-equivalent)"
-              className="inline-flex items-center gap-1 rounded-md border border-neutral-800 bg-neutral-900 px-2 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-800"
+              className="inline-flex items-center gap-1 rounded-md border border-default bg-surface-1 px-2 py-0.5 text-[11px] text-fg-secondary hover:bg-surface-2"
             >
               <Power className="h-3 w-3" /> close
             </button>
@@ -330,7 +330,7 @@ export function TerminalPane({ agent }: Props) {
               <button
                 onClick={reset}
                 title="dismiss"
-                className="inline-flex items-center rounded-md border border-neutral-800 bg-neutral-900 p-1 text-neutral-400 hover:bg-neutral-800"
+                className="inline-flex items-center rounded-md border border-default bg-surface-1 p-1 text-fg-tertiary hover:bg-surface-2"
               >
                 <X className="h-3 w-3" />
               </button>
@@ -340,7 +340,7 @@ export function TerminalPane({ agent }: Props) {
                   open();
                 }}
                 title="restart"
-                className="inline-flex items-center gap-1 rounded-md border border-neutral-800 bg-neutral-900 px-2 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-800"
+                className="inline-flex items-center gap-1 rounded-md border border-default bg-surface-1 px-2 py-0.5 text-[11px] text-fg-secondary hover:bg-surface-2"
               >
                 <RotateCcw className="h-3 w-3" /> restart
               </button>
@@ -353,19 +353,19 @@ export function TerminalPane({ agent }: Props) {
         ref={containerRef}
         onClick={() => termRef.current?.focus()}
         className={cn(
-          'relative h-[280px] w-full rounded-md border border-neutral-800 bg-neutral-950 p-1.5',
+          'relative h-[280px] w-full rounded-md border border-default bg-surface-0 p-1.5',
           // Keep the inner xterm canvas snug against the rounded border.
           status.kind !== 'open' && status.kind !== 'closed' && 'flex items-center justify-center',
         )}
       >
         {status.kind === 'idle' && (
-          <div className="text-center text-[11px] text-neutral-600">
-            click <span className="text-neutral-400">open</span> to attach a shell on{' '}
-            <span className="font-mono text-neutral-400">{agent.machineName}</span>
+          <div className="text-center text-[11px] text-fg-muted">
+            click <span className="text-fg-tertiary">open</span> to attach a shell on{' '}
+            <span className="font-mono text-fg-tertiary">{agent.machineName}</span>
           </div>
         )}
         {status.kind === 'opening' && (
-          <Loader2 className="h-4 w-4 animate-spin text-neutral-500" />
+          <Loader2 className="h-4 w-4 animate-spin text-fg-tertiary" />
         )}
         {status.kind === 'error' && (
           <div className="text-center text-[11px] text-red-400">{status.message}</div>

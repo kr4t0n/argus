@@ -28,14 +28,14 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
   // since the tooltip is now reliable (Radix, not native `title`).
   const model = useSessionModel(chunks);
   if (!agent) {
-    return <div className="h-full p-4 text-sm text-neutral-500">no agent selected</div>;
+    return <div className="h-full p-4 text-sm text-fg-tertiary">no agent selected</div>;
   }
   return (
-    <aside className="h-full w-full border-l border-neutral-900 bg-neutral-950 px-4 py-4 overflow-y-auto">
+    <aside className="h-full w-full border-l border-default bg-surface-0 px-4 py-4 overflow-y-auto">
       <Section title="Agent">
         <div className="flex items-center gap-2">
           <AgentTypeIcon type={agent.type} />
-          <span className="text-sm text-neutral-100">{agentTypeLabel(agent.type)}</span>
+          <span className="text-sm text-fg-primary">{agentTypeLabel(agent.type)}</span>
         </div>
         <KV k="machine" v={agent.machineName} />
         <KV
@@ -52,7 +52,7 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
           <KV
             k="working dir"
             v={
-              <span title={agent.workingDir} className="font-mono text-[11px] text-neutral-300">
+              <span title={agent.workingDir} className="font-mono text-[11px] text-fg-secondary">
                 {agent.workingDir}
               </span>
             }
@@ -86,7 +86,7 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
             <KV
               k="model"
               v={
-                <span title={model} className="font-mono text-[11px] text-neutral-300">
+                <span title={model} className="font-mono text-[11px] text-fg-secondary">
                   {model}
                 </span>
               }
@@ -102,7 +102,7 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
               .slice(-5)
               .reverse()
               .map((c) => (
-                <li key={c.id} className="text-[11px] text-neutral-400 flex items-center gap-1.5">
+                <li key={c.id} className="text-[11px] text-fg-tertiary flex items-center gap-1.5">
                   <span
                     className={
                       c.status === 'failed'
@@ -110,7 +110,7 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
                         : c.status === 'completed'
                           ? 'text-emerald-400'
                           : c.status === 'cancelled'
-                            ? 'text-neutral-500'
+                            ? 'text-fg-tertiary'
                             : 'text-amber-300'
                     }
                   >
@@ -167,7 +167,7 @@ function Section({
 }) {
   return (
     <div className="mb-4">
-      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-neutral-600">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-fg-muted">
         {icon}
         <span>{title}</span>
       </div>
@@ -192,7 +192,7 @@ function CollapsibleSection({
     <div className="mb-4">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 text-[10px] uppercase tracking-widest text-neutral-600 hover:text-neutral-400"
+        className="flex w-full items-center gap-1.5 text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg-tertiary"
       >
         {icon}
         <span>{title}</span>
@@ -205,8 +205,8 @@ function CollapsibleSection({
 function KV({ k, v }: { k: string; v: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between text-xs">
-      <span className="text-neutral-500">{k}</span>
-      <span className="text-neutral-200 truncate max-w-[60%]">{v}</span>
+      <span className="text-fg-tertiary">{k}</span>
+      <span className="text-fg-primary truncate max-w-[60%]">{v}</span>
     </div>
   );
 }

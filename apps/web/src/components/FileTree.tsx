@@ -218,11 +218,11 @@ export function FileTree({ agentId, rootLabel }: Props) {
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           {rootLabel ? (
-            <span title={rootLabel} className="truncate font-mono text-[10px] text-neutral-500">
+            <span title={rootLabel} className="truncate font-mono text-[10px] text-fg-tertiary">
               {rootLabel}
             </span>
           ) : (
-            <span className="text-[10px] text-neutral-600">root</span>
+            <span className="text-[10px] text-fg-muted">root</span>
           )}
           {/* Branch label moved to the GitLogPanel above — the panel's
               header shows the same branch + detached state as the old
@@ -238,25 +238,25 @@ export function FileTree({ agentId, rootLabel }: Props) {
           </IconButton>
           <IconButton title="Refresh" onClick={refreshAll}>
             <RefreshCw
-              className={cn('h-3 w-3', rootState?.loading && 'animate-spin text-neutral-300')}
+              className={cn('h-3 w-3', rootState?.loading && 'animate-spin text-fg-secondary')}
             />
           </IconButton>
         </div>
       </div>
       <div
         className={cn(
-          'h-56 overflow-y-auto overflow-x-hidden rounded-md border border-neutral-900 bg-neutral-950/60 px-1 py-1 font-mono text-[11px]',
+          'h-56 overflow-y-auto overflow-x-hidden rounded-md border border-default bg-surface-0/60 px-1 py-1 font-mono text-[11px]',
         )}
       >
         {rootState?.error && (
           <div className="px-2 py-1 text-[11px] text-red-400">{rootState.error}</div>
         )}
         {rootState?.loading && !rootState.entries.length && (
-          <div className="flex items-center gap-1.5 px-2 py-1 text-neutral-500">
+          <div className="flex items-center gap-1.5 px-2 py-1 text-fg-tertiary">
             <Loader2 className="h-3 w-3 animate-spin" /> loading…
           </div>
         )}
-        {rootEmpty && <div className="px-2 py-1 text-neutral-600">empty directory</div>}
+        {rootEmpty && <div className="px-2 py-1 text-fg-muted">empty directory</div>}
         {rootState && !rootState.error && rootState.entries.length > 0 && (
           <DirNode
             path=""
@@ -339,8 +339,8 @@ function DirNode({
                 if (!isDir) onOpenFile(entryPath);
               }}
               className={cn(
-                'group flex w-full items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-neutral-900',
-                isSelected && 'bg-neutral-900 text-neutral-200',
+                'group flex w-full items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-surface-1',
+                isSelected && 'bg-surface-1 text-fg-primary',
                 e.gitignored && 'opacity-60',
               )}
               style={{ paddingLeft: 4 + depth * 12 }}
@@ -353,8 +353,8 @@ function DirNode({
               {isDir ? (
                 <ChevronRight
                   className={cn(
-                    'h-3 w-3 shrink-0 text-neutral-600 transition-transform',
-                    isOpen && 'rotate-90 text-neutral-400',
+                    'h-3 w-3 shrink-0 text-fg-muted transition-transform',
+                    isOpen && 'rotate-90 text-fg-tertiary',
                   )}
                 />
               ) : (
@@ -369,13 +369,13 @@ function DirNode({
               ) : e.kind === 'symlink' ? (
                 <FileText className="h-3.5 w-3.5 shrink-0 text-purple-400/80" />
               ) : (
-                <FileText className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
+                <FileText className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
               )}
-              <span className="truncate text-neutral-300 group-hover:text-neutral-100">
+              <span className="truncate text-fg-secondary group-hover:text-fg-primary">
                 {e.name}
               </span>
               {child?.loading && (
-                <Loader2 className="ml-auto h-3 w-3 animate-spin text-neutral-600" />
+                <Loader2 className="ml-auto h-3 w-3 animate-spin text-fg-muted" />
               )}
             </button>
             {isDir && isOpen && (
@@ -390,7 +390,7 @@ function DirNode({
                 )}
                 {child && !child.error && child.entries.length === 0 && !child.loading && (
                   <div
-                    className="py-0.5 text-neutral-600"
+                    className="py-0.5 text-fg-muted"
                     style={{ paddingLeft: 4 + (depth + 1) * 12 + 16 }}
                   >
                     (empty)
@@ -435,8 +435,8 @@ function IconButton({
       onClick={onClick}
       title={title}
       className={cn(
-        'rounded p-1 text-neutral-500 hover:bg-neutral-900 hover:text-neutral-300',
-        active && 'bg-neutral-900 text-neutral-300',
+        'rounded p-1 text-fg-tertiary hover:bg-surface-1 hover:text-fg-secondary',
+        active && 'bg-surface-1 text-fg-secondary',
       )}
     >
       {children}

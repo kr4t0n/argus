@@ -47,20 +47,20 @@ export const ToolPill = memo(function ToolPill({ tool, result }: Props) {
   const isDiff = resultMeta.isDiff === true;
 
   return (
-    <div className="my-1 overflow-hidden rounded-md border border-neutral-800/80 bg-neutral-950/40">
+    <div className="my-1 overflow-hidden rounded-md border border-default/80 bg-surface-0/40">
       <button
         onClick={() => hasInputDetail && setOpenArgs((o) => !o)}
         className={cn(
-          'group flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-neutral-400 transition-colors',
-          hasInputDetail ? 'cursor-pointer hover:bg-neutral-900/60' : 'cursor-default',
+          'group flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-fg-tertiary transition-colors',
+          hasInputDetail ? 'cursor-pointer hover:bg-surface-1/60' : 'cursor-default',
         )}
       >
-        <Icon className="h-3.5 w-3.5 shrink-0 text-neutral-500 group-hover:text-neutral-300" />
-        <span className="text-neutral-300">{verb}</span>
+        <Icon className="h-3.5 w-3.5 shrink-0 text-fg-tertiary group-hover:text-fg-secondary" />
+        <span className="text-fg-secondary">{verb}</span>
         {arg && (
           <span
             className={cn(
-              'truncate text-neutral-500 group-hover:text-neutral-400',
+              'truncate text-fg-tertiary group-hover:text-fg-tertiary',
               mono && 'font-mono text-[11px]',
             )}
           >
@@ -70,7 +70,7 @@ export const ToolPill = memo(function ToolPill({ tool, result }: Props) {
         {hasInputDetail && (
           <ChevronDown
             className={cn(
-              'ml-auto h-3 w-3 shrink-0 text-neutral-700 transition-transform group-hover:text-neutral-500',
+              'ml-auto h-3 w-3 shrink-0 text-fg-muted transition-transform group-hover:text-fg-tertiary',
               openArgs && 'rotate-180',
             )}
           />
@@ -78,7 +78,7 @@ export const ToolPill = memo(function ToolPill({ tool, result }: Props) {
       </button>
 
       {openArgs && hasInputDetail && (
-        <pre className="border-t border-neutral-800/80 bg-neutral-950/60 px-3 py-2 text-[11px] font-mono leading-relaxed text-neutral-400 overflow-x-auto">
+        <pre className="border-t border-default/80 bg-surface-0/60 px-3 py-2 text-[11px] font-mono leading-relaxed text-fg-tertiary overflow-x-auto">
           {JSON.stringify(input, null, 2)}
         </pre>
       )}
@@ -88,8 +88,8 @@ export const ToolPill = memo(function ToolPill({ tool, result }: Props) {
       ) : (
         <pre
           className={cn(
-            'max-h-36 overflow-auto border-t border-neutral-800/80 bg-neutral-950/40 px-3 py-2 text-[11px] font-mono leading-relaxed whitespace-pre-wrap',
-            isError ? 'text-red-400' : 'text-neutral-400',
+            'max-h-36 overflow-auto border-t border-default/80 bg-surface-0/40 px-3 py-2 text-[11px] font-mono leading-relaxed whitespace-pre-wrap',
+            isError ? 'text-red-400' : 'text-fg-tertiary',
           )}
         >
           {resultText}
@@ -108,10 +108,10 @@ export const ToolPill = memo(function ToolPill({ tool, result }: Props) {
 function DiffBlock({ text }: { text: string }) {
   const lines = text.split('\n');
   return (
-    <div className="max-h-36 overflow-auto border-t border-neutral-800/80 bg-neutral-950/40 px-0 py-1 text-[11px] font-mono leading-relaxed">
+    <div className="max-h-36 overflow-auto border-t border-default/80 bg-surface-0/40 px-0 py-1 text-[11px] font-mono leading-relaxed">
       {lines.map((line, i) => {
         if (line.startsWith('--- ') || line.startsWith('+++ ')) return null;
-        let cls = 'text-neutral-400';
+        let cls = 'text-fg-tertiary';
         let bg = '';
         if (line.startsWith('@@')) {
           cls = 'text-violet-400';
@@ -122,7 +122,7 @@ function DiffBlock({ text }: { text: string }) {
           cls = 'text-red-300';
           bg = 'bg-red-500/5';
         } else if (line.startsWith('…')) {
-          cls = 'text-neutral-500 italic';
+          cls = 'text-fg-tertiary italic';
         }
         return (
           <div

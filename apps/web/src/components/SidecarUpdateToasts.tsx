@@ -65,7 +65,7 @@ export function SidecarUpdateBatchDismissAll() {
   return (
     <button
       onClick={dismissBatch}
-      className="pointer-events-auto self-end text-[10px] uppercase tracking-widest text-neutral-600 hover:text-neutral-300"
+      className="pointer-events-auto self-end text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg-secondary"
     >
       dismiss all
     </button>
@@ -77,28 +77,28 @@ function UpdateToast({ update, onDismiss }: { update: MachineUpdate; onDismiss: 
   return (
     <div
       className={cn(
-        'pointer-events-auto rounded-lg border bg-neutral-950 px-3 py-2.5 shadow-lg shadow-black/40',
+        'pointer-events-auto rounded-lg border bg-surface-0 px-3 py-2.5 shadow-lg shadow-black/40',
         update.phase === 'failed'
           ? 'border-red-500/40'
           : update.phase === 'completed'
             ? 'border-emerald-500/30'
-            : 'border-neutral-800',
+            : 'border-default',
       )}
     >
       <div className="flex items-start gap-2">
         <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', color)} />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 text-[12px] font-medium text-neutral-100">
+          <div className="flex items-center gap-2 text-[12px] font-medium text-fg-primary">
             <span className="truncate">{update.machineName}</span>
-            <span className="ml-auto text-[10px] font-normal text-neutral-500">
+            <span className="ml-auto text-[10px] font-normal text-fg-tertiary">
               {phaseLabel(update.phase, update.restartMode)}
             </span>
           </div>
-          <div className="mt-0.5 truncate text-[11px] text-neutral-400">{phaseDetail(update)}</div>
+          <div className="mt-0.5 truncate text-[11px] text-fg-tertiary">{phaseDetail(update)}</div>
         </div>
         <button
           onClick={onDismiss}
-          className="shrink-0 text-neutral-600 hover:text-neutral-200"
+          className="shrink-0 text-fg-muted hover:text-fg-primary"
           title="dismiss"
         >
           <X className="h-3.5 w-3.5" />
@@ -121,7 +121,7 @@ function BatchToast() {
   const allDone = !inProgress && queued === 0;
 
   return (
-    <div className="pointer-events-auto rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2.5 shadow-lg shadow-black/40">
+    <div className="pointer-events-auto rounded-lg border border-default bg-surface-0 px-3 py-2.5 shadow-lg shadow-black/40">
       <div className="flex items-center gap-2">
         {allDone ? (
           failed > 0 ? (
@@ -132,19 +132,19 @@ function BatchToast() {
         ) : (
           <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
         )}
-        <div className="text-[12px] font-medium text-neutral-100">Updating fleet</div>
-        <div className="ml-auto text-[10px] text-neutral-500">
+        <div className="text-[12px] font-medium text-fg-primary">Updating fleet</div>
+        <div className="ml-auto text-[10px] text-fg-tertiary">
           {completed}/{total - skipped} done
           {failed > 0 && ` · ${failed} failed`}
           {skipped > 0 && ` · ${skipped} skipped`}
         </div>
       </div>
       {inProgress && (
-        <div className="mt-1.5 truncate text-[11px] text-neutral-400">
+        <div className="mt-1.5 truncate text-[11px] text-fg-tertiary">
           {inProgress.machineName} · {inProgress.fromVersion} → latest
         </div>
       )}
-      <div className="mt-2 flex h-1 gap-px overflow-hidden rounded-full bg-neutral-900">
+      <div className="mt-2 flex h-1 gap-px overflow-hidden rounded-full bg-surface-1">
         {batch.plan.map((p) => (
           <div
             key={p.machineId}
@@ -153,9 +153,9 @@ function BatchToast() {
               p.status === 'completed' && 'bg-emerald-500/70',
               p.status === 'failed' && 'bg-red-500/70',
               p.status === 'in-progress' && 'bg-blue-500/70',
-              p.status === 'queued' && 'bg-neutral-700/50',
+              p.status === 'queued' && 'bg-default-strong/50',
               (p.status === 'skipped-offline' || p.status === 'skipped-already-current') &&
-                'bg-neutral-800',
+                'bg-surface-2',
             )}
             title={`${p.machineName}: ${p.status}${p.error ? ` — ${p.error}` : ''}`}
           />

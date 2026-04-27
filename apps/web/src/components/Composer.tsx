@@ -56,7 +56,7 @@ export function Composer({
   }
 
   return (
-    <div className="bg-neutral-950 px-4 py-3">
+    <div className="bg-surface-0 px-4 py-3">
       <div
         className={cn(
           'surface mx-auto max-w-3xl rounded-3xl flex items-end gap-2 px-4 py-2.5',
@@ -74,12 +74,12 @@ export function Composer({
           placeholder={placeholder ?? 'Request changes or ask a question…'}
           disabled={disabled}
           rows={1}
-          className="flex-1 resize-none bg-transparent text-sm text-neutral-100 placeholder:text-neutral-600 outline-none focus:ring-0 py-1.5"
+          className="flex-1 resize-none bg-transparent text-sm text-fg-primary placeholder:text-fg-muted outline-none focus:ring-0 py-1.5"
         />
         {/* Shortcut hint sits inline next to the send button so the
             composer stays a single self-contained row instead of leaving a
             wide near-empty strip below it. */}
-        <span className="hidden sm:inline text-[10px] text-neutral-600 select-none pb-2 pr-1 whitespace-nowrap">
+        <span className="hidden sm:inline text-[10px] text-fg-muted select-none pb-2 pr-1 whitespace-nowrap">
           {running ? 'esc to cancel · shift+↵ for newline' : '↵ to send · shift+↵ for newline'}
         </span>
         {running ? (

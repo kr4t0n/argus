@@ -82,7 +82,7 @@ export function GitLogPanel({ agentId }: Props) {
   return (
     <div className="mb-4">
       <div className="mb-1.5 flex items-center justify-between gap-1.5">
-        <div className="flex min-w-0 items-center gap-1.5 text-[10px] uppercase tracking-widest text-neutral-600">
+        <div className="flex min-w-0 items-center gap-1.5 text-[10px] uppercase tracking-widest text-fg-muted">
           <GitBranch className="h-3 w-3" />
           <span>Recent commits</span>
           <BranchLabel git={git} />
@@ -92,16 +92,16 @@ export function GitLogPanel({ agentId }: Props) {
           title="Refresh"
           onClick={fetchLog}
           disabled={loading}
-          className="text-neutral-600 hover:text-neutral-300 disabled:opacity-50"
+          className="text-fg-muted hover:text-fg-secondary disabled:opacity-50"
         >
-          <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin text-neutral-300')} />
+          <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin text-fg-secondary')} />
         </button>
       </div>
       {/* Fixed height matches FileTree's `h-56` so the two right-pane
           sections read as one rhythm — `max-h-48` collapsed to content
           height during loading and on small chats, leaving a 1-row
           stub above a full-height tree which looked broken. */}
-      <div className="h-56 overflow-y-auto overflow-x-hidden rounded-md border border-neutral-900 bg-neutral-950/60 px-1 py-1 font-mono text-[11px]">
+      <div className="h-56 overflow-y-auto overflow-x-hidden rounded-md border border-default bg-surface-0/60 px-1 py-1 font-mono text-[11px]">
         {error && <div className="px-2 py-1 text-[11px] text-red-400">{error}</div>}
         {/* Loading-on-first-fetch indicator. Mirrors the FileTree
             section so the right pane reads consistently — the header
@@ -110,12 +110,12 @@ export function GitLogPanel({ agentId }: Props) {
             round trip. Suppressed once we have commits so a manual
             refresh just spins the header icon, not the whole list. */}
         {!error && loading && !commits && (
-          <div className="flex items-center gap-1.5 px-2 py-1 text-neutral-500">
+          <div className="flex items-center gap-1.5 px-2 py-1 text-fg-tertiary">
             <Loader2 className="h-3 w-3 animate-spin" /> loading…
           </div>
         )}
         {!error && !loading && commits && commits.length === 0 && (
-          <div className="px-2 py-1 text-[11px] text-neutral-600">no commits</div>
+          <div className="px-2 py-1 text-[11px] text-fg-muted">no commits</div>
         )}
         {!error && commits && commits.length > 0 && (
           <ul className="space-y-0.5">
@@ -137,7 +137,7 @@ function BranchLabel({ git }: { git: GitStatus | null }) {
     <span
       className={cn(
         'truncate font-mono text-[10px] normal-case tracking-normal',
-        git.detached ? 'text-amber-300' : 'text-neutral-400',
+        git.detached ? 'text-amber-300' : 'text-fg-tertiary',
       )}
       title={
         git.detached
@@ -159,12 +159,12 @@ function CommitRow({ commit }: { commit: GitCommit }) {
     commit.subject;
   return (
     <li
-      className="group flex items-center gap-2 rounded px-1.5 py-1 hover:bg-neutral-900/60"
+      className="group flex items-center gap-2 rounded px-1.5 py-1 hover:bg-surface-1/60"
       title={tooltip}
     >
-      <span className="shrink-0 text-[10px] text-neutral-600">{commit.shortSha}</span>
-      <span className="min-w-0 flex-1 truncate text-neutral-200">{commit.subject}</span>
-      <span className="shrink-0 text-[10px] text-neutral-600">
+      <span className="shrink-0 text-[10px] text-fg-muted">{commit.shortSha}</span>
+      <span className="min-w-0 flex-1 truncate text-fg-primary">{commit.subject}</span>
+      <span className="shrink-0 text-[10px] text-fg-muted">
         {formatRelative(commit.authorDate)}
       </span>
     </li>

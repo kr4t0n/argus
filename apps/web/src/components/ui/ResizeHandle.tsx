@@ -83,7 +83,7 @@ export function ResizeHandle({ side, onResize, targetRef, className }: Props) {
       <span
         className={cn(
           'h-full w-px bg-transparent transition-colors',
-          'group-hover:bg-neutral-700 group-active:bg-blue-500',
+          'group-hover:bg-default-strong group-active:bg-blue-500',
         )}
       />
     </div>

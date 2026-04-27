@@ -43,7 +43,7 @@ export function AgentTypeIcon({ type, className, size = 14 }: Props) {
   return (
     <Icon
       size={size}
-      className={cn('shrink-0', inheritColor && 'text-neutral-200', className)}
+      className={cn('shrink-0', inheritColor && 'text-fg-primary', className)}
     />
   );
 }

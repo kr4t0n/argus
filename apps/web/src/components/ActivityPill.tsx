@@ -56,8 +56,8 @@ export function ActivityPill({ chunks, running, startedAt, endedAt, open, onTogg
     <button
       onClick={onToggle}
       className={cn(
-        'inline-flex items-center gap-3 rounded-full border border-neutral-800 bg-neutral-900/60 px-3.5 py-1.5 text-xs text-neutral-400 hover:bg-neutral-800/60 hover:text-neutral-200 transition-colors',
-        open && 'bg-neutral-800/60 text-neutral-200',
+        'inline-flex items-center gap-3 rounded-full border border-default bg-surface-1/60 px-3.5 py-1.5 text-xs text-fg-tertiary hover:bg-surface-2/60 hover:text-fg-primary transition-colors',
+        open && 'bg-surface-2/60 text-fg-primary',
       )}
     >
       <span className="tabular-nums">
@@ -72,15 +72,15 @@ export function ActivityPill({ chunks, running, startedAt, endedAt, open, onTogg
             <Dot delay="320ms" />
           </span>
         ) : (
-          <span className="truncate max-w-[180px] font-mono text-neutral-500">
+          <span className="truncate max-w-[180px] font-mono text-fg-tertiary">
             {lastTool ? summarizeTool(lastTool) : 'done'}
           </span>
         )}
       </span>
       <Sep />
-      <span className="tabular-nums text-neutral-500">{elapsed}</span>
+      <span className="tabular-nums text-fg-tertiary">{elapsed}</span>
       <ChevronDown
-        className={cn('h-3 w-3 text-neutral-500 transition-transform', open && 'rotate-180')}
+        className={cn('h-3 w-3 text-fg-tertiary transition-transform', open && 'rotate-180')}
       />
     </button>
   );
@@ -99,7 +99,7 @@ export function ActivityPanel({ chunks }: { chunks: ResultChunkDTO[] }) {
   const items: TimelineItem[] = useMemo(() => buildTimeline(chunks), [chunks]);
   if (items.length === 0) return null;
   return (
-    <div className="ml-1 space-y-2 border-l border-neutral-800/80 pl-4">
+    <div className="ml-1 space-y-2 border-l border-default/80 pl-4">
       {items.map((it) => {
         if (it.kind === 'tool') {
           return <ToolPill key={it.tool.id} tool={it.tool} result={it.result} />;
@@ -109,9 +109,9 @@ export function ActivityPanel({ chunks }: { chunks: ResultChunkDTO[] }) {
           return (
             <pre
               key={c.id}
-              className="overflow-x-auto rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2 text-xs font-mono whitespace-pre-wrap leading-relaxed"
+              className="overflow-x-auto rounded-md bg-surface-1 border border-default px-3 py-2 text-xs font-mono whitespace-pre-wrap leading-relaxed"
             >
-              <span className={c.kind === 'stderr' ? 'text-red-400' : 'text-neutral-400'}>
+              <span className={c.kind === 'stderr' ? 'text-red-400' : 'text-fg-tertiary'}>
                 {c.content}
               </span>
             </pre>
@@ -125,14 +125,14 @@ export function ActivityPanel({ chunks }: { chunks: ResultChunkDTO[] }) {
           return (
             <div
               key={it.id}
-              className="markdown text-xs leading-relaxed text-neutral-400 max-w-none"
+              className="markdown text-xs leading-relaxed text-fg-tertiary max-w-none"
             >
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{it.text}</ReactMarkdown>
             </div>
           );
         }
         return (
-          <div key={it.chunk.id} className="text-xs text-neutral-500 italic">
+          <div key={it.chunk.id} className="text-xs text-fg-tertiary italic">
             {it.chunk.content ?? 'working…'}
           </div>
         );
@@ -217,13 +217,13 @@ function buildTimeline(chunks: ResultChunkDTO[]): TimelineItem[] {
 }
 
 function Sep() {
-  return <span className="text-neutral-700">·</span>;
+  return <span className="text-fg-muted">·</span>;
 }
 
 function Dot({ delay }: { delay: string }) {
   return (
     <span
-      className="h-1 w-1 rounded-full bg-neutral-400 animate-pulse"
+      className="h-1 w-1 rounded-full bg-fg-tertiary animate-pulse"
       style={{ animationDelay: delay, animationDuration: '900ms' }}
     />
   );
