@@ -133,17 +133,17 @@ export function BulkUpdateModal({ onClose }: { onClose: () => void }) {
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg overflow-hidden rounded-lg border border-neutral-800 bg-neutral-950 shadow-2xl"
+        className="w-full max-w-lg overflow-hidden rounded-lg border border-default bg-surface-0 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-2 border-b border-neutral-900 px-4 py-3">
+        <div className="flex items-center gap-2 border-b border-default px-4 py-3">
           <ArrowUpCircle className="h-4 w-4 text-emerald-400" />
-          <h2 className="text-sm font-medium text-neutral-100">
+          <h2 className="text-sm font-medium text-fg-primary">
             Update all sidecars
           </h2>
           <button
             onClick={onClose}
-            className="ml-auto text-neutral-500 hover:text-neutral-200"
+            className="ml-auto text-fg-tertiary hover:text-fg-primary"
             title="close"
           >
             <X className="h-4 w-4" />
@@ -151,26 +151,26 @@ export function BulkUpdateModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
-          <p className="mb-3 text-xs text-neutral-400">
+          <p className="mb-3 text-xs text-fg-tertiary">
             Each online machine running an outdated sidecar will be updated
             sequentially. The runner stops on the first failure so you can
             triage one bad host without re-updating the rest.
           </p>
 
           {loadingVersions && (
-            <div className="rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2 text-[11px] text-neutral-500">
+            <div className="rounded-md border border-default bg-surface-1/40 px-3 py-2 text-[11px] text-fg-tertiary">
               Resolving the latest sidecar release for each host…
             </div>
           )}
 
           {!loadingVersions && rows.length === 0 && (
-            <div className="rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2 text-[11px] text-neutral-500">
+            <div className="rounded-md border border-default bg-surface-1/40 px-3 py-2 text-[11px] text-fg-tertiary">
               No machines registered.
             </div>
           )}
 
           {!loadingVersions && rows.length > 0 && (
-            <ul className="divide-y divide-neutral-900 rounded-md border border-neutral-800 bg-neutral-900/30">
+            <ul className="divide-y divide-default rounded-md border border-default bg-surface-1/30">
               {rows.map((r) => (
                 <PreviewRow key={r.machineId} row={r} />
               ))}
@@ -178,8 +178,8 @@ export function BulkUpdateModal({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        <div className="flex items-center gap-3 border-t border-neutral-900 px-4 py-3">
-          <span className="text-[11px] text-neutral-500">
+        <div className="flex items-center gap-3 border-t border-default px-4 py-3">
+          <span className="text-[11px] text-fg-tertiary">
             {willUpdate.length} will update
             {skipped.length > 0 && ` · ${skipped.length} skipped`}
           </span>
@@ -209,20 +209,20 @@ export function BulkUpdateModal({ onClose }: { onClose: () => void }) {
 function PreviewRow({ row }: { row: RowPreview }) {
   return (
     <li className="flex items-center gap-2 px-3 py-2 text-[12px]">
-      <span className="truncate text-neutral-200" title={row.machineName}>
+      <span className="truncate text-fg-primary" title={row.machineName}>
         {row.machineName}
       </span>
       <span className="ml-auto flex items-center gap-2 font-mono text-[10px]">
         {row.outcome === 'will-update' && (
           <>
-            <span className="text-neutral-500">{row.current}</span>
+            <span className="text-fg-tertiary">{row.current}</span>
             <ArrowUpCircle className="h-3 w-3 text-emerald-400" />
             <span className="text-emerald-400">{row.latest}</span>
           </>
         )}
         {row.outcome === 'skipped-already-current' && (
           <span
-            className="inline-flex items-center gap-1 text-neutral-500"
+            className="inline-flex items-center gap-1 text-fg-tertiary"
             title="already on the latest sidecar"
           >
             <CheckCircle2 className="h-3 w-3" />
@@ -231,7 +231,7 @@ function PreviewRow({ row }: { row: RowPreview }) {
         )}
         {row.outcome === 'skipped-offline' && (
           <span
-            className={cn('text-neutral-600')}
+            className={cn('text-fg-muted')}
             title="machine is offline — the bulk runner will skip it"
           >
             offline

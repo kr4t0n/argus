@@ -89,10 +89,10 @@ export function SessionPanel() {
 
   if (!sessionId) {
     return (
-      <div className="relative flex h-full items-center justify-center text-neutral-500 text-sm">
+      <div className="relative flex h-full items-center justify-center text-fg-tertiary text-sm">
         <button
           onClick={toggleSidebar}
-          className="absolute left-4 top-3.5 md:hidden text-neutral-500 hover:text-neutral-200 transition-colors"
+          className="absolute left-4 top-3.5 md:hidden text-fg-tertiary hover:text-fg-primary transition-colors"
           title="show sidebar"
         >
           <Menu className="h-4 w-4" />
@@ -103,7 +103,7 @@ export function SessionPanel() {
   }
 
   if (loading && !entry) {
-    return <div className="p-6 text-neutral-500 text-sm">loading…</div>;
+    return <div className="p-6 text-fg-tertiary text-sm">loading…</div>;
   }
 
   if (error) {
@@ -130,20 +130,20 @@ export function SessionPanel() {
   return (
     <div className="flex h-full">
       <div className="flex flex-col flex-1 min-w-0">
-        <div className="h-12 shrink-0 flex items-center gap-3 px-5 border-b border-neutral-900">
+        <div className="h-12 shrink-0 flex items-center gap-3 px-5 border-b border-default">
           <button
             onClick={toggleSidebar}
-            className="md:hidden text-neutral-500 hover:text-neutral-200 transition-colors"
+            className="md:hidden text-fg-tertiary hover:text-fg-primary transition-colors"
             title="show sidebar"
           >
             <Menu className="h-4 w-4" />
           </button>
           {agent && <AgentTypeIcon type={agent.type} />}
           <div className="flex items-center gap-2 min-w-0">
-            <div className="text-sm font-medium text-neutral-100 truncate">
+            <div className="text-sm font-medium text-fg-primary truncate">
               {entry.session.title}
             </div>
-            {elapsed && <span className="text-xs text-neutral-500">· {elapsed}</span>}
+            {elapsed && <span className="text-xs text-fg-tertiary">· {elapsed}</span>}
           </div>
           <div className="ml-auto flex items-center gap-2">
             <UsageBadge chunks={entry.chunks} agentType={agent?.type} />
@@ -175,7 +175,7 @@ export function SessionPanel() {
           {activeFile ? (
             <Suspense
               fallback={
-                <div className="flex h-full items-center justify-center text-xs text-neutral-500">
+                <div className="flex h-full items-center justify-center text-xs text-fg-tertiary">
                   loading viewer…
                 </div>
               }

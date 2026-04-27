@@ -94,7 +94,7 @@ export function MachineIcon({ machineId, className }: Props) {
         }}
         title="change icon"
         className={cn(
-          'shrink-0 rounded-sm p-0.5 transition-colors hover:bg-neutral-800/60 hover:text-neutral-200',
+          'shrink-0 rounded-sm p-0.5 transition-colors hover:bg-surface-2/60 hover:text-fg-primary',
           className,
         )}
       >
@@ -202,7 +202,7 @@ function MachineIconPicker({
         left: pos?.left ?? -9999,
         width: POPOVER_WIDTH,
       }}
-      className="fixed z-50 rounded-md border border-neutral-800 bg-neutral-950 p-1.5 shadow-lg"
+      className="fixed z-50 rounded-md border border-default bg-surface-0 p-1.5 shadow-lg"
     >
       <div className="grid grid-cols-4 gap-1">
         {CATALOG_KEYS.map((key) => {
@@ -217,8 +217,8 @@ function MachineIconPicker({
               className={cn(
                 'flex h-7 w-7 items-center justify-center rounded-sm transition-colors',
                 active
-                  ? 'bg-neutral-800 text-neutral-100'
-                  : 'text-neutral-400 hover:bg-neutral-900 hover:text-neutral-100',
+                  ? 'bg-surface-2 text-fg-primary'
+                  : 'text-fg-tertiary hover:bg-surface-1 hover:text-fg-primary',
               )}
             >
               <Icon className="h-3.5 w-3.5" />

@@ -14,7 +14,21 @@
  */
 import { createHighlighter, type BundledLanguage, type Highlighter } from 'shiki';
 
-export const SHIKI_THEME = 'github-dark';
+// We load both themes up-front (small cost, ~5 KB each) so toggling
+// the dashboard theme can re-render existing viewers without a
+// highlighter re-init. `currentShikiTheme()` resolves the right one
+// at highlight time based on whether the dark class is on <html>.
+const DARK_THEME = 'github-dark';
+const LIGHT_THEME = 'github-light';
+export const SHIKI_THEMES = [DARK_THEME, LIGHT_THEME] as const;
+
+/** Which shiki theme to use for the current dashboard theme. Reads the
+ *  resolved value off <html> rather than the store so this works in
+ *  contexts that haven't subscribed to zustand. */
+export function currentShikiTheme(): typeof DARK_THEME | typeof LIGHT_THEME {
+  if (typeof document === 'undefined') return DARK_THEME;
+  return document.documentElement.classList.contains('dark') ? DARK_THEME : LIGHT_THEME;
+}
 
 let highlighterPromise: Promise<Highlighter> | null = null;
 const loaded = new Set<string>();
@@ -23,7 +37,7 @@ const loading = new Map<string, Promise<void>>();
 function getHighlighter(): Promise<Highlighter> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
-      themes: [SHIKI_THEME],
+      themes: [...SHIKI_THEMES],
       langs: [],
     });
   }
@@ -68,12 +82,12 @@ export async function highlightCode(code: string, path: string): Promise<string>
   const h = await getHighlighter();
   return h.codeToHtml(code, {
     lang: target as BundledLanguage,
-    theme: SHIKI_THEME,
+    theme: currentShikiTheme(),
   });
 }
 
 function renderPlain(code: string, h: Highlighter): string {
-  return h.codeToHtml(code, { lang: 'text', theme: SHIKI_THEME });
+  return h.codeToHtml(code, { lang: 'text', theme: currentShikiTheme() });
 }
 
 // Map from extension (or full filename for extensionless cases) to a

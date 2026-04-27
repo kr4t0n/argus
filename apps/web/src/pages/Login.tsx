@@ -26,7 +26,7 @@ export function Login() {
   }
 
   return (
-    <div className="h-screen flex items-center justify-center bg-neutral-950">
+    <div className="h-screen flex items-center justify-center bg-surface-0">
       <form
         onSubmit={submit}
         className="surface rounded-xl w-[360px] p-6 space-y-4"
@@ -35,7 +35,7 @@ export function Login() {
           <div className="h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.6)]" />
           <h1 className="text-lg font-semibold tracking-tight">Argus</h1>
         </div>
-        <p className="text-xs text-neutral-500 -mt-2">
+        <p className="text-xs text-fg-tertiary -mt-2">
           Agent management · multi-machine control plane
         </p>
 
@@ -91,7 +91,7 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="block text-[10px] uppercase tracking-wider text-neutral-500 mb-1">
+      <span className="block text-[10px] uppercase tracking-wider text-fg-tertiary mb-1">
         {label}
       </span>
       {children}

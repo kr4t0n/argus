@@ -36,7 +36,7 @@ export function FileTabStrip({ agentId }: Props) {
   const chatActive = !fileActive;
 
   return (
-    <div className="flex shrink-0 items-stretch overflow-x-auto border-b border-neutral-900 bg-neutral-950 px-2">
+    <div className="flex shrink-0 items-stretch overflow-x-auto border-b border-default bg-surface-0 px-2">
       <ChatTab active={chatActive} onClick={() => setActive(null)} />
       {tabs.map((f) => (
         <FileTab
@@ -60,8 +60,8 @@ function ChatTab({ active, onClick }: { active: boolean; onClick: () => void }) 
       className={cn(
         'inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-xs transition-colors',
         active
-          ? 'border-neutral-100 text-neutral-100'
-          : 'border-transparent text-neutral-500 hover:text-neutral-300',
+          ? 'border-fg-primary text-fg-primary'
+          : 'border-transparent text-fg-tertiary hover:text-fg-secondary',
       )}
     >
       <MessageSquare className="h-3 w-3" />
@@ -85,7 +85,7 @@ function FileTab({
     <div
       className={cn(
         'group relative inline-flex shrink-0 items-stretch border-b-2 transition-colors',
-        active ? 'border-neutral-100' : 'border-transparent',
+        active ? 'border-fg-primary' : 'border-transparent',
       )}
     >
       <button
@@ -102,10 +102,10 @@ function FileTab({
         title={file.path}
         className={cn(
           'inline-flex items-center gap-1.5 py-2 pl-3 pr-7 text-xs',
-          active ? 'text-neutral-100' : 'text-neutral-500 hover:text-neutral-300',
+          active ? 'text-fg-primary' : 'text-fg-tertiary hover:text-fg-secondary',
         )}
       >
-        <FileText className="h-3 w-3 shrink-0 text-neutral-500" />
+        <FileText className="h-3 w-3 shrink-0 text-fg-tertiary" />
         <span className="max-w-[180px] truncate">{file.name}</span>
       </button>
       <button
@@ -114,7 +114,7 @@ function FileTab({
         title="Close tab"
         aria-label={`Close ${file.name}`}
         className={cn(
-          'absolute right-1 top-1/2 -translate-y-1/2 rounded p-0.5 text-neutral-600 transition-opacity hover:bg-neutral-800 hover:text-neutral-300',
+          'absolute right-1 top-1/2 -translate-y-1/2 rounded p-0.5 text-fg-muted transition-opacity hover:bg-surface-2 hover:text-fg-secondary',
           // Always visible on the active tab so the user has an easy
           // exit; hover-revealed for inactive tabs to keep the strip
           // visually quiet when several files are open.

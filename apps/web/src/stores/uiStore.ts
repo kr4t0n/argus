@@ -1,6 +1,13 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+/**
+ * `'system'` defers to the OS via `prefers-color-scheme`; `'dark'` /
+ * `'light'` are explicit overrides. Default is `'system'` so the first
+ * load matches the user's OS without surprising them.
+ */
+export type ThemePreference = 'system' | 'light' | 'dark';
+
 interface UIState {
   sidebarOpen: boolean;
   sidebarWidth: number;
@@ -13,6 +20,9 @@ interface UIState {
   /** Global toggle: show archived agents in the sidebar. */
   showArchivedAgents: boolean;
   drafts: Record<string, string>;
+  /** User's theme preference. The resolved (system → light/dark) value
+   *  is applied to <html> as the `dark` class by `applyTheme()`. */
+  theme: ThemePreference;
   toggleSidebar: () => void;
   setSidebarWidth: (w: number) => void;
   toggleContextPane: () => void;
@@ -21,6 +31,7 @@ interface UIState {
   toggleShowArchived: (agentId: string) => void;
   toggleShowArchivedAgents: () => void;
   setDraft: (agentId: string, v: string) => void;
+  setTheme: (t: ThemePreference) => void;
 }
 
 export const SIDEBAR_MIN = 220;
@@ -39,6 +50,7 @@ export const useUIStore = create<UIState>()(
       showArchived: {},
       showArchivedAgents: false,
       drafts: {},
+      theme: 'system',
       toggleSidebar() {
         set({ sidebarOpen: !get().sidebarOpen });
       },
@@ -73,6 +85,9 @@ export const useUIStore = create<UIState>()(
       },
       setDraft(agentId, v) {
         set({ drafts: { ...get().drafts, [agentId]: v } });
+      },
+      setTheme(t) {
+        set({ theme: t });
       },
     }),
     { name: 'argus.ui' },

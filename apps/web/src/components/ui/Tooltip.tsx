@@ -58,7 +58,7 @@ export function Tooltip({
             // Card surface — matches the dark theming used by Buttons
             // and the chunk panes. `shadow-lg` lifts it above the
             // header's border-b without needing a backdrop.
-            'z-50 rounded-md border border-neutral-800 bg-neutral-950/95 px-2.5 py-1.5 text-xs text-neutral-200 shadow-lg',
+            'z-50 rounded-md border border-default bg-surface-0/95 px-2.5 py-1.5 text-xs text-fg-primary shadow-lg',
             // Subtle in/out animation borrowed from the Radix recipe.
             'data-[state=delayed-open]:animate-in data-[state=closed]:animate-out',
             'data-[state=closed]:fade-out-0 data-[state=delayed-open]:fade-in-0',

@@ -5,6 +5,7 @@ import { Code2, Eye, FileWarning, Loader2 } from 'lucide-react';
 import type { FSReadResult } from '@argus/shared-types';
 import { ApiError, api } from '../lib/api';
 import { highlightCode, languageForPath } from '../lib/shiki';
+import { useResolvedTheme } from '../lib/theme';
 import { useFileTabsStore, type OpenFile } from '../stores/fileTabsStore';
 import { cn } from '../lib/utils';
 
@@ -50,9 +51,7 @@ function useFetchFileContent(file: OpenFile) {
       .catch((err: unknown) => {
         if (cancelled) return;
         const message =
-          err instanceof ApiError
-            ? err.message
-            : (err as Error)?.message || 'failed to load file';
+          err instanceof ApiError ? err.message : (err as Error)?.message || 'failed to load file';
         setContent(file.key, { status: 'error', message });
       });
     return () => {
@@ -96,7 +95,7 @@ function TextOrMarkdownViewer({ file, content }: { file: OpenFile; content: stri
         type="button"
         onClick={() => setShowSource((v) => !v)}
         title={showSource ? 'Show rendered preview' : 'Show source'}
-        className="absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-950/80 px-2 py-1 text-[11px] text-neutral-400 backdrop-blur transition-colors hover:border-neutral-700 hover:text-neutral-200"
+        className="absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-default bg-surface-0/80 px-2 py-1 text-[11px] text-fg-tertiary backdrop-blur transition-colors hover:border-default-strong hover:text-fg-primary"
       >
         {showSource ? (
           <>
@@ -111,7 +110,7 @@ function TextOrMarkdownViewer({ file, content }: { file: OpenFile; content: stri
       {showSource ? (
         <TextViewer path={file.path} content={content} />
       ) : (
-        <div className="markdown h-full overflow-auto px-6 py-5 text-sm leading-relaxed text-neutral-200">
+        <div className="markdown h-full overflow-auto px-6 py-5 text-sm leading-relaxed text-fg-primary">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
         </div>
       )}
@@ -121,6 +120,12 @@ function TextOrMarkdownViewer({ file, content }: { file: OpenFile; content: stri
 
 function TextViewer({ path, content }: { path: string; content: string }) {
   const [html, setHtml] = useState<string | null>(null);
+  // Use the RESOLVED theme (not the user pref) so an OS-driven flip
+  // while on 'system' also re-runs the highlight with the matching
+  // shiki theme. highlightCode reads `currentShikiTheme()` off
+  // <html>, which the apply-theme hook has already updated by the
+  // time this effect runs.
+  const resolvedTheme = useResolvedTheme();
   useEffect(() => {
     let cancelled = false;
     setHtml(null);
@@ -130,38 +135,27 @@ function TextViewer({ path, content }: { path: string; content: string }) {
     return () => {
       cancelled = true;
     };
-  }, [content, path]);
+  }, [content, path, resolvedTheme]);
 
   if (html === null) {
     return (
-      <div className="flex h-full items-center justify-center text-neutral-500 text-xs">
+      <div className="flex h-full items-center justify-center text-fg-tertiary text-xs">
         <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> highlighting…
       </div>
     );
   }
   return (
-    <div
-      className="shiki-host h-full overflow-auto"
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <div className="shiki-host h-full overflow-auto" dangerouslySetInnerHTML={{ __html: html }} />
   );
 }
 
-function ImageViewer({
-  mime,
-  base64,
-  name,
-}: {
-  mime: string;
-  base64: string;
-  name: string;
-}) {
+function ImageViewer({ mime, base64, name }: { mime: string; base64: string; name: string }) {
   return (
-    <div className="flex h-full items-center justify-center overflow-auto bg-neutral-950 p-6">
+    <div className="flex h-full items-center justify-center overflow-auto bg-surface-0 p-6">
       <img
         src={`data:${mime};base64,${base64}`}
         alt={name}
-        className="max-h-full max-w-full rounded border border-neutral-900 object-contain"
+        className="max-h-full max-w-full rounded border border-default object-contain"
       />
     </div>
   );
@@ -169,10 +163,10 @@ function ImageViewer({
 
 function BinaryViewer({ name, size }: { name: string; size: number }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 text-neutral-500">
-      <FileWarning className="h-8 w-8 text-neutral-700" />
+    <div className="flex h-full flex-col items-center justify-center gap-2 text-fg-tertiary">
+      <FileWarning className="h-8 w-8 text-fg-muted" />
       <div className="text-sm">Cannot preview binary file</div>
-      <div className="font-mono text-xs text-neutral-600">
+      <div className="font-mono text-xs text-fg-muted">
         {name} · {formatBytes(size)}
       </div>
     </div>
@@ -182,10 +176,12 @@ function BinaryViewer({ name, size }: { name: string; size: number }) {
 function ErrorViewer({ message }: { message: string }) {
   return (
     <div className="flex h-full items-center justify-center px-6">
-      <div className={cn(
-        'max-w-md rounded-md border border-red-900/50 bg-red-950/20 px-4 py-3',
-        'text-sm text-red-300',
-      )}>
+      <div
+        className={cn(
+          'max-w-md rounded-md border border-red-900/50 bg-red-950/20 px-4 py-3',
+          'text-sm text-red-300',
+        )}
+      >
         {message}
       </div>
     </div>
@@ -194,7 +190,7 @@ function ErrorViewer({ message }: { message: string }) {
 
 function LoadingViewer() {
   return (
-    <div className="flex h-full items-center justify-center text-neutral-500 text-xs">
+    <div className="flex h-full items-center justify-center text-fg-tertiary text-xs">
       <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> loading…
     </div>
   );

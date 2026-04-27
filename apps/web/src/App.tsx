@@ -16,6 +16,7 @@ import {
   SidecarUpdateToasts,
 } from './components/SidecarUpdateToasts';
 import { SessionCloneFailedToasts } from './components/SessionCloneFailedToasts';
+import { useApplyTheme } from './lib/theme';
 
 function ProtectedRoutes() {
   const token = useAuthStore((s) => s.token);
@@ -31,6 +32,10 @@ function ProtectedRoutes() {
 }
 
 export default function App() {
+  // Keep <html>'s dark class in sync with the persisted theme +
+  // OS preference. Runs once at mount; idempotent.
+  useApplyTheme();
+
   const bootstrap = useAuthStore((s) => s.bootstrap);
   const token = useAuthStore((s) => s.token);
   const loadAgents = useAgentStore((s) => s.load);

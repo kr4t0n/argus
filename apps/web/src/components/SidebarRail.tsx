@@ -46,12 +46,12 @@ export function SidebarRail() {
     .filter((a): a is NonNullable<typeof a> => !!a && !a.archivedAt);
 
   return (
-    <aside className="flex h-full w-full flex-col items-stretch border-r border-neutral-900 bg-neutral-950">
-      <div className="flex h-12 shrink-0 items-center justify-center border-b border-neutral-900">
+    <aside className="flex h-full w-full flex-col items-stretch border-r border-default bg-surface-0">
+      <div className="flex h-12 shrink-0 items-center justify-center border-b border-default">
         <button
           onClick={toggleSidebar}
           title="show sidebar"
-          className="rounded-md p-1.5 text-neutral-500 hover:bg-neutral-900 hover:text-neutral-200 transition-colors"
+          className="rounded-md p-1.5 text-fg-tertiary hover:bg-surface-1 hover:text-fg-primary transition-colors"
         >
           <PanelLeftOpen className="h-3.5 w-3.5" />
         </button>
@@ -66,7 +66,7 @@ export function SidebarRail() {
               title={`${a.name} · ${agentTypeLabel(a.type)}`}
               className={cn(
                 'relative flex h-9 w-9 items-center justify-center rounded-md transition-colors',
-                active ? 'bg-neutral-800' : 'hover:bg-neutral-900',
+                active ? 'bg-surface-2' : 'hover:bg-surface-1',
                 !sid && 'opacity-50 cursor-not-allowed',
               )}
             >
@@ -94,7 +94,7 @@ export function SidebarRail() {
       </div>
 
       {machineOrder.length > 0 && (
-        <div className="flex shrink-0 flex-col items-center gap-1 border-t border-neutral-900 py-2 max-h-[40%] overflow-y-auto">
+        <div className="flex shrink-0 flex-col items-center gap-1 border-t border-default py-2 max-h-[40%] overflow-y-auto">
           {machineOrder.map((id) => {
             const m = machines[id];
             if (!m) return null;
@@ -107,11 +107,11 @@ export function SidebarRail() {
                 title={`${m.name} · ${m.hostname}`}
                 className={cn(
                   'relative flex h-9 w-9 items-center justify-center rounded-md transition-colors',
-                  active ? 'bg-neutral-800' : 'hover:bg-neutral-900',
+                  active ? 'bg-surface-2' : 'hover:bg-surface-1',
                   offline && 'opacity-60',
                 )}
               >
-                <MachineIconGlyph machineId={m.id} className="h-4 w-4 text-neutral-400" />
+                <MachineIconGlyph machineId={m.id} className="h-4 w-4 text-fg-tertiary" />
                 <span className="absolute -bottom-0.5 -right-0.5">
                   <StatusDot status={m.status === 'online' ? 'online' : 'offline'} />
                 </span>
@@ -121,11 +121,11 @@ export function SidebarRail() {
         </div>
       )}
 
-      <div className="flex h-11 shrink-0 items-center justify-center border-t border-neutral-900">
+      <div className="flex h-11 shrink-0 items-center justify-center border-t border-default">
         <button
           onClick={logout}
           title={user?.email ?? 'sign out'}
-          className="rounded-md p-1.5 text-neutral-500 hover:bg-neutral-900 hover:text-neutral-200 transition-colors"
+          className="rounded-md p-1.5 text-fg-tertiary hover:bg-surface-1 hover:text-fg-primary transition-colors"
         >
           <LogOut className="h-3.5 w-3.5" />
         </button>
