@@ -205,15 +205,18 @@ func ReadGitLog(ctx context.Context, workingDir string, limit int) ([]protocol.G
 		limit = gitLogMaxLimit
 	}
 
-	// Field separator is NUL and the record separator is the literal
-	// string "%x1e%x00" (record separator + NUL). Subjects can contain
-	// any printable byte including newlines (for `git log -B`-merged
-	// messages) so a line-based split is unsafe; the explicit RS keeps
-	// us robust.
+	// Field separator is NUL between columns. Records are separated by
+	// `%x1e\n` because git's `--pretty=format:` joins commits with a
+	// literal newline (the only inter-record glue we don't control), so
+	// the on-wire record boundary is "our explicit RS byte, then git's
+	// joining LF". Splitting on just `%x1e` would still work today —
+	// `%s` (subject) is git's first-line-only token and we don't emit
+	// `%b` — but pinning the LF here prevents a bug if a future field
+	// addition (e.g. body, GPG sig) does carry an embedded RS.
 	//
 	// Format columns: full hash, subject, author name, author ISO date.
 	const fieldSep = "\x00"
-	const recordSep = "\x1e\x00"
+	const recordSep = "\x1e\n"
 	format := "%H%x00%s%x00%an%x00%aI%x1e"
 
 	cmd := exec.CommandContext(ctx, "git", "log",
