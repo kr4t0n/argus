@@ -146,9 +146,12 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
       <CollapsibleSection
         title="Terminal"
         icon={<TerminalIcon className="h-3 w-3" />}
-        // Default-collapsed: spinning up xterm + opening a PTY costs CPU
-        // and a network round-trip we shouldn't pay until the user asks.
-        defaultOpen={false}
+        // Default-open: TerminalPane gates the actual xterm + PTY spin-up
+        // behind a user click on its inner "open" button — just expanding
+        // the section only renders the affordance, not the runtime — so
+        // there's no real cost to surfacing it by default. The previous
+        // collapsed default was over-cautious.
+        defaultOpen={true}
       >
         <TerminalPane key={agent.id} agent={agent} />
       </CollapsibleSection>
