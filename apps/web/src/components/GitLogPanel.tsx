@@ -97,9 +97,24 @@ export function GitLogPanel({ agentId }: Props) {
           <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin text-neutral-300')} />
         </button>
       </div>
-      <div className="max-h-48 overflow-y-auto overflow-x-hidden rounded-md border border-neutral-900 bg-neutral-950/60 px-1 py-1 font-mono text-[11px]">
+      {/* Fixed height matches FileTree's `h-56` so the two right-pane
+          sections read as one rhythm — `max-h-48` collapsed to content
+          height during loading and on small chats, leaving a 1-row
+          stub above a full-height tree which looked broken. */}
+      <div className="h-56 overflow-y-auto overflow-x-hidden rounded-md border border-neutral-900 bg-neutral-950/60 px-1 py-1 font-mono text-[11px]">
         {error && <div className="px-2 py-1 text-[11px] text-red-400">{error}</div>}
-        {!error && commits && commits.length === 0 && (
+        {/* Loading-on-first-fetch indicator. Mirrors the FileTree
+            section so the right pane reads consistently — the header
+            refresh icon also spins, but a body-level placeholder
+            keeps the panel from looking empty during the initial
+            round trip. Suppressed once we have commits so a manual
+            refresh just spins the header icon, not the whole list. */}
+        {!error && loading && !commits && (
+          <div className="flex items-center gap-1.5 px-2 py-1 text-neutral-500">
+            <Loader2 className="h-3 w-3 animate-spin" /> loading…
+          </div>
+        )}
+        {!error && !loading && commits && commits.length === 0 && (
           <div className="px-2 py-1 text-[11px] text-neutral-600">no commits</div>
         )}
         {!error && commits && commits.length > 0 && (
