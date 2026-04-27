@@ -183,12 +183,8 @@ function MachineList() {
   return (
     <div className="shrink-0 py-1.5 px-1 max-h-[40%] overflow-y-auto">
       <div className="group flex items-center px-3 py-1">
-        <span className="text-[10px] uppercase tracking-widest text-fg-muted">
-          machines
-        </span>
-        <span className="ml-1.5 text-[10px] text-fg-muted">
-          ({order.length})
-        </span>
+        <span className="text-[10px] uppercase tracking-widest text-fg-muted">machines</span>
+        <span className="ml-1.5 text-[10px] text-fg-muted">({order.length})</span>
         <span className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
           <MachinesHeaderMenu />
         </span>
@@ -308,10 +304,7 @@ function MachineRow({
       )}
     >
       <MachineIcon machineId={machine.id} className="text-fg-tertiary" />
-      <Link
-        to={`/machines/${machine.id}`}
-        className="min-w-0 flex-1 outline-none"
-      >
+      <Link to={`/machines/${machine.id}`} className="min-w-0 flex-1 outline-none">
         <div
           className="truncate text-[12px] text-fg-primary"
           title={`${machine.hostname} · ${machine.os}/${machine.arch} · sidecar ${machine.sidecarVersion}`}
@@ -319,8 +312,8 @@ function MachineRow({
           {machine.name}
         </div>
         <div className="truncate text-[10px] text-fg-muted">
-          {machine.agentCount} agent{machine.agentCount === 1 ? '' : 's'} ·{' '}
-          {adapters.length} adapter{adapters.length === 1 ? '' : 's'}
+          {machine.agentCount} agent{machine.agentCount === 1 ? '' : 's'} · {adapters.length}{' '}
+          adapter{adapters.length === 1 ? '' : 's'}
         </div>
       </Link>
       <StatusDot status={machine.status === 'online' ? 'online' : 'offline'} />
@@ -339,11 +332,7 @@ function MachineRow({
       </button>
 
       {popoverOpen && (
-        <CreateAgentPopover
-          machine={machine}
-          anchor={anchorRef}
-          onClose={onClosePopover}
-        />
+        <CreateAgentPopover machine={machine} anchor={anchorRef} onClose={onClosePopover} />
       )}
     </div>
   );
@@ -427,9 +416,7 @@ function SessionRow({ session, active }: { session: SessionDTO; active: boolean 
       {!archived && session.status === 'failed' && (
         <span className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />
       )}
-      {archived && (
-        <Archive className="h-3 w-3 shrink-0 text-fg-muted" />
-      )}
+      {archived && <Archive className="h-3 w-3 shrink-0 text-fg-muted" />}
       {editing ? (
         <input
           ref={inputRef}
@@ -484,11 +471,7 @@ function SessionRow({ session, active }: { session: SessionDTO; active: boolean 
             )}
             title={archived ? 'restore from archive' : 'archive session'}
           >
-            {archived ? (
-              <ArchiveRestore className="h-3 w-3" />
-            ) : (
-              <Archive className="h-3 w-3" />
-            )}
+            {archived ? <ArchiveRestore className="h-3 w-3" /> : <Archive className="h-3 w-3" />}
           </button>
         </>
       )}
@@ -542,9 +525,7 @@ function AgentRow({
 }) {
   const archived = !!agent.archivedAt;
   const [busy, setBusy] = useState(false);
-  const visibleSessions = showArchived
-    ? sessions
-    : sessions.filter((s) => !s.archivedAt);
+  const visibleSessions = showArchived ? sessions : sessions.filter((s) => !s.archivedAt);
   const hiddenArchivedCount = sessions.length - visibleSessions.length;
   const hasArchived = sessions.some((s) => !!s.archivedAt);
 
@@ -578,10 +559,7 @@ function AgentRow({
           className="flex flex-1 min-w-0 items-center gap-1.5 px-2.5 py-1.5"
         >
           <ChevronRight
-            className={cn(
-              'h-3 w-3 text-fg-tertiary transition-transform',
-              open && 'rotate-90',
-            )}
+            className={cn('h-3 w-3 text-fg-tertiary transition-transform', open && 'rotate-90')}
           />
           <AgentTypeIcon type={agent.type} />
           <span
@@ -589,10 +567,11 @@ function AgentRow({
               'text-sm truncate',
               archived ? 'text-fg-tertiary italic' : 'text-fg-primary',
             )}
-            title={archived ? `${agentTypeLabel(agent.type)} (archived)` : agentTypeLabel(agent.type)}
+            title={
+              archived ? `${agentTypeLabel(agent.type)} (archived)` : agentTypeLabel(agent.type)
+            }
           >
-            {agent.name || agent.id}{' '}
-            <span className="text-fg-tertiary">· {agent.machineName}</span>
+            {agent.name || agent.id} <span className="text-fg-tertiary">· {agent.machineName}</span>
           </span>
         </button>
         {/* New-session action, hover-only. Hidden when the agent is
@@ -642,9 +621,7 @@ function AgentRow({
               // The eye toggle is always visible whenever there's something
               // archived to look at OR the user has it currently on; otherwise
               // it stays hover-only so the row reads cleanly at rest.
-              (showArchived || hasArchived)
-                ? 'opacity-100'
-                : 'opacity-0 group-hover:opacity-100',
+              showArchived || hasArchived ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
               showArchived
                 ? 'text-emerald-400 hover:text-emerald-300'
                 : 'text-fg-muted hover:text-fg-secondary',
@@ -657,11 +634,7 @@ function AgentRow({
                   : 'show archived sessions'
             }
           >
-            {showArchived ? (
-              <Eye className="h-3.5 w-3.5" />
-            ) : (
-              <EyeOff className="h-3.5 w-3.5" />
-            )}
+            {showArchived ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
           </button>
         )}
         {/* Liveness dot — pinned to the rightmost slot so it reads as a

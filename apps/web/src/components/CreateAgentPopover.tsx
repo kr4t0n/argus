@@ -36,8 +36,8 @@ type Props = {
   onClose: () => void;
 };
 
-const POPOVER_WIDTH = 288;        // 18rem (Tailwind w-72)
-const VIEWPORT_MARGIN = 8;        // keep this far from the edge
+const POPOVER_WIDTH = 288; // 18rem (Tailwind w-72)
+const VIEWPORT_MARGIN = 8; // keep this far from the edge
 
 export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
   const upsertAgent = useAgentStore((s) => s.upsert);
@@ -107,8 +107,7 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
     };
   }, [onClose]);
 
-  const canSubmit =
-    !!type.trim() && !!name.trim() && !submitting && machine.status === 'online';
+  const canSubmit = !!type.trim() && !!name.trim() && !submitting && machine.status === 'online';
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -134,12 +133,11 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
   return createPortal(
     <div
       ref={popRef}
-      className="fixed z-[60] rounded-lg border border-default p-3 shadow-2xl"
+      className="fixed z-[60] rounded-lg border border-default bg-surface-1 p-3 shadow-2xl"
       style={{
         top: pos?.top ?? -9999,
         left: pos?.left ?? -9999,
         width: POPOVER_WIDTH,
-        backgroundColor: '#101012',
         // Hide until we've measured so the user doesn't see a flash
         // of the popover at the (-9999, -9999) staging coords.
         visibility: pos ? 'visible' : 'hidden',
@@ -150,15 +148,9 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
       <div className="mb-2 flex items-center justify-between">
         <div className="text-[11px] uppercase tracking-widest text-fg-tertiary">
           new agent on{' '}
-          <span className="text-fg-secondary normal-case tracking-normal">
-            {machine.name}
-          </span>
+          <span className="text-fg-secondary normal-case tracking-normal">{machine.name}</span>
         </div>
-        <button
-          onClick={onClose}
-          className="text-fg-muted hover:text-fg-secondary"
-          title="close"
-        >
+        <button onClick={onClose} className="text-fg-muted hover:text-fg-secondary" title="close">
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
@@ -186,7 +178,11 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
                       key={a.type}
                       type="button"
                       onClick={() => setType(a.type)}
-                      title={a.version ? `${agentTypeLabel(a.type)} · ${a.version}` : agentTypeLabel(a.type)}
+                      title={
+                        a.version
+                          ? `${agentTypeLabel(a.type)} · ${a.version}`
+                          : agentTypeLabel(a.type)
+                      }
                       className={cn(
                         'inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs ring-1 transition-colors',
                         selected
@@ -254,9 +250,7 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
         </label>
 
         {err && (
-          <div className="rounded bg-red-950/40 px-2 py-1.5 text-[11px] text-red-300">
-            {err}
-          </div>
+          <div className="rounded bg-red-950/40 px-2 py-1.5 text-[11px] text-red-300">{err}</div>
         )}
 
         <div className="flex items-center justify-end gap-2 pt-1">

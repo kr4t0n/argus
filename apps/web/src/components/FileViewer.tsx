@@ -5,6 +5,7 @@ import { Code2, Eye, FileWarning, Loader2 } from 'lucide-react';
 import type { FSReadResult } from '@argus/shared-types';
 import { ApiError, api } from '../lib/api';
 import { highlightCode, languageForPath } from '../lib/shiki';
+import { useResolvedTheme } from '../lib/theme';
 import { useFileTabsStore, type OpenFile } from '../stores/fileTabsStore';
 import { cn } from '../lib/utils';
 
@@ -50,9 +51,7 @@ function useFetchFileContent(file: OpenFile) {
       .catch((err: unknown) => {
         if (cancelled) return;
         const message =
-          err instanceof ApiError
-            ? err.message
-            : (err as Error)?.message || 'failed to load file';
+          err instanceof ApiError ? err.message : (err as Error)?.message || 'failed to load file';
         setContent(file.key, { status: 'error', message });
       });
     return () => {
@@ -121,6 +120,12 @@ function TextOrMarkdownViewer({ file, content }: { file: OpenFile; content: stri
 
 function TextViewer({ path, content }: { path: string; content: string }) {
   const [html, setHtml] = useState<string | null>(null);
+  // Use the RESOLVED theme (not the user pref) so an OS-driven flip
+  // while on 'system' also re-runs the highlight with the matching
+  // shiki theme. highlightCode reads `currentShikiTheme()` off
+  // <html>, which the apply-theme hook has already updated by the
+  // time this effect runs.
+  const resolvedTheme = useResolvedTheme();
   useEffect(() => {
     let cancelled = false;
     setHtml(null);
@@ -130,7 +135,7 @@ function TextViewer({ path, content }: { path: string; content: string }) {
     return () => {
       cancelled = true;
     };
-  }, [content, path]);
+  }, [content, path, resolvedTheme]);
 
   if (html === null) {
     return (
@@ -140,22 +145,11 @@ function TextViewer({ path, content }: { path: string; content: string }) {
     );
   }
   return (
-    <div
-      className="shiki-host h-full overflow-auto"
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <div className="shiki-host h-full overflow-auto" dangerouslySetInnerHTML={{ __html: html }} />
   );
 }
 
-function ImageViewer({
-  mime,
-  base64,
-  name,
-}: {
-  mime: string;
-  base64: string;
-  name: string;
-}) {
+function ImageViewer({ mime, base64, name }: { mime: string; base64: string; name: string }) {
   return (
     <div className="flex h-full items-center justify-center overflow-auto bg-surface-0 p-6">
       <img
@@ -182,10 +176,12 @@ function BinaryViewer({ name, size }: { name: string; size: number }) {
 function ErrorViewer({ message }: { message: string }) {
   return (
     <div className="flex h-full items-center justify-center px-6">
-      <div className={cn(
-        'max-w-md rounded-md border border-red-900/50 bg-red-950/20 px-4 py-3',
-        'text-sm text-red-300',
-      )}>
+      <div
+        className={cn(
+          'max-w-md rounded-md border border-red-900/50 bg-red-950/20 px-4 py-3',
+          'text-sm text-red-300',
+        )}
+      >
         {message}
       </div>
     </div>

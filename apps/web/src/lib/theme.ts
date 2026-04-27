@@ -15,7 +15,7 @@
  * already speaks the semantic-token vocabulary (bg-surface-0, etc.),
  * so flipping `dark` on <html> swaps the entire palette in one paint.
  */
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useUIStore, type ThemePreference } from '../stores/uiStore';
 
 const DARK_QUERY = '(prefers-color-scheme: dark)';
@@ -57,6 +57,31 @@ export function applyThemeImmediate() {
     // Storage unavailable / malformed — fall through to 'system'.
   }
   setRootDark(resolveTheme(pref) === 'dark');
+}
+
+/**
+ * Hook: returns the RESOLVED theme ('light' | 'dark'), updating
+ * whenever the user's preference changes OR (when on 'system') the
+ * OS color-scheme flips. Use this when a component needs to render
+ * differently based on the active theme — e.g. swapping the shiki
+ * highlighter theme so syntax-highlighted code re-renders in step
+ * with the dashboard.
+ */
+export function useResolvedTheme(): 'light' | 'dark' {
+  const pref = useUIStore((s) => s.theme);
+  const [resolved, setResolved] = useState(() => resolveTheme(pref));
+
+  useEffect(() => {
+    setResolved(resolveTheme(pref));
+    if (pref !== 'system') return;
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia(DARK_QUERY);
+    const handler = () => setResolved(mq.matches ? 'dark' : 'light');
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, [pref]);
+
+  return resolved;
 }
 
 /**

@@ -3,13 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
-import {
-  Loader2,
-  Power,
-  RotateCcw,
-  Terminal as TerminalIcon,
-  X,
-} from 'lucide-react';
+import { Loader2, Power, RotateCcw, Terminal as TerminalIcon, X } from 'lucide-react';
 import type {
   AgentDTO,
   TerminalDTO,
@@ -25,6 +19,7 @@ import {
   sendTerminalResize,
   subscribeHandler,
 } from '../lib/ws';
+import { useResolvedTheme } from '../lib/theme';
 import { cn } from '../lib/utils';
 
 type Props = {
@@ -149,37 +144,14 @@ export function TerminalPane({ agent }: Props) {
     if (!node) return;
 
     const term = new Terminal({
-      fontFamily:
-        '"Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+      fontFamily: '"Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
       fontSize: 12,
       lineHeight: 1.25,
       cursorBlink: true,
       convertEol: false,
       scrollback: 5000,
       allowProposedApi: true,
-      theme: {
-        background: '#0a0a0a',
-        foreground: '#e5e5e5',
-        cursor: '#a3a3a3',
-        cursorAccent: '#0a0a0a',
-        selectionBackground: '#525252',
-        black: '#171717',
-        brightBlack: '#404040',
-        red: '#ef4444',
-        brightRed: '#f87171',
-        green: '#22c55e',
-        brightGreen: '#4ade80',
-        yellow: '#eab308',
-        brightYellow: '#facc15',
-        blue: '#3b82f6',
-        brightBlue: '#60a5fa',
-        magenta: '#a855f7',
-        brightMagenta: '#c084fc',
-        cyan: '#06b6d4',
-        brightCyan: '#22d3ee',
-        white: '#e5e5e5',
-        brightWhite: '#fafafa',
-      },
+      theme: xtermThemeForDocument(),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -230,6 +202,17 @@ export function TerminalPane({ agent }: Props) {
       resizeObsRef.current = null;
     };
   }, [status.kind]);
+
+  // Re-theme the live terminal when the dashboard theme flips.
+  // xterm supports hot-swapping `options.theme` — colors update on
+  // the next paint without recreating the terminal or losing scroll
+  // history.
+  const resolvedTheme = useResolvedTheme();
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.theme = xtermThemeForDocument();
+  }, [resolvedTheme]);
 
   // Wire up WS handlers (output / closed).
   useEffect(() => {
@@ -285,8 +268,8 @@ export function TerminalPane({ agent }: Props) {
           this agent's sidecar has not opted into terminals.
         </div>
         <div className="text-[11px] text-fg-muted">
-          set <span className="font-mono text-fg-tertiary">terminal.enabled: true</span> in
-          its YAML and restart.
+          set <span className="font-mono text-fg-tertiary">terminal.enabled: true</span> in its YAML
+          and restart.
         </div>
       </div>
     );
@@ -300,9 +283,7 @@ export function TerminalPane({ agent }: Props) {
           {status.kind === 'opening' && 'connecting…'}
           {status.kind === 'closed' && `exited (${status.exitCode})`}
           {status.kind === 'idle' && 'no session'}
-          {status.kind === 'error' && (
-            <span className="text-red-400">error: {status.message}</span>
-          )}
+          {status.kind === 'error' && <span className="text-red-400">error: {status.message}</span>}
         </span>
         <div className="flex items-center gap-1">
           {status.kind === 'idle' && (
@@ -364,13 +345,68 @@ export function TerminalPane({ agent }: Props) {
             <span className="font-mono text-fg-tertiary">{agent.machineName}</span>
           </div>
         )}
-        {status.kind === 'opening' && (
-          <Loader2 className="h-4 w-4 animate-spin text-fg-tertiary" />
-        )}
+        {status.kind === 'opening' && <Loader2 className="h-4 w-4 animate-spin text-fg-tertiary" />}
         {status.kind === 'error' && (
           <div className="text-center text-[11px] text-red-400">{status.message}</div>
         )}
       </div>
     </div>
   );
+}
+
+// xterm color themes. We bake two per-theme palettes (matching the
+// dashboard tokens) and pick by the dark class on <html>. Hot-swapping
+// `term.options.theme` triggers an in-place repaint so flipping the
+// dashboard theme doesnt drop scroll position or kill the PTY.
+const XTERM_DARK = {
+  background: '#0a0a0a',
+  foreground: '#e5e5e5',
+  cursor: '#a3a3a3',
+  cursorAccent: '#0a0a0a',
+  selectionBackground: '#525252',
+  black: '#171717',
+  brightBlack: '#404040',
+  red: '#ef4444',
+  brightRed: '#f87171',
+  green: '#22c55e',
+  brightGreen: '#4ade80',
+  yellow: '#eab308',
+  brightYellow: '#facc15',
+  blue: '#3b82f6',
+  brightBlue: '#60a5fa',
+  magenta: '#a855f7',
+  brightMagenta: '#c084fc',
+  cyan: '#06b6d4',
+  brightCyan: '#22d3ee',
+  white: '#e5e5e5',
+  brightWhite: '#fafafa',
+};
+
+const XTERM_LIGHT = {
+  background: '#ffffff',
+  foreground: '#171717',
+  cursor: '#525252',
+  cursorAccent: '#ffffff',
+  selectionBackground: '#cccccc',
+  black: '#171717',
+  brightBlack: '#404040',
+  red: '#dc2626',
+  brightRed: '#ef4444',
+  green: '#16a34a',
+  brightGreen: '#22c55e',
+  yellow: '#ca8a04',
+  brightYellow: '#eab308',
+  blue: '#2563eb',
+  brightBlue: '#3b82f6',
+  magenta: '#9333ea',
+  brightMagenta: '#a855f7',
+  cyan: '#0891b2',
+  brightCyan: '#06b6d4',
+  white: '#525252',
+  brightWhite: '#171717',
+};
+
+function xtermThemeForDocument() {
+  if (typeof document === 'undefined') return XTERM_DARK;
+  return document.documentElement.classList.contains('dark') ? XTERM_DARK : XTERM_LIGHT;
 }
