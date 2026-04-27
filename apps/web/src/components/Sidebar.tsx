@@ -26,6 +26,7 @@ import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
 import { CreateAgentPopover } from './CreateAgentPopover';
 import { BulkUpdateModal } from './BulkUpdateModal';
 import { MachineIcon } from './MachineIcon';
+import { ThemeToggle } from './ThemeToggle';
 import { api } from '../lib/api';
 
 export function Sidebar() {
@@ -68,6 +69,7 @@ export function Sidebar() {
           <span className="text-sm font-semibold tracking-tight">Argus</span>
         </div>
         <div className="flex items-center gap-3">
+          <ThemeToggle />
           <button
             onClick={toggleSidebar}
             className="text-fg-tertiary hover:text-fg-primary transition-colors"
