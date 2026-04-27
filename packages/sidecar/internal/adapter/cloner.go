@@ -14,30 +14,23 @@ import (
 )
 
 // CLI session storage layouts the cloners target. Discovered empirically
-// by inspecting on-disk transcripts; documented in
-// docs (or AGENTS.md follow-up) so future format shifts are caught fast.
+// by inspecting on-disk transcripts; documented inline so future format
+// shifts are caught fast.
 //
 //	~/.claude/projects/<slug>/<sessionId>.jsonl
 //	~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<sessionId>.jsonl
-//	~/.cursor/projects/<slug>/agent-transcripts/<sessionId>/<sessionId>.jsonl
+//	~/.cursor/chats/<md5(workspace)>/<sessionId>/store.db   (SQLite)
 //
-// The two slug encodings differ by ONE character: Claude keeps the
-// leading `/` (encodes as a leading `-`), Cursor strips it. Both replace
-// every other `/` with `-`. We expose helpers for each so the per-adapter
-// cloners don't get this wrong.
+// Claude's slug is the abs path with `/` → `-` (leading slash becomes
+// a leading dash). Cursor uses md5(workspace) instead of a slug — see
+// cursor_cli_clone.go. Codex doesn't slug at all; sessions are
+// date-bucketed at the file-system root and discovered via glob.
 
 // claudeProjectSlug encodes an absolute working directory the way Claude
 // Code does on disk: every `/` becomes `-`, including the leading slash
 // (so /home/kyle/foo becomes -home-kyle-foo).
 func claudeProjectSlug(workingDir string) string {
 	return strings.ReplaceAll(workingDir, "/", "-")
-}
-
-// cursorProjectSlug encodes the same path the way Cursor CLI stores it
-// (no leading dash; a leading slash is stripped before slashes are
-// replaced with dashes).
-func cursorProjectSlug(workingDir string) string {
-	return strings.ReplaceAll(strings.TrimPrefix(workingDir, "/"), "/", "-")
 }
 
 // homeDir returns $HOME, falling back to os.UserHomeDir.
