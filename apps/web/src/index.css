@@ -5,9 +5,61 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Theme tokens.
+ *
+ * Every color used by the dashboard funnels through one of these
+ * semantic variables (exposed as Tailwind utilities like `bg-surface-0`
+ * via tailwind.config.ts). Light values live under `:root`; dark
+ * overrides under `.dark`. The `dark` class is toggled on <html> by
+ * applyTheme() based on the persisted `theme` choice in uiStore
+ * (light | dark | system).
+ *
+ * Values are stored as bare HSL components (no `hsl(...)` wrapper) so
+ * Tailwind's slash-opacity modifier — `bg-surface-1/60` — keeps
+ * working: the config wraps each in `hsl(var(--token) / <alpha-value>)`.
+ *
+ * Light palette is the "soft neutral" choice we agreed on:
+ *   surface-0: #f8f8f8  page background, slightly off-white
+ *   surface-1: #ffffff  cards/panels, pure white for contrast
+ *   surface-2: #ededed  hover/active state on surface-1
+ *
+ * Dark palette mirrors what the codebase used before the migration:
+ *   surface-0: neutral-950 (~#0a0a0a)
+ *   surface-1: neutral-900 (~#171717)
+ *   surface-2: neutral-800 (~#262626)
+ */
 @layer base {
   :root {
+    color-scheme: light;
+
+    --surface-0: 0 0% 97.3%; /* #f8f8f8 */
+    --surface-1: 0 0% 100%; /* #ffffff */
+    --surface-2: 0 0% 92.9%; /* #ededed */
+    --border: 0 0% 88.2%; /* #e1e1e1 */
+    --border-strong: 0 0% 80%; /* #cccccc */
+    --fg-primary: 0 0% 9%; /* #171717 (neutral-900) */
+    --fg-secondary: 0 0% 32.2%; /* #525252 (neutral-600) */
+    --fg-tertiary: 0 0% 45.1%; /* #737373 (neutral-500) */
+    --fg-muted: 0 0% 63.9%; /* #a3a3a3 (neutral-400) */
+    --selection-bg: 0 0% 80%;
+    --selection-fg: 0 0% 9%;
+  }
+
+  :root.dark {
     color-scheme: dark;
+
+    --surface-0: 0 0% 4%; /* neutral-950 */
+    --surface-1: 0 0% 9%; /* neutral-900 */
+    --surface-2: 0 0% 15%; /* neutral-800 */
+    --border: 0 0% 15%; /* neutral-800 */
+    --border-strong: 0 0% 25%; /* neutral-700 */
+    --fg-primary: 0 0% 96%; /* neutral-100 */
+    --fg-secondary: 0 0% 83%; /* neutral-300 */
+    --fg-tertiary: 0 0% 64%; /* neutral-400 */
+    --fg-muted: 0 0% 45%; /* neutral-500 */
+    --selection-bg: 0 0% 25%;
+    --selection-fg: 0 0% 98%;
   }
 
   html,
@@ -17,11 +69,12 @@
   }
 
   body {
-    @apply bg-neutral-950 text-neutral-100 font-sans;
+    @apply bg-surface-0 text-fg-primary font-sans;
   }
 
   ::selection {
-    @apply bg-neutral-700 text-neutral-50;
+    background-color: hsl(var(--selection-bg));
+    color: hsl(var(--selection-fg));
   }
 
   ::-webkit-scrollbar {
@@ -32,16 +85,17 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    @apply bg-neutral-800 rounded-full;
+    background-color: hsl(var(--border-strong));
+    border-radius: 9999px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-neutral-700;
+    background-color: hsl(var(--fg-muted));
   }
 }
 
 @layer components {
   .surface {
-    @apply bg-neutral-900 border border-neutral-800;
+    @apply bg-surface-1 border border-default;
   }
   .status-dot {
     @apply inline-block w-2 h-2 rounded-full;
@@ -56,11 +110,11 @@
     @apply bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)];
   }
   .status-offline {
-    @apply bg-neutral-600;
+    @apply bg-fg-muted;
   }
   .typewriter-cursor::after {
     content: '▍';
-    @apply ml-[2px] animate-blink text-neutral-400;
+    @apply ml-[2px] animate-blink text-fg-tertiary;
   }
   /* Hide the scrollbar while leaving scroll behaviour (mouse wheel,
      trackpad, keyboard) fully intact. Used on horizontal-only strips
@@ -91,10 +145,10 @@
   @apply mb-0;
 }
 .markdown code {
-  @apply font-mono text-[0.9em] bg-neutral-800/70 px-1 py-0.5 rounded;
+  @apply font-mono text-[0.9em] bg-surface-2/70 px-1 py-0.5 rounded;
 }
 .markdown pre {
-  @apply font-mono text-sm bg-neutral-800/70 px-3 py-2 rounded-md overflow-x-auto my-3;
+  @apply font-mono text-sm bg-surface-2/70 px-3 py-2 rounded-md overflow-x-auto my-3;
 }
 .markdown pre code {
   @apply bg-transparent px-0 py-0;
@@ -111,11 +165,11 @@
   @apply font-semibold my-2;
 }
 .markdown a {
-  @apply text-sky-400 hover:underline;
+  @apply text-sky-500 hover:underline dark:text-sky-400;
 }
 /* GFM tables. Without these the table dumps as raw text — no borders,
    no cell padding, no header background — because we don't ship a
-   prose plugin. Match the surrounding dark theme: subtle border, dim
+   prose plugin. Match the surrounding theme: subtle border, dim
    header row, generous cell padding, and a horizontal scroll wrapper
    so a wide table doesn't blow out the message column. */
 .markdown table {
@@ -124,27 +178,27 @@
   overflow-x: auto;
 }
 .markdown thead {
-  @apply bg-neutral-900/60;
+  @apply bg-surface-1/60;
 }
 .markdown th,
 .markdown td {
-  @apply border border-neutral-800 px-3 py-1.5 align-top;
+  @apply border border-default px-3 py-1.5 align-top;
 }
 .markdown th {
-  @apply text-left font-semibold text-neutral-100;
+  @apply text-left font-semibold text-fg-primary;
 }
 .markdown td {
-  @apply text-neutral-300;
+  @apply text-fg-secondary;
 }
 .markdown tbody tr:nth-child(even) {
-  @apply bg-neutral-900/30;
+  @apply bg-surface-1/30;
 }
 
-/* shiki output for the file preview tabs. The github-dark theme paints
- * its own background (~#24292e) via an inline style on `pre.shiki`;
- * we override it to transparent so the surrounding `bg-neutral-950`
- * shows through, keeping the viewer visually aligned with the rest of
- * the dashboard rather than introducing a second "dark" surface. */
+/* shiki output for the file preview tabs. The shiki theme paints its
+ * own background via an inline style on `pre.shiki`; we override it
+ * to transparent so the surrounding surface shows through, keeping
+ * the viewer visually aligned with the rest of the dashboard rather
+ * than introducing a second surface. */
 .shiki-host pre.shiki {
   @apply m-0 px-4 py-3 text-[13px] leading-relaxed;
   background-color: transparent !important;
