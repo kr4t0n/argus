@@ -229,6 +229,67 @@ type FSReadRequestCommand struct {
 // FSReadMaxBytes mirrors FS_READ_MAX_BYTES on the TS side. Keep in sync.
 const FSReadMaxBytes = 1_048_576
 
+// GitLogRequestCommand asks the sidecar for the most recent N commits
+// reachable from the agent's workingDir HEAD. Same control-plane RPC
+// shape as fs-list / fs-read: server publishes on the per-machine
+// control stream, sidecar replies on the lifecycle stream with a
+// matching GitLogResponseEvent.
+type GitLogRequestCommand struct {
+	Kind      string `json:"kind"` // "git-log"
+	RequestID string `json:"requestId"`
+	AgentID   string `json:"agentId"`
+	// Limit caps how many commits to return (1-based). 0 or negative
+	// means "use the sidecar's default" (50). The server caps at 200
+	// at the controller layer.
+	Limit int   `json:"limit,omitempty"`
+	TS    int64 `json:"ts"`
+}
+
+// GitCommit is one row in the dashboard's "Recent commits" panel.
+// Subject is the first line of the commit message; body/parents/diff
+// stats are intentionally omitted so the wire payload stays small for
+// the panel's list rendering. Click-throughs (full message, file list)
+// would be a follow-up RPC, not a heavier payload here.
+type GitCommit struct {
+	SHA        string `json:"sha"`        // full 40-char hash
+	ShortSHA   string `json:"shortSha"`   // 7-char display form
+	Subject    string `json:"subject"`    // first line of the message
+	AuthorName string `json:"authorName"` // committer display name
+	AuthorDate string `json:"authorDate"` // ISO 8601 (RFC3339), author time
+}
+
+// GitLogResponseEvent is the sidecar's reply to GitLogRequestCommand.
+// On success, Commits is populated and Error is empty. On failure
+// (workingDir not a git repo, `git` missing on PATH, exec failure)
+// Error carries a human-readable reason and Commits is nil.
+//
+// Git carries the same GitStatus snapshot that FSListResponseEvent
+// returns, so a panel rendering the log doesn't have to round-trip a
+// parallel fs-list just to label its header. Cheap to produce — one
+// extra .git/HEAD read alongside the `git log` shell-out.
+type GitLogResponseEvent struct {
+	Kind      string      `json:"kind"` // "git-log-response"
+	MachineID string      `json:"machineId"`
+	AgentID   string      `json:"agentId"`
+	RequestID string      `json:"requestId"`
+	Commits   []GitCommit `json:"commits,omitempty"`
+	Git       *GitStatus  `json:"git,omitempty"`
+	Error     string      `json:"error,omitempty"`
+	TS        int64       `json:"ts"`
+}
+
+// GitChangedEvent is the unsolicited push from the sidecar's per-agent
+// secondary fsnotify watcher when the repo's HEAD or a ref under
+// refs/heads/ moved (commit, checkout, reset, etc). The dashboard's
+// GitLogPanel uses this to refresh without polling. Debounced on the
+// sidecar side; rapid changes (rebase) collapse into a single event.
+type GitChangedEvent struct {
+	Kind      string `json:"kind"` // "git-changed"
+	MachineID string `json:"machineId"`
+	AgentID   string `json:"agentId"`
+	TS        int64  `json:"ts"`
+}
+
 type FSListResponseEvent struct {
 	Kind      string    `json:"kind"` // "fs-list-response"
 	MachineID string    `json:"machineId"`

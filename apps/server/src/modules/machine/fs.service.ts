@@ -8,11 +8,15 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import {
+  GIT_LOG_DEFAULT_LIMIT,
+  GIT_LOG_MAX_LIMIT,
   streamKeys,
   type FSListResponse,
   type FSListResponseEvent,
   type FSReadResponse,
   type FSReadResponseEvent,
+  type GitLogResponse,
+  type GitLogResponseEvent,
 } from '@argus/shared-types';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
@@ -31,13 +35,27 @@ interface PendingRead {
   timer: NodeJS.Timeout;
 }
 
-type Pending = PendingList | PendingRead;
+interface PendingGitLog {
+  kind: 'git-log';
+  // Pre-fetched on the server so the response can pair commits with
+  // a fresh GitStatus reading. Avoids a second fs-list round-trip
+  // just for the panel header.
+  resolve: (resp: GitLogResponse) => void;
+  reject: (err: Error) => void;
+  timer: NodeJS.Timeout;
+}
+
+type Pending = PendingList | PendingRead | PendingGitLog;
 
 const FS_LIST_TIMEOUT_MS = 5_000;
 // File reads are heavier than listings (up to 1 MB across the wire +
 // base64 inflation for images), so we give them more headroom. Slow
 // disks / network FUSE mounts can easily exceed 5s.
 const FS_READ_TIMEOUT_MS = 15_000;
+// `git log -n 50` is millisecond-fast on any sane repo, but the
+// timeout has to cover the round-trip and slow-disk worst cases. 5s
+// matches fs-list — the cost profile is similar (one bounded read).
+const GIT_LOG_TIMEOUT_MS = 5_000;
 
 /**
  * FSService is the server-side half of the filesystem browsing RPC.
@@ -104,11 +122,7 @@ export class FSService implements OnModuleDestroy {
     const promise = new Promise<FSListResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
-        reject(
-          new BadRequestException(
-            'agent did not respond — the machine may be offline',
-          ),
-        );
+        reject(new BadRequestException('agent did not respond — the machine may be offline'));
       }, FS_LIST_TIMEOUT_MS);
       this.pending.set(requestId, { kind: 'list', resolve, reject, timer });
     });
@@ -163,11 +177,7 @@ export class FSService implements OnModuleDestroy {
     const promise = new Promise<FSReadResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
-        reject(
-          new BadRequestException(
-            'agent did not respond — the machine may be offline',
-          ),
-        );
+        reject(new BadRequestException('agent did not respond — the machine may be offline'));
       }, FS_READ_TIMEOUT_MS);
       this.pending.set(requestId, { kind: 'read', resolve, reject, timer });
     });
@@ -178,6 +188,60 @@ export class FSService implements OnModuleDestroy {
         requestId,
         agentId,
         path,
+        ts: Date.now(),
+      });
+    } catch (err) {
+      const pending = this.pending.get(requestId);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pending.delete(requestId);
+      }
+      throw err;
+    }
+    return promise;
+  }
+
+  /**
+   * Request the recent commit history for `agentId`'s workingDir. Same
+   * timeout / pending-promise pattern as listDir / readFile. The
+   * sidecar shells out to `git log` and replies with a
+   * GitLogResponseEvent that carries both the commits and a fresh
+   * GitStatus snapshot, so the dashboard panel can render its header
+   * (branch / detached HEAD) without a parallel fs-list call.
+   */
+  async listGitLog(agentId: string, limit: number): Promise<GitLogResponse> {
+    const agent = await this.prisma.agent.findUnique({
+      where: { id: agentId },
+      select: { id: true, machineId: true, workingDir: true },
+    });
+    if (!agent) throw new NotFoundException('agent not found');
+    if (!agent.workingDir) {
+      throw new BadRequestException('agent has no working directory configured');
+    }
+
+    // Clamp at the controller layer, but defend in depth: an over-large
+    // limit clamped here means the sidecar's own cap (200) never kicks
+    // in for legitimate clients.
+    const effectiveLimit = Math.min(
+      Math.max(1, Math.floor(limit) || GIT_LOG_DEFAULT_LIMIT),
+      GIT_LOG_MAX_LIMIT,
+    );
+
+    const requestId = randomUUID();
+    const promise = new Promise<GitLogResponse>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(requestId);
+        reject(new BadRequestException('agent did not respond — the machine may be offline'));
+      }, GIT_LOG_TIMEOUT_MS);
+      this.pending.set(requestId, { kind: 'git-log', resolve, reject, timer });
+    });
+
+    try {
+      await this.redis.publish(streamKeys.machineControl(agent.machineId), {
+        kind: 'git-log',
+        requestId,
+        agentId,
+        limit: effectiveLimit,
         ts: Date.now(),
       });
     } catch (err) {
@@ -258,6 +322,27 @@ export class FSService implements OnModuleDestroy {
     pending.resolve({
       path: ev.path,
       result: { kind: 'binary', size: ev.size ?? 0 },
+    });
+  }
+
+  /**
+   * Called by MachineService when a `git-log-response` lands on the
+   * lifecycle stream. Mirrors handleResponse / handleReadResponse:
+   * no-op for stale requestIds, BadRequest on sidecar-side errors so
+   * the controller surfaces the reason verbatim.
+   */
+  handleGitLogResponse(ev: GitLogResponseEvent): void {
+    const pending = this.pending.get(ev.requestId);
+    if (!pending || pending.kind !== 'git-log') return;
+    clearTimeout(pending.timer);
+    this.pending.delete(ev.requestId);
+    if (ev.error) {
+      pending.reject(new BadRequestException(ev.error));
+      return;
+    }
+    pending.resolve({
+      commits: ev.commits ?? [],
+      git: ev.git,
     });
   }
 }

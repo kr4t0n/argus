@@ -6,11 +6,10 @@ import {
   FileText,
   Folder,
   FolderOpen,
-  GitBranch,
   Loader2,
   RefreshCw,
 } from 'lucide-react';
-import type { FSEntry, GitStatus } from '@argus/shared-types';
+import type { FSEntry } from '@argus/shared-types';
 import { api, ApiError } from '../lib/api';
 import { joinAgent, leaveAgent, subscribeHandler } from '../lib/ws';
 import { useFileTabsStore } from '../stores/fileTabsStore';
@@ -58,13 +57,6 @@ export function FileTree({ agentId, rootLabel }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']));
   const [showAll, setShowAll] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
-  // Latest git HEAD snapshot the sidecar attached to an fs-list
-  // response. Refreshed on every successful listing — both manual
-  // refresh and fsnotify-driven refetches — so a `git checkout` flips
-  // the badge as soon as the next refresh lands. `undefined` means we
-  // haven't fetched yet; `null` means the workingDir is not a repo.
-  const [gitStatus, setGitStatus] = useState<GitStatus | null | undefined>(undefined);
-
   // Bound to this agent so DirNode doesn't need to know about it.
   const openFile = useFileTabsStore((s) => s.openFile);
   const onOpenFile = useCallback(
@@ -107,15 +99,9 @@ export function FileTree({ agentId, rootLabel }: Props) {
           }
           return next;
         });
-        // Sidecar omits `git` for non-repo workingDirs; coerce to null
-        // so we can distinguish "not a repo" (no badge) from "haven't
-        // fetched yet" (still undefined).
-        setGitStatus(res.git ?? null);
       } catch (err) {
         const msg =
-          err instanceof ApiError
-            ? err.message
-            : (err as Error).message || 'listing failed';
+          err instanceof ApiError ? err.message : (err as Error).message || 'listing failed';
         setDirs((prev) => {
           const next = new Map(prev);
           const existing = next.get(path);
@@ -139,7 +125,6 @@ export function FileTree({ agentId, rootLabel }: Props) {
     setDirs(new Map());
     setExpanded(new Set(['']));
     setSelected(null);
-    setGitStatus(undefined);
     void fetchDir('', TREE_PREFETCH_DEPTH);
   }, [agentId, fetchDir]);
 
@@ -198,10 +183,7 @@ export function FileTree({ agentId, rootLabel }: Props) {
             // window. Pull TREE_PREFETCH_DEPTH more levels starting
             // here so the next few clicks are instant too.
             void fetchDir(path, TREE_PREFETCH_DEPTH);
-          } else if (
-            !cached.loading &&
-            hasUnwalkedSubdir(cached.entries, path, dirs)
-          ) {
+          } else if (!cached.loading && hasUnwalkedSubdir(cached.entries, path, dirs)) {
             // Cached — the folder itself renders instantly, but at
             // least one of its subdirs hasn't been walked yet. Fire a
             // background depth-N fetch so the frontier slides with
@@ -236,16 +218,15 @@ export function FileTree({ agentId, rootLabel }: Props) {
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           {rootLabel ? (
-            <span
-              title={rootLabel}
-              className="truncate font-mono text-[10px] text-neutral-500"
-            >
+            <span title={rootLabel} className="truncate font-mono text-[10px] text-neutral-500">
               {rootLabel}
             </span>
           ) : (
             <span className="text-[10px] text-neutral-600">root</span>
           )}
-          <GitBranchBadge status={gitStatus} />
+          {/* Branch label moved to the GitLogPanel above — the panel's
+              header shows the same branch + detached state as the old
+              inline badge here, plus a list of recent commits. */}
         </div>
         <div className="flex items-center gap-1">
           <IconButton
@@ -257,10 +238,7 @@ export function FileTree({ agentId, rootLabel }: Props) {
           </IconButton>
           <IconButton title="Refresh" onClick={refreshAll}>
             <RefreshCw
-              className={cn(
-                'h-3 w-3',
-                rootState?.loading && 'animate-spin text-neutral-300',
-              )}
+              className={cn('h-3 w-3', rootState?.loading && 'animate-spin text-neutral-300')}
             />
           </IconButton>
         </div>
@@ -278,9 +256,7 @@ export function FileTree({ agentId, rootLabel }: Props) {
             <Loader2 className="h-3 w-3 animate-spin" /> loading…
           </div>
         )}
-        {rootEmpty && (
-          <div className="px-2 py-1 text-neutral-600">empty directory</div>
-        )}
+        {rootEmpty && <div className="px-2 py-1 text-neutral-600">empty directory</div>}
         {rootState && !rootState.error && rootState.entries.length > 0 && (
           <DirNode
             path=""
@@ -439,37 +415,6 @@ function DirNode({
         );
       })}
     </ul>
-  );
-}
-
-/**
- * Tiny pill showing the git branch (or short SHA when detached) for
- * the agent's workingDir. Self-hides for non-repos and while we're
- * still waiting for the first listing to come back. Informational
- * only — no click behavior in v1.
- */
-function GitBranchBadge({ status }: { status: GitStatus | null | undefined }) {
-  if (!status) return null;
-  const label = status.detached ? status.head : status.branch;
-  if (!label) return null;
-  const tooltip = status.detached
-    ? `detached HEAD @ ${status.head}`
-    : status.head
-      ? `${status.branch} @ ${status.head}`
-      : (status.branch ?? '');
-  return (
-    <span
-      title={tooltip}
-      className={cn(
-        'inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-[1px] font-mono text-[10px]',
-        status.detached
-          ? 'border-amber-700/60 bg-amber-900/20 text-amber-300'
-          : 'border-neutral-700/60 bg-neutral-900/60 text-neutral-300',
-      )}
-    >
-      <GitBranch className="h-2.5 w-2.5" />
-      {label}
-    </span>
   );
 }
 

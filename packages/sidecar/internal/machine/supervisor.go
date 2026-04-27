@@ -43,6 +43,15 @@ type supervisor struct {
 	// to register — in which case the tree works in manual-refresh
 	// mode without live updates).
 	fsw *fsWatcher
+
+	// Per-agent git watcher (`.git/HEAD` + `refs/heads/`). Separate
+	// from fsw because the primary watcher hard-skips `.git/` to
+	// avoid object-write churn; this one is narrowly scoped just to
+	// ref movement so the dashboard's commit panel can refresh on
+	// commit/checkout/reset without us widening the primary watch.
+	// Same fail-soft semantics as fsw — nil here just means the
+	// panel falls back to mount-fetch + manual-refresh.
+	gitw *gitWatcher
 }
 
 const (
@@ -137,6 +146,7 @@ func (s *supervisor) run(ctx context.Context) {
 	}
 
 	s.startFSWatcher(ctx)
+	s.startGitWatcher(ctx)
 
 	cmdStream := protocol.CommandStream(s.spec.AgentID)
 	group := protocol.SidecarConsumerGroup(s.spec.AgentID)
@@ -203,6 +213,9 @@ func (s *supervisor) run(ctx context.Context) {
 
 	if s.fsw != nil {
 		s.fsw.Close()
+	}
+	if s.gitw != nil {
+		s.gitw.Close()
 	}
 
 	// Best-effort deregister so the dashboard reflects the change
@@ -388,6 +401,33 @@ func (s *supervisor) startFSWatcher(ctx context.Context) {
 	s.fsw = w
 }
 
+// startGitWatcher brings up the per-agent ref watcher (`.git/HEAD` +
+// `refs/heads/`) so the dashboard's commit panel can refresh on
+// commits / checkouts / resets without polling. Non-repos and watch
+// failures degrade silently to manual-refresh, matching fsw.
+func (s *supervisor) startGitWatcher(ctx context.Context) {
+	if s.spec.WorkingDir == "" {
+		return
+	}
+	w, err := newGitWatcher(ctx, s.spec.WorkingDir, func() {
+		_ = s.bus.Publish(ctx, protocol.LifecycleStream(), protocol.GitChangedEvent{
+			Kind:      "git-changed",
+			MachineID: s.machine,
+			AgentID:   s.spec.AgentID,
+			TS:        time.Now().UnixMilli(),
+		})
+	}, s.log)
+	if err != nil {
+		s.log.Printf("agent %s: git watcher disabled: %v", s.spec.AgentID, err)
+		return
+	}
+	// Non-repo workingDir returns (nil, nil) — quiet, expected.
+	if w == nil {
+		return
+	}
+	s.gitw = w
+}
+
 // HandleFSList executes a list-directory request for this agent and
 // publishes the response back on the lifecycle stream. When req.Depth
 // > 1 the reply carries every listing up to that depth in Listings so
@@ -503,6 +543,42 @@ func (s *supervisor) HandleFSRead(ctx context.Context, req protocol.FSReadReques
 	}
 	if err := s.bus.Publish(ctx, protocol.LifecycleStream(), resp); err != nil {
 		s.log.Printf("agent %s: fs-read-response publish failed: %v", s.spec.AgentID, err)
+	}
+}
+
+// HandleGitLog runs `git log` in the agent's workingDir and publishes
+// the recent commits back on the lifecycle stream. Same fan-in
+// pattern as HandleFSList — keyed by RequestID for the server to
+// match against its pending-promise map. Errors (non-repo, git not
+// on PATH, exec failure) are surfaced as Error so the dashboard
+// renders a panel-level error instead of timing out.
+func (s *supervisor) HandleGitLog(ctx context.Context, req protocol.GitLogRequestCommand) {
+	resp := protocol.GitLogResponseEvent{
+		Kind:      "git-log-response",
+		MachineID: s.machine,
+		AgentID:   s.spec.AgentID,
+		RequestID: req.RequestID,
+		TS:        time.Now().UnixMilli(),
+	}
+	commits, err := ReadGitLog(ctx, s.spec.WorkingDir, req.Limit)
+	if err != nil {
+		resp.Error = err.Error()
+	} else {
+		// commits == nil ⇒ non-repo workingDir. The server treats nil
+		// the same as an empty list at the controller layer, so callers
+		// see "no commits" rather than an error. We could also return
+		// an explicit error here, but rendering an empty list keeps the
+		// panel flicker-free if the user toggles into a non-repo dir.
+		resp.Commits = commits
+	}
+	// Attach GitStatus regardless — even when log read failed, the
+	// panel header might still want to display the current branch.
+	// Cheap: ReadGitStatus is one .git/HEAD read.
+	if status, gerr := ReadGitStatus(s.spec.WorkingDir); gerr == nil && status != nil {
+		resp.Git = status
+	}
+	if err := s.bus.Publish(ctx, protocol.LifecycleStream(), resp); err != nil {
+		s.log.Printf("agent %s: git-log-response publish failed: %v", s.spec.AgentID, err)
 	}
 }
 

@@ -181,6 +181,15 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server.to(`agent:${payload.agentId}`).emit('fs:changed', payload);
   }
 
+  /**
+   * Broadcast a debounced ref-change from the sidecar's secondary git
+   * watcher. Scoped to the agent room — only clients viewing that
+   * agent's panel re-fetch.
+   */
+  emitGitChanged(payload: { agentId: string }) {
+    this.server.to(`agent:${payload.agentId}`).emit('git:changed', payload);
+  }
+
   // ------- Sidecar remote-update events -------
   //
   // Broadcast globally rather than scoping to a per-machine room: the

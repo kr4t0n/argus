@@ -6,6 +6,7 @@ import type {
   CreateSessionRequest,
   FSListResponse,
   FSReadResponse,
+  GitLogResponse,
   LoginResponse,
   MachineDTO,
   OpenTerminalRequest,
@@ -177,5 +178,15 @@ export const api = {
   readAgentFile: (agentId: string, path: string) => {
     const q = new URLSearchParams({ path });
     return http<FSReadResponse>(`/agents/${agentId}/fs/read?${q.toString()}`);
+  },
+
+  /** Recent commits for the agent's workingDir. The response also
+   *  carries a fresh GitStatus so the panel header (branch /
+   *  detached) renders in one round trip. */
+  getAgentGitLog: (agentId: string, limit?: number) => {
+    const q = new URLSearchParams();
+    if (limit && limit > 0) q.set('limit', String(limit));
+    const qs = q.toString();
+    return http<GitLogResponse>(`/agents/${agentId}/git/log${qs ? `?${qs}` : ''}`);
   },
 };
