@@ -15,13 +15,7 @@ export type AgentStatus = 'online' | 'offline' | 'busy' | 'error';
 
 export type SessionStatus = 'active' | 'idle' | 'done' | 'failed';
 
-export type CommandStatus =
-  | 'pending'
-  | 'sent'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'cancelled';
+export type CommandStatus = 'pending' | 'sent' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export type ResultKind =
   | 'delta' // incremental text fragment (typewriter)
@@ -105,7 +99,7 @@ export interface MachineRegisterEvent {
   /** User-friendly name; defaults to hostname (`.local` stripped). */
   name: string;
   hostname: string;
-  os: string;   // darwin | linux
+  os: string; // darwin | linux
   arch: string; // amd64 | arm64
   sidecarVersion: string;
   availableAdapters: AvailableAdapter[];
@@ -118,9 +112,7 @@ export interface MachineHeartbeatEvent {
   ts: number;
 }
 
-export type MachineLifecycleEvent =
-  | MachineRegisterEvent
-  | MachineHeartbeatEvent;
+export type MachineLifecycleEvent = MachineRegisterEvent | MachineHeartbeatEvent;
 
 // ─────────────────────────────────────────────────────────────────────
 // Machine control plane (server → sidecar)
@@ -249,6 +241,84 @@ export interface FSReadRequestCommand {
  *  an error rather than truncating. */
 export const FS_READ_MAX_BYTES = 1_048_576;
 
+/**
+ * Asks the sidecar for the most recent N commits reachable from the
+ * agent's HEAD. Same control-plane RPC pattern as fs-list / fs-read:
+ * server publishes on the per-machine control stream, sidecar replies
+ * on the lifecycle stream. The sidecar caps at GIT_LOG_MAX_LIMIT (200)
+ * regardless of what's requested.
+ */
+export interface GitLogRequestCommand {
+  kind: 'git-log';
+  requestId: string;
+  agentId: string;
+  /** Default 50, max 200. Server validates the upper bound; sidecar
+   *  applies the same cap defensively. */
+  limit?: number;
+  ts: number;
+}
+
+/** Default page size when the dashboard doesn't pass an explicit limit. */
+export const GIT_LOG_DEFAULT_LIMIT = 50;
+/** Hard cap so a buggy / hostile caller can't ask for unbounded log
+ *  output. Sized so 200 commits × ~150 wire bytes stays trivial. */
+export const GIT_LOG_MAX_LIMIT = 200;
+
+/**
+ * One row in the dashboard's "Recent commits" panel. Subject is the
+ * first line of the commit message; body / parents / diff stats are
+ * intentionally omitted to keep the wire payload compact for the
+ * panel's list rendering. Click-throughs (full message, file list)
+ * would be a follow-up RPC, not a heavier payload here.
+ */
+export interface GitCommit {
+  /** Full 40-char hash. */
+  sha: string;
+  /** 7-char display form. */
+  shortSha: string;
+  /** First line of the commit message. */
+  subject: string;
+  /** Committer display name. */
+  authorName: string;
+  /** ISO-8601 (RFC3339) author timestamp. */
+  authorDate: string;
+}
+
+/**
+ * Sidecar's reply to GitLogRequestCommand. On success `commits` is
+ * populated and `error` is empty. On failure (workingDir not a git
+ * repo, `git` missing on PATH, exec failure) `error` carries a
+ * human-readable reason and `commits` is omitted.
+ *
+ * `git` mirrors the GitStatus on FSListResponseEvent so a panel
+ * rendering recent commits can label its header (branch / detached
+ * HEAD) in one round trip — no parallel fs-list needed.
+ */
+export interface GitLogResponseEvent {
+  kind: 'git-log-response';
+  machineId: string;
+  agentId: string;
+  requestId: string;
+  commits?: GitCommit[];
+  git?: GitStatus;
+  error?: string;
+  ts: number;
+}
+
+/**
+ * Unsolicited push from the sidecar's secondary git watcher
+ * (`.git/HEAD` + `refs/heads/`) — fires when the repo's HEAD or a
+ * branch tip moved (commit, checkout, reset). Debounced on the
+ * sidecar so a rebase collapses into one event. The dashboard's
+ * GitLogPanel listens for this and re-fetches the log + branch.
+ */
+export interface GitChangedEvent {
+  kind: 'git-changed';
+  machineId: string;
+  agentId: string;
+  ts: number;
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Remote sidecar update (server → sidecar)
 //
@@ -280,6 +350,7 @@ export type MachineControlCommand =
   | SyncAgentsCommand
   | FSListRequestCommand
   | FSReadRequestCommand
+  | GitLogRequestCommand
   | UpdateSidecarCommand;
 
 export interface FSListResponseEvent {
@@ -408,10 +479,7 @@ export interface AgentDestroyedEvent {
   ts: number;
 }
 
-export type MachineLifecycleAck =
-  | AgentSpawnedEvent
-  | AgentSpawnFailedEvent
-  | AgentDestroyedEvent;
+export type MachineLifecycleAck = AgentSpawnedEvent | AgentSpawnFailedEvent | AgentDestroyedEvent;
 
 /** Anything the server expects on `agent:lifecycle`. Ordering matters:
  *  more specific kinds first so TS narrows correctly. */
@@ -427,9 +495,27 @@ export type AnyLifecycleEvent =
   | FSListResponseEvent
   | FSReadResponseEvent
   | FSChangedEvent
+  | GitLogResponseEvent
+  | GitChangedEvent
   | SidecarUpdateStartedEvent
   | SidecarUpdateDownloadedEvent
   | SidecarUpdateFailedEvent;
+
+/**
+ * Tells the sidecar to clone an existing on-disk CLI session into a new
+ * one for the agent. Carried on Command when `kind === 'clone-session'`.
+ *
+ *   • `srcExternalId` — the upstream CLI's id for the source conversation
+ *     (matches Session.externalId on the server side).
+ *   • `turnIndex` — 1-based; clone the prefix containing turns 1..N and
+ *     drop everything after. The sidecar's per-adapter Cloner enforces
+ *     turn boundaries (truncate before the (N+1)th user turn so we don't
+ *     leave a dangling tool_use without its tool_result).
+ */
+export interface CloneSpec {
+  srcExternalId: string;
+  turnIndex: number;
+}
 
 /** Server → sidecar */
 export interface Command {
@@ -442,12 +528,14 @@ export interface Command {
    * previous conversation.
    */
   externalId?: string;
-  kind: 'execute' | 'cancel';
+  kind: 'execute' | 'cancel' | 'clone-session';
   prompt?: string;
   context?: Record<string, unknown>;
   timeoutMs?: number;
   /** optional adapter-specific options (model, flags, etc.) */
   options?: Record<string, unknown>;
+  /** Set when kind === 'clone-session'; ignored otherwise. */
+  clone?: CloneSpec;
 }
 
 /** Sidecar → server, streamed */
@@ -476,6 +564,23 @@ export interface SessionExternalIdEvent {
   sessionId: string;
   commandId: string;
   externalId: string;
+  ts: number;
+}
+
+/**
+ * Reported by the sidecar when an in-flight `clone-session` command can't
+ * finish — adapter doesn't implement Cloner, source file missing, etc.
+ *
+ * The forked Session row already exists with the reproduced history, so
+ * the event isn't fatal: it's a notification that on-disk CLI state
+ * couldn't be replicated and the next prompt will start a fresh
+ * conversation. Server fans this out as `session:clone-failed` to the
+ * owning user's WS room; the dashboard surfaces a toast.
+ */
+export interface SessionCloneFailedEvent {
+  kind: 'session-clone-failed';
+  sessionId: string;
+  reason: string;
   ts: number;
 }
 

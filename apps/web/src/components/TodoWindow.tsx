@@ -52,27 +52,27 @@ export const TodoWindow = memo(function TodoWindow({ chunks }: Props) {
   if (!todos || total === 0) return null;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-neutral-800 bg-neutral-900/60">
+    <div className="overflow-hidden rounded-xl border border-default bg-surface-1/60">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="group flex w-full items-center gap-2 px-3.5 py-2 text-xs text-neutral-400 transition-colors hover:bg-neutral-800/40 hover:text-neutral-200"
+        className="group flex w-full items-center gap-2 px-3.5 py-2 text-xs text-fg-tertiary transition-colors hover:bg-surface-2/40 hover:text-fg-primary"
       >
-        <ListTodo className="h-3.5 w-3.5 shrink-0 text-neutral-500 group-hover:text-neutral-300" />
-        <span className="text-neutral-300">To-dos</span>
-        <span className="tabular-nums text-neutral-500">
+        <ListTodo className="h-3.5 w-3.5 shrink-0 text-fg-tertiary group-hover:text-fg-secondary" />
+        <span className="text-fg-secondary">To-dos</span>
+        <span className="tabular-nums text-fg-tertiary">
           {allDone ? total : `${doneCount}/${total}`}
         </span>
         <ChevronDown
           className={cn(
-            'ml-auto h-3.5 w-3.5 shrink-0 text-neutral-600 transition-transform group-hover:text-neutral-400',
+            'ml-auto h-3.5 w-3.5 shrink-0 text-fg-muted transition-transform group-hover:text-fg-tertiary',
             open && 'rotate-180',
           )}
         />
       </button>
 
       {open && (
-        <ul className="space-y-2.5 border-t border-neutral-800/80 px-3.5 py-3">
+        <ul className="space-y-2.5 border-t border-default/80 px-3.5 py-3">
           {todos.map((t, i) => (
             <TodoRow key={i} todo={t} />
           ))}
@@ -101,16 +101,16 @@ function TodoRow({ todo }: { todo: Todo }) {
         className={cn(
           'mt-0.5 h-3.5 w-3.5 shrink-0',
           todo.status === 'completed' && 'text-emerald-500/80',
-          todo.status === 'in_progress' && 'animate-spin text-neutral-300',
-          todo.status === 'pending' && 'text-neutral-600',
+          todo.status === 'in_progress' && 'animate-spin text-fg-secondary',
+          todo.status === 'pending' && 'text-fg-muted',
         )}
       />
       <span
         className={cn(
           'min-w-0 break-words',
-          todo.status === 'completed' && 'text-neutral-500 line-through',
-          todo.status === 'in_progress' && 'text-neutral-100',
-          todo.status === 'pending' && 'text-neutral-300',
+          todo.status === 'completed' && 'text-fg-tertiary line-through',
+          todo.status === 'in_progress' && 'text-fg-primary',
+          todo.status === 'pending' && 'text-fg-secondary',
         )}
       >
         {text}

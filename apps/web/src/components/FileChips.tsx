@@ -87,9 +87,9 @@ export function FileChips({
             // Hover reveals the absolute path so copy-out and "where on
             // disk is this exactly?" both keep working when shown != f.
             title={shown === f ? undefined : f}
-            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-md bg-neutral-900 border border-neutral-800 px-2 py-1 font-mono text-[11px] text-neutral-400"
+            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-md bg-surface-1 border border-default px-2 py-1 font-mono text-[11px] text-fg-tertiary"
           >
-            <FileText className="h-3 w-3 flex-shrink-0 text-neutral-500" />
+            <FileText className="h-3 w-3 flex-shrink-0 text-fg-tertiary" />
             <span className="truncate max-w-[260px]">{shown}</span>
           </span>
         );

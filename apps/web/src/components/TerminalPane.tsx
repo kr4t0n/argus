@@ -3,13 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
-import {
-  Loader2,
-  Power,
-  RotateCcw,
-  Terminal as TerminalIcon,
-  X,
-} from 'lucide-react';
+import { Loader2, Power, RotateCcw, Terminal as TerminalIcon, X } from 'lucide-react';
 import type {
   AgentDTO,
   TerminalDTO,
@@ -25,6 +19,7 @@ import {
   sendTerminalResize,
   subscribeHandler,
 } from '../lib/ws';
+import { useResolvedTheme } from '../lib/theme';
 import { cn } from '../lib/utils';
 
 type Props = {
@@ -149,37 +144,14 @@ export function TerminalPane({ agent }: Props) {
     if (!node) return;
 
     const term = new Terminal({
-      fontFamily:
-        '"Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+      fontFamily: '"Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
       fontSize: 12,
       lineHeight: 1.25,
       cursorBlink: true,
       convertEol: false,
       scrollback: 5000,
       allowProposedApi: true,
-      theme: {
-        background: '#0a0a0a',
-        foreground: '#e5e5e5',
-        cursor: '#a3a3a3',
-        cursorAccent: '#0a0a0a',
-        selectionBackground: '#525252',
-        black: '#171717',
-        brightBlack: '#404040',
-        red: '#ef4444',
-        brightRed: '#f87171',
-        green: '#22c55e',
-        brightGreen: '#4ade80',
-        yellow: '#eab308',
-        brightYellow: '#facc15',
-        blue: '#3b82f6',
-        brightBlue: '#60a5fa',
-        magenta: '#a855f7',
-        brightMagenta: '#c084fc',
-        cyan: '#06b6d4',
-        brightCyan: '#22d3ee',
-        white: '#e5e5e5',
-        brightWhite: '#fafafa',
-      },
+      theme: xtermThemeForDocument(),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -231,6 +203,17 @@ export function TerminalPane({ agent }: Props) {
     };
   }, [status.kind]);
 
+  // Re-theme the live terminal when the dashboard theme flips.
+  // xterm supports hot-swapping `options.theme` — colors update on
+  // the next paint without recreating the terminal or losing scroll
+  // history.
+  const resolvedTheme = useResolvedTheme();
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.theme = xtermThemeForDocument();
+  }, [resolvedTheme]);
+
   // Wire up WS handlers (output / closed).
   useEffect(() => {
     const off = subscribeHandler({
@@ -281,12 +264,12 @@ export function TerminalPane({ agent }: Props) {
   if (!supported) {
     return (
       <div className="space-y-1">
-        <div className="text-xs text-neutral-500">
+        <div className="text-xs text-fg-tertiary">
           this agent's sidecar has not opted into terminals.
         </div>
-        <div className="text-[11px] text-neutral-600">
-          set <span className="font-mono text-neutral-400">terminal.enabled: true</span> in
-          its YAML and restart.
+        <div className="text-[11px] text-fg-muted">
+          set <span className="font-mono text-fg-tertiary">terminal.enabled: true</span> in its YAML
+          and restart.
         </div>
       </div>
     );
@@ -294,33 +277,31 @@ export function TerminalPane({ agent }: Props) {
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between text-[11px] text-neutral-500">
+      <div className="flex items-center justify-between text-[11px] text-fg-tertiary">
         <span>
           {status.kind === 'open' && 'connected'}
           {status.kind === 'opening' && 'connecting…'}
           {status.kind === 'closed' && `exited (${status.exitCode})`}
           {status.kind === 'idle' && 'no session'}
-          {status.kind === 'error' && (
-            <span className="text-red-400">error: {status.message}</span>
-          )}
+          {status.kind === 'error' && <span className="text-red-400">error: {status.message}</span>}
         </span>
         <div className="flex items-center gap-1">
           {status.kind === 'idle' && (
             <button
               onClick={open}
-              className="inline-flex items-center gap-1 rounded-md border border-neutral-800 bg-neutral-900 px-2 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-800"
+              className="inline-flex items-center gap-1 rounded-md border border-default bg-surface-1 px-2 py-0.5 text-[11px] text-fg-secondary hover:bg-surface-2"
             >
               <TerminalIcon className="h-3 w-3" /> open
             </button>
           )}
           {status.kind === 'opening' && (
-            <Loader2 className="h-3 w-3 animate-spin text-neutral-500" />
+            <Loader2 className="h-3 w-3 animate-spin text-fg-tertiary" />
           )}
           {status.kind === 'open' && (
             <button
               onClick={close}
               title="close (sends SIGHUP-equivalent)"
-              className="inline-flex items-center gap-1 rounded-md border border-neutral-800 bg-neutral-900 px-2 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-800"
+              className="inline-flex items-center gap-1 rounded-md border border-default bg-surface-1 px-2 py-0.5 text-[11px] text-fg-secondary hover:bg-surface-2"
             >
               <Power className="h-3 w-3" /> close
             </button>
@@ -330,7 +311,7 @@ export function TerminalPane({ agent }: Props) {
               <button
                 onClick={reset}
                 title="dismiss"
-                className="inline-flex items-center rounded-md border border-neutral-800 bg-neutral-900 p-1 text-neutral-400 hover:bg-neutral-800"
+                className="inline-flex items-center rounded-md border border-default bg-surface-1 p-1 text-fg-tertiary hover:bg-surface-2"
               >
                 <X className="h-3 w-3" />
               </button>
@@ -340,7 +321,7 @@ export function TerminalPane({ agent }: Props) {
                   open();
                 }}
                 title="restart"
-                className="inline-flex items-center gap-1 rounded-md border border-neutral-800 bg-neutral-900 px-2 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-800"
+                className="inline-flex items-center gap-1 rounded-md border border-default bg-surface-1 px-2 py-0.5 text-[11px] text-fg-secondary hover:bg-surface-2"
               >
                 <RotateCcw className="h-3 w-3" /> restart
               </button>
@@ -353,24 +334,79 @@ export function TerminalPane({ agent }: Props) {
         ref={containerRef}
         onClick={() => termRef.current?.focus()}
         className={cn(
-          'relative h-[280px] w-full rounded-md border border-neutral-800 bg-neutral-950 p-1.5',
+          'relative h-[280px] w-full rounded-md border border-default bg-surface-0 p-1.5',
           // Keep the inner xterm canvas snug against the rounded border.
           status.kind !== 'open' && status.kind !== 'closed' && 'flex items-center justify-center',
         )}
       >
         {status.kind === 'idle' && (
-          <div className="text-center text-[11px] text-neutral-600">
-            click <span className="text-neutral-400">open</span> to attach a shell on{' '}
-            <span className="font-mono text-neutral-400">{agent.machineName}</span>
+          <div className="text-center text-[11px] text-fg-muted">
+            click <span className="text-fg-tertiary">open</span> to attach a shell on{' '}
+            <span className="font-mono text-fg-tertiary">{agent.machineName}</span>
           </div>
         )}
-        {status.kind === 'opening' && (
-          <Loader2 className="h-4 w-4 animate-spin text-neutral-500" />
-        )}
+        {status.kind === 'opening' && <Loader2 className="h-4 w-4 animate-spin text-fg-tertiary" />}
         {status.kind === 'error' && (
           <div className="text-center text-[11px] text-red-400">{status.message}</div>
         )}
       </div>
     </div>
   );
+}
+
+// xterm color themes. We bake two per-theme palettes (matching the
+// dashboard tokens) and pick by the dark class on <html>. Hot-swapping
+// `term.options.theme` triggers an in-place repaint so flipping the
+// dashboard theme doesnt drop scroll position or kill the PTY.
+const XTERM_DARK = {
+  background: '#0a0a0a',
+  foreground: '#e5e5e5',
+  cursor: '#a3a3a3',
+  cursorAccent: '#0a0a0a',
+  selectionBackground: '#525252',
+  black: '#171717',
+  brightBlack: '#404040',
+  red: '#ef4444',
+  brightRed: '#f87171',
+  green: '#22c55e',
+  brightGreen: '#4ade80',
+  yellow: '#eab308',
+  brightYellow: '#facc15',
+  blue: '#3b82f6',
+  brightBlue: '#60a5fa',
+  magenta: '#a855f7',
+  brightMagenta: '#c084fc',
+  cyan: '#06b6d4',
+  brightCyan: '#22d3ee',
+  white: '#e5e5e5',
+  brightWhite: '#fafafa',
+};
+
+const XTERM_LIGHT = {
+  background: '#ffffff',
+  foreground: '#171717',
+  cursor: '#525252',
+  cursorAccent: '#ffffff',
+  selectionBackground: '#cccccc',
+  black: '#171717',
+  brightBlack: '#404040',
+  red: '#dc2626',
+  brightRed: '#ef4444',
+  green: '#16a34a',
+  brightGreen: '#22c55e',
+  yellow: '#ca8a04',
+  brightYellow: '#eab308',
+  blue: '#2563eb',
+  brightBlue: '#3b82f6',
+  magenta: '#9333ea',
+  brightMagenta: '#a855f7',
+  cyan: '#0891b2',
+  brightCyan: '#06b6d4',
+  white: '#525252',
+  brightWhite: '#171717',
+};
+
+function xtermThemeForDocument() {
+  if (typeof document === 'undefined') return XTERM_DARK;
+  return document.documentElement.classList.contains('dark') ? XTERM_DARK : XTERM_LIGHT;
 }

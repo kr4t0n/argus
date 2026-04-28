@@ -145,3 +145,12 @@ func (a *CursorCLIAdapter) Cancel(_ context.Context, commandID string) error {
 	}
 	return nil
 }
+
+// CloneSession is implemented in cursor_cli_clone.go — Cursor stores
+// chat state in a SQLite content-addressed graph at
+// `~/.cursor/chats/<md5(workspace)>/<chat-id>/store.db`, NOT in the
+// agent-transcripts JSONL we used to copy. The JSONL is just a
+// derived log; cursor regenerates it from the SQLite on resume.
+// See that file for the implementation + the rationale for using
+// historical root snapshots cursor itself wrote, rather than
+// synthesizing a truncated graph by hand.

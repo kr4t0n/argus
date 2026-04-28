@@ -259,6 +259,13 @@ func (d *Daemon) dispatchControl(ctx context.Context, payload map[string]any) {
 			return
 		}
 		d.handleFSRead(ctx, ev)
+	case "git-log":
+		var ev protocol.GitLogRequestCommand
+		if err := remarshal(payload, &ev); err != nil {
+			d.log.Printf("control: bad git-log: %v", err)
+			return
+		}
+		d.handleGitLog(ctx, ev)
 	case "update-sidecar":
 		var ev protocol.UpdateSidecarCommand
 		if err := remarshal(payload, &ev); err != nil {
@@ -332,6 +339,34 @@ func (d *Daemon) handleFSRead(ctx context.Context, req protocol.FSReadRequestCom
 		d.fsSlots <- struct{}{}
 		defer func() { <-d.fsSlots }()
 		s.HandleFSRead(ctx, req)
+	}()
+}
+
+// handleGitLog mirrors handleFSList: routes to the target supervisor,
+// publishes a synthetic error response if the agent is gone so the
+// server-side pending request resolves instead of timing out, and
+// dispatches the actual `git log` shell-out under the shared fsSlots
+// gate (a depth-N tree refresh shouldn't queue behind a git log; same
+// gate keeps total concurrent disk-touching ops bounded).
+func (d *Daemon) handleGitLog(ctx context.Context, req protocol.GitLogRequestCommand) {
+	d.mu.Lock()
+	s, ok := d.supervisors[req.AgentID]
+	d.mu.Unlock()
+	if !ok {
+		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.GitLogResponseEvent{
+			Kind:      "git-log-response",
+			MachineID: d.cache.MachineID,
+			AgentID:   req.AgentID,
+			RequestID: req.RequestID,
+			Error:     "agent not running on this machine",
+			TS:        time.Now().UnixMilli(),
+		})
+		return
+	}
+	go func() {
+		d.fsSlots <- struct{}{}
+		defer func() { <-d.fsSlots }()
+		s.HandleGitLog(ctx, req)
 	}()
 }
 

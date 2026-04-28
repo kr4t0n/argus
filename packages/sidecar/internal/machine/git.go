@@ -18,8 +18,11 @@ package machine
 
 import (
 	"bufio"
+	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -156,4 +159,121 @@ func readRefSHA(gitDir, ref string) string {
 		sha = sha[:shortHashLen]
 	}
 	return sha
+}
+
+// gitLogDefaultLimit / gitLogMaxLimit bound how many commits the
+// dashboard panel asks for. Defaults match the recommended scope (50
+// rows visible without paging) and the cap matches the server-side
+// validator so an over-large request can't drag the wire payload past
+// a few KB. Each commit is ~150 bytes wire — 200 commits stays well
+// under any meaningful threshold.
+const (
+	gitLogDefaultLimit = 50
+	gitLogMaxLimit     = 200
+)
+
+// ReadGitLog returns the most recent N commits reachable from HEAD in
+// `workingDir`. We shell out to `git log` rather than parsing
+// `.git/objects/` ourselves: the binary is a hard runtime dependency
+// for nearly every CLI agent we wrap (Claude / Codex / Cursor all
+// shell out to git themselves) so requiring it is not a meaningful
+// extra constraint, and the format-with-NUL-separators trick below
+// gives us a robust parse with zero ambiguity around message bytes.
+//
+// Returns (nil, nil) when the directory is not a git repo. The
+// "no commits yet" case (freshly init'd repo) returns ([], nil) — an
+// empty list is a valid response, not an error.
+//
+// Error returns are reserved for unexpected failures (git not on PATH,
+// exec rejected, malformed output). Callers should surface these to
+// the dashboard as a panel-level error rather than swallowing.
+func ReadGitLog(ctx context.Context, workingDir string, limit int) ([]protocol.GitCommit, error) {
+	if workingDir == "" {
+		return nil, nil
+	}
+	gitDir, err := resolveGitDir(workingDir)
+	if err != nil {
+		return nil, err
+	}
+	if gitDir == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = gitLogDefaultLimit
+	}
+	if limit > gitLogMaxLimit {
+		limit = gitLogMaxLimit
+	}
+
+	// Field separator is NUL between columns. Records are separated by
+	// `%x1e\n` because git's `--pretty=format:` joins commits with a
+	// literal newline (the only inter-record glue we don't control), so
+	// the on-wire record boundary is "our explicit RS byte, then git's
+	// joining LF". Splitting on just `%x1e` would still work today —
+	// `%s` (subject) is git's first-line-only token and we don't emit
+	// `%b` — but pinning the LF here prevents a bug if a future field
+	// addition (e.g. body, GPG sig) does carry an embedded RS.
+	//
+	// Format columns: full hash, subject, author name, author ISO date.
+	const fieldSep = "\x00"
+	const recordSep = "\x1e\n"
+	format := "%H%x00%s%x00%an%x00%aI%x1e"
+
+	cmd := exec.CommandContext(ctx, "git", "log",
+		fmt.Sprintf("-n%d", limit),
+		"--pretty=format:"+format,
+		"--no-color",
+	)
+	cmd.Dir = workingDir
+	out, err := cmd.Output()
+	if err != nil {
+		// "does not have any commits yet" is the empty-repo case —
+		// `git log` exits 128 with that message on stderr. Surface
+		// as an empty list, not an error.
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr := string(exitErr.Stderr)
+			if strings.Contains(stderr, "does not have any commits") ||
+				strings.Contains(stderr, "bad default revision") {
+				return []protocol.GitCommit{}, nil
+			}
+			return nil, fmt.Errorf("git log: %w (%s)", err, strings.TrimSpace(stderr))
+		}
+		return nil, fmt.Errorf("git log: %w", err)
+	}
+
+	body := string(out)
+	// Trim a trailing newline that some git versions append after the
+	// final record.
+	body = strings.TrimRight(body, "\n")
+	if body == "" {
+		return []protocol.GitCommit{}, nil
+	}
+	rawRecords := strings.Split(body, recordSep)
+	commits := make([]protocol.GitCommit, 0, len(rawRecords))
+	for _, rec := range rawRecords {
+		// Final record may have a trailing %x1e with no NUL after it
+		// (no record separator after the last commit). Strip the lone
+		// %x1e if present.
+		rec = strings.TrimSuffix(rec, "\x1e")
+		if rec == "" {
+			continue
+		}
+		fields := strings.SplitN(rec, fieldSep, 4)
+		if len(fields) < 4 {
+			continue
+		}
+		sha := fields[0]
+		short := sha
+		if len(short) > shortHashLen {
+			short = short[:shortHashLen]
+		}
+		commits = append(commits, protocol.GitCommit{
+			SHA:        sha,
+			ShortSHA:   short,
+			Subject:    fields[1],
+			AuthorName: fields[2],
+			AuthorDate: fields[3],
+		})
+	}
+	return commits, nil
 }

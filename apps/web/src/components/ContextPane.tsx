@@ -1,14 +1,10 @@
 import { useState } from 'react';
-import type {
-  AgentDTO,
-  CommandDTO,
-  ResultChunkDTO,
-  SessionDTO,
-} from '@argus/shared-types';
+import type { AgentDTO, CommandDTO, ResultChunkDTO, SessionDTO } from '@argus/shared-types';
 import { FolderTree, Terminal as TerminalIcon } from 'lucide-react';
 import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
 import { StatusDot } from './ui/StatusDot';
 import { FileTree } from './FileTree';
+import { GitLogPanel } from './GitLogPanel';
 import { TerminalPane } from './TerminalPane';
 import { relativeTime } from '../lib/utils';
 import { useSessionModel } from '../lib/usage';
@@ -32,14 +28,14 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
   // since the tooltip is now reliable (Radix, not native `title`).
   const model = useSessionModel(chunks);
   if (!agent) {
-    return <div className="h-full p-4 text-sm text-neutral-500">no agent selected</div>;
+    return <div className="h-full p-4 text-sm text-fg-tertiary">no agent selected</div>;
   }
   return (
-    <aside className="h-full w-full border-l border-neutral-900 bg-neutral-950 px-4 py-4 overflow-y-auto">
+    <aside className="h-full w-full border-l border-default bg-surface-0 px-4 py-4 overflow-y-auto">
       <Section title="Agent">
         <div className="flex items-center gap-2">
           <AgentTypeIcon type={agent.type} />
-          <span className="text-sm text-neutral-100">{agentTypeLabel(agent.type)}</span>
+          <span className="text-sm text-fg-primary">{agentTypeLabel(agent.type)}</span>
         </div>
         <KV k="machine" v={agent.machineName} />
         <KV
@@ -56,10 +52,7 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
           <KV
             k="working dir"
             v={
-              <span
-                title={agent.workingDir}
-                className="font-mono text-[11px] text-neutral-300"
-              >
+              <span title={agent.workingDir} className="font-mono text-[11px] text-fg-secondary">
                 {agent.workingDir}
               </span>
             }
@@ -71,9 +64,7 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
         />
         <KV
           k="last seen"
-          v={
-            <span title={agent.lastHeartbeatAt}>{relativeTime(agent.lastHeartbeatAt)} ago</span>
-          }
+          v={<span title={agent.lastHeartbeatAt}>{relativeTime(agent.lastHeartbeatAt)} ago</span>}
         />
       </Section>
 
@@ -95,7 +86,7 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
             <KV
               k="model"
               v={
-                <span title={model} className="font-mono text-[11px] text-neutral-300">
+                <span title={model} className="font-mono text-[11px] text-fg-secondary">
                   {model}
                 </span>
               }
@@ -107,30 +98,36 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
       {recentCommands.length > 0 && (
         <Section title="Recent turns">
           <ul className="space-y-1 mt-1">
-            {recentCommands.slice(-5).reverse().map((c) => (
-              <li
-                key={c.id}
-                className="text-[11px] text-neutral-400 flex items-center gap-1.5"
-              >
-                <span
-                  className={
-                    c.status === 'failed'
-                      ? 'text-red-400'
-                      : c.status === 'completed'
-                        ? 'text-emerald-400'
-                        : c.status === 'cancelled'
-                          ? 'text-neutral-500'
-                          : 'text-amber-300'
-                  }
-                >
-                  ●
-                </span>
-                <span className="truncate">{c.prompt ?? `(${c.kind})`}</span>
-              </li>
-            ))}
+            {recentCommands
+              .slice(-5)
+              .reverse()
+              .map((c) => (
+                <li key={c.id} className="text-[11px] text-fg-tertiary flex items-center gap-1.5">
+                  <span
+                    className={
+                      c.status === 'failed'
+                        ? 'text-red-400'
+                        : c.status === 'completed'
+                          ? 'text-emerald-400'
+                          : c.status === 'cancelled'
+                            ? 'text-fg-tertiary'
+                            : 'text-amber-300'
+                    }
+                  >
+                    ●
+                  </span>
+                  <span className="truncate">{c.prompt ?? `(${c.kind})`}</span>
+                </li>
+              ))}
           </ul>
         </Section>
       )}
+
+      {/* Git log sits just above Files: gives the user a glanceable
+          sense of "where is HEAD and what just happened" before they
+          dive into reading source. Self-hides for non-repo workingDirs
+          so non-git agents don't render a phantom empty section. */}
+      {agent.workingDir && <GitLogPanel key={agent.id} agentId={agent.id} />}
 
       {/* File tree sits above Terminal — it's read-only context that
           benefits from always being visible (user scans the workspace
@@ -149,9 +146,12 @@ export function ContextPane({ agent, session, recentCommands, chunks }: Props) {
       <CollapsibleSection
         title="Terminal"
         icon={<TerminalIcon className="h-3 w-3" />}
-        // Default-collapsed: spinning up xterm + opening a PTY costs CPU
-        // and a network round-trip we shouldn't pay until the user asks.
-        defaultOpen={false}
+        // Default-open: TerminalPane gates the actual xterm + PTY spin-up
+        // behind a user click on its inner "open" button — just expanding
+        // the section only renders the affordance, not the runtime — so
+        // there's no real cost to surfacing it by default. The previous
+        // collapsed default was over-cautious.
+        defaultOpen={true}
       >
         <TerminalPane key={agent.id} agent={agent} />
       </CollapsibleSection>
@@ -170,7 +170,7 @@ function Section({
 }) {
   return (
     <div className="mb-4">
-      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-neutral-600">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-fg-muted">
         {icon}
         <span>{title}</span>
       </div>
@@ -195,7 +195,7 @@ function CollapsibleSection({
     <div className="mb-4">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 text-[10px] uppercase tracking-widest text-neutral-600 hover:text-neutral-400"
+        className="flex w-full items-center gap-1.5 text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg-tertiary"
       >
         {icon}
         <span>{title}</span>
@@ -208,8 +208,8 @@ function CollapsibleSection({
 function KV({ k, v }: { k: string; v: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between text-xs">
-      <span className="text-neutral-500">{k}</span>
-      <span className="text-neutral-200 truncate max-w-[60%]">{v}</span>
+      <span className="text-fg-tertiary">{k}</span>
+      <span className="text-fg-primary truncate max-w-[60%]">{v}</span>
     </div>
   );
 }

@@ -36,8 +36,8 @@ type Props = {
   onClose: () => void;
 };
 
-const POPOVER_WIDTH = 288;        // 18rem (Tailwind w-72)
-const VIEWPORT_MARGIN = 8;        // keep this far from the edge
+const POPOVER_WIDTH = 288; // 18rem (Tailwind w-72)
+const VIEWPORT_MARGIN = 8; // keep this far from the edge
 
 export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
   const upsertAgent = useAgentStore((s) => s.upsert);
@@ -107,8 +107,7 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
     };
   }, [onClose]);
 
-  const canSubmit =
-    !!type.trim() && !!name.trim() && !submitting && machine.status === 'online';
+  const canSubmit = !!type.trim() && !!name.trim() && !submitting && machine.status === 'online';
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -134,12 +133,11 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
   return createPortal(
     <div
       ref={popRef}
-      className="fixed z-[60] rounded-lg border border-neutral-800 p-3 shadow-2xl"
+      className="fixed z-[60] rounded-lg border border-default bg-surface-1 p-3 shadow-2xl"
       style={{
         top: pos?.top ?? -9999,
         left: pos?.left ?? -9999,
         width: POPOVER_WIDTH,
-        backgroundColor: '#101012',
         // Hide until we've measured so the user doesn't see a flash
         // of the popover at the (-9999, -9999) staging coords.
         visibility: pos ? 'visible' : 'hidden',
@@ -148,28 +146,22 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
       aria-label={`Create agent on ${machine.name}`}
     >
       <div className="mb-2 flex items-center justify-between">
-        <div className="text-[11px] uppercase tracking-widest text-neutral-500">
+        <div className="text-[11px] uppercase tracking-widest text-fg-tertiary">
           new agent on{' '}
-          <span className="text-neutral-300 normal-case tracking-normal">
-            {machine.name}
-          </span>
+          <span className="text-fg-secondary normal-case tracking-normal">{machine.name}</span>
         </div>
-        <button
-          onClick={onClose}
-          className="text-neutral-600 hover:text-neutral-300"
-          title="close"
-        >
+        <button onClick={onClose} className="text-fg-muted hover:text-fg-secondary" title="close">
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
 
       {machine.status === 'offline' && (
-        <div className="mb-2 rounded bg-neutral-900 px-2 py-1.5 text-[11px] text-amber-300">
+        <div className="mb-2 rounded bg-surface-1 px-2 py-1.5 text-[11px] text-amber-300">
           this machine is offline; the agent will queue and start when the sidecar reconnects
         </div>
       )}
       {adapters.length === 0 && (
-        <div className="mb-2 rounded bg-neutral-900 px-2 py-1.5 text-[11px] text-neutral-400">
+        <div className="mb-2 rounded bg-surface-1 px-2 py-1.5 text-[11px] text-fg-tertiary">
           sidecar reported no installed adapters; you can still try a known type
         </div>
       )}
@@ -186,12 +178,16 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
                       key={a.type}
                       type="button"
                       onClick={() => setType(a.type)}
-                      title={a.version ? `${agentTypeLabel(a.type)} · ${a.version}` : agentTypeLabel(a.type)}
+                      title={
+                        a.version
+                          ? `${agentTypeLabel(a.type)} · ${a.version}`
+                          : agentTypeLabel(a.type)
+                      }
                       className={cn(
                         'inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs ring-1 transition-colors',
                         selected
-                          ? 'bg-neutral-800 text-neutral-100 ring-neutral-600'
-                          : 'bg-neutral-900 text-neutral-400 ring-neutral-800 hover:bg-neutral-800/70 hover:text-neutral-200',
+                          ? 'bg-surface-2 text-fg-primary ring-fg-muted'
+                          : 'bg-surface-1 text-fg-tertiary ring-default hover:bg-surface-2/70 hover:text-fg-primary',
                       )}
                     >
                       <AgentTypeIcon type={a.type} />
@@ -201,7 +197,7 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
                 })}
               </div>
               {type && (
-                <div className="mt-1 text-[11px] text-neutral-500">
+                <div className="mt-1 text-[11px] text-fg-tertiary">
                   {adapters.find((a) => a.type === type)?.version ?? ''}
                 </div>
               )}
@@ -212,10 +208,10 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
                 value={type}
                 onChange={(e) => setType(e.target.value)}
                 placeholder="claude-code, codex, cursor-cli, …"
-                className="w-full rounded bg-neutral-900 px-2 py-1.5 font-mono text-xs text-neutral-100 outline-none ring-1 ring-neutral-800 focus:ring-neutral-600"
+                className="w-full rounded bg-surface-1 px-2 py-1.5 font-mono text-xs text-fg-primary outline-none ring-1 ring-default focus:ring-fg-muted"
               />
               {type && (
-                <div className="mt-1 flex items-center gap-1.5 text-[11px] text-neutral-500">
+                <div className="mt-1 flex items-center gap-1.5 text-[11px] text-fg-tertiary">
                   <AgentTypeIcon type={type} />
                   <span>{agentTypeLabel(type)}</span>
                 </div>
@@ -230,7 +226,7 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
             onChange={(e) => setName(e.target.value)}
             placeholder="api-bot, frontend, …"
             autoFocus
-            className="w-full rounded bg-neutral-900 px-2 py-1.5 text-sm text-neutral-100 outline-none ring-1 ring-neutral-800 focus:ring-neutral-600"
+            className="w-full rounded bg-surface-1 px-2 py-1.5 text-sm text-fg-primary outline-none ring-1 ring-default focus:ring-fg-muted"
           />
         </Field>
 
@@ -239,11 +235,11 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
             value={workingDir}
             onChange={(e) => setWorkingDir(e.target.value)}
             placeholder="/Users/you/projects/foo"
-            className="w-full rounded bg-neutral-900 px-2 py-1.5 text-sm text-neutral-100 outline-none ring-1 ring-neutral-800 focus:ring-neutral-600"
+            className="w-full rounded bg-surface-1 px-2 py-1.5 text-sm text-fg-primary outline-none ring-1 ring-default focus:ring-fg-muted"
           />
         </Field>
 
-        <label className="flex items-center gap-2 px-0.5 py-1 text-xs text-neutral-300 cursor-pointer">
+        <label className="flex items-center gap-2 px-0.5 py-1 text-xs text-fg-secondary cursor-pointer">
           <input
             type="checkbox"
             checked={supportsTerminal}
@@ -254,16 +250,14 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
         </label>
 
         {err && (
-          <div className="rounded bg-red-950/40 px-2 py-1.5 text-[11px] text-red-300">
-            {err}
-          </div>
+          <div className="rounded bg-red-950/40 px-2 py-1.5 text-[11px] text-red-300">{err}</div>
         )}
 
         <div className="flex items-center justify-end gap-2 pt-1">
           <button
             type="button"
             onClick={onClose}
-            className="rounded px-2.5 py-1 text-xs text-neutral-400 hover:text-neutral-200"
+            className="rounded px-2.5 py-1 text-xs text-fg-tertiary hover:text-fg-primary"
           >
             cancel
           </button>
@@ -274,7 +268,7 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
               'inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs',
               canSubmit
                 ? 'bg-emerald-500 text-neutral-950 hover:bg-emerald-400'
-                : 'bg-neutral-800 text-neutral-500',
+                : 'bg-surface-2 text-fg-tertiary',
             )}
           >
             {submitting && <Loader2 className="h-3 w-3 animate-spin" />}
@@ -290,7 +284,7 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-[10px] uppercase tracking-widest text-neutral-500">
+      <span className="mb-1 block text-[10px] uppercase tracking-widest text-fg-tertiary">
         {label}
       </span>
       {children}

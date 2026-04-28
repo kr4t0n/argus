@@ -8,24 +8,25 @@ import {
 import { cn } from '../lib/utils';
 
 /**
- * Bottom-right toast stack for sidecar self-updates. One row per
- * machine update + an optional batch-progress strip on top.
+ * Sidecar self-update toast items (BatchToast + per-machine UpdateToasts).
+ * Returns a Fragment so the toast host in `App.tsx` can stack these
+ * alongside other toast types in one shared bottom-right column instead
+ * of every toast type rendering its own overlapping fixed wrapper.
  *
  * Auto-dismiss rules:
  *   - completed (or manual) → dismiss after 6s
  *   - failed → keep until the user closes it (the message is
- *     usually actionable and shouldn't disappear before they
- *     read it)
+ *     usually actionable and shouldn't disappear before they read it)
  *
- * Mounted once at the app shell so it survives route changes
- * (a per-machine update stays visible even after the user
- * navigates away from the machine pane).
+ * The "dismiss all" affordance is exported separately as
+ * `SidecarUpdateBatchDismissAll` so the host can render it at the very
+ * bottom of the combined stack regardless of what other toast types
+ * are above it.
  */
 export function SidecarUpdateToasts() {
   const updates = useSidecarUpdateStore((s) => s.updates);
   const batch = useSidecarUpdateStore((s) => s.batch);
   const dismiss = useSidecarUpdateStore((s) => s.dismiss);
-  const dismissBatch = useSidecarUpdateStore((s) => s.dismissBatch);
 
   const visible = Object.values(updates)
     .filter((u) => !u.dismissed)
@@ -35,69 +36,69 @@ export function SidecarUpdateToasts() {
     const timers: number[] = [];
     for (const u of visible) {
       if (u.phase === 'completed') {
-        timers.push(
-          window.setTimeout(() => dismiss(u.machineId), 6_000),
-        );
+        timers.push(window.setTimeout(() => dismiss(u.machineId), 6_000));
       }
     }
     return () => timers.forEach(window.clearTimeout);
   }, [visible, dismiss]);
 
-  if (visible.length === 0 && (!batch || batch.dismissed)) return null;
-
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col gap-2">
+    <>
       {batch && !batch.dismissed && <BatchToast />}
       {visible.map((u) => (
         <UpdateToast key={u.machineId} update={u} onDismiss={() => dismiss(u.machineId)} />
       ))}
-      {batch && !batch.dismissed && (
-        <button
-          onClick={dismissBatch}
-          className="pointer-events-auto self-end text-[10px] uppercase tracking-widest text-neutral-600 hover:text-neutral-300"
-        >
-          dismiss all
-        </button>
-      )}
-    </div>
+    </>
   );
 }
 
-function UpdateToast({
-  update,
-  onDismiss,
-}: {
-  update: MachineUpdate;
-  onDismiss: () => void;
-}) {
+/**
+ * "Dismiss all" affordance for an in-flight bulk sidecar update.
+ * Lives at the very bottom of the combined toast stack so it doesn't
+ * get sandwiched between toast types as new ones are added. Renders
+ * nothing when no batch is active.
+ */
+export function SidecarUpdateBatchDismissAll() {
+  const batch = useSidecarUpdateStore((s) => s.batch);
+  const dismissBatch = useSidecarUpdateStore((s) => s.dismissBatch);
+  if (!batch || batch.dismissed) return null;
+  return (
+    <button
+      onClick={dismissBatch}
+      className="pointer-events-auto self-end text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg-secondary"
+    >
+      dismiss all
+    </button>
+  );
+}
+
+function UpdateToast({ update, onDismiss }: { update: MachineUpdate; onDismiss: () => void }) {
   const { Icon, color } = phaseChrome(update.phase);
   return (
     <div
       className={cn(
-        'pointer-events-auto rounded-lg border bg-neutral-950 px-3 py-2.5 shadow-lg shadow-black/40',
+        'pointer-events-auto rounded-lg border bg-surface-0 px-3 py-2.5 shadow-lg shadow-black/40',
         update.phase === 'failed'
           ? 'border-red-500/40'
           : update.phase === 'completed'
             ? 'border-emerald-500/30'
-            : 'border-neutral-800',
+            : 'border-default',
       )}
     >
       <div className="flex items-start gap-2">
         <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', color)} />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 text-[12px] font-medium text-neutral-100">
+          <div className="flex items-center gap-2 text-[12px] font-medium text-fg-primary">
             <span className="truncate">{update.machineName}</span>
-            <span className="ml-auto text-[10px] font-normal text-neutral-500">
+            <span className="ml-auto text-[10px] font-normal text-fg-tertiary">
               {phaseLabel(update.phase, update.restartMode)}
             </span>
           </div>
-          <div className="mt-0.5 truncate text-[11px] text-neutral-400">
-            {phaseDetail(update)}
-          </div>
+          <div className="mt-0.5 truncate text-[11px] text-fg-tertiary">{phaseDetail(update)}</div>
         </div>
         <button
           onClick={onDismiss}
-          className="shrink-0 text-neutral-600 hover:text-neutral-200"
+          className="shrink-0 text-fg-muted hover:text-fg-primary"
           title="dismiss"
         >
           <X className="h-3.5 w-3.5" />
@@ -113,15 +114,14 @@ function BatchToast() {
   const completed = batch.plan.filter((p) => p.status === 'completed').length;
   const failed = batch.plan.filter((p) => p.status === 'failed').length;
   const skipped = batch.plan.filter(
-    (p) =>
-      p.status === 'skipped-offline' || p.status === 'skipped-already-current',
+    (p) => p.status === 'skipped-offline' || p.status === 'skipped-already-current',
   ).length;
   const inProgress = batch.plan.find((p) => p.status === 'in-progress');
   const queued = batch.plan.filter((p) => p.status === 'queued').length;
   const allDone = !inProgress && queued === 0;
 
   return (
-    <div className="pointer-events-auto rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2.5 shadow-lg shadow-black/40">
+    <div className="pointer-events-auto rounded-lg border border-default bg-surface-0 px-3 py-2.5 shadow-lg shadow-black/40">
       <div className="flex items-center gap-2">
         {allDone ? (
           failed > 0 ? (
@@ -132,21 +132,19 @@ function BatchToast() {
         ) : (
           <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
         )}
-        <div className="text-[12px] font-medium text-neutral-100">
-          Updating fleet
-        </div>
-        <div className="ml-auto text-[10px] text-neutral-500">
+        <div className="text-[12px] font-medium text-fg-primary">Updating fleet</div>
+        <div className="ml-auto text-[10px] text-fg-tertiary">
           {completed}/{total - skipped} done
           {failed > 0 && ` · ${failed} failed`}
           {skipped > 0 && ` · ${skipped} skipped`}
         </div>
       </div>
       {inProgress && (
-        <div className="mt-1.5 truncate text-[11px] text-neutral-400">
+        <div className="mt-1.5 truncate text-[11px] text-fg-tertiary">
           {inProgress.machineName} · {inProgress.fromVersion} → latest
         </div>
       )}
-      <div className="mt-2 flex h-1 gap-px overflow-hidden rounded-full bg-neutral-900">
+      <div className="mt-2 flex h-1 gap-px overflow-hidden rounded-full bg-surface-1">
         {batch.plan.map((p) => (
           <div
             key={p.machineId}
@@ -155,10 +153,9 @@ function BatchToast() {
               p.status === 'completed' && 'bg-emerald-500/70',
               p.status === 'failed' && 'bg-red-500/70',
               p.status === 'in-progress' && 'bg-blue-500/70',
-              p.status === 'queued' && 'bg-neutral-700/50',
-              (p.status === 'skipped-offline' ||
-                p.status === 'skipped-already-current') &&
-                'bg-neutral-800',
+              p.status === 'queued' && 'bg-default-strong/50',
+              (p.status === 'skipped-offline' || p.status === 'skipped-already-current') &&
+                'bg-surface-2',
             )}
             title={`${p.machineName}: ${p.status}${p.error ? ` — ${p.error}` : ''}`}
           />
@@ -176,7 +173,10 @@ function phaseChrome(phase: UpdatePhase): {
     case 'pending':
     case 'started':
     case 'downloaded':
-      return { Icon: phase === 'downloaded' ? RefreshCw : Loader2, color: 'text-blue-400 animate-spin' };
+      return {
+        Icon: phase === 'downloaded' ? RefreshCw : Loader2,
+        color: 'text-blue-400 animate-spin',
+      };
     case 'completed':
       return { Icon: CheckCircle2, color: 'text-emerald-400' };
     case 'failed':
@@ -184,10 +184,7 @@ function phaseChrome(phase: UpdatePhase): {
   }
 }
 
-function phaseLabel(
-  phase: UpdatePhase,
-  restartMode?: 'self' | 'supervisor' | 'manual',
-): string {
+function phaseLabel(phase: UpdatePhase, restartMode?: 'self' | 'supervisor' | 'manual'): string {
   switch (phase) {
     case 'pending':
       return 'queued';

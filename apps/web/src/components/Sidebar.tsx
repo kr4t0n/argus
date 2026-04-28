@@ -26,6 +26,7 @@ import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
 import { CreateAgentPopover } from './CreateAgentPopover';
 import { BulkUpdateModal } from './BulkUpdateModal';
 import { MachineIcon } from './MachineIcon';
+import { ThemeToggle } from './ThemeToggle';
 import { api } from '../lib/api';
 
 export function Sidebar() {
@@ -61,23 +62,24 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="h-full w-full flex flex-col border-r border-neutral-900 bg-neutral-950">
-      <div className="h-12 shrink-0 px-4 border-b border-neutral-900 flex items-center justify-between">
+    <aside className="h-full w-full flex flex-col border-r border-default bg-surface-0">
+      <div className="h-12 shrink-0 px-4 border-b border-default flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
           <span className="text-sm font-semibold tracking-tight">Argus</span>
         </div>
         <div className="flex items-center gap-3">
+          <ThemeToggle />
           <button
             onClick={toggleSidebar}
-            className="text-neutral-500 hover:text-neutral-200 transition-colors"
+            className="text-fg-tertiary hover:text-fg-primary transition-colors"
             title="hide sidebar"
           >
             <PanelLeftClose className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={logout}
-            className="text-neutral-500 hover:text-neutral-200 transition-colors"
+            className="text-fg-tertiary hover:text-fg-primary transition-colors"
             title={user?.email ?? 'sign out'}
           >
             <LogOut className="h-3.5 w-3.5" />
@@ -87,7 +89,7 @@ export function Sidebar() {
 
       <div className="flex-1 overflow-y-auto py-2 px-1">
         {order.length === 0 && (
-          <div className="px-4 py-6 text-xs text-neutral-500">
+          <div className="px-4 py-6 text-xs text-fg-tertiary">
             No agents yet — hover a machine below and click{' '}
             <Plus className="inline h-3 w-3 -mt-0.5" /> to create one.
           </div>
@@ -123,7 +125,7 @@ export function Sidebar() {
               {!showArchivedAgents && hiddenArchivedAgentCount > 0 && (
                 <button
                   onClick={toggleShowArchivedAgents}
-                  className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-[11px] rounded-md text-neutral-600 hover:text-neutral-300 hover:bg-neutral-900 transition-colors"
+                  className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-[11px] rounded-md text-fg-muted hover:text-fg-secondary hover:bg-surface-1 transition-colors"
                 >
                   <Archive className="h-3 w-3" />
                   {hiddenArchivedAgentCount} archived agent
@@ -133,7 +135,7 @@ export function Sidebar() {
               {showArchivedAgents && order.some((id) => agents[id]?.archivedAt) && (
                 <button
                   onClick={toggleShowArchivedAgents}
-                  className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-[11px] rounded-md text-emerald-400 hover:text-emerald-300 hover:bg-neutral-900 transition-colors"
+                  className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-[11px] rounded-md text-emerald-400 hover:text-emerald-300 hover:bg-surface-1 transition-colors"
                 >
                   <Archive className="h-3 w-3" />
                   hide archived agents
@@ -168,9 +170,9 @@ function MachineList() {
 
   if (order.length === 0) {
     return (
-      <div className="shrink-0 px-4 py-3 text-[11px] text-neutral-600">
+      <div className="shrink-0 px-4 py-3 text-[11px] text-fg-muted">
         no machines connected. Run{' '}
-        <code className="rounded bg-neutral-900 px-1 py-0.5 text-neutral-400">
+        <code className="rounded bg-surface-1 px-1 py-0.5 text-fg-tertiary">
           argus-sidecar init
         </code>{' '}
         on a host.
@@ -181,12 +183,8 @@ function MachineList() {
   return (
     <div className="shrink-0 py-1.5 px-1 max-h-[40%] overflow-y-auto">
       <div className="group flex items-center px-3 py-1">
-        <span className="text-[10px] uppercase tracking-widest text-neutral-600">
-          machines
-        </span>
-        <span className="ml-1.5 text-[10px] text-neutral-700">
-          ({order.length})
-        </span>
+        <span className="text-[10px] uppercase tracking-widest text-fg-muted">machines</span>
+        <span className="ml-1.5 text-[10px] text-fg-muted">({order.length})</span>
         <span className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
           <MachinesHeaderMenu />
         </span>
@@ -245,13 +243,13 @@ function MachinesHeaderMenu() {
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="rounded p-0.5 text-neutral-500 hover:bg-neutral-900 hover:text-neutral-200"
+        className="rounded p-0.5 text-fg-tertiary hover:bg-surface-1 hover:text-fg-primary"
         title="machine actions"
       >
         <MoreVertical className="h-3.5 w-3.5" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 w-56 overflow-hidden rounded-md border border-neutral-800 bg-neutral-950 shadow-lg">
+        <div className="absolute right-0 top-full z-30 mt-1 w-56 overflow-hidden rounded-md border border-default bg-surface-0 shadow-lg">
           <button
             onClick={() => {
               setOpen(false);
@@ -260,7 +258,7 @@ function MachinesHeaderMenu() {
             disabled={batchInFlight}
             className={cn(
               'flex w-full items-center gap-2 px-3 py-2 text-left text-xs',
-              'text-neutral-200 hover:bg-neutral-900',
+              'text-fg-primary hover:bg-surface-1',
               'disabled:cursor-not-allowed disabled:opacity-40',
             )}
             title={batchInFlight ? 'a bulk update is already in progress' : undefined}
@@ -300,48 +298,46 @@ function MachineRow({
     <div
       ref={anchorRef}
       className={cn(
-        'group flex items-center gap-1.5 rounded-md px-2.5 py-1.5 transition-colors hover:bg-neutral-900',
-        active && 'bg-neutral-900',
+        'group flex items-center gap-1.5 rounded-md px-2.5 py-1.5 transition-colors hover:bg-surface-1',
+        active && 'bg-surface-1',
         offline && 'opacity-60',
       )}
     >
-      <MachineIcon machineId={machine.id} className="text-neutral-500" />
-      <Link
-        to={`/machines/${machine.id}`}
-        className="min-w-0 flex-1 outline-none"
-      >
+      <MachineIcon machineId={machine.id} className="text-fg-tertiary" />
+      <Link to={`/machines/${machine.id}`} className="min-w-0 flex-1 outline-none">
         <div
-          className="truncate text-[12px] text-neutral-200"
+          className="truncate text-[12px] text-fg-primary"
           title={`${machine.hostname} · ${machine.os}/${machine.arch} · sidecar ${machine.sidecarVersion}`}
         >
           {machine.name}
         </div>
-        <div className="truncate text-[10px] text-neutral-600">
-          {machine.agentCount} agent{machine.agentCount === 1 ? '' : 's'} ·{' '}
-          {adapters.length} adapter{adapters.length === 1 ? '' : 's'}
+        <div className="truncate text-[10px] text-fg-muted">
+          {machine.agentCount} agent{machine.agentCount === 1 ? '' : 's'} · {adapters.length}{' '}
+          adapter{adapters.length === 1 ? '' : 's'}
         </div>
       </Link>
-      <StatusDot status={machine.status === 'online' ? 'online' : 'offline'} />
       <button
         onClick={(e) => {
           e.stopPropagation();
           onOpenPopover();
         }}
         className={cn(
-          'ml-0.5 flex items-center text-neutral-500 transition-opacity hover:text-neutral-200',
+          'ml-0.5 flex items-center text-fg-tertiary transition-opacity hover:text-fg-primary',
           popoverOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
         )}
         title="create agent on this machine"
       >
         <Plus className="h-3.5 w-3.5" />
       </button>
+      {/* Liveness dot — pinned to the rightmost slot so it reads as a
+          persistent status indicator. Mirrors the AgentRow layout
+          (hover actions sit to its left). */}
+      <span className="flex items-center pr-2">
+        <StatusDot status={machine.status === 'online' ? 'online' : 'offline'} />
+      </span>
 
       {popoverOpen && (
-        <CreateAgentPopover
-          machine={machine}
-          anchor={anchorRef}
-          onClose={onClosePopover}
-        />
+        <CreateAgentPopover machine={machine} anchor={anchorRef} onClose={onClosePopover} />
       )}
     </div>
   );
@@ -425,9 +421,7 @@ function SessionRow({ session, active }: { session: SessionDTO; active: boolean 
       {!archived && session.status === 'failed' && (
         <span className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />
       )}
-      {archived && (
-        <Archive className="h-3 w-3 shrink-0 text-neutral-600" />
-      )}
+      {archived && <Archive className="h-3 w-3 shrink-0 text-fg-muted" />}
       {editing ? (
         <input
           ref={inputRef}
@@ -444,13 +438,13 @@ function SessionRow({ session, active }: { session: SessionDTO; active: boolean 
               cancel();
             }
           }}
-          className="min-w-0 flex-1 rounded bg-neutral-800 px-1 py-0.5 text-sm text-neutral-100 outline-none ring-1 ring-neutral-700 focus:ring-neutral-500"
+          className="min-w-0 flex-1 rounded bg-surface-2 px-1 py-0.5 text-sm text-fg-primary outline-none ring-1 ring-default-strong focus:ring-fg-tertiary"
         />
       ) : (
         <span
           className={cn(
             'truncate',
-            archived ? 'text-neutral-500 italic' : 'text-neutral-300',
+            archived ? 'text-fg-tertiary italic' : 'text-fg-secondary',
             saving && 'opacity-60',
           )}
           onDoubleClick={startEdit}
@@ -468,7 +462,7 @@ function SessionRow({ session, active }: { session: SessionDTO; active: boolean 
         <>
           <button
             onClick={startEdit}
-            className="text-neutral-600 opacity-0 transition group-hover:opacity-100 hover:text-neutral-200"
+            className="text-fg-muted opacity-0 transition group-hover:opacity-100 hover:text-fg-primary"
             title="rename session"
           >
             <Pencil className="h-3 w-3" />
@@ -477,26 +471,22 @@ function SessionRow({ session, active }: { session: SessionDTO; active: boolean 
             onClick={toggleArchive}
             disabled={busy}
             className={cn(
-              'text-neutral-600 opacity-0 transition group-hover:opacity-100 hover:text-neutral-200 disabled:opacity-40',
-              archived && 'opacity-100 text-neutral-500',
+              'text-fg-muted opacity-0 transition group-hover:opacity-100 hover:text-fg-primary disabled:opacity-40',
+              archived && 'opacity-100 text-fg-tertiary',
             )}
             title={archived ? 'restore from archive' : 'archive session'}
           >
-            {archived ? (
-              <ArchiveRestore className="h-3 w-3" />
-            ) : (
-              <Archive className="h-3 w-3" />
-            )}
+            {archived ? <ArchiveRestore className="h-3 w-3" /> : <Archive className="h-3 w-3" />}
           </button>
         </>
       )}
-      <span className="text-[10px] text-neutral-600">{relativeTime(session.updatedAt)}</span>
+      <span className="text-[10px] text-fg-muted">{relativeTime(session.updatedAt)}</span>
     </span>
   );
 
   const rowClass = cn(
-    'group flex items-center justify-between rounded-md px-2 py-1 text-sm transition-colors hover:bg-neutral-900',
-    active && 'bg-neutral-900 text-neutral-50',
+    'group flex items-center justify-between rounded-md px-2 py-1 text-sm transition-colors hover:bg-surface-1',
+    active && 'bg-surface-1 text-fg-primary',
     archived && 'opacity-70',
   );
 
@@ -540,9 +530,7 @@ function AgentRow({
 }) {
   const archived = !!agent.archivedAt;
   const [busy, setBusy] = useState(false);
-  const visibleSessions = showArchived
-    ? sessions
-    : sessions.filter((s) => !s.archivedAt);
+  const visibleSessions = showArchived ? sessions : sessions.filter((s) => !s.archivedAt);
   const hiddenArchivedCount = sessions.length - visibleSessions.length;
   const hasArchived = sessions.some((s) => !!s.archivedAt);
 
@@ -567,7 +555,7 @@ function AgentRow({
     <div className="mb-1">
       <div
         className={cn(
-          'group flex items-stretch rounded-md hover:bg-neutral-900 transition-colors',
+          'group flex items-stretch rounded-md hover:bg-surface-1 transition-colors',
           archived && 'opacity-70',
         )}
       >
@@ -576,21 +564,19 @@ function AgentRow({
           className="flex flex-1 min-w-0 items-center gap-1.5 px-2.5 py-1.5"
         >
           <ChevronRight
-            className={cn(
-              'h-3 w-3 text-neutral-500 transition-transform',
-              open && 'rotate-90',
-            )}
+            className={cn('h-3 w-3 text-fg-tertiary transition-transform', open && 'rotate-90')}
           />
           <AgentTypeIcon type={agent.type} />
           <span
             className={cn(
               'text-sm truncate',
-              archived ? 'text-neutral-400 italic' : 'text-neutral-200',
+              archived ? 'text-fg-tertiary italic' : 'text-fg-primary',
             )}
-            title={archived ? `${agentTypeLabel(agent.type)} (archived)` : agentTypeLabel(agent.type)}
+            title={
+              archived ? `${agentTypeLabel(agent.type)} (archived)` : agentTypeLabel(agent.type)
+            }
           >
-            {agent.name || agent.id}{' '}
-            <span className="text-neutral-500">· {agent.machineName}</span>
+            {agent.name || agent.id} <span className="text-fg-tertiary">· {agent.machineName}</span>
           </span>
         </button>
         {/* New-session action, hover-only. Hidden when the agent is
@@ -601,7 +587,7 @@ function AgentRow({
               e.stopPropagation();
               onNewSession();
             }}
-            className="flex items-center px-1.5 text-neutral-600 opacity-0 transition-colors hover:text-neutral-200 group-hover:opacity-100"
+            className="flex items-center px-1.5 text-fg-muted opacity-0 transition-colors hover:text-fg-primary group-hover:opacity-100"
             title="new session"
           >
             <Plus className="h-3.5 w-3.5" />
@@ -612,10 +598,10 @@ function AgentRow({
           onClick={toggleAgentArchive}
           disabled={busy}
           className={cn(
-            'flex items-center px-1.5 text-neutral-600 transition-colors disabled:opacity-40',
+            'flex items-center px-1.5 text-fg-muted transition-colors disabled:opacity-40',
             archived
-              ? 'opacity-100 text-neutral-500 hover:text-neutral-200'
-              : 'opacity-0 group-hover:opacity-100 hover:text-neutral-200',
+              ? 'opacity-100 text-fg-tertiary hover:text-fg-primary'
+              : 'opacity-0 group-hover:opacity-100 hover:text-fg-primary',
           )}
           title={archived ? 'restore agent' : 'archive agent (hides from sidebar)'}
         >
@@ -640,12 +626,10 @@ function AgentRow({
               // The eye toggle is always visible whenever there's something
               // archived to look at OR the user has it currently on; otherwise
               // it stays hover-only so the row reads cleanly at rest.
-              (showArchived || hasArchived)
-                ? 'opacity-100'
-                : 'opacity-0 group-hover:opacity-100',
+              showArchived || hasArchived ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
               showArchived
                 ? 'text-emerald-400 hover:text-emerald-300'
-                : 'text-neutral-600 hover:text-neutral-300',
+                : 'text-fg-muted hover:text-fg-secondary',
             )}
             title={
               showArchived
@@ -655,11 +639,7 @@ function AgentRow({
                   : 'show archived sessions'
             }
           >
-            {showArchived ? (
-              <Eye className="h-3.5 w-3.5" />
-            ) : (
-              <EyeOff className="h-3.5 w-3.5" />
-            )}
+            {showArchived ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
           </button>
         )}
         {/* Liveness dot — pinned to the rightmost slot so it reads as a
@@ -671,7 +651,7 @@ function AgentRow({
       </div>
 
       {open && (
-        <div className="ml-5 mt-0.5 border-l border-neutral-900 pl-2 space-y-0.5">
+        <div className="ml-5 mt-0.5 border-l border-default pl-2 space-y-0.5">
           {visibleSessions.map((s) => (
             <SessionRow key={s.id} session={s} active={activeSessionId === s.id} />
           ))}

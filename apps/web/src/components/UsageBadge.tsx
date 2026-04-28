@@ -32,7 +32,7 @@ export function UsageBadge({
 
   return (
     <Tooltip content={<UsageBreakdown u={total} />}>
-      <span className="inline-flex shrink-0 cursor-default items-center gap-1 rounded-md border border-neutral-800 bg-neutral-900/60 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-neutral-400">
+      <span className="inline-flex shrink-0 cursor-default items-center gap-1 rounded-md border border-default bg-surface-1/60 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-fg-tertiary">
         {inOut}
       </span>
     </Tooltip>
@@ -75,8 +75,8 @@ function UsageBreakdown({ u }: { u: TokenUsage }) {
 function RowCells({ k, v }: { k: string; v: string }) {
   return (
     <>
-      <span className="text-neutral-500">{k}</span>
-      <span className="text-right text-neutral-100">{v}</span>
+      <span className="text-fg-tertiary">{k}</span>
+      <span className="text-right text-fg-primary">{v}</span>
     </>
   );
 }

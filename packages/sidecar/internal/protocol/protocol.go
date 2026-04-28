@@ -229,6 +229,67 @@ type FSReadRequestCommand struct {
 // FSReadMaxBytes mirrors FS_READ_MAX_BYTES on the TS side. Keep in sync.
 const FSReadMaxBytes = 1_048_576
 
+// GitLogRequestCommand asks the sidecar for the most recent N commits
+// reachable from the agent's workingDir HEAD. Same control-plane RPC
+// shape as fs-list / fs-read: server publishes on the per-machine
+// control stream, sidecar replies on the lifecycle stream with a
+// matching GitLogResponseEvent.
+type GitLogRequestCommand struct {
+	Kind      string `json:"kind"` // "git-log"
+	RequestID string `json:"requestId"`
+	AgentID   string `json:"agentId"`
+	// Limit caps how many commits to return (1-based). 0 or negative
+	// means "use the sidecar's default" (50). The server caps at 200
+	// at the controller layer.
+	Limit int   `json:"limit,omitempty"`
+	TS    int64 `json:"ts"`
+}
+
+// GitCommit is one row in the dashboard's "Recent commits" panel.
+// Subject is the first line of the commit message; body/parents/diff
+// stats are intentionally omitted so the wire payload stays small for
+// the panel's list rendering. Click-throughs (full message, file list)
+// would be a follow-up RPC, not a heavier payload here.
+type GitCommit struct {
+	SHA        string `json:"sha"`        // full 40-char hash
+	ShortSHA   string `json:"shortSha"`   // 7-char display form
+	Subject    string `json:"subject"`    // first line of the message
+	AuthorName string `json:"authorName"` // committer display name
+	AuthorDate string `json:"authorDate"` // ISO 8601 (RFC3339), author time
+}
+
+// GitLogResponseEvent is the sidecar's reply to GitLogRequestCommand.
+// On success, Commits is populated and Error is empty. On failure
+// (workingDir not a git repo, `git` missing on PATH, exec failure)
+// Error carries a human-readable reason and Commits is nil.
+//
+// Git carries the same GitStatus snapshot that FSListResponseEvent
+// returns, so a panel rendering the log doesn't have to round-trip a
+// parallel fs-list just to label its header. Cheap to produce — one
+// extra .git/HEAD read alongside the `git log` shell-out.
+type GitLogResponseEvent struct {
+	Kind      string      `json:"kind"` // "git-log-response"
+	MachineID string      `json:"machineId"`
+	AgentID   string      `json:"agentId"`
+	RequestID string      `json:"requestId"`
+	Commits   []GitCommit `json:"commits,omitempty"`
+	Git       *GitStatus  `json:"git,omitempty"`
+	Error     string      `json:"error,omitempty"`
+	TS        int64       `json:"ts"`
+}
+
+// GitChangedEvent is the unsolicited push from the sidecar's per-agent
+// secondary fsnotify watcher when the repo's HEAD or a ref under
+// refs/heads/ moved (commit, checkout, reset, etc). The dashboard's
+// GitLogPanel uses this to refresh without polling. Debounced on the
+// sidecar side; rapid changes (rebase) collapse into a single event.
+type GitChangedEvent struct {
+	Kind      string `json:"kind"` // "git-changed"
+	MachineID string `json:"machineId"`
+	AgentID   string `json:"agentId"`
+	TS        int64  `json:"ts"`
+}
+
 type FSListResponseEvent struct {
 	Kind      string    `json:"kind"` // "fs-list-response"
 	MachineID string    `json:"machineId"`
@@ -308,16 +369,28 @@ type AgentDestroyedEvent struct {
 	TS        int64  `json:"ts"`
 }
 
+// CloneSpec rides on Command when Kind == "clone-session": tells the
+// sidecar's per-adapter Cloner to fork the CLI's on-disk session for
+// SrcExternalID into a new session whose id will be reported back via
+// SessionExternalIDEvent on the result stream. TurnIndex is 1-based; the
+// adapter must truncate at a safe boundary (before the (N+1)th user
+// turn so a dangling tool_use isn't left without its tool_result).
+type CloneSpec struct {
+	SrcExternalID string `json:"srcExternalId"`
+	TurnIndex     int    `json:"turnIndex"`
+}
+
 type Command struct {
 	ID         string         `json:"id"`
 	AgentID    string         `json:"agentId"`
 	SessionID  string         `json:"sessionId"`
 	ExternalID string         `json:"externalId,omitempty"`
-	Kind       string         `json:"kind"` // "execute" | "cancel"
+	Kind       string         `json:"kind"` // "execute" | "cancel" | "clone-session"
 	Prompt     string         `json:"prompt,omitempty"`
 	Context    map[string]any `json:"context,omitempty"`
 	TimeoutMS  int            `json:"timeoutMs,omitempty"`
 	Options    map[string]any `json:"options,omitempty"`
+	Clone      *CloneSpec     `json:"clone,omitempty"`
 }
 
 type ResultChunk struct {
@@ -340,6 +413,20 @@ type SessionExternalIDEvent struct {
 	CommandID  string `json:"commandId"`
 	ExternalID string `json:"externalId"`
 	TS         int64  `json:"ts"`
+}
+
+// SessionCloneFailedEvent is emitted when handleCloneSession can't
+// complete the on-disk fork (adapter doesn't implement Cloner, source
+// missing, IO error, etc). Mirror of SessionCloneFailedEvent in
+// packages/shared-types/src/protocol.ts. The server forwards this to
+// the owning user's WS room so the dashboard can toast; the new
+// Session row is left intact (history is still reproduced; just no
+// externalId means the next prompt starts a fresh CLI conversation).
+type SessionCloneFailedEvent struct {
+	Kind      string `json:"kind"` // "session-clone-failed"
+	SessionID string `json:"sessionId"`
+	Reason    string `json:"reason"`
+	TS        int64  `json:"ts"`
 }
 
 // ─────────── Terminal protocol ───────────

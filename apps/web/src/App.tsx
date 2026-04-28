@@ -7,10 +7,16 @@ import { useAgentStore } from './stores/agentStore';
 import { useMachineStore } from './stores/machineStore';
 import { useSessionStore } from './stores/sessionStore';
 import { useSidecarUpdateStore } from './stores/sidecarUpdateStore';
+import { useCloneFailureStore } from './stores/cloneFailureStore';
 import { ensureSocket, resetSocket, subscribeHandler } from './lib/ws';
 import { api } from './lib/api';
 import { migrateLocalMachineIconsToServer } from './lib/migrateMachineIcons';
-import { SidecarUpdateToasts } from './components/SidecarUpdateToasts';
+import {
+  SidecarUpdateBatchDismissAll,
+  SidecarUpdateToasts,
+} from './components/SidecarUpdateToasts';
+import { SessionCloneFailedToasts } from './components/SessionCloneFailedToasts';
+import { useApplyTheme } from './lib/theme';
 
 function ProtectedRoutes() {
   const token = useAuthStore((s) => s.token);
@@ -26,6 +32,10 @@ function ProtectedRoutes() {
 }
 
 export default function App() {
+  // Keep <html>'s dark class in sync with the persisted theme +
+  // OS preference. Runs once at mount; idempotent.
+  useApplyTheme();
+
   const bootstrap = useAuthStore((s) => s.bootstrap);
   const token = useAuthStore((s) => s.token);
   const loadAgents = useAgentStore((s) => s.load);
@@ -77,19 +87,25 @@ export default function App() {
       onCommandCreated: upsertCommand,
       onCommandUpdated: upsertCommand,
       onChunk: appendChunk,
-      onSidecarUpdateStarted: (p) =>
-        updateStore.setStarted(p.machineId, p.fromVersion),
+      onSessionCloneFailed: (p) => {
+        // Look the session up at push time so the toast can show the
+        // human title even if the row hasn't fully hydrated yet (the
+        // session:created event may still be in flight; fall back to
+        // the id so we never render an empty label).
+        const sess = useSessionStore.getState().entries[p.sessionId]?.session;
+        useCloneFailureStore.getState().push({
+          sessionId: p.sessionId,
+          sessionTitle: sess?.title ?? p.sessionId.slice(0, 8),
+          reason: p.reason,
+          startedAt: Date.now(),
+        });
+      },
+      onSidecarUpdateStarted: (p) => updateStore.setStarted(p.machineId, p.fromVersion),
       onSidecarUpdateDownloaded: (p) =>
-        updateStore.setDownloaded(
-          p.machineId,
-          p.fromVersion,
-          p.toVersion,
-          p.restartMode,
-        ),
+        updateStore.setDownloaded(p.machineId, p.fromVersion, p.toVersion, p.restartMode),
       onSidecarUpdateCompleted: (p) =>
         updateStore.setCompleted(p.machineId, p.fromVersion, p.toVersion),
-      onSidecarUpdateFailed: (p) =>
-        updateStore.setFailed(p.machineId, p.fromVersion, p.reason),
+      onSidecarUpdateFailed: (p) => updateStore.setFailed(p.machineId, p.fromVersion, p.reason),
       onSidecarUpdateBatchProgress: (p) =>
         useSidecarUpdateStore.getState().updateBatch(p.batchId, p.plan),
       onConnect: async () => {
@@ -121,7 +137,17 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/*" element={<ProtectedRoutes />} />
       </Routes>
-      <SidecarUpdateToasts />
+      {/* Single host for every transient bottom-right toast type so
+          stacks combine into one column instead of overlapping at the
+          same screen coords. Toast components return Fragments of items
+          and inherit layout from this wrapper. The "dismiss all"
+          affordance for sidecar-update batches lives last so it always
+          sits at the bottom edge of the combined stack. */}
+      <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col gap-2">
+        <SidecarUpdateToasts />
+        <SessionCloneFailedToasts />
+        <SidecarUpdateBatchDismissAll />
+      </div>
     </>
   );
 }
