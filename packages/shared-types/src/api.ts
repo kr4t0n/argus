@@ -285,3 +285,21 @@ export interface SidecarUpdateBatchAccepted {
   batchId: string;
   plan: SidecarUpdatePlanEntry[];
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// User views
+// ─────────────────────────────────────────────────────────────────────
+
+/** One bucket in the activity heatmap — `count` commands the user
+ *  sent on this UTC day. `date` is `YYYY-MM-DD`. */
+export interface ActivityDay {
+  date: string;
+  count: number;
+}
+
+/** REST response for `GET /me/activity`. Days are dense (zero-days
+ *  included) and ordered ascending; the client renders them as a
+ *  GitHub-style 7-row × N-column grid. */
+export interface UserActivityResponse {
+  days: ActivityDay[];
+}

@@ -27,6 +27,7 @@ import { CreateAgentPopover } from './CreateAgentPopover';
 import { BulkUpdateModal } from './BulkUpdateModal';
 import { MachineIcon } from './MachineIcon';
 import { ThemeToggle } from './ThemeToggle';
+import { UserRow } from './UserRow';
 import { api } from '../lib/api';
 
 export function Sidebar() {
@@ -147,6 +148,7 @@ export function Sidebar() {
       </div>
 
       <MachineList />
+      <UserRow />
     </aside>
   );
 }
