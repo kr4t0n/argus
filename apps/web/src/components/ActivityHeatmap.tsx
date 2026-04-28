@@ -33,13 +33,25 @@ type Props = {
  * SVG. Hover tooltip uses the native `<title>` element which gives
  * us free a11y + keyboardless tooltips without a Radix dependency.
  */
+// Pixel height of the month-labels row sitting above the grid. 14 px
+// fits a 10 px text comfortably with a hair of breathing room.
+const MONTH_LABEL_H = 14;
+
+// Min column gap between two month labels. Months span ~4 weeks, but
+// the calendar can put two month transitions within 1-2 columns of
+// each other (e.g. when a month starts mid-week). Skipping labels
+// closer than this prevents text collisions.
+const MIN_LABEL_GAP_COLS = 3;
+
 export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
   const grid = useMemo(() => buildGrid(days), [days]);
   const max = useMemo(() => days.reduce((m, d) => Math.max(m, d.count), 0), [days]);
   const total = useMemo(() => days.reduce((m, d) => m + d.count, 0), [days]);
+  const months = useMemo(() => buildMonthLabels(days), [days]);
 
   const width = grid.weeks * cell + (grid.weeks - 1) * gap;
-  const height = 7 * cell + 6 * gap;
+  const gridH = 7 * cell + 6 * gap;
+  const height = MONTH_LABEL_H + gridH;
 
   return (
     <div className="flex flex-col gap-2">
@@ -66,29 +78,80 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
           role="img"
           aria-label={`Activity heatmap: ${total} commands in the last year, peak ${max} on a single day.`}
         >
-          {grid.cells.map((c) => (
-            <rect
-              key={`${c.col}-${c.row}`}
-              x={c.col * (cell + gap)}
-              y={c.row * (cell + gap)}
-              width={cell}
-              height={cell}
-              rx={2}
-              ry={2}
-              className={c.day ? bucketClass(bucketize(c.day.count)) : ''}
-              fill={c.day ? undefined : 'transparent'}
+          {/* Month labels along the top. The text origin (`y`) sits at
+              the BASELINE — placing the baseline at MONTH_LABEL_H - 3
+              leaves a 3 px gutter between the label and the first row
+              of cells. */}
+          {months.map((m) => (
+            <text
+              key={m.col}
+              x={m.col * (cell + gap)}
+              y={MONTH_LABEL_H - 3}
+              className="fill-fg-tertiary"
+              fontSize={10}
             >
-              {c.day && (
-                <title>
-                  {c.day.count} command{c.day.count === 1 ? '' : 's'} · {formatDayLabel(c.day.date)}
-                </title>
-              )}
-            </rect>
+              {m.text}
+            </text>
           ))}
+          {/* Grid cells, offset down by MONTH_LABEL_H so they sit under
+              the label row. */}
+          <g transform={`translate(0, ${MONTH_LABEL_H})`}>
+            {grid.cells.map((c) => (
+              <rect
+                key={`${c.col}-${c.row}`}
+                x={c.col * (cell + gap)}
+                y={c.row * (cell + gap)}
+                width={cell}
+                height={cell}
+                rx={2}
+                ry={2}
+                className={c.day ? bucketClass(bucketize(c.day.count)) : ''}
+                fill={c.day ? undefined : 'transparent'}
+              >
+                {c.day && (
+                  <title>
+                    {c.day.count} command{c.day.count === 1 ? '' : 's'} ·{' '}
+                    {formatDayLabel(c.day.date)}
+                  </title>
+                )}
+              </rect>
+            ))}
+          </g>
         </svg>
       </div>
     </div>
   );
+}
+
+type MonthLabel = { col: number; text: string };
+
+/**
+ * Walk the day window once, recording the column where each new month
+ * starts. We use the locale-short name (`Apr`, `May`, …) — toolitp
+ * already gives the absolute date on hover, so the axis labels stay
+ * compact. Labels closer than MIN_LABEL_GAP_COLS columns are skipped
+ * to avoid text collisions where a month boundary falls within a
+ * couple of weeks of another.
+ */
+function buildMonthLabels(days: ActivityDay[]): MonthLabel[] {
+  if (days.length === 0) return [];
+  const first = parseUtcDay(days[0]!.date);
+  const leading = first.getUTCDay();
+  const out: MonthLabel[] = [];
+  let prevMonth = -1;
+  for (let i = 0; i < days.length; i++) {
+    const d = parseUtcDay(days[i]!.date);
+    const m = d.getUTCMonth();
+    if (m === prevMonth) continue;
+    prevMonth = m;
+    const col = Math.floor((leading + i) / 7);
+    if (out.length > 0 && col - out[out.length - 1]!.col < MIN_LABEL_GAP_COLS) continue;
+    out.push({
+      col,
+      text: d.toLocaleDateString(undefined, { month: 'short' }),
+    });
+  }
+  return out;
 }
 
 type GridCell = {
@@ -166,9 +229,14 @@ function bucketize(n: number): 0 | 1 | 2 | 3 | 4 {
 function bucketClass(b: number): string {
   switch (b) {
     case 0:
-      // Empty cells use surface-2 in light, dimmer in dark — same
-      // contrast against the page in either theme.
-      return 'fill-surface-2 dark:fill-surface-1';
+      // Zero-day cells need to be VISIBLE — they're the grid that
+      // makes the chart legible — but quiet enough not to compete
+      // with the active days. surface-1 / surface-2 were too close
+      // to the surrounding card bg (which is itself surface-1) and
+      // the cells effectively disappeared. neutral-200 / neutral-800
+      // give ~5-8% contrast against the card in their respective
+      // themes — visible without shouting.
+      return 'fill-neutral-200 dark:fill-neutral-800';
     case 1:
       return 'fill-emerald-200 dark:fill-emerald-900';
     case 2:
