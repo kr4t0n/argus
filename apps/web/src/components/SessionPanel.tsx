@@ -32,7 +32,6 @@ export function SessionPanel() {
   const entry = useSessionStore((s) => (sessionId ? s.entries[sessionId] : undefined));
   const loadSession = useSessionStore((s) => s.loadSession);
   const loadOlder = useSessionStore((s) => s.loadOlder);
-  const backfill = useSessionStore((s) => s.backfill);
   const agent = useAgentStore((s) =>
     entry?.session ? s.agents[entry.session.agentId] : undefined,
   );
@@ -54,32 +53,27 @@ export function SessionPanel() {
     setError(null);
 
     // We unsubscribe from the session room on navigation away, so any
-    // chunks / command-status updates that land for THIS session while
-    // the user was viewing another one go unobserved by the WS layer.
-    // Server still persists them; we just need to ask. `loadSession`
-    // short-circuits when an entry is already `loaded`, so we have to
-    // run a tail-gap backfill ourselves on re-entry — same primitive
-    // App.tsx uses on WS reconnect.
+    // chunks / command-updates that land for THIS session while the
+    // user was viewing another one are missed by the WS layer. On
+    // re-entry, force `loadSession` to refetch the tail window
+    // instead of returning the (now-stale) cached entry.
+    //
+    // Why force-refetch and not a partial-seq backfill: the chunk
+    // `seq` is per-command (each command's chunks restart at 1), but
+    // the store's `lastSeq` is the global max across all chunks. A
+    // newer command's seqs (1..N) are all <= that max, so a
+    // `WHERE seq > lastSeq` filter would silently drop the new
+    // command's chunks entirely — which is exactly what made the
+    // activity pill disappear in the prior attempt at this fix.
     const wasLoaded = !!useSessionStore.getState().entries[sessionId]?.loaded;
-    loadSession(sessionId)
-      .then(async (entry) => {
-        if (!wasLoaded) return;
-        try {
-          const { commands, chunks } = await api.getSessionChunks(sessionId, entry.lastSeq);
-          if (commands.length || chunks.length) {
-            backfill(sessionId, commands, chunks);
-          }
-        } catch {
-          /* visible state stays as it was; user can still hard-refresh */
-        }
-      })
+    loadSession(sessionId, { force: wasLoaded })
       .catch((err) => setError(err.message ?? 'failed to load session'))
       .finally(() => setLoading(false));
     joinSession(sessionId);
     return () => {
       leaveSession(sessionId);
     };
-  }, [sessionId, loadSession, backfill]);
+  }, [sessionId, loadSession]);
 
   const running = useMemo(() => {
     if (!entry) return false;
