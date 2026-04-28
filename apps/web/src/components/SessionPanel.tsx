@@ -56,17 +56,27 @@ export function SessionPanel() {
     // chunks / command-updates that land for THIS session while the
     // user was viewing another one are missed by the WS layer. On
     // re-entry, force `loadSession` to refetch the tail window
-    // instead of returning the (now-stale) cached entry.
+    // instead of returning the (now-stale) cached entry — but only
+    // when the cache still THINKS something is running. The
+    // App-level agent:status handler silently prefetches sessions
+    // whose agent flipped busy → online, so by the time the user
+    // navigates back the cached entry is usually already fresh
+    // (running=false) and we can render instantly with no loading
+    // flash. The local force-refetch is the fallback for the case
+    // where the user re-enters before the prefetch has completed,
+    // or before the agent flipped status (e.g. machine offline).
     //
     // Why force-refetch and not a partial-seq backfill: the chunk
     // `seq` is per-command (each command's chunks restart at 1), but
     // the store's `lastSeq` is the global max across all chunks. A
     // newer command's seqs (1..N) are all <= that max, so a
     // `WHERE seq > lastSeq` filter would silently drop the new
-    // command's chunks entirely — which is exactly what made the
-    // activity pill disappear in the prior attempt at this fix.
-    const wasLoaded = !!useSessionStore.getState().entries[sessionId]?.loaded;
-    loadSession(sessionId, { force: wasLoaded })
+    // command's chunks entirely — which made the activity pill
+    // disappear in the first version of this fix.
+    const cached = useSessionStore.getState().entries[sessionId];
+    const cachedRunning =
+      cached?.commands.some((c) => ['pending', 'sent', 'running'].includes(c.status)) ?? false;
+    loadSession(sessionId, { force: !!cached?.loaded && cachedRunning })
       .catch((err) => setError(err.message ?? 'failed to load session'))
       .finally(() => setLoading(false));
     joinSession(sessionId);

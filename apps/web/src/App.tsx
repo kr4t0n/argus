@@ -76,7 +76,31 @@ export default function App() {
       onMachineStatus: (p) => setMachineStatus(p.id, p.status),
       onMachineRemoved: (p) => removeMachine(p.id),
       onAgentUpsert: upsertAgent,
-      onAgentStatus: (p) => setAgentStatus(p.id, p.status),
+      onAgentStatus: (p) => {
+        // Prefetch trigger: when an agent transitions busy → not-busy,
+        // any session on that agent whose cached state still says
+        // "running" almost certainly just finished. Force-refresh
+        // those sessions silently in the background so the user sees
+        // the fresh state instantly when they navigate back, rather
+        // than the brief loading flash from SessionPanel's mount
+        // effect catching up. Read prev status BEFORE updating so we
+        // can detect the transition.
+        const prev = useAgentStore.getState().agents[p.id]?.status;
+        setAgentStatus(p.id, p.status);
+        if (prev === 'busy' && p.status !== 'busy') {
+          const ss = useSessionStore.getState();
+          for (const e of Object.values(ss.entries)) {
+            if (e.session.agentId !== p.id) continue;
+            const stillRunning = e.commands.some((c) =>
+              ['pending', 'sent', 'running'].includes(c.status),
+            );
+            if (!stillRunning) continue;
+            void ss.loadSession(e.session.id, { force: true }).catch(() => {
+              /* silent — re-entry will retry */
+            });
+          }
+        }
+      },
       onAgentRemoved: (p) => removeAgent(p.id),
       onSessionCreated: upsertSession,
       onSessionUpdated: upsertSession,
