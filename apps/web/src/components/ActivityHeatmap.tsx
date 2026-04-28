@@ -98,7 +98,7 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
           {[0, 1, 2, 3, 4].map((b) => (
             <span
               key={b}
-              className={cn('inline-block rounded-sm', bucketClass(b))}
+              className={cn('inline-block rounded-sm', bucketBgClass(b))}
               style={{ width: cell, height: cell }}
             />
           ))}
@@ -139,7 +139,7 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
                 height={effectiveCell}
                 rx={2}
                 ry={2}
-                className={c.day ? bucketClass(bucketize(c.day.count)) : ''}
+                className={c.day ? bucketFillClass(bucketize(c.day.count)) : ''}
                 fill={c.day ? undefined : 'transparent'}
               >
                 {c.day && (
@@ -260,7 +260,17 @@ function bucketize(n: number): 0 | 1 | 2 | 3 | 4 {
   return 4;
 }
 
-function bucketClass(b: number): string {
+/**
+ * Two parallel bucket-class helpers because Tailwind's `fill-*` and
+ * `bg-*` are different utilities targeting different CSS properties:
+ *   - SVG <rect>s honor `fill-*` (sets the `fill` property).
+ *   - HTML <span>s honor `bg-*` (sets `background-color`); a `fill-*`
+ *     class on a span is a no-op, which made the legend swatches
+ *     all render colorless.
+ * Keep the two arrays in lockstep so the legend chip and the matching
+ * cell in the grid show the exact same shade.
+ */
+function bucketFillClass(b: number): string {
   switch (b) {
     case 0:
       // Zero-day cells need to be VISIBLE — they're the grid that
@@ -280,5 +290,21 @@ function bucketClass(b: number): string {
     case 4:
     default:
       return 'fill-emerald-600 dark:fill-emerald-300';
+  }
+}
+
+function bucketBgClass(b: number): string {
+  switch (b) {
+    case 0:
+      return 'bg-neutral-200 dark:bg-neutral-800';
+    case 1:
+      return 'bg-emerald-200 dark:bg-emerald-900';
+    case 2:
+      return 'bg-emerald-400 dark:bg-emerald-700';
+    case 3:
+      return 'bg-emerald-500 dark:bg-emerald-500';
+    case 4:
+    default:
+      return 'bg-emerald-600 dark:bg-emerald-300';
   }
 }
