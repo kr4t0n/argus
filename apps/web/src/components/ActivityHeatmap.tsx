@@ -68,10 +68,21 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
     return () => ro.disconnect();
   }, []);
 
-  const effectiveCell =
+  // Solve for cell size: weeks * cell + (weeks - 1) * gap == wrapWidth
+  // → cell = (wrapWidth - (weeks - 1) * gap) / weeks. Kept fractional
+  // so the grid spans the container exactly (Math.floor previously
+  // left ~39 px of slack for a 726 px container at 53 weeks). Rects
+  // already render with anti-aliased rounded corners (rx=2), so
+  // sub-pixel widths blend in cleanly. Falls back to the `cell` prop
+  // until ResizeObserver fires the first measurement, and treats
+  // `cell` as a minimum so a narrow viewport horizontally scrolls
+  // (via the wrapper's overflow-x-auto) instead of crushing cells
+  // below 11 px.
+  const fitted =
     grid.weeks > 0 && wrapWidth > 0
-      ? Math.max(cell, Math.floor((wrapWidth - (grid.weeks - 1) * gap) / grid.weeks))
+      ? (wrapWidth - (grid.weeks - 1) * gap) / grid.weeks
       : cell;
+  const effectiveCell = Math.max(cell, fitted);
   const width = grid.weeks * effectiveCell + (grid.weeks - 1) * gap;
   const gridH = 7 * effectiveCell + 6 * gap;
   const height = MONTH_LABEL_H + gridH;
@@ -94,7 +105,7 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
           <span>more</span>
         </div>
       </div>
-      <div ref={wrapRef} className="w-full">
+      <div ref={wrapRef} className="w-full overflow-x-auto">
         <svg
           width={width}
           height={height}
