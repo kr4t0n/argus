@@ -69,6 +69,18 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
     return () => ro.disconnect();
   }, []);
 
+  // Hover tooltip state. Coordinates are anchored to the wrapper div
+  // (NOT the viewport) so positioning math is independent of page
+  // scroll. We track only what's currently hovered — a single shared
+  // <Tooltip> renders above the grid rather than spawning 365 Radix
+  // Tooltip instances. Native `<title>` is kept on each cell for
+  // screen-reader accessibility / keyboardless fallback.
+  const [hover, setHover] = useState<{
+    x: number;
+    y: number;
+    day: ActivityDay;
+  } | null>(null);
+
   // Solve for cell size: weeks * cell + (weeks - 1) * gap == wrapWidth
   // → cell = (wrapWidth - (weeks - 1) * gap) / weeks. Kept fractional
   // so the grid spans the container exactly (Math.floor previously
@@ -106,7 +118,7 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
           <span>more</span>
         </div>
       </div>
-      <div ref={wrapRef} className="w-full overflow-x-auto">
+      <div ref={wrapRef} className="relative w-full overflow-x-auto">
         <svg
           width={width}
           height={height}
@@ -131,28 +143,87 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
           {/* Grid cells, offset down by MONTH_LABEL_H so they sit under
               the label row. */}
           <g transform={`translate(0, ${MONTH_LABEL_H})`}>
-            {grid.cells.map((c) => (
-              <rect
-                key={`${c.col}-${c.row}`}
-                x={c.col * (effectiveCell + gap)}
-                y={c.row * (effectiveCell + gap)}
-                width={effectiveCell}
-                height={effectiveCell}
-                rx={2}
-                ry={2}
-                fill={c.day ? palette[bucketize(c.day.count)] : 'transparent'}
-              >
-                {c.day && (
+            {grid.cells.map((c) => {
+              if (!c.day) {
+                return (
+                  <rect
+                    key={`${c.col}-${c.row}`}
+                    x={c.col * (effectiveCell + gap)}
+                    y={c.row * (effectiveCell + gap)}
+                    width={effectiveCell}
+                    height={effectiveCell}
+                    rx={2}
+                    ry={2}
+                    fill="transparent"
+                  />
+                );
+              }
+              const day = c.day;
+              const x = c.col * (effectiveCell + gap);
+              const y = c.row * (effectiveCell + gap);
+              return (
+                <rect
+                  key={`${c.col}-${c.row}`}
+                  x={x}
+                  y={y}
+                  width={effectiveCell}
+                  height={effectiveCell}
+                  rx={2}
+                  ry={2}
+                  fill={palette[bucketize(day.count)]}
+                  onMouseEnter={() =>
+                    setHover({
+                      // Tooltip anchor: top-center of the cell, with
+                      // MONTH_LABEL_H added because the <g> shifts the
+                      // grid down by that amount.
+                      x: x + effectiveCell / 2,
+                      y: y + MONTH_LABEL_H,
+                      day,
+                    })
+                  }
+                  onMouseLeave={() =>
+                    // Drop only if this is still the hovered cell —
+                    // covers the case where the next cell's enter
+                    // event has already overwritten state.
+                    setHover((h) => (h?.day === day ? null : h))
+                  }
+                >
                   <title>
-                    {c.day.count} command{c.day.count === 1 ? '' : 's'} ·{' '}
-                    {formatDayLabel(c.day.date)}
+                    {day.count} command{day.count === 1 ? '' : 's'} ·{' '}
+                    {formatDayLabel(day.date)}
                   </title>
-                )}
-              </rect>
-            ))}
+                </rect>
+              );
+            })}
           </g>
         </svg>
+        {hover && <HoverTooltip x={hover.x} y={hover.y} day={hover.day} />}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Floating tooltip rendered above the hovered cell. Positioned
+ * absolutely within the heatmap wrapper (which is `position:
+ * relative`), centered on `x` and translating itself up via
+ * `translate(-50%, -100%)` so the bottom edge sits just above the
+ * cell. `pointer-events-none` so it can't itself trap mouse moves
+ * and flicker the hover state.
+ */
+function HoverTooltip({ x, y, day }: { x: number; y: number; day: ActivityDay }) {
+  return (
+    <div
+      className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md border border-default bg-surface-1 px-2 py-1 text-[11px] text-fg-primary shadow-md"
+      style={{ left: x, top: y - 4 }}
+    >
+      <span className="font-medium">{day.count}</span>
+      <span className="text-fg-tertiary">
+        {' '}
+        command{day.count === 1 ? '' : 's'}
+      </span>
+      <span className="text-fg-tertiary"> · </span>
+      <span>{formatDayLabel(day.date)}</span>
     </div>
   );
 }
