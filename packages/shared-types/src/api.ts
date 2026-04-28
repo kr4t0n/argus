@@ -9,6 +9,7 @@ import type {
   ResultChunk,
   SessionStatus,
 } from './protocol';
+import type { TokenUsage } from './usage';
 
 export interface AuthUser {
   id: string;
@@ -284,4 +285,31 @@ export interface SidecarUpdatePlanEntry {
 export interface SidecarUpdateBatchAccepted {
   batchId: string;
   plan: SidecarUpdatePlanEntry[];
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// User views
+// ─────────────────────────────────────────────────────────────────────
+
+/** One bucket in the activity heatmap — `count` commands the user
+ *  sent on this UTC day. `date` is `YYYY-MM-DD`. */
+export interface ActivityDay {
+  date: string;
+  count: number;
+}
+
+/** REST response for `GET /me/activity`. Days are dense (zero-days
+ *  included) and ordered ascending; the client renders them as a
+ *  GitHub-style 7-row × N-column grid. */
+export interface UserActivityResponse {
+  days: ActivityDay[];
+}
+
+/** REST response for `GET /me/usage`. Lifetime totals across every
+ *  session the user owns, parsed per-adapter on the server using
+ *  the same `parseUsage` the dashboard's per-session UsageBadge
+ *  uses — so the totals never disagree with what the user sees
+ *  while looking at any single session. */
+export interface UserUsageResponse {
+  usage: TokenUsage;
 }

@@ -1,0 +1,388 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import type { ActivityDay } from '@argus/shared-types';
+import { useResolvedTheme } from '../lib/theme';
+
+type Props = {
+  /** Dense, ascending-by-date list. The first day's day-of-week
+   *  determines where in the leading column the run starts (the
+   *  preceding cells are rendered as empty placeholders). */
+  days: ActivityDay[];
+  /** Minimum side of each square in pixels. Cells expand from this
+   *  baseline to fill the container's available width — see the
+   *  ResizeObserver block below. Default 11 matches GitHub's
+   *  contributions chart density. */
+  cell?: number;
+  /** Pixel gap between cells. */
+  gap?: number;
+};
+
+/**
+ * GitHub-style activity heatmap.
+ *
+ * Layout:
+ *   - 7 rows, one per weekday (Sun..Sat by default — the same layout
+ *     GitHub uses on github.com).
+ *   - N columns, one per ISO week. The first column may have leading
+ *     empty cells if the window's first day isn't a Sunday; the last
+ *     column may have trailing empty cells if today isn't a Saturday.
+ *     Empty cells are rendered transparent so the grid stays square.
+ *   - Cell color is bucketed by count via a fixed quintile scale
+ *     (empty / 1 / 2-3 / 4-6 / 7+ commands). Tuned for a single-user
+ *     dashboard where the daily counts are typically small; tweaks
+ *     are easy if the distribution skews heavier later.
+ *
+ * No third-party calendar/heatmap library — the grid is ~80 lines of
+ * SVG. Hover tooltip uses the native `<title>` element which gives
+ * us free a11y + keyboardless tooltips without a Radix dependency.
+ */
+// Pixel height of the month-labels row sitting above the grid. 14 px
+// fits a 10 px text comfortably with a hair of breathing room.
+const MONTH_LABEL_H = 14;
+
+// Min column gap between two month labels. Months span ~4 weeks, but
+// the calendar can put two month transitions within 1-2 columns of
+// each other (e.g. when a month starts mid-week). Skipping labels
+// closer than this prevents text collisions.
+const MIN_LABEL_GAP_COLS = 3;
+
+export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
+  const grid = useMemo(() => buildGrid(days), [days]);
+  const max = useMemo(() => days.reduce((m, d) => Math.max(m, d.count), 0), [days]);
+  const total = useMemo(() => days.reduce((m, d) => m + d.count, 0), [days]);
+  const months = useMemo(() => buildMonthLabels(days), [days]);
+  const thresholds = useMemo(() => computeThresholds(days), [days]);
+  const palette = bucketPalette(useResolvedTheme());
+
+  // Measure the wrapping element and grow each cell so the grid spans
+  // the container's full width. Falls back to the `cell` prop when
+  // the measurement hasn't landed yet (initial paint before the
+  // observer fires) or when the container is narrower than the
+  // baseline grid would naturally need.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [wrapWidth, setWrapWidth] = useState(0);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      if (entry) setWrapWidth(entry.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Hover tooltip state. We capture the hovered cell's BoundingClient-
+  // Rect (viewport coords) and portal the tooltip into document.body
+  // — that bypasses the wrapper's `overflow-x-auto`, which would
+  // otherwise clip the tooltip whenever it sits above a cell in the
+  // top row (the wrapper has no vertical headroom). Native <title>
+  // stays on each rect for screen-reader / keyboardless fallback.
+  const [hover, setHover] = useState<{
+    rect: DOMRect;
+    day: ActivityDay;
+  } | null>(null);
+
+  // Solve for cell size: weeks * cell + (weeks - 1) * gap == wrapWidth
+  // → cell = (wrapWidth - (weeks - 1) * gap) / weeks. Kept fractional
+  // so the grid spans the container exactly (Math.floor previously
+  // left ~39 px of slack for a 726 px container at 53 weeks). Rects
+  // already render with anti-aliased rounded corners (rx=2), so
+  // sub-pixel widths blend in cleanly. Falls back to the `cell` prop
+  // until ResizeObserver fires the first measurement, and treats
+  // `cell` as a minimum so a narrow viewport horizontally scrolls
+  // (via the wrapper's overflow-x-auto) instead of crushing cells
+  // below 11 px.
+  const fitted =
+    grid.weeks > 0 && wrapWidth > 0
+      ? (wrapWidth - (grid.weeks - 1) * gap) / grid.weeks
+      : cell;
+  const effectiveCell = Math.max(cell, fitted);
+  const width = grid.weeks * effectiveCell + (grid.weeks - 1) * gap;
+  const gridH = 7 * effectiveCell + 6 * gap;
+  const height = MONTH_LABEL_H + gridH;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between">
+        <div className="text-[11px] uppercase tracking-widest text-fg-muted">
+          {total.toLocaleString()} command{total === 1 ? '' : 's'} in the last year
+        </div>
+        <div className="flex items-center gap-1.5 text-[10px] text-fg-muted">
+          <span>less</span>
+          {[0, 1, 2, 3, 4].map((b) => (
+            <span
+              key={b}
+              className="inline-block rounded-sm"
+              style={{ width: cell, height: cell, backgroundColor: palette[b] }}
+            />
+          ))}
+          <span>more</span>
+        </div>
+      </div>
+      <div ref={wrapRef} className="relative w-full overflow-x-auto">
+        <svg
+          width={width}
+          height={height}
+          role="img"
+          aria-label={`Activity heatmap: ${total} commands in the last year, peak ${max} on a single day.`}
+        >
+          {/* Month labels along the top. The text origin (`y`) sits at
+              the BASELINE — placing the baseline at MONTH_LABEL_H - 3
+              leaves a 3 px gutter between the label and the first row
+              of cells. */}
+          {months.map((m) => (
+            <text
+              key={m.col}
+              x={m.col * (effectiveCell + gap)}
+              y={MONTH_LABEL_H - 3}
+              className="fill-fg-tertiary"
+              fontSize={10}
+            >
+              {m.text}
+            </text>
+          ))}
+          {/* Grid cells, offset down by MONTH_LABEL_H so they sit under
+              the label row. */}
+          <g transform={`translate(0, ${MONTH_LABEL_H})`}>
+            {grid.cells.map((c) => {
+              if (!c.day) {
+                return (
+                  <rect
+                    key={`${c.col}-${c.row}`}
+                    x={c.col * (effectiveCell + gap)}
+                    y={c.row * (effectiveCell + gap)}
+                    width={effectiveCell}
+                    height={effectiveCell}
+                    rx={2}
+                    ry={2}
+                    fill="transparent"
+                  />
+                );
+              }
+              const day = c.day;
+              const x = c.col * (effectiveCell + gap);
+              const y = c.row * (effectiveCell + gap);
+              return (
+                <rect
+                  key={`${c.col}-${c.row}`}
+                  x={x}
+                  y={y}
+                  width={effectiveCell}
+                  height={effectiveCell}
+                  rx={2}
+                  ry={2}
+                  fill={palette[bucketize(day.count, thresholds)]}
+                  onMouseEnter={(e) =>
+                    setHover({
+                      rect: (e.currentTarget as SVGRectElement).getBoundingClientRect(),
+                      day,
+                    })
+                  }
+                  onMouseLeave={() =>
+                    // Drop only if this is still the hovered cell —
+                    // covers the case where the next cell's enter
+                    // event has already overwritten state.
+                    setHover((h) => (h?.day === day ? null : h))
+                  }
+                >
+                  <title>
+                    {day.count} command{day.count === 1 ? '' : 's'} ·{' '}
+                    {formatDayLabel(day.date)}
+                  </title>
+                </rect>
+              );
+            })}
+          </g>
+        </svg>
+        {hover && <HoverTooltip rect={hover.rect} day={hover.day} />}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Floating tooltip rendered above the hovered cell. Portaled into
+ * <body> with `position: fixed` (viewport coords) so the wrapper's
+ * `overflow-x-auto` clipping context can't cut the tooltip off
+ * when a cell sits in the top row.
+ *
+ * Positioning math: the cell's getBoundingClientRect gives us
+ * viewport coords for the cell's edges. We center horizontally on
+ * the cell's mid-x, anchor the tooltip's BOTTOM 4 px above the
+ * cell's TOP, and let CSS `translate(-50%, -100%)` do the
+ * "above-and-centered" placement. `pointer-events-none` so the
+ * tooltip never traps mouse moves and flickers the hover state
+ * between cells.
+ */
+function HoverTooltip({ rect, day }: { rect: DOMRect; day: ActivityDay }) {
+  return createPortal(
+    <div
+      className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md border border-default bg-surface-1 px-2 py-1 text-[11px] text-fg-primary shadow-md"
+      style={{ left: rect.left + rect.width / 2, top: rect.top - 4 }}
+    >
+      <span className="font-medium">{day.count}</span>
+      <span className="text-fg-tertiary"> command{day.count === 1 ? '' : 's'}</span>
+      <span className="text-fg-tertiary"> · </span>
+      <span>{formatDayLabel(day.date)}</span>
+    </div>,
+    document.body,
+  );
+}
+
+type MonthLabel = { col: number; text: string };
+
+/**
+ * Walk the day window once, recording the column where each new month
+ * starts. We use the locale-short name (`Apr`, `May`, …) — toolitp
+ * already gives the absolute date on hover, so the axis labels stay
+ * compact. Labels closer than MIN_LABEL_GAP_COLS columns are skipped
+ * to avoid text collisions where a month boundary falls within a
+ * couple of weeks of another.
+ */
+function buildMonthLabels(days: ActivityDay[]): MonthLabel[] {
+  if (days.length === 0) return [];
+  const first = parseUtcDay(days[0]!.date);
+  const leading = first.getUTCDay();
+  const out: MonthLabel[] = [];
+  let prevMonth = -1;
+  for (let i = 0; i < days.length; i++) {
+    const d = parseUtcDay(days[i]!.date);
+    const m = d.getUTCMonth();
+    if (m === prevMonth) continue;
+    prevMonth = m;
+    const col = Math.floor((leading + i) / 7);
+    if (out.length > 0 && col - out[out.length - 1]!.col < MIN_LABEL_GAP_COLS) continue;
+    out.push({
+      col,
+      text: d.toLocaleDateString(undefined, { month: 'short' }),
+    });
+  }
+  return out;
+}
+
+type GridCell = {
+  col: number;
+  row: number;
+  /** null for the leading / trailing placeholders that pad out the
+   *  first / last column to a full week. */
+  day: ActivityDay | null;
+};
+
+type Grid = {
+  weeks: number;
+  cells: GridCell[];
+};
+
+function buildGrid(days: ActivityDay[]): Grid {
+  if (days.length === 0) return { weeks: 0, cells: [] };
+  const first = parseUtcDay(days[0]!.date);
+  const leading = first.getUTCDay(); // 0 = Sunday
+  const totalRows = leading + days.length;
+  const weeks = Math.ceil(totalRows / 7);
+
+  const cells: GridCell[] = [];
+  // Leading placeholders so the column starts at Sunday.
+  for (let i = 0; i < leading; i++) {
+    cells.push({ col: 0, row: i, day: null });
+  }
+  for (let i = 0; i < days.length; i++) {
+    const idx = leading + i;
+    cells.push({ col: Math.floor(idx / 7), row: idx % 7, day: days[i]! });
+  }
+  // Trailing placeholders not strictly needed — `<svg>`'s viewport
+  // is sized off `weeks`, so missing rects are simply transparent.
+  return { weeks, cells };
+}
+
+function parseUtcDay(iso: string): Date {
+  // iso is YYYY-MM-DD; new Date(iso) parses as UTC midnight per the
+  // spec. Building from parts avoids any host-TZ surprises.
+  const [y, m, d] = iso.split('-').map(Number) as [number, number, number];
+  return new Date(Date.UTC(y, m - 1, d));
+}
+
+function formatDayLabel(iso: string): string {
+  const d = parseUtcDay(iso);
+  return d.toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+/**
+ * Map a day's count to a bucket index using thresholds derived from
+ * the user's actual data (see `computeThresholds`). Boundaries are
+ * inclusive on the lower side: counts in [1, t1] are bucket 1,
+ * [t1+1, t2] are bucket 2, etc.
+ *
+ * Adapting the thresholds to the user's distribution — rather than
+ * hard-coding fixed cutoffs like "7+ commands → max bucket" — keeps
+ * the heatmap visually informative whether a user runs 2/day or
+ * 200/day. GitHub does the same thing with their contribution graph.
+ */
+function bucketize(n: number, thresholds: readonly [number, number, number]): 0 | 1 | 2 | 3 | 4 {
+  if (n <= 0) return 0;
+  if (n <= thresholds[0]) return 1;
+  if (n <= thresholds[1]) return 2;
+  if (n <= thresholds[2]) return 3;
+  return 4;
+}
+
+/**
+ * Compute quartile thresholds from the user's non-zero days. We
+ * sort the active counts ascending and take values at the 25%, 50%,
+ * and 75% positions — so each of the four active buckets contains
+ * roughly a quarter of the user's active days.
+ *
+ * Falls back to small fixed values when there's too little data to
+ * meaningfully quantile (e.g. brand-new account with two active
+ * days) — the heatmap will technically render but won't claim more
+ * resolution than the data supports.
+ */
+function computeThresholds(days: ActivityDay[]): [number, number, number] {
+  const active = days
+    .filter((d) => d.count > 0)
+    .map((d) => d.count)
+    .sort((a, b) => a - b);
+  if (active.length === 0) return [1, 2, 3];
+  const q = (p: number) => active[Math.min(active.length - 1, Math.floor(active.length * p))]!;
+  return [q(0.25), q(0.5), q(0.75)];
+}
+
+/**
+ * Hex color tables per bucket, indexed [0..4]. We bake hex literals
+ * (rather than relying on Tailwind classes) because the prior class-
+ * based approach hit two issues:
+ *   - `fill-*` is SVG-only, so the legend's <span> chips rendered
+ *     colorless (fixed once before by adding parallel `bg-*` classes).
+ *   - In this build Tailwind didn't actually emit `fill-emerald-*`
+ *     utilities for some reason, so even after the legend fix every
+ *     SVG cell rendered with the default fill — i.e. the same color.
+ *
+ * Hex literals applied via the `fill` SVG attribute / `style.background-
+ * Color` bypass both class-detection paths and guarantee distinct
+ * shades. Picked to mirror Tailwind's emerald-{200,400,500,600} steps
+ * and the corresponding flipped-darker shades for dark mode, so the
+ * design matches what the migration would have produced.
+ */
+const PALETTE_LIGHT = [
+  '#e5e5e5', // neutral-200, zero-day grid color
+  '#a7f3d0', // emerald-200
+  '#34d399', // emerald-400
+  '#10b981', // emerald-500
+  '#059669', // emerald-600
+] as const;
+
+const PALETTE_DARK = [
+  '#262626', // neutral-800, zero-day grid color
+  '#064e3b', // emerald-900
+  '#047857', // emerald-700
+  '#10b981', // emerald-500
+  '#6ee7b7', // emerald-300
+] as const;
+
+function bucketPalette(theme: 'light' | 'dark'): readonly string[] {
+  return theme === 'dark' ? PALETTE_DARK : PALETTE_LIGHT;
+}

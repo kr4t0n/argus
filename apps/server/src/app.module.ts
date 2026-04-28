@@ -11,6 +11,7 @@ import { ResultIngestorModule } from './modules/result-ingestor/result-ingestor.
 import { GatewayModule } from './modules/gateway/gateway.module';
 import { TerminalModule } from './modules/terminal/terminal.module';
 import { SidecarLinkModule } from './modules/sidecar-link/sidecar-link.module';
+import { UserModule } from './modules/user/user.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { SidecarLinkModule } from './modules/sidecar-link/sidecar-link.module';
     GatewayModule,
     SidecarLinkModule,
     TerminalModule,
+    UserModule,
   ],
 })
 export class AppModule {}

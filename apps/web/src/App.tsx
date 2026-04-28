@@ -26,6 +26,7 @@ function ProtectedRoutes() {
       <Route path="/" element={<Dashboard />} />
       <Route path="/sessions/:sessionId" element={<Dashboard />} />
       <Route path="/machines/:machineId" element={<Dashboard />} />
+      <Route path="/user" element={<Dashboard />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

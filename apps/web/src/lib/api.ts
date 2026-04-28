@@ -16,6 +16,8 @@ import type {
   SidecarUpdateBatchAccepted,
   SidecarVersionInfo,
   TerminalDTO,
+  UserActivityResponse,
+  UserUsageResponse,
 } from '@argus/shared-types';
 import { getToken } from './auth';
 import { apiBaseUrl } from './host';
@@ -179,6 +181,16 @@ export const api = {
     const q = new URLSearchParams({ path });
     return http<FSReadResponse>(`/agents/${agentId}/fs/read?${q.toString()}`);
   },
+
+  /** Per-day command count for the current user (last 365 days). The
+   *  response is dense — zero-days included — so the heatmap can map
+   *  it directly to a 7-row × N-column grid. */
+  getMyActivity: () => http<UserActivityResponse>('/me/activity'),
+
+  /** Lifetime token totals across every session the user owns —
+   *  parsed server-side with the same per-adapter `parseUsage` the
+   *  per-session UsageBadge uses, so the totals never disagree. */
+  getMyUsage: () => http<UserUsageResponse>('/me/usage'),
 
   /** Recent commits for the agent's workingDir. The response also
    *  carries a fresh GitStatus so the panel header (branch /
