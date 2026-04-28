@@ -313,3 +313,23 @@ export interface UserActivityResponse {
 export interface UserUsageResponse {
   usage: TokenUsage;
 }
+
+/** REST response for `GET /me/rules`. `rules` is a free-form text
+ *  blob the user wants every CLI agent they spawn to follow. Empty
+ *  string means "no rules" — the response always carries a string
+ *  so the client doesn't have to disambiguate null vs unset. */
+export interface UserRulesResponse {
+  rules: string;
+}
+
+/** Request body for `PUT /me/rules`. Server enforces an upper bound
+ *  (USER_RULES_MAX_BYTES) so a runaway paste can't blow up the
+ *  database row. */
+export interface UpdateUserRulesRequest {
+  rules: string;
+}
+
+/** Hard cap for stored rules text. 32 KB is generous compared to a
+ *  typical AGENTS.md / CLAUDE.md / .cursorrules file (a few KB at
+ *  most) while staying well under any realistic Postgres TEXT limit. */
+export const USER_RULES_MAX_BYTES = 32_768;

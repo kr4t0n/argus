@@ -1,11 +1,17 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type {
   AgentType,
   TokenUsage,
   UserActivityResponse,
+  UserRulesResponse,
   UserUsageResponse,
 } from '@argus/shared-types';
-import { ZERO_USAGE, parseUsage, sumUsage } from '@argus/shared-types';
+import {
+  USER_RULES_MAX_BYTES,
+  ZERO_USAGE,
+  parseUsage,
+  sumUsage,
+} from '@argus/shared-types';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 
 const DAY_MS = 86_400_000;
@@ -98,6 +104,53 @@ export class UserService {
       if (u) total = sumUsage(total, u);
     }
     return { usage: total };
+  }
+
+  /**
+   * Free-form rules the user wants every CLI agent they spawn to
+   * follow. Stored in `User.rules`; NULL becomes empty string in the
+   * response so the client doesn't have to disambiguate "never set"
+   * from "explicitly cleared."
+   */
+  async getRules(userId: string): Promise<UserRulesResponse> {
+    const row = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { rules: true },
+    });
+    if (!row) throw new NotFoundException('user not found');
+    return { rules: row.rules ?? '' };
+  }
+
+  /**
+   * Persist rules text. Hard-caps at USER_RULES_MAX_BYTES so a
+   * runaway paste can't blow up the row; the byte length is measured
+   * via TextEncoder so multi-byte characters count correctly. Empty
+   * string is allowed and stored as NULL — that gives a future
+   * "clear rules" gesture a target without juggling a sentinel.
+   */
+  async setRules(userId: string, rules: string): Promise<UserRulesResponse> {
+    const bytes = new TextEncoder().encode(rules).byteLength;
+    if (bytes > USER_RULES_MAX_BYTES) {
+      throw new BadRequestException(
+        `rules too large: ${bytes} bytes > ${USER_RULES_MAX_BYTES} byte limit`,
+      );
+    }
+    const next = rules.length === 0 ? null : rules;
+    const updated = await this.prisma.user
+      .update({
+        where: { id: userId },
+        data: { rules: next },
+        select: { rules: true },
+      })
+      .catch((err) => {
+        // P2025 = "Record to update not found" — surface as 404 so
+        // a deleted-mid-flight user gets a meaningful response.
+        if ((err as { code?: string }).code === 'P2025') {
+          throw new NotFoundException('user not found');
+        }
+        throw err;
+      });
+    return { rules: updated.rules ?? '' };
   }
 }
 

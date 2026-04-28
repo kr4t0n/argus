@@ -1,15 +1,16 @@
-import { useEffect, useState } from 'react';
-import { Loader2, User } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Check, Loader2, User } from 'lucide-react';
 import type {
   TokenUsage,
   UserActivityResponse,
   UserUsageResponse,
 } from '@argus/shared-types';
-import { hasUsage } from '@argus/shared-types';
+import { USER_RULES_MAX_BYTES, hasUsage } from '@argus/shared-types';
 import { ApiError, api } from '../lib/api';
 import { useAuthStore } from '../stores/authStore';
 import { useUIStore } from '../stores/uiStore';
 import { ActivityHeatmap } from '../components/ActivityHeatmap';
+import { Button } from '../components/ui/Button';
 
 /**
  * `/user` route. Two cards today:
@@ -95,7 +96,7 @@ export function UserPanel() {
           {!activityError && activity && <ActivityHeatmap days={activity.days} />}
         </section>
 
-        <section className="rounded-lg border border-default bg-surface-1 px-5 py-4">
+        <section className="mb-4 rounded-lg border border-default bg-surface-1 px-5 py-4">
           <h2 className="mb-3 text-[12px] font-semibold uppercase tracking-widest text-fg-tertiary">
             Total usage
           </h2>
@@ -107,8 +108,140 @@ export function UserPanel() {
           )}
           {!usageError && usage && <UsageSummary usage={usage.usage} />}
         </section>
+
+        <section className="rounded-lg border border-default bg-surface-1 px-5 py-4">
+          <RulesEditor />
+        </section>
       </div>
     </div>
+  );
+}
+
+/**
+ * Editable rules card. Loads current value on mount, tracks a dirty
+ * state against the last-saved baseline, and persists via PUT
+ * /me/rules on Save. The Save button stays disabled until the user
+ * actually changes something — covers the common "I navigated
+ * here, looked at my rules, navigated away" path with no UX cost.
+ *
+ * Sidecar sync — propagating the saved value to the spawned agents'
+ * AGENTS.md / CLAUDE.md / .cursorrules — is intentionally NOT in
+ * this commit. Persistence first, sync later (the user explicitly
+ * scoped it that way so the UI surface and the eventual
+ * distribution mechanism can iterate independently).
+ */
+function RulesEditor() {
+  const [text, setText] = useState('');
+  const [savedText, setSavedText] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  // Brief "Saved" affirmation that auto-fades — keeps the UI from
+  // looking idle the moment a save resolves successfully.
+  const [justSaved, setJustSaved] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    api
+      .getMyRules()
+      .then((d) => {
+        if (cancelled) return;
+        setText(d.rules);
+        setSavedText(d.rules);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof ApiError ? err.message : 'failed to load rules');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const dirty = text !== savedText;
+  const byteCount = new TextEncoder().encode(text).byteLength;
+  const overLimit = byteCount > USER_RULES_MAX_BYTES;
+  const canSave = dirty && !saving && !overLimit;
+
+  const onSave = useCallback(async () => {
+    if (!canSave) return;
+    setSaving(true);
+    setError(null);
+    setJustSaved(false);
+    try {
+      const resp = await api.setMyRules(text);
+      setSavedText(resp.rules);
+      setText(resp.rules);
+      setJustSaved(true);
+      window.setTimeout(() => setJustSaved(false), 2000);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'failed to save rules');
+    } finally {
+      setSaving(false);
+    }
+  }, [canSave, text]);
+
+  return (
+    <>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 className="text-[12px] font-semibold uppercase tracking-widest text-fg-tertiary">
+          Rules
+        </h2>
+        <span
+          className={
+            'font-mono text-[10px] tabular-nums ' +
+            (overLimit ? 'text-red-400' : 'text-fg-muted')
+          }
+          title="rules size in UTF-8 bytes / max"
+        >
+          {byteCount.toLocaleString()} / {USER_RULES_MAX_BYTES.toLocaleString()} bytes
+        </span>
+      </div>
+      <p className="mb-3 text-[11px] text-fg-tertiary">
+        Free-form guidance every CLI agent you spawn should follow — coding style, banned
+        patterns, project conventions. Saved to your account; sync to running agents lands
+        in a follow-up.
+      </p>
+      {loading && (
+        <div className="flex items-center gap-2 text-[12px] text-fg-tertiary">
+          <Loader2 className="h-3 w-3 animate-spin" /> loading…
+        </div>
+      )}
+      {!loading && (
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={10}
+          spellCheck={false}
+          placeholder="e.g. Prefer pure functions. No console.log in committed code. Match existing import order."
+          className="w-full resize-y rounded-md border border-default bg-surface-0 px-3 py-2 font-mono text-[12px] leading-relaxed text-fg-primary outline-none placeholder:text-fg-muted focus:border-default-strong"
+        />
+      )}
+      <div className="mt-3 flex items-center justify-between gap-3">
+        <div className="min-h-[18px] text-[11px]">
+          {error && <span className="text-red-400">{error}</span>}
+          {!error && justSaved && (
+            <span className="inline-flex items-center gap-1 text-emerald-500 dark:text-emerald-400">
+              <Check className="h-3 w-3" /> saved
+            </span>
+          )}
+        </div>
+        <Button onClick={onSave} disabled={!canSave} size="sm">
+          {saving ? (
+            <>
+              <Loader2 className="h-3 w-3 animate-spin" /> saving…
+            </>
+          ) : (
+            'Save'
+          )}
+        </Button>
+      </div>
+    </>
   );
 }
 
