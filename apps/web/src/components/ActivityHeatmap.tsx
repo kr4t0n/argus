@@ -51,6 +51,7 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
   const max = useMemo(() => days.reduce((m, d) => Math.max(m, d.count), 0), [days]);
   const total = useMemo(() => days.reduce((m, d) => m + d.count, 0), [days]);
   const months = useMemo(() => buildMonthLabels(days), [days]);
+  const thresholds = useMemo(() => computeThresholds(days), [days]);
   const palette = bucketPalette(useResolvedTheme());
 
   // Measure the wrapping element and grow each cell so the grid spans
@@ -170,7 +171,7 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
                   height={effectiveCell}
                   rx={2}
                   ry={2}
-                  fill={palette[bucketize(day.count)]}
+                  fill={palette[bucketize(day.count, thresholds)]}
                   onMouseEnter={(e) =>
                     setHover({
                       rect: (e.currentTarget as SVGRectElement).getBoundingClientRect(),
@@ -311,24 +312,43 @@ function formatDayLabel(iso: string): string {
 }
 
 /**
- * Buckets:
- *   0 → empty
- *   1 → exactly 1 command
- *   2 → 2–3 commands
- *   3 → 4–6 commands
- *   4 → 7+ commands
+ * Map a day's count to a bucket index using thresholds derived from
+ * the user's actual data (see `computeThresholds`). Boundaries are
+ * inclusive on the lower side: counts in [1, t1] are bucket 1,
+ * [t1+1, t2] are bucket 2, etc.
  *
- * Hand-tuned for the single-user case (most days are 0, active days
- * are typically 1–10). The scale stays meaningful even if a power
- * user sometimes hits 50 — they cap out at the brightest bucket
- * rather than washing out the rest of the grid.
+ * Adapting the thresholds to the user's distribution — rather than
+ * hard-coding fixed cutoffs like "7+ commands → max bucket" — keeps
+ * the heatmap visually informative whether a user runs 2/day or
+ * 200/day. GitHub does the same thing with their contribution graph.
  */
-function bucketize(n: number): 0 | 1 | 2 | 3 | 4 {
+function bucketize(n: number, thresholds: readonly [number, number, number]): 0 | 1 | 2 | 3 | 4 {
   if (n <= 0) return 0;
-  if (n === 1) return 1;
-  if (n <= 3) return 2;
-  if (n <= 6) return 3;
+  if (n <= thresholds[0]) return 1;
+  if (n <= thresholds[1]) return 2;
+  if (n <= thresholds[2]) return 3;
   return 4;
+}
+
+/**
+ * Compute quartile thresholds from the user's non-zero days. We
+ * sort the active counts ascending and take values at the 25%, 50%,
+ * and 75% positions — so each of the four active buckets contains
+ * roughly a quarter of the user's active days.
+ *
+ * Falls back to small fixed values when there's too little data to
+ * meaningfully quantile (e.g. brand-new account with two active
+ * days) — the heatmap will technically render but won't claim more
+ * resolution than the data supports.
+ */
+function computeThresholds(days: ActivityDay[]): [number, number, number] {
+  const active = days
+    .filter((d) => d.count > 0)
+    .map((d) => d.count)
+    .sort((a, b) => a - b);
+  if (active.length === 0) return [1, 2, 3];
+  const q = (p: number) => active[Math.min(active.length - 1, Math.floor(active.length * p))]!;
+  return [q(0.25), q(0.5), q(0.75)];
 }
 
 /**
