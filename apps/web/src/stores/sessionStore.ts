@@ -28,7 +28,12 @@ interface SessionState {
   loading: boolean;
 
   loadList: () => Promise<void>;
-  loadSession: (id: string) => Promise<SessionEntry>;
+  /** Load (or re-load) a session's tail window. The cached entry is
+   *  reused when present; pass `force: true` to bypass the cache and
+   *  refetch — used when re-entering a session after navigating away,
+   *  to pick up any chunks that landed while we were unsubscribed
+   *  from its WS room. */
+  loadSession: (id: string, opts?: { force?: boolean }) => Promise<SessionEntry>;
   /** Fetch the next page of older commands for a session already in the
    *  store. No-op if nothing more is available or a fetch is in flight. */
   loadOlder: (id: string) => Promise<void>;
@@ -72,9 +77,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ sessions, order: sortOrder(sessions), loading: false });
   },
 
-  async loadSession(id) {
+  async loadSession(id, opts) {
     const existing = get().entries[id];
-    if (existing?.loaded) return existing;
+    if (existing?.loaded && !opts?.force) return existing;
     const data = await api.getSession(id, { tailCommands: DEFAULT_TAIL });
     // lastSeq tracks the high-water-mark seq we've seen across the whole
     // session — NOT just what we loaded. Reconnect backfill uses this to

@@ -32,7 +32,6 @@ export function SessionPanel() {
   const entry = useSessionStore((s) => (sessionId ? s.entries[sessionId] : undefined));
   const loadSession = useSessionStore((s) => s.loadSession);
   const loadOlder = useSessionStore((s) => s.loadOlder);
-  const backfill = useSessionStore((s) => s.backfill);
   const agent = useAgentStore((s) =>
     entry?.session ? s.agents[entry.session.agentId] : undefined,
   );
@@ -54,32 +53,37 @@ export function SessionPanel() {
     setError(null);
 
     // We unsubscribe from the session room on navigation away, so any
-    // chunks / command-status updates that land for THIS session while
-    // the user was viewing another one go unobserved by the WS layer.
-    // Server still persists them; we just need to ask. `loadSession`
-    // short-circuits when an entry is already `loaded`, so we have to
-    // run a tail-gap backfill ourselves on re-entry — same primitive
-    // App.tsx uses on WS reconnect.
-    const wasLoaded = !!useSessionStore.getState().entries[sessionId]?.loaded;
-    loadSession(sessionId)
-      .then(async (entry) => {
-        if (!wasLoaded) return;
-        try {
-          const { commands, chunks } = await api.getSessionChunks(sessionId, entry.lastSeq);
-          if (commands.length || chunks.length) {
-            backfill(sessionId, commands, chunks);
-          }
-        } catch {
-          /* visible state stays as it was; user can still hard-refresh */
-        }
-      })
+    // chunks / command-updates that land for THIS session while the
+    // user was viewing another one are missed by the WS layer. On
+    // re-entry, force `loadSession` to refetch the tail window
+    // instead of returning the (now-stale) cached entry — but only
+    // when the cache still THINKS something is running. The
+    // App-level agent:status handler silently prefetches sessions
+    // whose agent flipped busy → online, so by the time the user
+    // navigates back the cached entry is usually already fresh
+    // (running=false) and we can render instantly with no loading
+    // flash. The local force-refetch is the fallback for the case
+    // where the user re-enters before the prefetch has completed,
+    // or before the agent flipped status (e.g. machine offline).
+    //
+    // Why force-refetch and not a partial-seq backfill: the chunk
+    // `seq` is per-command (each command's chunks restart at 1), but
+    // the store's `lastSeq` is the global max across all chunks. A
+    // newer command's seqs (1..N) are all <= that max, so a
+    // `WHERE seq > lastSeq` filter would silently drop the new
+    // command's chunks entirely — which made the activity pill
+    // disappear in the first version of this fix.
+    const cached = useSessionStore.getState().entries[sessionId];
+    const cachedRunning =
+      cached?.commands.some((c) => ['pending', 'sent', 'running'].includes(c.status)) ?? false;
+    loadSession(sessionId, { force: !!cached?.loaded && cachedRunning })
       .catch((err) => setError(err.message ?? 'failed to load session'))
       .finally(() => setLoading(false));
     joinSession(sessionId);
     return () => {
       leaveSession(sessionId);
     };
-  }, [sessionId, loadSession, backfill]);
+  }, [sessionId, loadSession]);
 
   const running = useMemo(() => {
     if (!entry) return false;
@@ -123,7 +127,19 @@ export function SessionPanel() {
     );
   }
 
-  if (loading && !entry) {
+  // Loading placeholder fires in two cases:
+  //  - First load (no entry yet) — same as before.
+  //  - Re-entry where the cached state still thinks a turn is running
+  //    (because the WS room was unsubscribed when the actual `final`
+  //    chunk landed). Without this guard the activity pill would
+  //    render the stale entry first, ticking elapsed = `now -
+  //    startedAt` against a startedAt that's potentially minutes old,
+  //    then snap back to the frozen value when the force-refetch
+  //    resolves. The user sees a misleading "10 min → 1 min" jump.
+  //    Showing loading until the refetch lands suppresses the jump in
+  //    exchange for a brief (~one round trip) flash, which is the
+  //    less surprising UX.
+  if (loading && (!entry || running)) {
     return <div className="p-6 text-fg-tertiary text-sm">loading…</div>;
   }
 
