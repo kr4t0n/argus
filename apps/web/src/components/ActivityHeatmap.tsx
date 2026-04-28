@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { ActivityDay } from '@argus/shared-types';
 import { useResolvedTheme } from '../lib/theme';
 
@@ -69,15 +70,14 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
     return () => ro.disconnect();
   }, []);
 
-  // Hover tooltip state. Coordinates are anchored to the wrapper div
-  // (NOT the viewport) so positioning math is independent of page
-  // scroll. We track only what's currently hovered — a single shared
-  // <Tooltip> renders above the grid rather than spawning 365 Radix
-  // Tooltip instances. Native `<title>` is kept on each cell for
-  // screen-reader accessibility / keyboardless fallback.
+  // Hover tooltip state. We capture the hovered cell's BoundingClient-
+  // Rect (viewport coords) and portal the tooltip into document.body
+  // — that bypasses the wrapper's `overflow-x-auto`, which would
+  // otherwise clip the tooltip whenever it sits above a cell in the
+  // top row (the wrapper has no vertical headroom). Native <title>
+  // stays on each rect for screen-reader / keyboardless fallback.
   const [hover, setHover] = useState<{
-    x: number;
-    y: number;
+    rect: DOMRect;
     day: ActivityDay;
   } | null>(null);
 
@@ -171,13 +171,9 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
                   rx={2}
                   ry={2}
                   fill={palette[bucketize(day.count)]}
-                  onMouseEnter={() =>
+                  onMouseEnter={(e) =>
                     setHover({
-                      // Tooltip anchor: top-center of the cell, with
-                      // MONTH_LABEL_H added because the <g> shifts the
-                      // grid down by that amount.
-                      x: x + effectiveCell / 2,
-                      y: y + MONTH_LABEL_H,
+                      rect: (e.currentTarget as SVGRectElement).getBoundingClientRect(),
                       day,
                     })
                   }
@@ -197,34 +193,38 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
             })}
           </g>
         </svg>
-        {hover && <HoverTooltip x={hover.x} y={hover.y} day={hover.day} />}
+        {hover && <HoverTooltip rect={hover.rect} day={hover.day} />}
       </div>
     </div>
   );
 }
 
 /**
- * Floating tooltip rendered above the hovered cell. Positioned
- * absolutely within the heatmap wrapper (which is `position:
- * relative`), centered on `x` and translating itself up via
- * `translate(-50%, -100%)` so the bottom edge sits just above the
- * cell. `pointer-events-none` so it can't itself trap mouse moves
- * and flicker the hover state.
+ * Floating tooltip rendered above the hovered cell. Portaled into
+ * <body> with `position: fixed` (viewport coords) so the wrapper's
+ * `overflow-x-auto` clipping context can't cut the tooltip off
+ * when a cell sits in the top row.
+ *
+ * Positioning math: the cell's getBoundingClientRect gives us
+ * viewport coords for the cell's edges. We center horizontally on
+ * the cell's mid-x, anchor the tooltip's BOTTOM 4 px above the
+ * cell's TOP, and let CSS `translate(-50%, -100%)` do the
+ * "above-and-centered" placement. `pointer-events-none` so the
+ * tooltip never traps mouse moves and flickers the hover state
+ * between cells.
  */
-function HoverTooltip({ x, y, day }: { x: number; y: number; day: ActivityDay }) {
-  return (
+function HoverTooltip({ rect, day }: { rect: DOMRect; day: ActivityDay }) {
+  return createPortal(
     <div
-      className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md border border-default bg-surface-1 px-2 py-1 text-[11px] text-fg-primary shadow-md"
-      style={{ left: x, top: y - 4 }}
+      className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md border border-default bg-surface-1 px-2 py-1 text-[11px] text-fg-primary shadow-md"
+      style={{ left: rect.left + rect.width / 2, top: rect.top - 4 }}
     >
       <span className="font-medium">{day.count}</span>
-      <span className="text-fg-tertiary">
-        {' '}
-        command{day.count === 1 ? '' : 's'}
-      </span>
+      <span className="text-fg-tertiary"> command{day.count === 1 ? '' : 's'}</span>
       <span className="text-fg-tertiary"> · </span>
       <span>{formatDayLabel(day.date)}</span>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
