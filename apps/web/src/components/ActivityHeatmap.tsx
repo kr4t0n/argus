@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActivityDay } from '@argus/shared-types';
 import { cn } from '../lib/utils';
 
@@ -7,7 +7,9 @@ type Props = {
    *  determines where in the leading column the run starts (the
    *  preceding cells are rendered as empty placeholders). */
   days: ActivityDay[];
-  /** Side of each square in pixels. Default 11 matches GitHub's
+  /** Minimum side of each square in pixels. Cells expand from this
+   *  baseline to fill the container's available width — see the
+   *  ResizeObserver block below. Default 11 matches GitHub's
    *  contributions chart density. */
   cell?: number;
   /** Pixel gap between cells. */
@@ -49,8 +51,29 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
   const total = useMemo(() => days.reduce((m, d) => m + d.count, 0), [days]);
   const months = useMemo(() => buildMonthLabels(days), [days]);
 
-  const width = grid.weeks * cell + (grid.weeks - 1) * gap;
-  const gridH = 7 * cell + 6 * gap;
+  // Measure the wrapping element and grow each cell so the grid spans
+  // the container's full width. Falls back to the `cell` prop when
+  // the measurement hasn't landed yet (initial paint before the
+  // observer fires) or when the container is narrower than the
+  // baseline grid would naturally need.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [wrapWidth, setWrapWidth] = useState(0);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      if (entry) setWrapWidth(entry.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const effectiveCell =
+    grid.weeks > 0 && wrapWidth > 0
+      ? Math.max(cell, Math.floor((wrapWidth - (grid.weeks - 1) * gap) / grid.weeks))
+      : cell;
+  const width = grid.weeks * effectiveCell + (grid.weeks - 1) * gap;
+  const gridH = 7 * effectiveCell + 6 * gap;
   const height = MONTH_LABEL_H + gridH;
 
   return (
@@ -71,7 +94,7 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
           <span>more</span>
         </div>
       </div>
-      <div className="overflow-x-auto">
+      <div ref={wrapRef} className="w-full">
         <svg
           width={width}
           height={height}
@@ -85,7 +108,7 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
           {months.map((m) => (
             <text
               key={m.col}
-              x={m.col * (cell + gap)}
+              x={m.col * (effectiveCell + gap)}
               y={MONTH_LABEL_H - 3}
               className="fill-fg-tertiary"
               fontSize={10}
@@ -99,10 +122,10 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
             {grid.cells.map((c) => (
               <rect
                 key={`${c.col}-${c.row}`}
-                x={c.col * (cell + gap)}
-                y={c.row * (cell + gap)}
-                width={cell}
-                height={cell}
+                x={c.col * (effectiveCell + gap)}
+                y={c.row * (effectiveCell + gap)}
+                width={effectiveCell}
+                height={effectiveCell}
                 rx={2}
                 ry={2}
                 className={c.day ? bucketClass(bucketize(c.day.count)) : ''}
