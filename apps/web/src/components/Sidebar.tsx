@@ -7,7 +7,6 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
-  LogOut,
   MoreVertical,
   PanelLeftClose,
   Pencil,
@@ -18,7 +17,6 @@ import { useAgentStore } from '../stores/agentStore';
 import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
-import { useAuthStore } from '../stores/authStore';
 import { useSidecarUpdateStore } from '../stores/sidecarUpdateStore';
 import { cn, relativeTime } from '../lib/utils';
 import { StatusDot } from './ui/StatusDot';
@@ -45,8 +43,6 @@ export function Sidebar() {
   const toggleShowArchivedAgents = useUIStore((s) => s.toggleShowArchivedAgents);
   const upsertAgent = useAgentStore((s) => s.upsert);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
-  const logout = useAuthStore((s) => s.logout);
-  const user = useAuthStore((s) => s.user);
 
   async function startSession(agentId: string) {
     const { session } = await api.createSession({ agentId });
@@ -77,13 +73,6 @@ export function Sidebar() {
             title="hide sidebar"
           >
             <PanelLeftClose className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={logout}
-            className="text-fg-tertiary hover:text-fg-primary transition-colors"
-            title={user?.email ?? 'sign out'}
-          >
-            <LogOut className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
