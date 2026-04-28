@@ -1,5 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import type { UserActivityResponse } from '@argus/shared-types';
+import type {
+  AgentType,
+  TokenUsage,
+  UserActivityResponse,
+  UserUsageResponse,
+} from '@argus/shared-types';
+import { ZERO_USAGE, parseUsage, sumUsage } from '@argus/shared-types';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 
 const DAY_MS = 86_400_000;
@@ -54,6 +60,44 @@ export class UserService {
       days.push({ date: iso, count: counts.get(iso) ?? 0 });
     }
     return { days };
+  }
+
+  /**
+   * Aggregate token usage across every session the user owns.
+   *
+   * Token meta lives on each turn's `final` chunk; the field names
+   * differ between adapters (claude vs codex vs cursor vs custom),
+   * so we fan each chunk through the shared-types `parseUsage` with
+   * the agent's type — same parser the dashboard's per-session
+   * UsageBadge uses, keeping the totals consistent with what the user
+   * sees per-session.
+   *
+   * Performance: a heavy user with ~5k final chunks parses in single-
+   * digit milliseconds in Node; the join + scan is the dominant cost.
+   * If this ever becomes hot we can denormalize a per-command
+   * `usage` JSONB column populated by the result-ingestor, but the
+   * straightforward scan is cheap enough for v1.
+   */
+  async usage(userId: string): Promise<UserUsageResponse> {
+    const rows = await this.prisma.resultChunk.findMany({
+      where: {
+        kind: 'final',
+        command: { session: { userId } },
+      },
+      select: {
+        meta: true,
+        command: { select: { agent: { select: { type: true } } } },
+      },
+    });
+
+    let total: TokenUsage = ZERO_USAGE;
+    for (const row of rows) {
+      const meta = (row.meta ?? null) as Record<string, unknown> | null;
+      const type = row.command.agent.type as AgentType;
+      const u = parseUsage(type, meta);
+      if (u) total = sumUsage(total, u);
+    }
+    return { usage: total };
   }
 }
 
