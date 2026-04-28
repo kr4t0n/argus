@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActivityDay } from '@argus/shared-types';
-import { cn } from '../lib/utils';
+import { useResolvedTheme } from '../lib/theme';
 
 type Props = {
   /** Dense, ascending-by-date list. The first day's day-of-week
@@ -50,6 +50,7 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
   const max = useMemo(() => days.reduce((m, d) => Math.max(m, d.count), 0), [days]);
   const total = useMemo(() => days.reduce((m, d) => m + d.count, 0), [days]);
   const months = useMemo(() => buildMonthLabels(days), [days]);
+  const palette = bucketPalette(useResolvedTheme());
 
   // Measure the wrapping element and grow each cell so the grid spans
   // the container's full width. Falls back to the `cell` prop when
@@ -98,8 +99,8 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
           {[0, 1, 2, 3, 4].map((b) => (
             <span
               key={b}
-              className={cn('inline-block rounded-sm', bucketBgClass(b))}
-              style={{ width: cell, height: cell }}
+              className="inline-block rounded-sm"
+              style={{ width: cell, height: cell, backgroundColor: palette[b] }}
             />
           ))}
           <span>more</span>
@@ -139,8 +140,7 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
                 height={effectiveCell}
                 rx={2}
                 ry={2}
-                className={c.day ? bucketFillClass(bucketize(c.day.count)) : ''}
-                fill={c.day ? undefined : 'transparent'}
+                fill={c.day ? palette[bucketize(c.day.count)] : 'transparent'}
               >
                 {c.day && (
                   <title>
@@ -261,50 +261,37 @@ function bucketize(n: number): 0 | 1 | 2 | 3 | 4 {
 }
 
 /**
- * Two parallel bucket-class helpers because Tailwind's `fill-*` and
- * `bg-*` are different utilities targeting different CSS properties:
- *   - SVG <rect>s honor `fill-*` (sets the `fill` property).
- *   - HTML <span>s honor `bg-*` (sets `background-color`); a `fill-*`
- *     class on a span is a no-op, which made the legend swatches
- *     all render colorless.
- * Keep the two arrays in lockstep so the legend chip and the matching
- * cell in the grid show the exact same shade.
+ * Hex color tables per bucket, indexed [0..4]. We bake hex literals
+ * (rather than relying on Tailwind classes) because the prior class-
+ * based approach hit two issues:
+ *   - `fill-*` is SVG-only, so the legend's <span> chips rendered
+ *     colorless (fixed once before by adding parallel `bg-*` classes).
+ *   - In this build Tailwind didn't actually emit `fill-emerald-*`
+ *     utilities for some reason, so even after the legend fix every
+ *     SVG cell rendered with the default fill — i.e. the same color.
+ *
+ * Hex literals applied via the `fill` SVG attribute / `style.background-
+ * Color` bypass both class-detection paths and guarantee distinct
+ * shades. Picked to mirror Tailwind's emerald-{200,400,500,600} steps
+ * and the corresponding flipped-darker shades for dark mode, so the
+ * design matches what the migration would have produced.
  */
-function bucketFillClass(b: number): string {
-  switch (b) {
-    case 0:
-      // Zero-day cells need to be VISIBLE — they're the grid that
-      // makes the chart legible — but quiet enough not to compete
-      // with the active days. surface-1 / surface-2 were too close
-      // to the surrounding card bg (which is itself surface-1) and
-      // the cells effectively disappeared. neutral-200 / neutral-800
-      // give ~5-8% contrast against the card in their respective
-      // themes — visible without shouting.
-      return 'fill-neutral-200 dark:fill-neutral-800';
-    case 1:
-      return 'fill-emerald-200 dark:fill-emerald-900';
-    case 2:
-      return 'fill-emerald-400 dark:fill-emerald-700';
-    case 3:
-      return 'fill-emerald-500 dark:fill-emerald-500';
-    case 4:
-    default:
-      return 'fill-emerald-600 dark:fill-emerald-300';
-  }
-}
+const PALETTE_LIGHT = [
+  '#e5e5e5', // neutral-200, zero-day grid color
+  '#a7f3d0', // emerald-200
+  '#34d399', // emerald-400
+  '#10b981', // emerald-500
+  '#059669', // emerald-600
+] as const;
 
-function bucketBgClass(b: number): string {
-  switch (b) {
-    case 0:
-      return 'bg-neutral-200 dark:bg-neutral-800';
-    case 1:
-      return 'bg-emerald-200 dark:bg-emerald-900';
-    case 2:
-      return 'bg-emerald-400 dark:bg-emerald-700';
-    case 3:
-      return 'bg-emerald-500 dark:bg-emerald-500';
-    case 4:
-    default:
-      return 'bg-emerald-600 dark:bg-emerald-300';
-  }
+const PALETTE_DARK = [
+  '#262626', // neutral-800, zero-day grid color
+  '#064e3b', // emerald-900
+  '#047857', // emerald-700
+  '#10b981', // emerald-500
+  '#6ee7b7', // emerald-300
+] as const;
+
+function bucketPalette(theme: 'light' | 'dark'): readonly string[] {
+  return theme === 'dark' ? PALETTE_DARK : PALETTE_LIGHT;
 }
