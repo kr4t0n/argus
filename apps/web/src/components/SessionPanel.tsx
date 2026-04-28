@@ -117,7 +117,19 @@ export function SessionPanel() {
     );
   }
 
-  if (loading && !entry) {
+  // Loading placeholder fires in two cases:
+  //  - First load (no entry yet) — same as before.
+  //  - Re-entry where the cached state still thinks a turn is running
+  //    (because the WS room was unsubscribed when the actual `final`
+  //    chunk landed). Without this guard the activity pill would
+  //    render the stale entry first, ticking elapsed = `now -
+  //    startedAt` against a startedAt that's potentially minutes old,
+  //    then snap back to the frozen value when the force-refetch
+  //    resolves. The user sees a misleading "10 min → 1 min" jump.
+  //    Showing loading until the refetch lands suppresses the jump in
+  //    exchange for a brief (~one round trip) flash, which is the
+  //    less surprising UX.
+  if (loading && (!entry || running)) {
     return <div className="p-6 text-fg-tertiary text-sm">loading…</div>;
   }
 
