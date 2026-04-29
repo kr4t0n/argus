@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Check, Loader2, User } from 'lucide-react';
+import { Check, HelpCircle, Loader2, User } from 'lucide-react';
 import type {
   TokenUsage,
   UserActivityResponse,
@@ -11,6 +11,7 @@ import { useAuthStore } from '../stores/authStore';
 import { useUIStore } from '../stores/uiStore';
 import { ActivityHeatmap } from '../components/ActivityHeatmap';
 import { Button } from '../components/ui/Button';
+import { Tooltip } from '../components/ui/Tooltip';
 
 /**
  * `/user` route. Two cards today:
@@ -101,11 +102,7 @@ export function UserPanel() {
             Total usage
           </h2>
           {usageError && <div className="text-[12px] text-red-400">{usageError}</div>}
-          {!usageError && !usage && (
-            <div className="flex items-center gap-2 text-[12px] text-fg-tertiary">
-              <Loader2 className="h-3 w-3 animate-spin" /> loading…
-            </div>
-          )}
+          {!usageError && !usage && <UsageSummarySkeleton />}
           {!usageError && usage && <UsageSummary usage={usage.usage} />}
         </section>
 
@@ -189,9 +186,32 @@ function RulesEditor() {
   return (
     <>
       <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="text-[12px] font-semibold uppercase tracking-widest text-fg-tertiary">
-          Rules
-        </h2>
+        <div className="flex items-center gap-1.5">
+          <h2 className="text-[12px] font-semibold uppercase tracking-widest text-fg-tertiary">
+            Rules
+          </h2>
+          <Tooltip
+            side="right"
+            content={
+              <div className="max-w-[280px] text-[11px] leading-relaxed">
+                Free-form guidance every CLI agent you spawn should follow — coding style,
+                banned patterns, project conventions. On Save we push the text to every
+                online sidecar, which writes{' '}
+                <code className="font-mono">~/.claude/CLAUDE.md</code> for Claude Code and{' '}
+                <code className="font-mono">~/.codex/AGENTS.md</code> for Codex on each
+                host. Cursor CLI has no equivalent rules file yet.
+              </div>
+            }
+          >
+            <button
+              type="button"
+              aria-label="about rules"
+              className="text-fg-muted hover:text-fg-secondary"
+            >
+              <HelpCircle className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
+        </div>
         <span
           className={
             'font-mono text-[10px] tabular-nums ' +
@@ -202,11 +222,6 @@ function RulesEditor() {
           {byteCount.toLocaleString()} / {USER_RULES_MAX_BYTES.toLocaleString()} bytes
         </span>
       </div>
-      <p className="mb-3 text-[11px] text-fg-tertiary">
-        Free-form guidance every CLI agent you spawn should follow — coding style, banned
-        patterns, project conventions. Saved to your account; sync to running agents lands
-        in a follow-up.
-      </p>
       {loading && (
         <div className="flex items-center gap-2 text-[12px] text-fg-tertiary">
           <Loader2 className="h-3 w-3 animate-spin" /> loading…
@@ -284,6 +299,33 @@ function UsageSummary({ usage }: { usage: TokenUsage }) {
           muted={usage.durationApiMs === 0}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Layout-matched placeholder for `UsageSummary`. Renders the same
+ * 2/4-col grid with all six counters (input / output / cache read /
+ * cache write / cost / api time) so the card occupies its real
+ * height while the server-side aggregation runs — no jarring
+ * expansion when the totals land. The bottom two are conditional in
+ * the loaded view (claude-code surfaces them, codex/cursor don't);
+ * for non-claude users the card shrinks slightly post-load, which is
+ * still less jarring than the full-card expansion the spinner had.
+ */
+function UsageSummarySkeleton() {
+  return (
+    <div
+      className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4"
+      role="status"
+      aria-label="loading usage"
+    >
+      {['Input', 'Output', 'Cache read', 'Cache write', 'Cost', 'API time'].map((label) => (
+        <div key={label}>
+          <div className="text-[10px] uppercase tracking-widest text-fg-muted">{label}</div>
+          <div className="mt-1 h-[15px] w-16 animate-pulse rounded bg-surface-2" />
+        </div>
+      ))}
     </div>
   );
 }
