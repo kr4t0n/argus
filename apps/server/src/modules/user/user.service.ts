@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type {
   AgentType,
   TokenUsage,
@@ -13,12 +13,18 @@ import {
   sumUsage,
 } from '@argus/shared-types';
 import { PrismaService } from '../../infra/prisma/prisma.service';
+import { MachineService } from '../machine/machine.service';
 
 const DAY_MS = 86_400_000;
 
 @Injectable()
 export class UserService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(UserService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly machines: MachineService,
+  ) {}
 
   /**
    * Per-day command count for the user's last `windowDays` (default
@@ -127,6 +133,12 @@ export class UserService {
    * via TextEncoder so multi-byte characters count correctly. Empty
    * string is allowed and stored as NULL — that gives a future
    * "clear rules" gesture a target without juggling a sentinel.
+   *
+   * After persistence we fan the (potentially-empty) rules text out
+   * to every online sidecar via `sync-user-rules` so each one
+   * rewrites the global CLI rules files (CLAUDE.md / AGENTS.md).
+   * The fanout is best-effort — if a publish fails we log and move
+   * on; Postgres remains authoritative and the user can re-Save.
    */
   async setRules(userId: string, rules: string): Promise<UserRulesResponse> {
     const bytes = new TextEncoder().encode(rules).byteLength;
@@ -150,7 +162,13 @@ export class UserService {
         }
         throw err;
       });
-    return { rules: updated.rules ?? '' };
+
+    const synced = updated.rules ?? '';
+    this.machines.syncUserRulesAll(synced).catch((err) => {
+      this.logger.error(`sync-user-rules fanout failed: ${(err as Error).message}`);
+    });
+
+    return { rules: synced };
   }
 }
 

@@ -344,6 +344,26 @@ export interface UpdateSidecarCommand {
   ts: number;
 }
 
+/**
+ * Push the user's free-form coding-agent rules text down to every
+ * sidecar so each can write it to the conventional global rules file
+ * for any CLI it has on PATH (currently `~/.claude/CLAUDE.md` for
+ * claude-code, `~/.codex/AGENTS.md` for codex; cursor-cli has no
+ * supported equivalent yet, so we skip it). Empty `rules` = "no rules
+ * set"; the sidecar still rewrites the files (with empty content) so
+ * a previous value gets cleared.
+ *
+ * Fanout is one publish per online machine — Redis stream MAXLEN
+ * makes long-offline buffering unreliable, so a sidecar reconnecting
+ * after a freeze relies on the user re-Saving. Ack/result is fire-
+ * and-forget; persistence in Postgres is the source of truth.
+ */
+export interface SyncUserRulesCommand {
+  kind: 'sync-user-rules';
+  rules: string;
+  ts: number;
+}
+
 export type MachineControlCommand =
   | CreateAgentCommand
   | DestroyAgentCommand
@@ -351,7 +371,8 @@ export type MachineControlCommand =
   | FSListRequestCommand
   | FSReadRequestCommand
   | GitLogRequestCommand
-  | UpdateSidecarCommand;
+  | UpdateSidecarCommand
+  | SyncUserRulesCommand;
 
 export interface FSListResponseEvent {
   kind: 'fs-list-response';
