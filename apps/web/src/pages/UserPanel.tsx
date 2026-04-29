@@ -228,14 +228,33 @@ function RulesEditor() {
         </div>
       )}
       {!loading && (
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          rows={10}
-          spellCheck={false}
-          placeholder="e.g. Prefer pure functions. No console.log in committed code. Match existing import order."
-          className="w-full resize-y rounded-md border border-default bg-surface-0 px-3 py-2 font-mono text-[12px] leading-relaxed text-fg-primary outline-none placeholder:text-fg-muted focus:border-default-strong"
-        />
+        <div className="relative">
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={10}
+            spellCheck={false}
+            placeholder="e.g. Prefer pure functions. No console.log in committed code. Match existing import order."
+            className="block w-full resize-y rounded-md border border-default bg-surface-0 px-3 py-2 font-mono text-[12px] leading-relaxed text-fg-primary outline-none placeholder:text-fg-muted focus:border-default-strong"
+          />
+          {/* Theme-matched resize glyph. The default WebKit ::-webkit-resizer
+              is hidden globally (jarring white square on dark surfaces — see
+              index.css) so we paint our own here: two short diagonals in
+              fg-muted. `pointer-events-none` lets drags pass through to the
+              textarea's underlying resize hit-area, so resizing still works. */}
+          <svg
+            aria-hidden
+            className="pointer-events-none absolute bottom-1.5 right-1.5 h-2.5 w-2.5 text-fg-muted"
+            viewBox="0 0 10 10"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          >
+            <path d="M2 10 L10 2" />
+            <path d="M6 10 L10 6" />
+          </svg>
+        </div>
       )}
       <div className="mt-3 flex items-center justify-between gap-3">
         <div className="min-h-[18px] text-[11px]">
