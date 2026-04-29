@@ -17,6 +17,7 @@ import type {
   SidecarVersionInfo,
   TerminalDTO,
   UserActivityResponse,
+  UserRulesResponse,
   UserUsageResponse,
 } from '@argus/shared-types';
 import { getToken } from './auth';
@@ -191,6 +192,16 @@ export const api = {
    *  parsed server-side with the same per-adapter `parseUsage` the
    *  per-session UsageBadge uses, so the totals never disagree. */
   getMyUsage: () => http<UserUsageResponse>('/me/usage'),
+
+  /** Free-form rules the user wants every CLI agent they spawn to
+   *  follow. Empty string = no rules set. Sidecar sync to actual
+   *  agent runtimes is a follow-up. */
+  getMyRules: () => http<UserRulesResponse>('/me/rules'),
+  setMyRules: (rules: string) =>
+    http<UserRulesResponse>('/me/rules', {
+      method: 'PUT',
+      body: JSON.stringify({ rules }),
+    }),
 
   /** Recent commits for the agent's workingDir. The response also
    *  carries a fresh GitStatus so the panel header (branch /

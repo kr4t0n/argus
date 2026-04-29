@@ -230,6 +230,50 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     this.gateway.emitAgentRemoved(agentId);
   }
 
+  /**
+   * Fan out a `sync-user-rules` control command to every online,
+   * unarchived machine. Called when a user saves their rules text;
+   * the sidecar writes the content to each installed CLI's
+   * conventional rules file (claude-code → ~/.claude/CLAUDE.md,
+   * codex → ~/.codex/AGENTS.md).
+   *
+   * Best-effort: per-machine publish errors are logged but never
+   * fail the call. Persistence in `User.rules` is the source of
+   * truth; if a machine is offline or the publish drops, the user
+   * can re-Save to retry the fanout. We deliberately skip offline
+   * machines rather than relying on Redis stream buffering — the
+   * control stream's MAXLEN (200) makes long-offline catch-up
+   * unreliable, and a stale rules push isn't worth the complexity.
+   */
+  async syncUserRulesAll(rules: string): Promise<void> {
+    const machines = await this.prisma.machine.findMany({
+      where: { status: 'online', archivedAt: null },
+      select: { id: true, name: true },
+    });
+    if (machines.length === 0) {
+      this.logger.log('sync-user-rules: no online machines to sync');
+      return;
+    }
+    const ts = Date.now();
+    const results = await Promise.allSettled(
+      machines.map((m) =>
+        this.publishControl(m.id, { kind: 'sync-user-rules', rules, ts }),
+      ),
+    );
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    this.logger.log(
+      `sync-user-rules → ${machines.length - failed}/${machines.length} machine(s) (${rules.length} byte(s))`,
+    );
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (r.status === 'rejected') {
+        this.logger.warn(
+          `sync-user-rules: ${machines[i].name} (${machines[i].id}) publish failed: ${(r.reason as Error)?.message ?? String(r.reason)}`,
+        );
+      }
+    }
+  }
+
   // ───────────────────── Lifecycle ingest ─────────────────────
 
   private async publishControl(machineId: string, payload: unknown): Promise<void> {
