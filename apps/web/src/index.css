@@ -91,6 +91,27 @@
   ::-webkit-scrollbar-thumb:hover {
     background-color: hsl(var(--fg-muted));
   }
+
+}
+
+/* Chrome/Safari paint a fixed light-grey corner glyph on resizable
+   textareas (`::-webkit-resizer`) that ignores theme tokens — it
+   shows up as a jarring white square on dark surfaces. WebKit is
+   famously inconsistent about which `::-webkit-resizer` properties
+   it honors across versions, so this is intentionally shotgun:
+   `display: none` works on most builds, `visibility: hidden` covers
+   the rest, and zeroing the box stops the bg-paint pass from finding
+   anything to draw. Pulled out of `@layer base` so Tailwind preflight
+   can't re-introduce a default. Vertical resize still works via the
+   bottom-edge drag area. */
+textarea::-webkit-resizer,
+textarea::-webkit-scrollbar-corner {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+  background-image: none !important;
 }
 
 @layer components {

@@ -126,6 +126,23 @@ type UpdateSidecarCommand struct {
 	TS        int64  `json:"ts"`
 }
 
+// SyncUserRulesCommand pushes the saved coding-agent rules text to
+// the sidecar so it can write the conventional global rules file for
+// every CLI it found on PATH at boot:
+//
+//   - claude-code → ~/.claude/CLAUDE.md
+//   - codex       → ~/.codex/AGENTS.md
+//   - cursor-cli  → no supported equivalent yet, skipped
+//
+// Empty Rules means "no rules set" — the sidecar still writes the
+// files (with empty content) so a previous value gets cleared.
+// Mirror of SyncUserRulesCommand in packages/shared-types/src/protocol.ts.
+type SyncUserRulesCommand struct {
+	Kind  string `json:"kind"` // "sync-user-rules"
+	Rules string `json:"rules"`
+	TS    int64  `json:"ts"`
+}
+
 // ─────────── Sidecar update lifecycle (sidecar → server) ───────────
 //
 // Three events scoped by (machineId, requestId) report progress on a

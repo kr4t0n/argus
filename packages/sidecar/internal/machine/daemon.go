@@ -273,6 +273,13 @@ func (d *Daemon) dispatchControl(ctx context.Context, payload map[string]any) {
 			return
 		}
 		d.handleUpdateSidecar(ctx, ev)
+	case "sync-user-rules":
+		var ev protocol.SyncUserRulesCommand
+		if err := remarshal(payload, &ev); err != nil {
+			d.log.Printf("control: bad sync-user-rules: %v", err)
+			return
+		}
+		d.handleSyncUserRules(ev)
 	default:
 		d.log.Printf("control: unknown kind=%q", kindStr)
 	}

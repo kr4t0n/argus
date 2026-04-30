@@ -15,6 +15,14 @@ model User {
   passwordHash String
   role         String    @default("admin") // admin | viewer
   createdAt    DateTime  @default(now())
+  // Free-form rules text the user wants every CLI agent they spawn
+  // to follow (coding style, banned patterns, project conventions).
+  // Rendered + edited from the dashboard's user panel; the sidecar
+  // reads the latest value at agent boot to inject into adapters as
+  // an `AGENTS.md` / `CLAUDE.md` / `--rules` flag (sync path is a
+  // follow-up). NULL = "no rules set" — distinct from "" so a future
+  // "clear rules" gesture has a target.
+  rules        String?   @db.Text
 
   sessions Session[]
 }

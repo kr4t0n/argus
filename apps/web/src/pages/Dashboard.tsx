@@ -4,6 +4,7 @@ import { Sidebar } from '../components/Sidebar';
 import { SidebarRail } from '../components/SidebarRail';
 import { SessionPanel } from '../components/SessionPanel';
 import { MachinePanel } from '../components/MachinePanel';
+import { UserPanel } from './UserPanel';
 import { ResizeHandle } from '../components/ui/ResizeHandle';
 import { useUIStore } from '../stores/uiStore';
 
@@ -18,6 +19,10 @@ export function Dashboard() {
   const sidebarRef = useRef<HTMLDivElement>(null);
   const { machineId } = useParams();
   const location = useLocation();
+  // /user is a top-level pane (no params) sibling to MachinePanel /
+  // SessionPanel. Path-prefix match because react-router doesn't
+  // expose the matched route name to <Dashboard> itself.
+  const isUserPane = location.pathname.startsWith('/user');
   const prevPath = useRef(location.pathname);
   // Auto-close the mobile drawer on navigate so tapping a session in
   // the sidebar lands you on the chat rather than under the overlay.
@@ -46,10 +51,7 @@ export function Dashboard() {
           completely unmounted when closed. */}
       {sidebarOpen && (
         <>
-          <div
-            className="fixed inset-0 z-30 bg-black/60 md:hidden"
-            onClick={toggleSidebar}
-          />
+          <div className="fixed inset-0 z-30 bg-black/60 md:hidden" onClick={toggleSidebar} />
           <div
             style={{ width: MOBILE_DRAWER_WIDTH }}
             className="fixed inset-y-0 left-0 z-40 h-full md:hidden"
@@ -60,7 +62,7 @@ export function Dashboard() {
       )}
 
       <main className="flex-1 min-w-0 h-full">
-        {machineId ? <MachinePanel /> : <SessionPanel />}
+        {isUserPane ? <UserPanel /> : machineId ? <MachinePanel /> : <SessionPanel />}
       </main>
     </div>
   );

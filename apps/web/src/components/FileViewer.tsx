@@ -65,7 +65,7 @@ function useFetchFileContent(file: OpenFile) {
 
 function ContentViewer({ file, result }: { file: OpenFile; result: FSReadResult }) {
   if (result.kind === 'text') {
-    return <TextOrMarkdownViewer file={file} content={result.content} />;
+    return <PreviewableTextViewer file={file} content={result.content} />;
   }
   if (result.kind === 'image') {
     return <ImageViewer mime={result.mime} base64={result.base64} name={file.name} />;
@@ -73,20 +73,27 @@ function ContentViewer({ file, result }: { file: OpenFile; result: FSReadResult 
   return <BinaryViewer name={file.name} size={result.size} />;
 }
 
+type PreviewKind = 'markdown' | 'html' | null;
+
 /**
- * Markdown files default to a rendered preview with a "view source"
- * toggle in the corner. Everything else goes straight to highlighted
- * source. The toggle state lives here (per-tab, ephemeral) — losing
- * it on tab close is fine; it's a viewer affordance, not project state.
+ * Text files that have a meaningful "rendered" form (markdown, HTML)
+ * default to that preview with a "view source" toggle in the corner.
+ * Plain code files skip the preview path entirely and go straight to
+ * highlighted source.
+ *
+ * The toggle state lives here (per-tab, ephemeral) — losing it on
+ * tab close is fine; it's a viewer affordance, not project state.
  */
-function TextOrMarkdownViewer({ file, content }: { file: OpenFile; content: string }) {
-  const isMarkdown = useMemo(() => {
+function PreviewableTextViewer({ file, content }: { file: OpenFile; content: string }) {
+  const previewKind = useMemo<PreviewKind>(() => {
     const lang = languageForPath(file.path);
-    return lang === 'markdown' || lang === 'mdx';
+    if (lang === 'markdown' || lang === 'mdx') return 'markdown';
+    if (lang === 'html') return 'html';
+    return null;
   }, [file.path]);
   const [showSource, setShowSource] = useState(false);
 
-  if (!isMarkdown) {
+  if (previewKind === null) {
     return <TextViewer path={file.path} content={content} />;
   }
   return (
@@ -109,13 +116,58 @@ function TextOrMarkdownViewer({ file, content }: { file: OpenFile; content: stri
       </button>
       {showSource ? (
         <TextViewer path={file.path} content={content} />
-      ) : (
+      ) : previewKind === 'markdown' ? (
         <div className="markdown h-full overflow-auto px-6 py-5 text-sm leading-relaxed text-fg-primary">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
         </div>
+      ) : (
+        <HtmlPreview content={content} name={file.name} />
       )}
     </div>
   );
+}
+
+/**
+ * Render an HTML file inside a fully-locked-down iframe. `sandbox=""`
+ * (empty value) blocks scripts, forms, top-level navigation, plugins,
+ * and pop-ups, and keeps the iframe in a unique origin so it can't
+ * touch the parent dashboard's storage / cookies. Inline CSS still
+ * applies, so a static page renders the way the author intended; any
+ * external resources (CDN scripts, cross-origin images) won't load —
+ * that's the trade-off we accept for previewing untrusted content
+ * pulled off a remote agent's working tree.
+ *
+ * Theme handling: a plain HTML page (no body bg, no styles) inherits
+ * UA defaults — black text on white. Hard to read on the dashboard's
+ * dark theme, and pure-white iframe-bg-on-dark-app is jarring too.
+ * We inject a `:root { color-scheme }` style matching the dashboard's
+ * resolved theme, so the iframe's UA defaults flip to dark text/bg
+ * when the dashboard is dark. Pages that declare their own colors
+ * still win — color-scheme only affects UA defaults, not authored CSS.
+ */
+function HtmlPreview({ content, name }: { content: string; name: string }) {
+  const theme = useResolvedTheme();
+  const srcDoc = useMemo(() => injectColorScheme(content, theme), [content, theme]);
+  return <iframe title={name} srcDoc={srcDoc} sandbox="" className="h-full w-full" />;
+}
+
+/**
+ * Insert a `<style>:root{color-scheme:…}</style>` into the user's
+ * HTML so the iframe's UA defaults follow the dashboard theme. We try
+ * to land it inside an existing `<head>`; failing that, after `<html>`;
+ * and as a final fallback, wrap the input in a minimal standards-mode
+ * document. Wrapping is the right call for body fragments — leaving
+ * the input doctype-less would put the iframe in quirks mode.
+ */
+function injectColorScheme(content: string, theme: 'light' | 'dark'): string {
+  const style = `<style>:root{color-scheme:${theme}}</style>`;
+  if (/<head\b[^>]*>/i.test(content)) {
+    return content.replace(/<head\b[^>]*>/i, (m) => m + style);
+  }
+  if (/<html\b[^>]*>/i.test(content)) {
+    return content.replace(/<html\b[^>]*>/i, (m) => `${m}<head>${style}</head>`);
+  }
+  return `<!DOCTYPE html><html><head>${style}</head><body>${content}</body></html>`;
 }
 
 function TextViewer({ path, content }: { path: string; content: string }) {

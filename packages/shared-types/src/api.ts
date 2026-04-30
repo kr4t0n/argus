@@ -9,6 +9,7 @@ import type {
   ResultChunk,
   SessionStatus,
 } from './protocol';
+import type { TokenUsage } from './usage';
 
 export interface AuthUser {
   id: string;
@@ -285,3 +286,50 @@ export interface SidecarUpdateBatchAccepted {
   batchId: string;
   plan: SidecarUpdatePlanEntry[];
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// User views
+// ─────────────────────────────────────────────────────────────────────
+
+/** One bucket in the activity heatmap — `count` commands the user
+ *  sent on this UTC day. `date` is `YYYY-MM-DD`. */
+export interface ActivityDay {
+  date: string;
+  count: number;
+}
+
+/** REST response for `GET /me/activity`. Days are dense (zero-days
+ *  included) and ordered ascending; the client renders them as a
+ *  GitHub-style 7-row × N-column grid. */
+export interface UserActivityResponse {
+  days: ActivityDay[];
+}
+
+/** REST response for `GET /me/usage`. Lifetime totals across every
+ *  session the user owns, parsed per-adapter on the server using
+ *  the same `parseUsage` the dashboard's per-session UsageBadge
+ *  uses — so the totals never disagree with what the user sees
+ *  while looking at any single session. */
+export interface UserUsageResponse {
+  usage: TokenUsage;
+}
+
+/** REST response for `GET /me/rules`. `rules` is a free-form text
+ *  blob the user wants every CLI agent they spawn to follow. Empty
+ *  string means "no rules" — the response always carries a string
+ *  so the client doesn't have to disambiguate null vs unset. */
+export interface UserRulesResponse {
+  rules: string;
+}
+
+/** Request body for `PUT /me/rules`. Server enforces an upper bound
+ *  (USER_RULES_MAX_BYTES) so a runaway paste can't blow up the
+ *  database row. */
+export interface UpdateUserRulesRequest {
+  rules: string;
+}
+
+/** Hard cap for stored rules text. 32 KB is generous compared to a
+ *  typical AGENTS.md / CLAUDE.md / .cursorrules file (a few KB at
+ *  most) while staying well under any realistic Postgres TEXT limit. */
+export const USER_RULES_MAX_BYTES = 32_768;
