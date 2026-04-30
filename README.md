@@ -46,6 +46,12 @@ utilization (latest turn, since each CLI re-sends full history on
 `--resume`). Hover for the full breakdown — input vs cache read vs
 cache write, USD cost, API time, and the matched model family.
 Donut hides when the model isn't in the window lookup table.
+- **Task-completion notifications (opt-in)**: enable from `/user` and
+Argus shows a desktop notification + plays a short chime when a
+session finishes outside the route you're currently viewing — click
+the notification to jump to that session. Suppressed when you're
+already looking at the session that just completed, so it never
+nags you about something already on screen.
 - **Soft-archive everywhere**: hide a session or an entire agent from the
 sidebar without losing history. The data stays in Postgres and can be
 restored with one click; archived agents stay archived even if the

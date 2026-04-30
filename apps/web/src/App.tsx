@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { useAuthStore } from './stores/authStore';
@@ -8,9 +8,16 @@ import { useMachineStore } from './stores/machineStore';
 import { useSessionStore } from './stores/sessionStore';
 import { useSidecarUpdateStore } from './stores/sidecarUpdateStore';
 import { useCloneFailureStore } from './stores/cloneFailureStore';
+import { useUIStore } from './stores/uiStore';
 import { ensureSocket, resetSocket, subscribeHandler } from './lib/ws';
 import { api } from './lib/api';
 import { migrateLocalMachineIconsToServer } from './lib/migrateMachineIcons';
+import {
+  activeSessionIdFromPath,
+  playDoneSound,
+  shouldNotifyForTransition,
+  showCompletionNotification,
+} from './lib/notifications';
 import {
   SidecarUpdateBatchDismissAll,
   SidecarUpdateToasts,
@@ -54,6 +61,14 @@ export default function App() {
   const backfill = useSessionStore((s) => s.backfill);
   const entries = useSessionStore((s) => s.entries);
   const location = useLocation();
+  const navigate = useNavigate();
+  // Hold `navigate` in a ref so the WS handler closure (registered once
+  // per token, not per route change) calls the latest router instance
+  // without retriggering the subscription effect on every navigation.
+  const navigateRef = useRef(navigate);
+  useEffect(() => {
+    navigateRef.current = navigate;
+  }, [navigate]);
 
   useEffect(() => {
     bootstrap();
@@ -110,7 +125,39 @@ export default function App() {
         if (entry) upsertSession({ ...entry.session, status: p.status });
       },
       onCommandCreated: upsertCommand,
-      onCommandUpdated: upsertCommand,
+      onCommandUpdated: (cmd) => {
+        // Read the prior status from the store BEFORE upserting so we
+        // can detect the running → completed/failed transition. Without
+        // this, an at-least-once redelivery of an already-final command
+        // would re-fire the notification on every replay.
+        const prevEntry = useSessionStore.getState().entries[cmd.sessionId];
+        const prevStatus = prevEntry?.commands.find((c) => c.id === cmd.id)?.status;
+        upsertCommand(cmd);
+
+        if (!useUIStore.getState().notificationsEnabled) return;
+        const fire = shouldNotifyForTransition({
+          prevStatus,
+          nextStatus: cmd.status,
+          sessionId: cmd.sessionId,
+          activeSessionId: activeSessionIdFromPath(window.location.pathname),
+          tabVisible: document.visibilityState === 'visible',
+        });
+        if (!fire) return;
+
+        // Title may be empty/missing for very-fresh sessions; fall
+        // back to the id prefix so the OS notification still has a
+        // meaningful headline.
+        const session = prevEntry?.session;
+        const title = session?.title?.trim() || `session ${cmd.sessionId.slice(0, 8)}`;
+        const success = cmd.status === 'completed';
+        playDoneSound(success);
+        showCompletionNotification({
+          sessionId: cmd.sessionId,
+          sessionTitle: title,
+          success,
+          onClick: () => navigateRef.current(`/sessions/${cmd.sessionId}`),
+        });
+      },
       onChunk: appendChunk,
       onSessionCloneFailed: (p) => {
         // Look the session up at push time so the toast can show the
