@@ -20,32 +20,6 @@ export function activeSessionIdFromPath(pathname: string): string | null {
   return m ? m[1] : null;
 }
 
-/** Decide whether a command-status transition should fire a
- *  notification. Pulls the "session not active OR tab hidden" rule
- *  out of the WS handler so the policy is testable in isolation.
- *  `prevStatus` and `nextStatus` are the command's status before and
- *  after the just-arrived event; we fire only on a true running →
- *  completed/failed transition (not on idempotent re-deliveries of
- *  the same final state, which Redis at-least-once can produce). */
-export function shouldNotifyForTransition(args: {
-  prevStatus: string | undefined;
-  nextStatus: string;
-  sessionId: string;
-  activeSessionId: string | null;
-  tabVisible: boolean;
-}): boolean {
-  const { prevStatus, nextStatus, sessionId, activeSessionId, tabVisible } = args;
-  const wasRunning =
-    prevStatus !== undefined && ['pending', 'sent', 'running'].includes(prevStatus);
-  const isDone = nextStatus === 'completed' || nextStatus === 'failed';
-  if (!wasRunning || !isDone) return false;
-  // Suppress only when the user can plausibly see the completion: tab
-  // visible AND viewing this session. Any other combination — tab
-  // hidden, on a different session, on /user, etc. — earns a notify.
-  if (tabVisible && activeSessionId === sessionId) return false;
-  return true;
-}
-
 /** Synthesized two-tone ping using Web Audio. No bundled asset to ship,
  *  works offline, and the descending interval for failure is
  *  immediately distinguishable from the ascending success interval

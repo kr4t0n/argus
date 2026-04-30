@@ -436,21 +436,26 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `internal/machine/update_test.go:TestDetectRestartMode_DaemonChildIsSelf`
   — if you ever rewrite this with a homegrown FD check, run that test
   first.
-- **Task-completion notifications fire on transition, not state**:
-  the notifier in `App.tsx`'s `onCommandUpdated` handler reads the
-  prior command status from the store BEFORE upserting the new one,
-  then only fires when the transition is `pending|sent|running →
-  completed|failed`. Without that check, Redis Streams' at-least-once
-  redelivery would re-fire the notification (and chime) every time
-  the same final-status `command:updated` event was replayed — most
-  visibly on a server reconnect that backfills already-completed
-  commands. Also: `Notification.requestPermission()` MUST run inside
-  a user-gesture handler — the toggle in `UserPanel.NotificationSettings`
-  calls it directly from the click handler, so don't refactor it
-  through `useEffect` without preserving the synchronous call chain.
-  Suppression rule lives in `lib/notifications.ts:shouldNotifyForTransition`
-  and is `(tabVisible AND activeSessionId === cmd.sessionId)` —
-  any other combination earns a notify. The chime uses `AudioContext`
+- **Task-completion notifications hook `session:status`, not
+  `command:updated`**: the notifier in `App.tsx`'s `onSessionStatus`
+  handler reads the prior session status BEFORE upserting and fires
+  on the `active → done|failed` transition. The earlier-and-obvious
+  choice of hooking `command:updated` is wrong: that event is
+  emitted to room `session:{id}` (see `stream.gateway.ts:147`),
+  which the browser only joins while `SessionPanel` is mounted —
+  navigating away triggers `leaveSession` and the user stops
+  receiving command updates entirely, so notifications would never
+  fire in exactly the case they're meant for. `session:status`
+  goes to `user:{userId}` (always joined) and carries
+  `done`/`failed` which already encodes success vs. failure.
+  Reading prev-status before upsert prevents re-fires on idempotent
+  re-emits. `Notification.requestPermission()` MUST run inside a
+  user-gesture handler — `UserPanel.NotificationSettings` calls it
+  directly from the click handler, so don't refactor through
+  `useEffect` without preserving the synchronous call chain.
+  Suppression rule is inline in the handler:
+  `(tabVisible AND activeSessionId === p.id)` — any other
+  combination earns a notify. The chime uses `AudioContext`
   oscillators (no bundled asset) which can be silently blocked by
   autoplay policy on browsers that haven't seen a user gesture yet,
   but on a logged-in dashboard that's effectively never.

@@ -15,7 +15,6 @@ import { migrateLocalMachineIconsToServer } from './lib/migrateMachineIcons';
 import {
   activeSessionIdFromPath,
   playDoneSound,
-  shouldNotifyForTransition,
   showCompletionNotification,
 } from './lib/notifications';
 import {
@@ -121,43 +120,38 @@ export default function App() {
       onSessionCreated: upsertSession,
       onSessionUpdated: upsertSession,
       onSessionStatus: (p) => {
+        // The notification hook lives here (not on `command:updated`)
+        // because `command:*` is emitted to room `session:{id}` — only
+        // received while SessionPanel has the session open and joined
+        // the room. `session:status` is broadcast to `user:{id}` so
+        // the browser keeps receiving it after navigating away, which
+        // is exactly when we want to notify. Read prev status BEFORE
+        // upserting so we detect the active → done/failed transition
+        // and don't re-fire on idempotent re-emits.
         const entry = useSessionStore.getState().entries[p.id];
+        const prevStatus = entry?.session.status;
         if (entry) upsertSession({ ...entry.session, status: p.status });
-      },
-      onCommandCreated: upsertCommand,
-      onCommandUpdated: (cmd) => {
-        // Read the prior status from the store BEFORE upserting so we
-        // can detect the running → completed/failed transition. Without
-        // this, an at-least-once redelivery of an already-final command
-        // would re-fire the notification on every replay.
-        const prevEntry = useSessionStore.getState().entries[cmd.sessionId];
-        const prevStatus = prevEntry?.commands.find((c) => c.id === cmd.id)?.status;
-        upsertCommand(cmd);
 
         if (!useUIStore.getState().notificationsEnabled) return;
-        const fire = shouldNotifyForTransition({
-          prevStatus,
-          nextStatus: cmd.status,
-          sessionId: cmd.sessionId,
-          activeSessionId: activeSessionIdFromPath(window.location.pathname),
-          tabVisible: document.visibilityState === 'visible',
-        });
-        if (!fire) return;
+        if (prevStatus !== 'active') return;
+        if (p.status !== 'done' && p.status !== 'failed') return;
 
-        // Title may be empty/missing for very-fresh sessions; fall
-        // back to the id prefix so the OS notification still has a
-        // meaningful headline.
-        const session = prevEntry?.session;
-        const title = session?.title?.trim() || `session ${cmd.sessionId.slice(0, 8)}`;
-        const success = cmd.status === 'completed';
+        const tabVisible = document.visibilityState === 'visible';
+        const activeSessionId = activeSessionIdFromPath(window.location.pathname);
+        if (tabVisible && activeSessionId === p.id) return;
+
+        const title = entry?.session.title?.trim() || `session ${p.id.slice(0, 8)}`;
+        const success = p.status === 'done';
         playDoneSound(success);
         showCompletionNotification({
-          sessionId: cmd.sessionId,
+          sessionId: p.id,
           sessionTitle: title,
           success,
-          onClick: () => navigateRef.current(`/sessions/${cmd.sessionId}`),
+          onClick: () => navigateRef.current(`/sessions/${p.id}`),
         });
       },
+      onCommandCreated: upsertCommand,
+      onCommandUpdated: upsertCommand,
       onChunk: appendChunk,
       onSessionCloneFailed: (p) => {
         // Look the session up at push time so the toast can show the
