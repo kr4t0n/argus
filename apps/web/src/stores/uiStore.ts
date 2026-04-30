@@ -23,6 +23,14 @@ interface UIState {
   /** User's theme preference. The resolved (system → light/dark) value
    *  is applied to <html> as the `dark` class by `applyTheme()`. */
   theme: ThemePreference;
+  /** Global on/off for desktop notifications + completion sound when a
+   *  command finishes outside the active session route. Off by default —
+   *  the OS permission prompt only fires the first time the user flips
+   *  this on (must be in a user-gesture handler, see `lib/notifications`).
+   *  Even when this is `true`, the fire-time path still re-checks
+   *  `Notification.permission` so a user who revokes permission in
+   *  browser settings silently no-ops without us re-prompting. */
+  notificationsEnabled: boolean;
   toggleSidebar: () => void;
   setSidebarWidth: (w: number) => void;
   toggleContextPane: () => void;
@@ -32,6 +40,7 @@ interface UIState {
   toggleShowArchivedAgents: () => void;
   setDraft: (agentId: string, v: string) => void;
   setTheme: (t: ThemePreference) => void;
+  setNotificationsEnabled: (v: boolean) => void;
 }
 
 export const SIDEBAR_MIN = 220;
@@ -51,6 +60,7 @@ export const useUIStore = create<UIState>()(
       showArchivedAgents: false,
       drafts: {},
       theme: 'system',
+      notificationsEnabled: false,
       toggleSidebar() {
         set({ sidebarOpen: !get().sidebarOpen });
       },
@@ -88,6 +98,9 @@ export const useUIStore = create<UIState>()(
       },
       setTheme(t) {
         set({ theme: t });
+      },
+      setNotificationsEnabled(v) {
+        set({ notificationsEnabled: v });
       },
     }),
     { name: 'argus.ui' },
