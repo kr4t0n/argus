@@ -1,0 +1,80 @@
+---
+import FileTreeMock from './FileTreeMock.astro';
+
+interface Props {
+  class?: string;
+}
+const { class: className = '' } = Astro.props;
+---
+
+<div class:list={['mock-window', className]} style="--bar-left: 55%; --bar-right: 20%;">
+  <div class="mock-titlebar">
+    <div class="mock-traffic"><span></span><span></span><span></span></div>
+    <div class="ml-2 flex items-center gap-2 text-fg-3 truncate">
+      <span class="text-fg-2 font-mono">working dir</span>
+      <span>·</span>
+      <span class="font-mono text-fg-3">/home/agi/projects/argus</span>
+      <span class="ml-auto inline-flex items-center gap-1.5 shrink-0 font-mono text-[11px]">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-argus-green/85"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+        <span class="text-argus-green/90">main</span>
+      </span>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-[200px_1fr] min-h-[340px]">
+    <!-- File tree side -->
+    <aside class="border-r border-[oklch(0.18_0_0)] px-3 py-3">
+      <div class="px-1 pb-2 flex items-center justify-between">
+        <span class="font-mono text-[10px] uppercase tracking-[0.16em] text-fg-3">Tree</span>
+        <div class="flex items-center gap-2 text-fg-3">
+          <button class="hover:text-fg-1" aria-label="Toggle hidden">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+          <button class="hover:text-fg-1" aria-label="Refresh">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <FileTreeMock full />
+    </aside>
+
+    <!-- File preview -->
+    <div class="bg-bg-0/40 font-mono text-[11.5px] leading-[1.6]">
+      <!-- Tab strip -->
+      <div class="flex items-center text-[11px] border-b border-[oklch(0.18_0_0)]">
+        <div class="tile-soft px-3 py-1.5 inline-flex items-center gap-1.5 text-fg-0 -mb-px relative">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-argus-green"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
+          main.ts
+          <span class="text-argus-green/85 text-[9px] ml-1">M</span>
+        </div>
+        <div class="px-3 py-1.5 text-fg-3 inline-flex items-center gap-1.5">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
+          useSession.ts
+        </div>
+      </div>
+
+      <!-- Code -->
+      <div class="px-4 py-3 grid grid-cols-[28px_1fr] gap-x-2">
+        <span class="text-fg-3 text-right">19</span><span class="text-fg-2"><span class="text-pink-300/80">import</span> client <span class="text-pink-300/80">from</span> <span class="text-emerald-300/80">'prom-client'</span>;</span>
+        <span class="text-fg-3 text-right">20</span><span class="text-fg-2"><span class="text-pink-300/80">import</span> &#123; metricsHandler &#125; <span class="text-pink-300/80">from</span> <span class="text-emerald-300/80">'./metrics'</span>;</span>
+        <span class="text-fg-3 text-right">21</span><span></span>
+        <span class="text-fg-3 text-right">22</span><span class="text-fg-2"><span class="text-pink-300/80">async function</span> <span class="text-fg-0">bootstrap</span>() &#123;</span>
+        <span class="text-fg-3 text-right">23</span><span class="text-fg-2 pl-3"><span class="text-pink-300/80">const</span> app = <span class="text-pink-300/80">await</span> <span class="text-fg-0">NestFactory.create</span>(AppModule);</span>
+        <span class="text-argus-green/85 text-right">24</span><span class="text-fg-1 pl-3"><span class="text-pink-300/80">const</span> registry = <span class="text-pink-300/80">new</span> <span class="text-fg-0">client.Registry</span>();</span>
+        <span class="text-argus-green/85 text-right">25</span><span class="text-fg-1 pl-3"><span class="text-fg-0">client.collectDefaultMetrics</span>(&#123; register: registry &#125;);</span>
+        <span class="text-argus-green/85 text-right">26</span><span class="text-fg-1 pl-3"><span class="text-fg-0">app.use</span>(<span class="text-emerald-300/80">'/metrics'</span>, <span class="text-fg-0">metricsHandler</span>(registry));</span>
+        <span class="text-fg-3 text-right">27</span><span class="text-fg-2 pl-3"><span class="text-pink-300/80">await</span> app.listen(<span class="text-amber-300/80">3000</span>);</span>
+        <span class="text-fg-3 text-right">28</span><span class="text-fg-2">&#125;</span>
+      </div>
+
+      <!-- Footer status -->
+      <div class="px-4 py-1.5 mt-auto text-[10px] text-fg-3 border-t border-[oklch(0.18_0_0)] flex items-center gap-3">
+        <span>TS</span>
+        <span>UTF-8</span>
+        <span>LF</span>
+        <span class="ml-auto text-argus-green/85">fsnotify · synced 1s ago</span>
+      </div>
+    </div>
+  </div>
+</div>

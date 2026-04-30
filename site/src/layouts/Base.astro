@@ -1,0 +1,82 @@
+---
+import '../styles/global.css';
+
+interface Props {
+  title?: string;
+  description?: string;
+  ogImage?: string;
+}
+
+const {
+  title = 'Argus · Watch CLI agents on every machine',
+  description = 'Open-source dashboard for Claude Code, Codex, Cursor, and any other CLI agent. Run on your laptops, dev VMs, and GPU boxes. Self-hosted, multi-machine, your data stays on your network.',
+  ogImage = '/og.png',
+} = Astro.props;
+
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+const base = import.meta.env.BASE_URL;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
+    <meta name="generator" content={Astro.generator} />
+    <meta name="theme-color" content="#0c130f" />
+    <link rel="canonical" href={canonical} />
+
+    <title>{title}</title>
+    <meta name="description" content={description} />
+
+    <meta name="keywords" content="claude code, codex, cursor cli, agent dashboard, self-hosted, open source, multi-machine, devops, sre, terminal" />
+    <meta name="author" content="Argus contributors" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={new URL(ogImage, Astro.site).href} />
+    <meta property="og:site_name" content="Argus" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={new URL(ogImage, Astro.site).href} />
+
+    <script is:inline type="application/ld+json" set:html={JSON.stringify({
+      '@context': 'https://schema.org',
+      '@type': 'SoftwareApplication',
+      name: 'Argus',
+      applicationCategory: 'DeveloperApplication',
+      operatingSystem: 'Linux, macOS, Windows (via Docker)',
+      description,
+      url: 'https://argus.dev',
+      offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+      license: 'https://opensource.org/licenses/MIT',
+      author: { '@type': 'Organization', name: 'Argus contributors' },
+    })} />
+  </head>
+  <body class="relative min-h-screen overflow-x-hidden">
+    <!-- Subtle grain so flat dark areas don't band on OLED -->
+    <div
+      class="pointer-events-none fixed inset-0 opacity-[0.022] mix-blend-overlay"
+      style="background-image: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><filter id=%22n%22><feTurbulence type=%22fractalNoise%22 baseFrequency=%220.9%22 numOctaves=%222%22/></filter><rect width=%22100%25%22 height=%22100%25%22 filter=%22url(%23n)%22/></svg>'); z-index: 0;"
+    ></div>
+
+    <slot />
+
+    <script>
+      import '../scripts/cursor-light.ts';
+      import '../scripts/copy-button.ts';
+    </script>
+  </body>
+</html>
+<style>
+  @media (max-width: 640px) {
+    .cursor-light {
+      opacity: 0.6;
+    }
+  }
+</style>

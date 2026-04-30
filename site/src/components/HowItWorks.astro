@@ -1,0 +1,109 @@
+---
+import Connector from './primitives/Connector.astro';
+
+// Each module gets a theme color and an icon — a small stained-glass
+// glyph signals what kind of thing this is at a glance.
+const modules = [
+  {
+    eyebrow: 'Browser',
+    name: 'Web',
+    sub: 'React · Socket.IO',
+    accent: 'oklch(0.70 0.18 235)',     // cool blue
+    accentSoft: 'oklch(0.70 0.18 235 / 0.12)',
+    icon: 'monitor',
+  },
+  {
+    eyebrow: 'Control plane',
+    name: 'Server',
+    sub: 'NestJS · Prisma',
+    accent: 'oklch(0.70 0.20 295)',     // violet
+    accentSoft: 'oklch(0.70 0.20 295 / 0.12)',
+    icon: 'cog',
+  },
+  {
+    eyebrow: 'Per-machine',
+    name: 'Sidecar',
+    sub: 'Single Go binary',
+    accent: 'oklch(0.78 0.17 158)',     // argus green
+    accentSoft: 'oklch(0.78 0.17 158 / 0.12)',
+    icon: 'zap',
+  },
+  {
+    eyebrow: 'Anywhere',
+    name: 'CLI agent',
+    sub: 'claude · codex · cursor',
+    accent: 'oklch(0.72 0.18 38)',      // warm orange
+    accentSoft: 'oklch(0.72 0.18 38 / 0.12)',
+    icon: 'terminal',
+  },
+];
+---
+
+<section id="how" class="relative py-24 md:py-32">
+  <div class="mx-auto max-w-page px-6">
+    <header class="max-w-prose">
+      <p class="font-mono text-[11px] uppercase tracking-[0.18em] text-fg-3 mb-4">§01 · Architecture</p>
+      <h2 class="text-h2 font-medium text-fg-0 text-balance">Browser to server to sidecar to CLI.</h2>
+      <p class="mt-5 text-lead text-fg-1 text-pretty max-w-[60ch]">
+        Two paths through the stack. Results stream over Redis for durability. Keystrokes ride a
+        direct WebSocket for sub-10 ms echo.
+      </p>
+    </header>
+
+    <!-- Architecture diagram — no background, sits on the page -->
+    <div class="mt-12 p-2 md:p-4">
+      <div class="relative grid grid-cols-1 md:grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr] items-center gap-y-6 md:gap-y-0 md:gap-x-1">
+        {modules.map((m, i) => (
+          <>
+            <div
+              class="rounded-lg px-4 py-3.5 flex items-center justify-between gap-3"
+              style={`background: ${m.accentSoft};`}
+            >
+              <div class="min-w-0">
+                <div class="font-mono text-[10px] uppercase tracking-[0.18em]" style={`color: ${m.accent}; opacity: 0.9;`}>{m.eyebrow}</div>
+                <div class="text-fg-0 font-medium mt-1.5">{m.name}</div>
+                <div class="mt-0.5 text-[11.5px] text-fg-2">{m.sub}</div>
+              </div>
+              <div class="shrink-0" style={`color: ${m.accent};`}>
+                {m.icon === 'monitor' && (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                )}
+                {m.icon === 'cog' && (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                )}
+                {m.icon === 'zap' && (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 2L3 14h7l-1 8 11-13h-7z"/></svg>
+                )}
+                {m.icon === 'terminal' && (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                )}
+              </div>
+            </div>
+
+            {i < modules.length - 1 && (
+              <Connector
+                label={i === 0 ? 'HTTPS · WS' : i === 1 ? 'Redis Streams' : 'exec · pty'}
+                sublabel={i === 1 ? 'durable, replayable' : undefined}
+                emphasized={i === 1}
+              />
+            )}
+          </>
+        ))}
+      </div>
+
+      <!-- PTY direct path callout -->
+      <div class="mt-12">
+        <div class="grid grid-cols-1 md:grid-cols-[1fr_2fr] gap-6 md:gap-12 items-start">
+          <div class="font-mono text-[11px] uppercase tracking-[0.18em] text-argus-green/80">
+            <span class="inline-block">PTY · direct WebSocket</span>
+          </div>
+          <p class="text-fg-1 max-w-[60ch] text-pretty">
+            Interactive terminal traffic skips Redis and rides the
+            <span class="code-chip">/sidecar-link</span> WebSocket. Sub-10 ms keystroke echo.
+            <span class="code-chip">vim</span> and <span class="code-chip">htop</span> usable.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
