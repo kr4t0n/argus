@@ -99,6 +99,15 @@ jobs:
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "name=${TAG}" >> "$GITHUB_OUTPUT"
+          # Auto-flag prereleases. Without this the GitHub release sits
+          # un-marked, which trips the dashboard's "is this newer than
+          # what I'm running" check (see SidecarUpdateService —
+          # prereleases get filtered out before semver compare runs).
+          if [[ "${TAG}" =~ -(rc|alpha|beta|pre)(\.|$) ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
@@ -133,6 +142,7 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.name }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
