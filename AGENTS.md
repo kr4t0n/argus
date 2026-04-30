@@ -436,6 +436,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `internal/machine/update_test.go:TestDetectRestartMode_DaemonChildIsSelf`
   — if you ever rewrite this with a homegrown FD check, run that test
   first.
+- **Context-window lookup is hand-maintained**: the donut on the
+  session header's `UsageBadge` reads its denominator from
+  `packages/shared-types/src/contextWindow.ts`, a hardcoded family →
+  window map matched by lowercased substring on the active model id.
+  The "current context used" numerator is the LATEST `final` chunk's
+  `inputTokens + cacheReadTokens + cacheWriteTokens` — not a sum across
+  turns — because each CLI re-sends the full history on `--resume`,
+  so the most recent prompt size IS the live context. When a new model
+  family ships (Anthropic / OpenAI / Cursor announcement), bump the
+  table as `chore(shared): update model context windows` — verify
+  against the upstream announcement, not release-note rumors. Unknown
+  models return `null` so the ring just hides instead of rendering a
+  misleading percentage; the bare ↑/↓ arrows stay visible.
 - **GHA cache budget cap**: GitHub enforces ~10 GB of cache per repo.
   Buildx with `mode=max` writes every intermediate stage; tag pushes
   (`refs/heads/refs/tags/v*`) write under their own ref scope and are

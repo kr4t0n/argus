@@ -40,6 +40,12 @@ native `--resume` ids so you can pick up where you left off.
 the dashboard's "create agent" dropdown is filtered to whatever's
 actually installed on that machine. New adapters are ~30 lines + an
 `init()` register call.
+- **Token & context badge**: every session header shows cumulative
+↑/↓ token usage and a colored donut for live context-window
+utilization (latest turn, since each CLI re-sends full history on
+`--resume`). Hover for the full breakdown — input vs cache read vs
+cache write, USD cost, API time, and the matched model family.
+Donut hides when the model isn't in the window lookup table.
 - **Soft-archive everywhere**: hide a session or an entire agent from the
 sidebar without losing history. The data stays in Postgres and can be
 restored with one click; archived agents stay archived even if the
