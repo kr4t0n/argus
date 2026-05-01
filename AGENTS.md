@@ -439,17 +439,21 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - **Task-completion notifications hook `session:status`, not
   `command:updated`**: the notifier in `App.tsx`'s `onSessionStatus`
   handler reads the prior session status BEFORE upserting and fires
-  on the `active → done|failed` transition. The earlier-and-obvious
+  on the `active → idle|failed` transition. The earlier-and-obvious
   choice of hooking `command:updated` is wrong: that event is
   emitted to room `session:{id}` (see `stream.gateway.ts:147`),
   which the browser only joins while `SessionPanel` is mounted —
   navigating away triggers `leaveSession` and the user stops
   receiving command updates entirely, so notifications would never
-  fire in exactly the case they're meant for. `session:status`
-  goes to `user:{userId}` (always joined) and carries
-  `done`/`failed` which already encodes success vs. failure.
-  Reading prev-status before upsert prevents re-fires on idempotent
-  re-emits. `Notification.requestPermission()` MUST run inside a
+  fire in exactly the case they're meant for. `session:status` goes
+  to `user:{userId}` (always joined). Important: the `SessionStatus`
+  type allows `'done'` but the server never actually emits it —
+  `result-ingestor.service.ts` flips success to `'idle'` (re-using
+  the steady-state value) and failure to `'failed'`. So success is
+  encoded as `active → idle`, not `active → done`. The `'done'`
+  variant is dead in the type; don't rely on it. Reading prev-status
+  before upsert prevents re-fires on idempotent re-emits (the
+  ingestor emits `active` on every interim chunk). `Notification.requestPermission()` MUST run inside a
   user-gesture handler — `UserPanel.NotificationSettings` calls it
   directly from the click handler, so don't refactor through
   `useEffect` without preserving the synchronous call chain.

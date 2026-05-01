@@ -126,22 +126,28 @@ export default function App() {
         // the room. `session:status` is broadcast to `user:{id}` so
         // the browser keeps receiving it after navigating away, which
         // is exactly when we want to notify. Read prev status BEFORE
-        // upserting so we detect the active → done/failed transition
+        // upserting so we detect the active → idle/failed transition
         // and don't re-fire on idempotent re-emits.
+        //
+        // SessionStatus's type allows 'done' but the server never
+        // actually emits it — successful completion uses 'idle' (see
+        // result-ingestor.service.ts: it goes 'failed' on errors,
+        // 'idle' on success, and 'active' on every interim chunk).
+        // So the active → idle transition IS our success signal.
         const entry = useSessionStore.getState().entries[p.id];
         const prevStatus = entry?.session.status;
         if (entry) upsertSession({ ...entry.session, status: p.status });
 
         if (!useUIStore.getState().notificationsEnabled) return;
         if (prevStatus !== 'active') return;
-        if (p.status !== 'done' && p.status !== 'failed') return;
+        if (p.status !== 'idle' && p.status !== 'failed') return;
 
         const tabVisible = document.visibilityState === 'visible';
         const activeSessionId = activeSessionIdFromPath(window.location.pathname);
         if (tabVisible && activeSessionId === p.id) return;
 
         const title = entry?.session.title?.trim() || `session ${p.id.slice(0, 8)}`;
-        const success = p.status === 'done';
+        const success = p.status === 'idle';
         playDoneSound(success);
         showCompletionNotification({
           sessionId: p.id,
