@@ -1,0 +1,164 @@
+---
+// Flat rows. No cards. Machines on left, agents on right. The first
+// "machine" cell is the connect-new instruction. The agents column has
+// a one-line auto-detect note up top. Same total height between columns.
+
+const machines = [
+  { name: 'laptop',      os: 'macOS · arm64',      sessions: 2, status: 'live' as const, icon: 'laptop' as const },
+  { name: 'gpu-box-1',   os: 'Ubuntu · cuda',      sessions: 1, status: 'live' as const, icon: 'cpu' as const },
+  { name: 'home-srv',    os: 'Debian · arm64',     sessions: 3, status: 'idle' as const, icon: 'server' as const },
+  { name: 'dev-vm-east', os: 'NixOS · x86_64',     sessions: 1, status: 'pty' as const,  icon: 'cloud' as const },
+  { name: 'beachhouse',  os: 'Raspberry Pi',       sessions: 0, status: 'idle' as const, icon: 'box' as const },
+];
+
+const agents = [
+  { name: 'Claude Code', cmd: 'claude',        accent: 'oklch(0.74 0.16 38)', iconKind: 'claude' as const },
+  { name: 'Codex',       cmd: 'codex',         accent: 'oklch(0.92 0 0)',     iconKind: 'openai' as const },
+  { name: 'Cursor CLI',  cmd: 'cursor-agent',  accent: 'oklch(0.92 0 0)',     iconKind: 'cursor' as const },
+];
+---
+
+<section class="relative py-24 md:py-32 mesh-stage">
+  <div class="mesh-bg-faint" aria-hidden="true"></div>
+  <div class="mx-auto max-w-page px-6">
+    <header class="max-w-prose">
+      <p class="font-mono text-[11px] uppercase tracking-[0.18em] text-fg-3 mb-4">§02 · Machines & agents</p>
+      <h2 class="text-h2 font-medium text-fg-0 text-balance">Add a machine. Pick a CLI.</h2>
+      <p class="mt-5 text-lead text-fg-1 text-pretty max-w-[60ch]">
+        The dashboard pushes agent specs to each box on a per-machine Redis stream.
+      </p>
+    </header>
+
+    <div class="mt-14 grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-20 items-start">
+      <!-- ============================================================
+           Machines column
+           ============================================================ -->
+      <div>
+        <div class="flex items-baseline justify-between mb-5">
+          <h3 class="font-mono text-[11px] uppercase tracking-[0.18em] text-fg-3">Machines</h3>
+          <span class="font-mono text-[11px] text-fg-3">{machines.length} connected</span>
+        </div>
+
+        <div class="space-y-px">
+          <!-- Connect new machine row — looks like a plain command-line invitation -->
+          <div class="flex items-center gap-4 py-3 group cursor-default">
+            <div class="h-7 w-7 inline-flex items-center justify-center text-fg-3 shrink-0">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <line x1="12" y1="6" x2="12" y2="18"/><line x1="6" y1="12" x2="18" y2="12"/>
+              </svg>
+            </div>
+            <div class="flex-1 min-w-0 flex items-baseline gap-3">
+              <span class="text-fg-2 text-[14px] font-medium tracking-tight group-hover:text-fg-0 transition-colors">connect a new machine</span>
+              <span class="font-mono text-[11.5px] text-fg-3 truncate">curl -fsSL argus.dev/install.sh | bash</span>
+            </div>
+          </div>
+
+          <!-- Hairline above the actual machine list -->
+          <div class="h-1"></div>
+
+          {machines.map((m) => (
+            <div class="flex items-center gap-4 py-3 group cursor-default">
+              <div class="h-7 w-7 inline-flex items-center justify-center text-fg-2 shrink-0">
+                {m.icon === 'laptop' && (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="5" width="18" height="11" rx="1.5"/><path d="M2 19h20"/></svg>
+                )}
+                {m.icon === 'cpu' && (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>
+                )}
+                {m.icon === 'server' && (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2" y="4" width="20" height="6" rx="1"/><rect x="2" y="14" width="20" height="6" rx="1"/><path d="M6 7h.01M6 17h.01"/></svg>
+                )}
+                {m.icon === 'cloud' && (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M17.5 19a4.5 4.5 0 1 0 0-9 6 6 0 0 0-11.5 2 4.5 4.5 0 0 0 1 8.9"/></svg>
+                )}
+                {m.icon === 'box' && (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                )}
+              </div>
+              <span class="text-[14px] font-medium tracking-tight text-fg-0">{m.name}</span>
+              <span class="font-mono text-[11.5px] text-fg-3 truncate">{m.os}</span>
+              <span class="ml-auto font-mono text-[11.5px] text-fg-3 tabular-nums shrink-0">
+                {m.sessions === 0 ? 'idle' : `${m.sessions} session${m.sessions === 1 ? '' : 's'}`}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <!-- ============================================================
+           Agents column
+           ============================================================ -->
+      <div>
+        <div class="flex items-baseline justify-between mb-5">
+          <h3 class="font-mono text-[11px] uppercase tracking-[0.18em] text-fg-3">Agents</h3>
+          <span class="font-mono text-[11px] text-fg-3">auto-detected on PATH</span>
+        </div>
+
+        <div class="space-y-px">
+          <!-- Note row — what the dropdown actually does -->
+          <div class="flex items-center gap-4 py-3">
+            <div class="h-7 w-7 inline-flex items-center justify-center text-fg-3 shrink-0">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+            </div>
+            <p class="text-fg-2 text-[13.5px] leading-[1.55] text-pretty">
+              The sidecar probes <span class="code-chip">PATH</span> at boot. The create-agent dropdown shows whatever's installed on that machine.
+            </p>
+          </div>
+
+          <div class="h-1"></div>
+
+          {agents.map((a) => (
+            <div class="agent-row flex items-center gap-4 py-3.5 group cursor-default" style={`--agent-accent: ${a.accent};`}>
+              <div
+                class="agent-icon h-9 w-9 inline-flex items-center justify-center rounded-md shrink-0"
+                style={`color: ${a.accent};`}
+              >
+                {a.iconKind === 'claude' && (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z" fill-rule="nonzero"/>
+                  </svg>
+                )}
+                {a.iconKind === 'openai' && (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" aria-hidden="true">
+                    <path clip-rule="evenodd" d="M8.086.457a6.105 6.105 0 013.046-.415c1.333.153 2.521.72 3.564 1.7a.117.117 0 00.107.029c1.408-.346 2.762-.224 4.061.366l.063.03.154.076c1.357.703 2.33 1.77 2.918 3.198.278.679.418 1.388.421 2.126a5.655 5.655 0 01-.18 1.631.167.167 0 00.04.155 5.982 5.982 0 011.578 2.891c.385 1.901-.01 3.615-1.183 5.14l-.182.22a6.063 6.063 0 01-2.934 1.851.162.162 0 00-.108.102c-.255.736-.511 1.364-.987 1.992-1.199 1.582-2.962 2.462-4.948 2.451-1.583-.008-2.986-.587-4.21-1.736a.145.145 0 00-.14-.032c-.518.167-1.04.191-1.604.185a5.924 5.924 0 01-2.595-.622 6.058 6.058 0 01-2.146-1.781c-.203-.269-.404-.522-.551-.821a7.74 7.74 0 01-.495-1.283 6.11 6.11 0 01-.017-3.064.166.166 0 00.008-.074.115.115 0 00-.037-.064 5.958 5.958 0 01-1.38-2.202 5.196 5.196 0 01-.333-1.589 6.915 6.915 0 01.188-2.132c.45-1.484 1.309-2.648 2.577-3.493.282-.188.55-.334.802-.438.286-.12.573-.22.861-.304a.129.129 0 00.087-.087A6.016 6.016 0 015.635 2.31C6.315 1.464 7.132.846 8.086.457zm-.804 7.85a.848.848 0 00-1.473.842l1.694 2.965-1.688 2.848a.849.849 0 001.46.864l1.94-3.272a.849.849 0 00.007-.854l-1.94-3.393zm5.446 6.24a.849.849 0 000 1.695h4.848a.849.849 0 000-1.696h-4.848z"/>
+                  </svg>
+                )}
+                {a.iconKind === 'cursor' && (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" aria-hidden="true">
+                    <path d="M22.106 5.68L12.5.135a.998.998 0 00-.998 0L1.893 5.68a.84.84 0 00-.419.726v11.186c0 .3.16.577.42.727l9.607 5.547a.999.999 0 00.998 0l9.608-5.547a.84.84 0 00.42-.727V6.407a.84.84 0 00-.42-.726zm-.603 1.176L12.228 22.92c-.063.108-.228.064-.228-.061V12.34a.59.59 0 00-.295-.51l-9.11-5.26c-.107-.062-.063-.228.062-.228h18.55c.264 0 .428.286.296.514z"/>
+                  </svg>
+                )}
+              </div>
+
+              <span class="text-fg-0 text-[15px] font-medium tracking-tight">{a.name}</span>
+
+              <span class="ml-auto inline-flex items-center gap-2 font-mono text-[11.5px] text-fg-3">
+                <span style={`color: ${a.accent}; opacity: 0.7;`}>$</span>
+                <span>{a.cmd}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  /* Subtle row hover — icon picks up brand-tinted bg, name brightens.
+     Synced with the page-wide --t-hover for consistency. */
+  .agent-row .agent-icon {
+    transition: background var(--t-hover);
+  }
+  .agent-row span:nth-child(2) {
+    transition: color var(--t-hover);
+  }
+  .agent-row:hover .agent-icon {
+    background: color-mix(in oklab, var(--agent-accent) 14%, transparent);
+  }
+  .agent-row:hover span:nth-child(2) {
+    color: oklch(1 0 0);
+  }
+</style>

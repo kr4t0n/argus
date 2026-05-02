@@ -1,0 +1,111 @@
+---
+import CodeBlock from './primitives/CodeBlock.astro';
+---
+
+<section id="install" class="relative py-24 md:py-32 mesh-stage">
+  <div class="mesh-bg-faint" aria-hidden="true"></div>
+  <div class="mx-auto max-w-page px-6">
+    <header class="max-w-prose">
+      <p class="font-mono text-[11px] uppercase tracking-[0.18em] text-fg-3 mb-4">§05 · Install</p>
+      <h2 class="text-h2 font-medium text-fg-0 text-balance">Sixty seconds to a running dashboard.</h2>
+      <p class="mt-5 text-lead text-fg-1 text-pretty max-w-[60ch]">
+        Two paths. Pick the one that matches the box you have lying around.
+      </p>
+    </header>
+
+    <div class="mt-14 grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-10">
+      <!-- Local — Docker Compose -->
+      <div class="install-block relative group">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2.5">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="install-icon text-argus-green/85" aria-hidden="true"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M2 11h20"/></svg>
+            <h3 class="install-title text-fg-0 text-[18px] font-medium">Local · Docker Compose</h3>
+          </div>
+          <span class="font-mono text-[10.5px] text-fg-3">recommended for trying it out</span>
+        </div>
+
+        <CodeBlock
+          lang="bash"
+          code={`git clone https://github.com/kr4t0n/argus
+cd argus
+cp .env.example .env
+docker compose up -d`}
+        />
+
+        <p class="mt-4 text-[13.5px] text-fg-2 max-w-[52ch] text-pretty">
+          Brings up Postgres, Redis, the server, and the web app on
+          <span class="code-chip">localhost:3000</span>. The bundled stack ships a sidecar on the host so you can
+          spin a Claude Code or Codex agent immediately.
+        </p>
+      </div>
+
+      <!-- Cluster — Helm -->
+      <div class="install-block relative group">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2.5">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="install-icon text-argus-green/85" aria-hidden="true"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/><line x1="12" y1="22" x2="12" y2="15.5"/><polyline points="22 8.5 12 15.5 2 8.5"/></svg>
+            <h3 class="install-title text-fg-0 text-[18px] font-medium">Cluster · Helm</h3>
+          </div>
+          <span class="font-mono text-[10.5px] text-fg-3">production deploys</span>
+        </div>
+
+        <CodeBlock
+          lang="bash"
+          code={`helm repo add argus https://kr4t0n.github.io/argus/helm
+helm repo update
+helm install argus argus/argus \\
+  --set postgres.url=$POSTGRES_URL \\
+  --set redis.url=$REDIS_URL`}
+        />
+
+        <p class="mt-4 text-[13.5px] text-fg-2 max-w-[52ch] text-pretty">
+          BYO Postgres and Redis, or run them in-cluster. Full chart docs in
+          <a href="https://github.com/kr4t0n/argus/blob/main/helm/argus/README.md" rel="noopener">helm/argus/README.md</a>.
+        </p>
+      </div>
+    </div>
+
+    <!-- Sidecars on remote boxes -->
+    <div class="mt-16">
+      <div class="grid grid-cols-1 md:grid-cols-[auto_1fr] gap-6 md:gap-16 items-start">
+        <div>
+          <p class="font-mono text-[11px] uppercase tracking-[0.18em] text-fg-3 mb-3">Adding remote machines</p>
+          <h3 class="text-h3 font-medium text-fg-0 max-w-[16ch] text-balance">One sidecar per box. systemd or launchd.</h3>
+        </div>
+        <div>
+          <p class="text-fg-1 max-w-[60ch] text-pretty">
+            Each remote box runs a single <span class="code-chip">argus-sidecar</span> binary. Hand it a server URL and a join token,
+            wrap it in a unit file, and it self-registers as a Machine on first dial-home.
+            Recipes for systemd, launchd, and a one-line shell installer in the
+            <a href="https://github.com/kr4t0n/argus/blob/main/INSTALLATION.md" rel="noopener">install guide</a>.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  /* Hover the whole install block: title goes brand green, icon stroke
+     brightens, the closing prose lifts from dim to full. CodeBlock
+     handles its own bg lift. No green halo. */
+  .install-block .install-prose,
+  .install-block > p:last-of-type {
+    transition: opacity var(--t-hover), color var(--t-hover);
+    opacity: 0.7;
+  }
+  .install-block .install-title,
+  .install-block .install-icon {
+    transition: color var(--t-hover);
+  }
+  .install-block:hover .install-prose,
+  .install-block:hover > p:last-of-type {
+    opacity: 1;
+  }
+  .install-block:hover .install-title {
+    color: oklch(0.78 0.17 158);
+  }
+  .install-block:hover .install-icon {
+    color: oklch(0.78 0.17 158);
+  }
+</style>

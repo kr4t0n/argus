@@ -1,0 +1,37 @@
+---
+interface Props {
+  code: string;
+  lang?: string;
+}
+const { code, lang = 'bash' } = Astro.props;
+---
+
+<div class="codeblock rounded-xl group relative overflow-hidden">
+  <div class="flex items-center justify-between px-4 py-2 text-[10.5px] font-mono uppercase tracking-[0.16em] text-fg-3">
+    <span>{lang}</span>
+    <button
+      type="button"
+      class="copy-btn flex items-center gap-1.5 text-fg-3 transition-colors duration-150"
+      data-copy={code}
+      aria-label="Copy code"
+    >
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      <span data-copy-label class="normal-case tracking-normal text-[11px]">copy</span>
+    </button>
+  </div>
+  <pre class="px-4 pb-4 pt-1 overflow-x-auto bg-bg-0/40 font-mono text-[12.5px] leading-[1.6] text-fg-1"><code>{code}</code></pre>
+</div>
+
+<style>
+  .codeblock {
+    background: var(--bg-1);
+    transition: background var(--t-hover);
+  }
+  .codeblock:hover {
+    background: oklch(0.195 0.013 158);
+  }
+  .codeblock:hover .copy-btn,
+  .copy-btn.is-copied {
+    color: oklch(0.78 0.17 158);
+  }
+</style>

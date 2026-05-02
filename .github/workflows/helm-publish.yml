@@ -24,10 +24,11 @@ permissions:
   contents: write   # required to push commits to gh-pages
 
 concurrency:
-  # Serialize publishes — two parallel runs would race on `git push
-  # gh-pages`. We don't cancel-in-progress because each run finalizes
+  # Serialized with pages-publish.yml under a shared group: both
+  # workflows push to gh-pages and would otherwise race on
+  # `git push`. cancel-in-progress: false because each run finalizes
   # an immutable artifact (a versioned .tgz) we don't want to lose.
-  group: helm-publish
+  group: gh-pages-publish
   cancel-in-progress: false
 
 jobs:

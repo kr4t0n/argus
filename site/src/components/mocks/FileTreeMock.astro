@@ -1,0 +1,87 @@
+---
+interface Props {
+  /** When true, renders a richer/wider tree for the showcase section */
+  full?: boolean;
+}
+const { full = false } = Astro.props;
+
+// Simple inline SVG icons keep this island JS-free.
+---
+
+<ul class="font-mono text-[11px] leading-[1.7] text-fg-2">
+  <li class="flex items-center gap-1.5 text-fg-1">
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="text-fg-3"><polyline points="6 9 12 15 18 9"/></svg>
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-argus-green/80"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+    apps
+  </li>
+
+  <li class="ml-4 flex items-center gap-1.5">
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="text-fg-3"><polyline points="6 9 12 15 18 9"/></svg>
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-fg-3"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+    web
+  </li>
+
+  <li class="ml-8 flex items-center gap-1.5">
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="text-fg-3 -rotate-90"><polyline points="6 9 12 15 18 9"/></svg>
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-fg-3"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+    src
+  </li>
+
+  <li class="ml-8 flex items-center gap-1.5 rounded px-1 py-0 -mx-1 bg-argus-green/10 text-fg-0">
+    <span class="w-2.5"></span>
+    <svg width="10" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-argus-green"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+    main.ts
+    <span class="ml-auto text-argus-green/80 text-[9.5px]">M</span>
+  </li>
+
+  <li class="ml-8 flex items-center gap-1.5">
+    <span class="w-2.5"></span>
+    <svg width="10" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-fg-3"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+    metrics.ts
+  </li>
+
+  {full && (
+    <>
+      <li class="ml-8 flex items-center gap-1.5">
+        <span class="w-2.5"></span>
+        <svg width="10" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-fg-3"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        useSession.ts
+      </li>
+      <li class="ml-8 flex items-center gap-1.5">
+        <span class="w-2.5"></span>
+        <svg width="10" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-fg-3"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        index.css
+      </li>
+    </>
+  )}
+
+  <li class="ml-4 flex items-center gap-1.5">
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="text-fg-3"><polyline points="6 9 12 15 18 9"/></svg>
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-fg-3"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+    server
+  </li>
+
+  <li class="flex items-center gap-1.5">
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="text-fg-3"><polyline points="6 9 12 15 18 9"/></svg>
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-fg-3"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+    packages
+  </li>
+
+  <li class="flex items-center gap-1.5">
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="text-fg-3"><polyline points="6 9 12 15 18 9"/></svg>
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-fg-3"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+    helm
+  </li>
+
+  <li class="flex items-center gap-1.5">
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="text-fg-3 -rotate-90"><polyline points="6 9 12 15 18 9"/></svg>
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-fg-3"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+    README.md
+  </li>
+
+  <li class="flex items-center gap-1.5">
+    <span class="w-2.5"></span>
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-fg-3"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+    package.json
+  </li>
+</ul>
