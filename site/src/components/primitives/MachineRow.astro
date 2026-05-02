@@ -1,0 +1,53 @@
+---
+interface Props {
+  name: string;
+  status: 'live' | 'idle' | 'pty' | 'stale';
+  icon: 'laptop' | 'cpu' | 'server' | 'cloud' | 'box' | 'monitor';
+  active?: boolean;
+}
+const { name, status, icon, active = false } = Astro.props;
+
+const statusColor = {
+  live: 'oklch(0.78 0.17 158)',
+  pty: 'oklch(0.78 0.17 158 / 0.75)',
+  idle: 'oklch(0.42 0 0)',
+  stale: 'oklch(0.32 0 0)',
+};
+---
+
+<div
+  class:list={[
+    'flex items-center gap-2 px-2 py-1.5 rounded-md text-fg-2 transition-colors',
+    active && 'text-fg-0',
+  ]}
+  style={active ? 'background: oklch(0.78 0.17 158 / 0.07);' : ''}
+>
+  {icon === 'laptop' && (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" class="text-fg-3"><rect x="3" y="5" width="18" height="11" rx="1.5"/><path d="M2 19h20"/></svg>
+  )}
+  {icon === 'cpu' && (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" class="text-fg-3"><rect x="6" y="6" width="12" height="12" rx="1"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>
+  )}
+  {icon === 'server' && (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" class="text-fg-3"><rect x="2" y="4" width="20" height="6" rx="1"/><rect x="2" y="14" width="20" height="6" rx="1"/><path d="M6 7h.01M6 17h.01"/></svg>
+  )}
+  {icon === 'cloud' && (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" class="text-fg-3"><path d="M17.5 19a4.5 4.5 0 1 0 0-9 6 6 0 0 0-11.5 2 4.5 4.5 0 0 0 1 8.9"/></svg>
+  )}
+  {icon === 'box' && (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" class="text-fg-3"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+  )}
+  {icon === 'monitor' && (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" class="text-fg-3"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+  )}
+
+  <span class="font-mono">{name}</span>
+
+  <span class="ml-auto relative inline-flex h-1.5 w-1.5">
+    {status === 'live' ? (
+      <span class="absolute inset-0 rounded-full bg-argus-green animate-pulse-rim"></span>
+    ) : (
+      <span class="absolute inset-0 rounded-full" style={`background: ${statusColor[status]}`}></span>
+    )}
+  </span>
+</div>

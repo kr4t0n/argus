@@ -1,0 +1,44 @@
+---
+interface Props {
+  label?: string;
+  sublabel?: string;
+  emphasized?: boolean;
+}
+const { label, sublabel, emphasized = false } = Astro.props;
+
+// CSS-only arrow: a 1px gradient line + a CSS-triangle arrowhead.
+// Guaranteed visible regardless of SVG stretching quirks.
+const stroke = emphasized
+  ? 'oklch(0.86 0.14 158)'
+  : 'oklch(0.78 0.005 158 / 0.55)';
+---
+
+<div class="flex md:flex-col items-center justify-center md:py-0 py-3">
+  <!-- Mobile: short vertical thread -->
+  <div class="md:hidden h-8 w-px" style={`background: ${stroke}; opacity: 0.55;`}></div>
+
+  <!-- Desktop: label · arrow · sublabel -->
+  <div class="hidden md:flex md:flex-col items-center gap-1.5 px-2 py-2 min-w-[120px]">
+    {label && (
+      <span class:list={[
+        'font-mono text-[10px] uppercase tracking-[0.16em] text-center leading-tight',
+        emphasized ? 'text-argus-green/90' : 'text-fg-3',
+      ]}>
+        {label}
+      </span>
+    )}
+    <div class="flex items-center w-full">
+      <div
+        class="flex-1 h-px"
+        style={`background: linear-gradient(to right, transparent 0%, ${stroke} 100%);`}
+      ></div>
+      <div
+        class="w-0 h-0 shrink-0"
+        style={`border-style: solid; border-width: 4px 0 4px 6px; border-color: transparent transparent transparent ${stroke};`}
+      ></div>
+    </div>
+    {sublabel && (
+      <span class="font-mono text-[10px] text-fg-3 leading-tight text-center">{sublabel}</span>
+    )}
+  </div>
+</div>

@@ -1,0 +1,68 @@
+---
+import Logo from './primitives/Logo.astro';
+const year = new Date().getFullYear();
+const base = import.meta.env.BASE_URL;
+---
+
+<footer class="relative pt-20 pb-12">
+  <div class="mx-auto max-w-page px-6">
+    <div class="mb-12"></div>
+
+    <div class="grid grid-cols-1 md:grid-cols-[1.4fr_1fr_1fr_1fr] gap-10">
+      <!-- Brand -->
+      <div>
+        <a href={base} class="flex items-center gap-2 text-fg-0 no-underline mb-3" aria-label="Argus home">
+          <Logo />
+          <span class="font-mono font-medium tracking-tight text-fg-0">argus</span>
+        </a>
+        <p class="text-[13.5px] text-fg-2 max-w-[42ch] text-pretty">
+          The open-source dashboard for CLI agents on every machine you own.
+        </p>
+      </div>
+
+      <!-- Project -->
+      <div>
+        <h4 class="text-fg-3 font-mono text-[10.5px] uppercase tracking-[0.18em] mb-4">Project</h4>
+        <ul class="space-y-2.5 text-[13.5px]">
+          <li><a href="https://github.com/kr4t0n/argus" class="text-fg-1 hover:text-argus-green no-underline" rel="noopener">GitHub</a></li>
+          <li><a href="https://github.com/kr4t0n/argus/blob/main/INSTALLATION.md" class="text-fg-1 hover:text-argus-green no-underline" rel="noopener">Install guide</a></li>
+          <li><a href="https://github.com/kr4t0n/argus/blob/main/helm/argus/README.md" class="text-fg-1 hover:text-argus-green no-underline" rel="noopener">Helm chart</a></li>
+          <li><a href="https://github.com/kr4t0n/argus/issues" class="text-fg-1 hover:text-argus-green no-underline" rel="noopener">Issues</a></li>
+        </ul>
+      </div>
+
+      <!-- Adapters -->
+      <div>
+        <h4 class="text-fg-3 font-mono text-[10.5px] uppercase tracking-[0.18em] mb-4">Adapters</h4>
+        <ul class="space-y-2.5 text-[13.5px]">
+          <li><span class="text-fg-1">claude-code</span></li>
+          <li><span class="text-fg-1">codex</span></li>
+          <li><span class="text-fg-1">cursor-cli</span></li>
+        </ul>
+      </div>
+
+      <!-- Community -->
+      <div>
+        <h4 class="text-fg-3 font-mono text-[10.5px] uppercase tracking-[0.18em] mb-4">Community</h4>
+        <ul class="space-y-2.5 text-[13.5px]">
+          <li><a href="https://github.com/kr4t0n/argus/discussions" class="text-fg-1 hover:text-argus-green no-underline" rel="noopener">Discussions</a></li>
+          <li><a href="https://github.com/kr4t0n/argus/blob/main/AGENTS.md" class="text-fg-1 hover:text-argus-green no-underline" rel="noopener">Agents.md</a></li>
+          <li><a href="https://github.com/kr4t0n/argus/blob/main/LICENSE" class="text-fg-1 hover:text-argus-green no-underline" rel="noopener">License</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="my-10"></div>
+
+    <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-[12px] text-fg-3 font-mono">
+      <div>© {year} Argus contributors. Built in the open.</div>
+      <div class="flex items-center gap-4">
+        <span>self-hosted</span>
+        <span>·</span>
+        <span>multi-machine</span>
+        <span>·</span>
+        <span>multi-CLI</span>
+      </div>
+    </div>
+  </div>
+</footer>

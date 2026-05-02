@@ -1,0 +1,337 @@
+@import '@fontsource-variable/onest';
+@import '@fontsource-variable/jetbrains-mono';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+    /* Cursor position in viewport coords — written by JS on mousemove. */
+    --cx: 50vw;
+    --cy: 30vh;
+    /* Standard hover transition — used everywhere on the page so
+       different elements animate in lockstep. */
+    --t-hover: 350ms cubic-bezier(0.4, 0, 0.2, 1);
+    /* Two-level neutral surface scheme. Tinted toward the brand
+       (green, hue 158) per color-and-contrast.md. */
+    --bg-0: oklch(0.130 0.010 158);
+    --bg-1: oklch(0.170 0.012 158);
+    --hairline: oklch(0.130 0.010 158);
+    /* Brand */
+    --brand-green: oklch(0.78 0.17 158);
+    --brand-rim: oklch(0.86 0.14 158);
+  }
+
+  html {
+    /* Definite page bg — bg-0. Solid, slightly green-tinted. */
+    background: var(--bg-0);
+  }
+
+  html,
+  body {
+    @apply text-fg-1 font-sans antialiased;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Body owns the page stacking context so z:-1 children paint on
+     top of body's bg paint, not behind it. */
+  body {
+    background: transparent;
+    isolation: isolate;
+    overflow-x: hidden;
+  }
+
+  ::selection {
+    background-color: oklch(0.78 0.17 158 / 0.35);
+    color: oklch(0.96 0 0);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: oklch(0.22 0 0);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: oklch(0.30 0 0);
+  }
+
+  h1, h2, h3, h4 {
+    @apply text-fg-0 font-display;
+    font-feature-settings: 'ss01', 'ss03', 'cv11';
+  }
+
+  a {
+    @apply text-argus-green transition-colors duration-150 ease-out-expo;
+  }
+  a:hover {
+    color: oklch(0.86 0.14 158);
+  }
+
+  hr {
+    @apply border-0 h-px;
+    background: linear-gradient(
+      to right,
+      transparent 0%,
+      oklch(0.78 0.17 158 / 0.16) 50%,
+      transparent 100%
+    );
+  }
+
+  pre, code {
+    @apply font-mono;
+    font-feature-settings: 'ss02', 'ss03';
+  }
+}
+
+@layer components {
+  /* Tile — nested raised surface inside a card. Used by mock chrome
+     elements like the FileView tab strip. */
+  .tile-soft {
+    background: var(--bg-0);
+    border-radius: 6px;
+  }
+
+  /* ============================================================
+   * Cursor light — viewport-fixed, very faint, very wide.
+   * ============================================================ */
+  .cursor-light {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background: radial-gradient(
+      circle 1400px at var(--cx, 50vw) var(--cy, 30vh),
+      oklch(0.78 0.22 158 / 0.035) 0%,
+      oklch(0.62 0.20 158 / 0.015) 35%,
+      transparent 70%
+    );
+  }
+  main, footer, nav {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ============================================================
+   * Laser — image asset (laser.png). Beam comes from upper-right
+   * and diffuses down-left. Sized to the hero's top area, fades to
+   * transparent at the bottom so it blends into the page bg.
+   * ============================================================ */
+  .laser-stage {
+    position: relative;
+    isolation: isolate;
+  }
+  .laser {
+    position: absolute;
+    inset: 0 0 0 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image: url('../assets/laser-4.svg');
+    background-repeat: no-repeat;
+    background-position: top center;
+    /* Fixed render size — does not scale with viewport. Overflow on
+       the sides is clipped by the parent .laser-stage / hero section. */
+    background-size: 1660px auto;
+    -webkit-mask-image: linear-gradient(to bottom, black 0%, black 50%, transparent 95%);
+    mask-image: linear-gradient(to bottom, black 0%, black 50%, transparent 95%);
+    animation: laser-breathe 8s ease-in-out infinite alternate;
+  }
+  @keyframes laser-breathe {
+    0%   { opacity: 0.9; }
+    100% { opacity: 1.0; }
+  }
+
+  /* Soft mesh for feature mocks — keeps the previous quiet pool style. */
+  .mesh-stage {
+    position: relative;
+    isolation: isolate;
+  }
+  .mesh-bg-soft {
+    position: absolute;
+    inset: -8% -8%;
+    z-index: -1;
+    pointer-events: none;
+    /* Faint glow pool. All hues at 158 (brand) or 162 (teal-leaning).
+       Quiet enough that mocks read as the focal element. */
+    background:
+      radial-gradient(50% 60% at 50% 40%, oklch(0.62 0.20 158 / 0.16) 0%, transparent 70%),
+      radial-gradient(35% 45% at 20% 70%, oklch(0.52 0.16 162 / 0.10) 0%, transparent 70%),
+      radial-gradient(35% 45% at 80% 70%, oklch(0.55 0.18 158 / 0.10) 0%, transparent 70%);
+    filter: blur(80px) saturate(1.1);
+    animation: mesh-drift 32s ease-in-out infinite alternate;
+  }
+  /* Page-level atmospheric green accent — drop into a section that
+     would otherwise be plain black text on dark. Roughly half the
+     opacity of mesh-bg-soft. Hues drift between 158 and 162. */
+  .mesh-bg-faint {
+    position: absolute;
+    inset: -10% -10%;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(45% 55% at 30% 30%, oklch(0.62 0.18 158 / 0.08) 0%, transparent 75%),
+      radial-gradient(40% 50% at 75% 65%, oklch(0.55 0.16 162 / 0.06) 0%, transparent 75%);
+    filter: blur(100px) saturate(1.1);
+    animation: mesh-drift 48s ease-in-out infinite alternate;
+  }
+  @keyframes mesh-drift {
+    0%   { transform: translate3d(-2%, -1%, 0) scale(1.0); }
+    50%  { transform: translate3d(2%, 1%, 0)   scale(1.04); }
+    100% { transform: translate3d(-1%, 2%, 0)  scale(1.02); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cursor-light {
+      background: radial-gradient(
+        circle 1400px at 50vw 30vh,
+        oklch(0.78 0.20 158 / 0.025) 0%,
+        oklch(0.62 0.20 158 / 0.010) 35%,
+        transparent 70%
+      );
+    }
+    .laser::before, .laser::after, .mesh-bg-soft {
+      animation: none !important;
+    }
+    .laser::before {
+      transform: translateX(-50%) !important;
+    }
+  }
+
+  /* Section divider */
+  .divider {
+    height: 1px;
+    background: linear-gradient(
+      to right,
+      transparent 0%,
+      oklch(0.78 0.17 158 / 0.20) 50%,
+      transparent 100%
+    );
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center gap-2 rounded-full px-5 py-2 font-mono text-[13px] font-medium transition-all duration-150 ease-out-expo;
+    background: oklch(0.78 0.17 158);
+    color: oklch(0.10 0 0);
+  }
+  .btn-primary:hover {
+    background: oklch(0.84 0.16 158);
+    /* Pin dark color so the global a:hover green doesn't bleed through
+       and turn the label invisible against the green button. */
+    color: oklch(0.10 0 0);
+    transform: translateY(-1px);
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center gap-2 rounded-full px-5 py-2 font-mono text-[13px] transition-all duration-150 ease-out-expo;
+    color: oklch(0.78 0 0);
+  }
+  .btn-secondary:hover {
+    color: oklch(0.96 0 0);
+  }
+
+  .code-chip {
+    @apply font-mono text-[0.875em] px-1.5 py-0.5 rounded;
+    background: oklch(0.18 0 0);
+    color: oklch(0.86 0 0);
+  }
+
+  /* Mock window — page-bg color so the laser/mesh glow flows
+     continuously through the card without clashing. At rest the
+     panel sits at 95% opacity; hover brings it to 100% and brightens
+     the top rim slightly. */
+  .mock-window {
+    position: relative;
+    overflow: hidden;
+    font-size: 12.5px;
+    background: var(--bg-0);
+    border-radius: 14px;
+    isolation: isolate;
+    opacity: 0.95;
+    font-family: 'Onest Variable', ui-sans-serif, system-ui, sans-serif;
+    /* Single shadow layer — a top green glow only. No black drop. At
+       rest its alpha is 0 (invisible); on hover it fades in to 0.32.
+       Negative spread (-60px) keeps it as a column above the card,
+       not a ring around it. */
+    box-shadow: 0 -40px 80px -60px oklch(0.86 0.14 158 / 0);
+    transition:
+      opacity var(--t-hover),
+      box-shadow var(--t-hover);
+  }
+  .mock-window:hover {
+    opacity: 1;
+    box-shadow: 0 -40px 80px -60px oklch(0.86 0.14 158 / 0.32);
+  }
+  /* Top-edge rim of light — short bright bar, position varies per mock
+     via --bar-left/--bar-right. Faint at rest, brightens slightly on
+     hover. Lives on top of everything in the mock so the panel reads
+     as illuminated from behind. */
+  .mock-window::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: var(--bar-left, 32%);
+    right: var(--bar-right, 32%);
+    height: 1px;
+    background: linear-gradient(
+      to right,
+      transparent 0%,
+      oklch(0.86 0.14 158 / 0.40) 50%,
+      transparent 100%
+    );
+    pointer-events: none;
+    z-index: 2;
+    border-top-left-radius: 999px;
+    border-top-right-radius: 999px;
+    transition: background var(--t-hover);
+  }
+  .mock-window:hover::before {
+    background: linear-gradient(
+      to right,
+      transparent 0%,
+      oklch(0.96 0.18 158 / 0.92) 50%,
+      transparent 100%
+    );
+  }
+  .mock-titlebar {
+    @apply flex items-center gap-2 px-3 py-2 text-[11px] font-mono;
+    color: oklch(0.45 0.004 252);
+    /* Flat. No gradient. Same bg as the card; a faint bottom hairline
+       separates it from the body. */
+    background: transparent;
+    border-bottom: 1px solid var(--bg-0);
+  }
+  .mock-traffic {
+    @apply flex gap-1.5;
+  }
+  .mock-traffic span {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: oklch(0.32 0.008 252);
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .text-pretty {
+    text-wrap: pretty;
+  }
+  .mask-fade-b {
+    -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+  }
+  .mask-fade-br {
+    -webkit-mask-image: linear-gradient(to bottom right, #000 50%, transparent 95%);
+    mask-image: linear-gradient(to bottom right, #000 50%, transparent 95%);
+  }
+}

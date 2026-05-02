@@ -1,0 +1,122 @@
+---
+import DashboardMock from './mocks/DashboardMock.astro';
+import Logo from './primitives/Logo.astro';
+const base = import.meta.env.BASE_URL;
+---
+
+<section class="relative pt-10 pb-24 md:pt-14 md:pb-32 overflow-hidden laser-stage">
+  <!-- Diffused laser-beam light source. Diagonal, irregular, fades on scroll. -->
+  <div class="laser" aria-hidden="true"></div>
+
+  <!-- Top nav -->
+  <nav class="mx-auto max-w-page px-6 flex items-center justify-between text-[13px]">
+    <a href={base} class="flex items-center gap-2 text-fg-0 no-underline" aria-label="Argus home">
+      <Logo />
+      <span class="font-mono font-medium tracking-tight text-fg-0">argus</span>
+    </a>
+    <div class="flex items-center gap-6">
+      <a href="#how" class="text-fg-2 hover:text-fg-0 no-underline">How it works</a>
+      <a href="#features" class="text-fg-2 hover:text-fg-0 no-underline">Features</a>
+      <a href="#install" class="text-fg-2 hover:text-fg-0 no-underline">Install</a>
+      <a
+        href="https://github.com/kr4t0n/argus"
+        class="text-fg-1 hover:text-fg-0 no-underline inline-flex items-center gap-1.5"
+        rel="noopener"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.07 3.29 9.36 7.84 10.88.57.1.78-.25.78-.55v-2.16c-3.19.69-3.86-1.36-3.86-1.36-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.69 1.25 3.34.95.1-.74.4-1.25.73-1.54-2.55-.29-5.23-1.27-5.23-5.66 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.46.11-3.05 0 0 .96-.31 3.15 1.18.91-.25 1.89-.38 2.86-.38s1.95.13 2.86.38c2.18-1.49 3.14-1.18 3.14-1.18.62 1.59.23 2.76.11 3.05.74.8 1.18 1.82 1.18 3.07 0 4.4-2.68 5.36-5.24 5.65.41.36.78 1.06.78 2.14v3.17c0 .31.21.66.79.55C20.21 21.36 23.5 17.07 23.5 12 23.5 5.65 18.35.5 12 .5z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </nav>
+
+  <!-- Hero copy -->
+  <div class="mx-auto max-w-page px-6 mt-20 md:mt-28">
+    <p class="font-mono text-[12px] uppercase tracking-[0.18em] text-argus-green/85 mb-5 inline-flex items-center gap-2">
+      <span class="relative inline-flex h-1.5 w-1.5">
+        <span class="absolute inset-0 rounded-full bg-argus-green animate-pulse-rim"></span>
+      </span>
+      Open-source, self-hosted, multi-machine
+    </p>
+
+    <h1 class="text-hero font-medium text-fg-0 max-w-[14ch] text-balance">
+      Watch CLI agents on every machine.
+    </h1>
+
+    <p class="mt-7 text-lead text-fg-1 max-w-[58ch] text-pretty">
+      The open-source dashboard for Claude Code, Codex, Cursor, and any CLI agent you run.
+      Self-hosted, multi-machine, your data stays on your network.
+    </p>
+
+    <div class="mt-9 flex flex-wrap items-center gap-3">
+      <a href="https://github.com/kr4t0n/argus" class="btn-primary no-underline" rel="noopener">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.07 3.29 9.36 7.84 10.88.57.1.78-.25.78-.55v-2.16c-3.19.69-3.86-1.36-3.86-1.36-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.69 1.25 3.34.95.1-.74.4-1.25.73-1.54-2.55-.29-5.23-1.27-5.23-5.66 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.46.11-3.05 0 0 .96-.31 3.15 1.18.91-.25 1.89-.38 2.86-.38s1.95.13 2.86.38c2.18-1.49 3.14-1.18 3.14-1.18.62 1.59.23 2.76.11 3.05.74.8 1.18 1.82 1.18 3.07 0 4.4-2.68 5.36-5.24 5.65.41.36.78 1.06.78 2.14v3.17c0 .31.21.66.79.55C20.21 21.36 23.5 17.07 23.5 12 23.5 5.65 18.35.5 12 .5z"/></svg>
+        Star on GitHub
+      </a>
+      <div class="helm-pill inline-flex items-center gap-3 px-3.5 py-2.5 rounded-full" style="background: var(--bg-1);">
+        <span class="font-mono text-[12.5px] text-fg-1 select-all">helm repo add argus https://kr4t0n.github.io/argus/helm</span>
+        <button
+          type="button"
+          class="text-fg-3 hover:text-fg-0 transition-colors"
+          aria-label="Copy install command"
+          data-copy="helm repo add argus https://kr4t0n.github.io/argus/helm"
+          data-copy-feedback="swap-icon"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <p class="mt-4 text-[12.5px] text-fg-3 font-mono">
+      Or: <a href="#install" class="no-underline hover:underline">docker compose up</a>. Works in 60 seconds.
+    </p>
+  </div>
+
+  <style>
+    /* Helm pill — small, focused cursor-rim. Brighter near the cursor,
+       fades within ~140px so it reads as a "spotlight on this pill"
+       rather than a full halo. JS sets --mx/--my (already wired by
+       cursor-light.ts since the pill carries .helm-pill, which we
+       opt-in select below). */
+    .helm-pill {
+      position: relative;
+      isolation: isolate;
+      cursor: text;
+    }
+    .helm-pill::after {
+      content: '';
+      position: absolute;
+      /* Sit OUTSIDE the pill: extends 1.5px beyond every edge so the
+         masked ring lives in that outset area, not on the pill itself. */
+      inset: -1.5px;
+      border-radius: 9999px;
+      padding: 1.5px;
+      background: radial-gradient(
+        140px circle at var(--mx, 50%) var(--my, 50%),
+        oklch(0.92 0.16 158 / 0.65) 0%,
+        oklch(0.86 0.14 158 / 0.22) 35%,
+        transparent 65%
+      );
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity var(--t-hover);
+    }
+    .helm-pill:hover::after {
+      opacity: 1;
+    }
+  </style>
+
+  <!-- Hero mock — perspective-tilted, rim-lit, with a mesh glow pool behind. -->
+  <div class="relative mx-auto max-w-[1400px] px-6 mt-20 md:mt-24 mesh-stage">
+    <div class="mesh-bg-soft" aria-hidden="true"></div>
+    <DashboardMock variant="hero" class="mx-auto max-w-[1180px] shadow-[0_40px_120px_-40px_oklch(0.05_0_0/0.7)]" />
+  </div>
+</section>
+
+<style>
+  /* Copy-button colour pulse — handled by the shared copy script
+     toggling .is-copied. */
+  [data-copy].is-copied { color: oklch(0.78 0.17 158); }
+</style>
