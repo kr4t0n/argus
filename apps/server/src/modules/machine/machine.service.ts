@@ -21,7 +21,7 @@ import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 import { FSService } from './fs.service';
-import { SidecarUpdateService } from './sidecar-update.service';
+import { SidecarUpdateService, stripSidecarPrefix } from './sidecar-update.service';
 
 const CONSUMER = 'server-1';
 const STALE_AFTER_MS = 30_000;
@@ -347,6 +347,14 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
       case 'machine-register': {
         const now = new Date();
         const adapters = ev.availableAdapters ?? [];
+        // Normalize the reported sidecar version so the DB always stores
+        // bare semver (`0.1.11`) — the running binary reports its raw
+        // `main.Version` ldflag, which is the full tag name
+        // (`argus-sidecar-v0.1.11`) when built by argus-sidecar-release.yml.
+        // Without this, every downstream comparator and "from X to Y"
+        // toast sees mismatched shapes against the prefix-stripped GH
+        // latest tag.
+        const sidecarVersion = stripSidecarPrefix(ev.sidecarVersion);
         const saved = await this.prisma.machine.upsert({
           where: { id: ev.machineId },
           create: {
@@ -355,7 +363,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
             hostname: ev.hostname,
             os: ev.os,
             arch: ev.arch,
-            sidecarVersion: ev.sidecarVersion,
+            sidecarVersion,
             availableAdapters: adapters as unknown as Prisma.InputJsonValue,
             status: 'online',
             lastSeenAt: now,
@@ -367,7 +375,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
             hostname: ev.hostname,
             os: ev.os,
             arch: ev.arch,
-            sidecarVersion: ev.sidecarVersion,
+            sidecarVersion,
             availableAdapters: adapters as unknown as Prisma.InputJsonValue,
             status: 'online',
             lastSeenAt: now,
@@ -380,12 +388,12 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         const count = await this.prisma.agent.count({ where: { machineId: saved.id } });
         this.gateway.emitMachineUpsert(MachineService.toDto(saved, count));
         this.logger.log(
-          `machine-register ${ev.machineId} (${ev.name} / ${ev.os}/${ev.arch}, sidecar ${ev.sidecarVersion}, ${adapters.length} adapter(s))`,
+          `machine-register ${ev.machineId} (${ev.name} / ${ev.os}/${ev.arch}, sidecar ${sidecarVersion}, ${adapters.length} adapter(s))`,
         );
         // If a remote-triggered self-update was waiting for this
         // machine to come back on the new binary, fire `completed`
         // and resolve the bulk-loop promise.
-        this.sidecarUpdate.observeMachineRegister(ev.machineId, ev.sidecarVersion);
+        this.sidecarUpdate.observeMachineRegister(ev.machineId, sidecarVersion);
         await this.syncAgents(ev.machineId);
         break;
       }
