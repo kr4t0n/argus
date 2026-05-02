@@ -436,6 +436,24 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `internal/machine/update_test.go:TestDetectRestartMode_DaemonChildIsSelf`
   — if you ever rewrite this with a homegrown FD check, run that test
   first.
+- **Sidecar version strings have a tag prefix; strip on BOTH sides
+  before comparing**: the running sidecar reports its `main.Version`
+  ldflag verbatim, which the release workflow injects as the full
+  tag name (`argus-sidecar-v0.1.11`), so that's what lands in
+  `Machine.sidecarVersion` from `machine-register`. The GitHub
+  latest-tag fetch in `SidecarUpdateService.fetchLatestTag` strips
+  the prefix to a bare semver. A naive
+  `compareSemver(machine.sidecarVersion, latest)` compares
+  `"argus-sidecar-v0.1.11"` against `"0.1.11"` — the first base
+  parses as `parseInt("argus") || 0` and the comparator decides
+  the sidecar is forever behind, so the badge sticks on
+  "update from argus-sidecar-v0.1.11 to 0.1.11" indefinitely. Use
+  `stripSidecarPrefix` (exported from `sidecar-update.service.ts`)
+  on every value sourced from `Machine.sidecarVersion` or a
+  lifecycle event before passing it to `compareSemver` or surfacing
+  it in a UI string. The write path in `MachineService` also
+  normalizes on register so newly-stored rows are bare; the strip on
+  read is defense-in-depth for rows written before that landed.
 - **Task-completion notifications hook `session:status`, not
   `command:updated`**: the notifier in `App.tsx`'s `onSessionStatus`
   handler reads the prior session status BEFORE upserting and fires

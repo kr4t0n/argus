@@ -140,7 +140,10 @@ export class SidecarUpdateService implements OnModuleDestroy {
     if (this.machineLocks.has(machineId)) {
       throw new BadRequestException('an update is already in progress for this machine');
     }
-    return this.dispatch(machineId, machine.sidecarVersion);
+    // Strip on read in case the row was written before the write-time
+    // normalize landed; harmless for new records that already store
+    // bare semver.
+    return this.dispatch(machineId, stripSidecarPrefix(machine.sidecarVersion) ?? '');
   }
 
   // ───────────────────── REST: bulk ─────────────────────
@@ -171,26 +174,29 @@ export class SidecarUpdateService implements OnModuleDestroy {
 
     const batchId = randomUUID();
     const plan: SidecarUpdatePlanEntry[] = machines.map((m) => {
+      // Normalize the stored version so the displayed `fromVersion` matches
+      // the bare-semver `latest` and the compare below sees matching shapes.
+      const fromVersion = stripSidecarPrefix(m.sidecarVersion);
       if (m.status !== 'online') {
         return {
           machineId: m.id,
           machineName: m.name,
-          fromVersion: m.sidecarVersion,
+          fromVersion,
           status: 'skipped-offline',
         };
       }
-      if (latest && compareSemver(m.sidecarVersion, latest) >= 0) {
+      if (latest && fromVersion && compareSemver(fromVersion, latest) >= 0) {
         return {
           machineId: m.id,
           machineName: m.name,
-          fromVersion: m.sidecarVersion,
+          fromVersion,
           status: 'skipped-already-current',
         };
       }
       return {
         machineId: m.id,
         machineName: m.name,
-        fromVersion: m.sidecarVersion,
+        fromVersion,
         status: 'queued',
       };
     });
@@ -263,16 +269,19 @@ export class SidecarUpdateService implements OnModuleDestroy {
     if (!machine) throw new NotFoundException('machine not found');
 
     const latest = await this.getLatestTag();
+    // Normalize the stored version: the running sidecar reports its
+    // `main.Version` ldflag verbatim, which is the full prefixed tag
+    // (`argus-sidecar-v0.1.11`). Strip so both `current` (UI display)
+    // and the compare below match the bare-semver `latest`.
+    const current = stripSidecarPrefix(machine.sidecarVersion);
     return {
-      current: machine.sidecarVersion,
+      current,
       latest,
       latestCheckedAt: this.latestCache
         ? new Date(this.latestCache.fetchedAt).toISOString()
         : null,
       updateAvailable:
-        !!latest &&
-        !!machine.sidecarVersion &&
-        compareSemver(machine.sidecarVersion, latest) < 0,
+        !!latest && !!current && compareSemver(current, latest) < 0,
     };
   }
 
@@ -360,13 +369,19 @@ export class SidecarUpdateService implements OnModuleDestroy {
       | SidecarUpdateFailedEvent,
   ): void {
     const pending = this.pending.get(ev.requestId);
+    // Lifecycle events carry the sidecar's `main.Version` ldflag verbatim
+    // (e.g. `argus-sidecar-v0.1.11`); normalize to bare semver so toasts
+    // show "from 0.1.11 to 0.1.12" rather than "from argus-sidecar-v0.1.11
+    // to 0.1.12", and so the equality check in `observeMachineRegister`
+    // sees consistent shapes against the now-stripped DB row.
+    const fromVersion = stripSidecarPrefix(ev.fromVersion);
 
     switch (ev.kind) {
       case 'sidecar-update-started': {
         this.gateway.emitSidecarUpdateStarted({
           machineId: ev.machineId,
           requestId: ev.requestId,
-          fromVersion: ev.fromVersion,
+          fromVersion,
         });
         if (pending) {
           // Resolve the 202 acceptance here so the REST caller knows
@@ -374,17 +389,18 @@ export class SidecarUpdateService implements OnModuleDestroy {
           pending.resolveAccepted({
             requestId: ev.requestId,
             machineId: ev.machineId,
-            fromVersion: ev.fromVersion,
+            fromVersion,
           });
         }
         break;
       }
       case 'sidecar-update-downloaded': {
+        const toVersion = stripSidecarPrefix(ev.toVersion);
         this.gateway.emitSidecarUpdateDownloaded({
           machineId: ev.machineId,
           requestId: ev.requestId,
-          fromVersion: ev.fromVersion,
-          toVersion: ev.toVersion,
+          fromVersion,
+          toVersion,
           restartMode: ev.restartMode as 'self' | 'supervisor' | 'manual',
         });
         if (pending) {
@@ -393,7 +409,7 @@ export class SidecarUpdateService implements OnModuleDestroy {
           // pending.completion so it sequences correctly.
           this.waitingForRegister.set(ev.machineId, {
             requestId: ev.requestId,
-            fromVersion: ev.fromVersion,
+            fromVersion,
           });
           if (ev.restartMode === 'manual') {
             // Manual restart: the new register may never come (or
@@ -401,7 +417,7 @@ export class SidecarUpdateService implements OnModuleDestroy {
             // the freshly downloaded tag so the bulk loop doesn't
             // hang. The dashboard already differentiates the toast
             // copy off `restartMode`.
-            pending.resolveCompletion({ toVersion: ev.toVersion });
+            pending.resolveCompletion({ toVersion });
             this.cleanupPending(ev.requestId);
             this.waitingForRegister.delete(ev.machineId);
           }
@@ -412,7 +428,7 @@ export class SidecarUpdateService implements OnModuleDestroy {
         this.gateway.emitSidecarUpdateFailed({
           machineId: ev.machineId,
           requestId: ev.requestId,
-          fromVersion: ev.fromVersion,
+          fromVersion,
           reason: ev.reason,
         });
         if (pending) {
@@ -545,6 +561,34 @@ export class SidecarUpdateService implements OnModuleDestroy {
 }
 
 /**
+ * Strip the `argus-sidecar-v` tag prefix off a version string, returning
+ * a bare semver (`0.1.11`, `0.1.11-rc.1`). Idempotent — strings that
+ * don't carry the prefix pass through unchanged, so it's safe to call
+ * on values of unknown provenance (DB row, lifecycle event, REST input).
+ *
+ * Why this exists: the sidecar binary's `main.Version` is injected at
+ * release-build time via `-ldflags="-X main.Version=$GITHUB_REF_NAME"`,
+ * which means the running binary reports the FULL prefixed tag
+ * (`argus-sidecar-v0.1.11`), and that's what lands in
+ * `Machine.sidecarVersion` from the `machine-register` event. The
+ * latest-tag fetch already strips the prefix, so a naive
+ * `compareSemver(machine.sidecarVersion, latest)` ends up comparing
+ * `"argus-sidecar-v0.1.11"` against `"0.1.11"` — the first parses as
+ * `0` (parseInt of "argus") and the comparator decides the sidecar
+ * is forever behind. The previous fix in 5af213c only stripped one
+ * side; this normalizer is the matching strip for the other.
+ *
+ * Returns `null` for `null`/`undefined` input so callers can flow it
+ * through without re-checking.
+ */
+export function stripSidecarPrefix<T extends string | null | undefined>(v: T): T {
+  if (v == null) return v;
+  // The slice result is still string, so the cast back to T is sound —
+  // the generic constraint guarantees T contains string when v is non-null.
+  return (v.startsWith(SIDECAR_TAG_PREFIX) ? v.slice(SIDECAR_TAG_PREFIX.length) : v) as T;
+}
+
+/**
  * Compare two semver strings of the shape `MAJOR.MINOR.PATCH[-pre]`.
  * Returns a negative number if `a < b`, zero if equal, positive if
  * `a > b`. Pre-release identifiers (`-rc.1`, `-beta`, `-alpha.2`) are
@@ -557,6 +601,10 @@ export class SidecarUpdateService implements OnModuleDestroy {
  * `semver` package: we only need the two shapes our release pipeline
  * produces (X.Y.Z and X.Y.Z-rc.N) and any extra dependency surface
  * isn't worth shaving lines here.
+ *
+ * NOTE: callers must pass bare semver — strip the `argus-sidecar-v`
+ * prefix via `stripSidecarPrefix` first when feeding raw values from
+ * `Machine.sidecarVersion` or lifecycle events.
  */
 export function compareSemver(a: string, b: string): number {
   const [aBase, aPre = ''] = a.split('-', 2);
