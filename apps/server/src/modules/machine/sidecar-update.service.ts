@@ -179,7 +179,7 @@ export class SidecarUpdateService implements OnModuleDestroy {
           status: 'skipped-offline',
         };
       }
-      if (m.sidecarVersion === latest) {
+      if (latest && compareSemver(m.sidecarVersion, latest) >= 0) {
         return {
           machineId: m.id,
           machineName: m.name,
@@ -270,7 +270,9 @@ export class SidecarUpdateService implements OnModuleDestroy {
         ? new Date(this.latestCache.fetchedAt).toISOString()
         : null,
       updateAvailable:
-        !!latest && !!machine.sidecarVersion && latest !== machine.sidecarVersion,
+        !!latest &&
+        !!machine.sidecarVersion &&
+        compareSemver(machine.sidecarVersion, latest) < 0,
     };
   }
 
@@ -330,7 +332,16 @@ export class SidecarUpdateService implements OnModuleDestroy {
     for (const r of releases) {
       if (r.draft || r.prerelease) continue;
       if (!r.tag_name?.startsWith(SIDECAR_TAG_PREFIX)) continue;
-      return r.tag_name;
+      // Strip the `argus-sidecar-v` prefix so the returned value
+      // matches the bare semver string the sidecar reports at
+      // register time (`Machine.sidecarVersion`). Without this strip,
+      // every comparison sees mismatched shapes ("argus-sidecar-v0.1.10"
+      // vs "0.1.10") and `updateAvailable` always flips on. Belt-and-
+      // braces on prerelease too: a tag with a `-rc.N` suffix is
+      // treated as older than the matching stable by compareSemver,
+      // so even if the GitHub release wasn't flagged prerelease the
+      // comparison won't propose a "newer" RC over a stable.
+      return r.tag_name.slice(SIDECAR_TAG_PREFIX.length);
     }
     return null;
   }
@@ -531,4 +542,57 @@ export class SidecarUpdateService implements OnModuleDestroy {
     this.pending.delete(requestId);
     this.machineLocks.delete(p.machineId);
   }
+}
+
+/**
+ * Compare two semver strings of the shape `MAJOR.MINOR.PATCH[-pre]`.
+ * Returns a negative number if `a < b`, zero if equal, positive if
+ * `a > b`. Pre-release identifiers (`-rc.1`, `-beta`, `-alpha.2`) are
+ * treated as STRICTLY older than the matching stable, matching the
+ * semver §11 rule — `0.1.10-rc.1 < 0.1.10`. Within prereleases, dot-
+ * separated parts compare numerically when both sides are numeric and
+ * lexically otherwise, also per §11.
+ *
+ * Intentionally a hand-rolled mini-compare instead of pulling in the
+ * `semver` package: we only need the two shapes our release pipeline
+ * produces (X.Y.Z and X.Y.Z-rc.N) and any extra dependency surface
+ * isn't worth shaving lines here.
+ */
+export function compareSemver(a: string, b: string): number {
+  const [aBase, aPre = ''] = a.split('-', 2);
+  const [bBase, bPre = ''] = b.split('-', 2);
+
+  const aParts = aBase.split('.').map((p) => parseInt(p, 10) || 0);
+  const bParts = bBase.split('.').map((p) => parseInt(p, 10) || 0);
+  for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
+    const diff = (aParts[i] ?? 0) - (bParts[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+
+  // Bases match. A bare version outranks any prerelease of the same base.
+  if (aPre === '' && bPre === '') return 0;
+  if (aPre === '') return 1;
+  if (bPre === '') return -1;
+
+  const aPreParts = aPre.split('.');
+  const bPreParts = bPre.split('.');
+  for (let i = 0; i < Math.max(aPreParts.length, bPreParts.length); i++) {
+    const ap = aPreParts[i];
+    const bp = bPreParts[i];
+    if (ap === undefined) return -1;
+    if (bp === undefined) return 1;
+    const aNum = /^\d+$/.test(ap) ? parseInt(ap, 10) : null;
+    const bNum = /^\d+$/.test(bp) ? parseInt(bp, 10) : null;
+    if (aNum !== null && bNum !== null) {
+      const diff = aNum - bNum;
+      if (diff !== 0) return diff;
+    } else if (aNum !== null) {
+      return -1;
+    } else if (bNum !== null) {
+      return 1;
+    } else if (ap !== bp) {
+      return ap < bp ? -1 : 1;
+    }
+  }
+  return 0;
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Check, HelpCircle, Loader2, User } from 'lucide-react';
+import { Bell, Check, HelpCircle, Loader2, User } from 'lucide-react';
 import type {
   TokenUsage,
   UserActivityResponse,
@@ -12,6 +12,7 @@ import { useUIStore } from '../stores/uiStore';
 import { ActivityHeatmap } from '../components/ActivityHeatmap';
 import { Button } from '../components/ui/Button';
 import { Tooltip } from '../components/ui/Tooltip';
+import { requestNotificationPermission } from '../lib/notifications';
 
 /**
  * `/user` route. Two cards today:
@@ -106,11 +107,106 @@ export function UserPanel() {
           {!usageError && usage && <UsageSummary usage={usage.usage} />}
         </section>
 
+        <section className="mb-4 rounded-lg border border-default bg-surface-1 px-5 py-4">
+          <NotificationSettings />
+        </section>
+
         <section className="rounded-lg border border-default bg-surface-1 px-5 py-4">
           <RulesEditor />
         </section>
       </div>
     </div>
+  );
+}
+
+/**
+ * Global toggle for desktop notifications + completion sound when a
+ * command finishes outside the active session route. Wraps the OS
+ * permission dance: turning the toggle ON triggers
+ * `Notification.requestPermission()` from inside this click handler
+ * (browsers reject the call outside a user gesture). The four
+ * outcomes (granted / denied / unsupported / dismissed) each map to
+ * a distinct inline message so the user understands why the toggle
+ * may have refused to flip on.
+ */
+function NotificationSettings() {
+  const enabled = useUIStore((s) => s.notificationsEnabled);
+  const setEnabled = useUIStore((s) => s.setNotificationsEnabled);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const onToggle = useCallback(async () => {
+    setError(null);
+    if (enabled) {
+      setEnabled(false);
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await requestNotificationPermission();
+      if (result === 'granted') {
+        setEnabled(true);
+      } else if (result === 'denied') {
+        setError(
+          'Notifications are blocked in your browser. Re-allow them in site settings to enable.',
+        );
+      } else if (result === 'unsupported') {
+        setError('This browser does not support desktop notifications.');
+      } else {
+        // Dismissed without choosing — leave the toggle off; the user
+        // can click again to re-prompt.
+        setError('Permission prompt dismissed — click again to re-prompt.');
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, [enabled, setEnabled]);
+
+  return (
+    <>
+      <div className="mb-3 flex items-center gap-1.5">
+        <h2 className="text-[12px] font-semibold uppercase tracking-widest text-fg-tertiary">
+          Notifications
+        </h2>
+        <Tooltip
+          side="right"
+          content={
+            <div className="max-w-[280px] text-[11px] leading-relaxed">
+              When a task finishes outside the session you&apos;re currently viewing,
+              Argus shows a desktop notification and plays a short chime. Click
+              the notification to jump to that session. Disabled when you&apos;re
+              already viewing the session that just completed.
+            </div>
+          }
+        >
+          <button
+            type="button"
+            aria-label="about notifications"
+            className="text-fg-muted hover:text-fg-secondary"
+          >
+            <HelpCircle className="h-3.5 w-3.5" />
+          </button>
+        </Tooltip>
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2 text-[12px] text-fg-secondary">
+          <Bell className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
+          <span>Desktop notification + sound on task completion</span>
+        </div>
+        <Button onClick={onToggle} disabled={busy} size="sm" variant={enabled ? 'subtle' : 'default'}>
+          {busy ? (
+            <>
+              <Loader2 className="h-3 w-3 animate-spin" /> requesting…
+            </>
+          ) : enabled ? (
+            'Disable'
+          ) : (
+            'Enable'
+          )}
+        </Button>
+      </div>
+      {error && <div className="mt-2 text-[11px] text-red-400">{error}</div>}
+    </>
   );
 }
 

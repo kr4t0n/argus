@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { useAuthStore } from './stores/authStore';
@@ -8,9 +8,15 @@ import { useMachineStore } from './stores/machineStore';
 import { useSessionStore } from './stores/sessionStore';
 import { useSidecarUpdateStore } from './stores/sidecarUpdateStore';
 import { useCloneFailureStore } from './stores/cloneFailureStore';
+import { useUIStore } from './stores/uiStore';
 import { ensureSocket, resetSocket, subscribeHandler } from './lib/ws';
 import { api } from './lib/api';
 import { migrateLocalMachineIconsToServer } from './lib/migrateMachineIcons';
+import {
+  activeSessionIdFromPath,
+  playDoneSound,
+  showCompletionNotification,
+} from './lib/notifications';
 import {
   SidecarUpdateBatchDismissAll,
   SidecarUpdateToasts,
@@ -54,6 +60,14 @@ export default function App() {
   const backfill = useSessionStore((s) => s.backfill);
   const entries = useSessionStore((s) => s.entries);
   const location = useLocation();
+  const navigate = useNavigate();
+  // Hold `navigate` in a ref so the WS handler closure (registered once
+  // per token, not per route change) calls the latest router instance
+  // without retriggering the subscription effect on every navigation.
+  const navigateRef = useRef(navigate);
+  useEffect(() => {
+    navigateRef.current = navigate;
+  }, [navigate]);
 
   useEffect(() => {
     bootstrap();
@@ -106,8 +120,41 @@ export default function App() {
       onSessionCreated: upsertSession,
       onSessionUpdated: upsertSession,
       onSessionStatus: (p) => {
+        // The notification hook lives here (not on `command:updated`)
+        // because `command:*` is emitted to room `session:{id}` — only
+        // received while SessionPanel has the session open and joined
+        // the room. `session:status` is broadcast to `user:{id}` so
+        // the browser keeps receiving it after navigating away, which
+        // is exactly when we want to notify. Read prev status BEFORE
+        // upserting so we detect the active → idle/failed transition
+        // and don't re-fire on idempotent re-emits.
+        //
+        // SessionStatus's type allows 'done' but the server never
+        // actually emits it — successful completion uses 'idle' (see
+        // result-ingestor.service.ts: it goes 'failed' on errors,
+        // 'idle' on success, and 'active' on every interim chunk).
+        // So the active → idle transition IS our success signal.
         const entry = useSessionStore.getState().entries[p.id];
+        const prevStatus = entry?.session.status;
         if (entry) upsertSession({ ...entry.session, status: p.status });
+
+        if (!useUIStore.getState().notificationsEnabled) return;
+        if (prevStatus !== 'active') return;
+        if (p.status !== 'idle' && p.status !== 'failed') return;
+
+        const tabVisible = document.visibilityState === 'visible';
+        const activeSessionId = activeSessionIdFromPath(window.location.pathname);
+        if (tabVisible && activeSessionId === p.id) return;
+
+        const title = entry?.session.title?.trim() || `session ${p.id.slice(0, 8)}`;
+        const success = p.status === 'idle';
+        playDoneSound(success);
+        showCompletionNotification({
+          sessionId: p.id,
+          sessionTitle: title,
+          success,
+          onClick: () => navigateRef.current(`/sessions/${p.id}`),
+        });
       },
       onCommandCreated: upsertCommand,
       onCommandUpdated: upsertCommand,
