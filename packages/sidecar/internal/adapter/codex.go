@@ -420,6 +420,42 @@ func mapCodexItem(phase string, item, raw map[string]any, state *fileEditState) 
 			},
 		}}
 
+	case "web_search":
+		// Codex emits two events for each search:
+		//   item.started   — query is "" (action.type == "other")
+		//   item.completed — query is populated, with action.{query,queries}
+		// We only emit on completion so the tool card carries the actual
+		// query; while running, the activity pill's pulsing-dot indicator
+		// already conveys "search in progress". Tool name is "WebSearch"
+		// so ToolPill's describer renders it as "Searched web for <query>"
+		// (same shape Claude Code's web_search tool_use produces).
+		if phase != "item.completed" {
+			return nil
+		}
+		query := firstString(item, "query")
+		if query == "" {
+			if action := toMap(item["action"]); action != nil {
+				query = firstString(action, "query")
+				if query == "" {
+					if qs := toAnySlice(action["queries"]); len(qs) > 0 {
+						if s, ok := qs[0].(string); ok {
+							query = s
+						}
+					}
+				}
+			}
+		}
+		input := map[string]any{"query": query}
+		return []Chunk{{
+			Kind:    protocol.KindTool,
+			Content: fmt.Sprintf("WebSearch %s", query),
+			Meta: map[string]any{
+				"tool":  "WebSearch",
+				"input": input,
+				"id":    itemID,
+			},
+		}}
+
 	case "tool_call", "tool_use":
 		name := firstString(item, "name", "tool")
 		args := toMap(item["arguments"])
