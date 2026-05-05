@@ -56,7 +56,7 @@ export function ActivityPill({ chunks, running, startedAt, endedAt, open, onTogg
     <button
       onClick={onToggle}
       className={cn(
-        'inline-flex items-center gap-3 rounded-full border border-default bg-surface-1/60 px-3.5 py-1.5 text-xs text-fg-tertiary hover:bg-surface-2/60 hover:text-fg-primary transition-colors',
+        'inline-flex items-center gap-3 rounded-full bg-surface-1/60 px-3.5 py-1.5 text-xs text-fg-tertiary hover:bg-surface-2/60 hover:text-fg-primary transition-colors',
         open && 'bg-surface-2/60 text-fg-primary',
       )}
     >
@@ -99,7 +99,7 @@ export function ActivityPanel({ chunks }: { chunks: ResultChunkDTO[] }) {
   const items: TimelineItem[] = useMemo(() => buildTimeline(chunks), [chunks]);
   if (items.length === 0) return null;
   return (
-    <div className="ml-1 space-y-2 border-l border-default/80 pl-4">
+    <div className="ml-1 space-y-1.5 border-l border-default/60 pl-4">
       {items.map((it) => {
         if (it.kind === 'tool') {
           return <ToolPill key={it.tool.id} tool={it.tool} result={it.result} />;
@@ -109,9 +109,9 @@ export function ActivityPanel({ chunks }: { chunks: ResultChunkDTO[] }) {
           return (
             <pre
               key={c.id}
-              className="overflow-x-auto rounded-md bg-surface-1 border border-default px-3 py-2 text-xs font-mono whitespace-pre-wrap leading-relaxed"
+              className="overflow-x-auto rounded-md bg-surface-1/50 px-3 py-2 text-[11px] font-mono whitespace-pre-wrap leading-relaxed no-scrollbar"
             >
-              <span className={c.kind === 'stderr' ? 'text-red-400' : 'text-fg-tertiary'}>
+              <span className={c.kind === 'stderr' ? 'text-red-500 dark:text-red-400' : 'text-fg-tertiary'}>
                 {c.content}
               </span>
             </pre>
@@ -125,7 +125,7 @@ export function ActivityPanel({ chunks }: { chunks: ResultChunkDTO[] }) {
           return (
             <div
               key={it.id}
-              className="markdown text-xs leading-relaxed text-fg-tertiary max-w-none"
+              className="markdown max-w-none py-1.5 text-xs leading-relaxed text-fg-tertiary"
             >
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{it.text}</ReactMarkdown>
             </div>
@@ -202,13 +202,12 @@ function buildTimeline(chunks: ResultChunkDTO[]): TimelineItem[] {
       out.push({ kind: 'output', chunk: c });
       continue;
     }
-    if (c.kind === 'progress') {
+    // Drop content-less progress chunks — the claude-code sidecar emits
+    // these for meta events (e.g. unknown stream-json types) that carry
+    // no user-visible signal; rendering them as "working…" rows just
+    // clutters the timeline.
+    if (c.kind === 'progress' && c.content) {
       flushThought();
-      // Drop content-less progress chunks — the claude-code sidecar emits
-      // these for meta events (e.g. unknown stream-json types) that carry
-      // no user-visible signal; rendering them as "working…" rows just
-      // clutters the timeline.
-      if (!c.content) continue;
       out.push({ kind: 'progress', chunk: c });
     }
   }

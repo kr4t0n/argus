@@ -20,10 +20,10 @@ import { useUIStore } from '../stores/uiStore';
 import { useSidecarUpdateStore } from '../stores/sidecarUpdateStore';
 import { cn, relativeTime } from '../lib/utils';
 import { StatusDot } from './ui/StatusDot';
-import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
+import { AgentTypeIcon } from './ui/AgentTypeIcon';
 import { CreateAgentPopover } from './CreateAgentPopover';
 import { BulkUpdateModal } from './BulkUpdateModal';
-import { MachineIcon } from './MachineIcon';
+import { MachineIcon, MachineIconGlyph } from './MachineIcon';
 import { ThemeToggle } from './ThemeToggle';
 import { UserRow } from './UserRow';
 import { api } from '../lib/api';
@@ -60,11 +60,8 @@ export function Sidebar() {
 
   return (
     <aside className="h-full w-full flex flex-col border-r border-default bg-surface-0">
-      <div className="h-12 shrink-0 px-4 border-b border-default flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
-          <span className="text-sm font-semibold tracking-tight">Argus</span>
-        </div>
+      <div className="shrink-0 pl-6 pr-4 pt-4 pb-3 flex items-center justify-between min-h-[52px]">
+        <span className="text-display font-display">Argus</span>
         <div className="flex items-center gap-3">
           <ThemeToggle />
           <button
@@ -77,7 +74,7 @@ export function Sidebar() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-2 px-1">
+      <div className="flex-1 overflow-y-auto py-1 px-2">
         {order.length === 0 && (
           <div className="px-4 py-6 text-xs text-fg-tertiary">
             No agents yet — hover a machine below and click{' '}
@@ -115,7 +112,7 @@ export function Sidebar() {
               {!showArchivedAgents && hiddenArchivedAgentCount > 0 && (
                 <button
                   onClick={toggleShowArchivedAgents}
-                  className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-[11px] rounded-md text-fg-muted hover:text-fg-secondary hover:bg-surface-1 transition-colors"
+                  className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-xs rounded-md text-fg-muted hover:text-fg-secondary hover:bg-surface-1 transition-colors"
                 >
                   <Archive className="h-3 w-3" />
                   {hiddenArchivedAgentCount} archived agent
@@ -125,7 +122,7 @@ export function Sidebar() {
               {showArchivedAgents && order.some((id) => agents[id]?.archivedAt) && (
                 <button
                   onClick={toggleShowArchivedAgents}
-                  className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-[11px] rounded-md text-emerald-400 hover:text-emerald-300 hover:bg-surface-1 transition-colors"
+                  className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-xs rounded-md text-emerald-400 hover:text-emerald-300 hover:bg-surface-1 transition-colors"
                 >
                   <Archive className="h-3 w-3" />
                   hide archived agents
@@ -161,9 +158,9 @@ function MachineList() {
 
   if (order.length === 0) {
     return (
-      <div className="shrink-0 px-4 py-3 text-[11px] text-fg-muted">
+      <div className="shrink-0 px-4 py-3 text-meta text-fg-muted">
         no machines connected. Run{' '}
-        <code className="rounded bg-surface-1 px-1 py-0.5 text-fg-tertiary">
+        <code className="rounded bg-surface-1 px-1 py-0.5 font-mono text-fg-tertiary">
           argus-sidecar init
         </code>{' '}
         on a host.
@@ -174,8 +171,8 @@ function MachineList() {
   return (
     <div className="shrink-0 py-1.5 px-1 max-h-[40%] overflow-y-auto">
       <div className="group flex items-center px-3 py-1">
-        <span className="text-[10px] uppercase tracking-widest text-fg-muted">machines</span>
-        <span className="ml-1.5 text-[10px] text-fg-muted">({order.length})</span>
+        <span className="text-caps">machines</span>
+        <span className="ml-1.5 text-meta text-fg-muted">({order.length})</span>
         <span className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
           <MachinesHeaderMenu />
         </span>
@@ -289,7 +286,7 @@ function MachineRow({
     <div
       ref={anchorRef}
       className={cn(
-        'group flex items-center gap-1.5 rounded-md px-2.5 py-1.5 transition-colors hover:bg-surface-1',
+        'group flex items-center gap-1.5 rounded-md px-2.5 py-1 transition-colors hover:bg-surface-1',
         active && 'bg-surface-1',
         offline && 'opacity-60',
       )}
@@ -297,12 +294,12 @@ function MachineRow({
       <MachineIcon machineId={machine.id} className="text-fg-tertiary" />
       <Link to={`/machines/${machine.id}`} className="min-w-0 flex-1 outline-none">
         <div
-          className="truncate text-[12px] text-fg-primary"
+          className="truncate text-xs text-fg-primary"
           title={`${machine.hostname} · ${machine.os}/${machine.arch} · sidecar ${machine.sidecarVersion}`}
         >
           {machine.name}
         </div>
-        <div className="truncate text-[10px] text-fg-muted">
+        <div className="truncate text-meta text-fg-muted">
           {machine.agentCount} agent{machine.agentCount === 1 ? '' : 's'} · {adapters.length}{' '}
           adapter{adapters.length === 1 ? '' : 's'}
         </div>
@@ -471,12 +468,12 @@ function SessionRow({ session, active }: { session: SessionDTO; active: boolean 
           </button>
         </>
       )}
-      <span className="text-[10px] text-fg-muted">{relativeTime(session.updatedAt)}</span>
+      <span className="text-meta text-fg-muted">{relativeTime(session.updatedAt)}</span>
     </span>
   );
 
   const rowClass = cn(
-    'group flex items-center justify-between rounded-md px-2 py-1 text-sm transition-colors hover:bg-surface-1',
+    'group flex items-center justify-between rounded-md px-2 py-1 text-sm leading-5 transition-colors hover:bg-surface-1',
     active && 'bg-surface-1 text-fg-primary',
     archived && 'opacity-70',
   );
@@ -543,16 +540,16 @@ function AgentRow({
   }
 
   return (
-    <div className="mb-1">
+    <div>
       <div
         className={cn(
-          'group flex items-stretch rounded-md hover:bg-surface-1 transition-colors',
+          'group relative flex items-center rounded-md transition-colors hover:bg-surface-1',
           archived && 'opacity-70',
         )}
       >
         <button
           onClick={onToggle}
-          className="flex flex-1 min-w-0 items-center gap-1.5 px-2.5 py-1.5"
+          className="flex min-w-0 flex-1 items-center gap-1.5 px-2.5 py-1 pr-2 leading-5"
         >
           <ChevronRight
             className={cn('h-3 w-3 text-fg-tertiary transition-transform', open && 'rotate-90')}
@@ -560,85 +557,82 @@ function AgentRow({
           <AgentTypeIcon type={agent.type} />
           <span
             className={cn(
-              'text-sm truncate',
+              'min-w-0 truncate text-sm',
               archived ? 'text-fg-tertiary italic' : 'text-fg-primary',
             )}
             title={
-              archived ? `${agentTypeLabel(agent.type)} (archived)` : agentTypeLabel(agent.type)
+              archived
+                ? `${agent.name} · ${agent.machineName} (archived)`
+                : `${agent.name} · ${agent.machineName}`
             }
           >
-            {agent.name || agent.id} <span className="text-fg-tertiary">· {agent.machineName}</span>
+            {agent.name || agent.id}
           </span>
+          <MachineIconGlyph
+            machineId={agent.machineId}
+            className="h-3 w-3 shrink-0 text-fg-muted"
+          />
         </button>
-        {/* New-session action, hover-only. Hidden when the agent is
-            archived or offline since the create would be rejected anyway. */}
-        {!archived && agent.status !== 'offline' && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onNewSession();
-            }}
-            className="flex items-center px-1.5 text-fg-muted opacity-0 transition-colors hover:text-fg-primary group-hover:opacity-100"
-            title="new session"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
-        )}
-        {/* Per-agent archive toggle (for the AGENT itself). */}
-        <button
-          onClick={toggleAgentArchive}
-          disabled={busy}
-          className={cn(
-            'flex items-center px-1.5 text-fg-muted transition-colors disabled:opacity-40',
-            archived
-              ? 'opacity-100 text-fg-tertiary hover:text-fg-primary'
-              : 'opacity-0 group-hover:opacity-100 hover:text-fg-primary',
-          )}
-          title={archived ? 'restore agent' : 'archive agent (hides from sidebar)'}
-        >
-          {archived ? (
-            <ArchiveRestore className="h-3.5 w-3.5" />
-          ) : (
-            <Archive className="h-3.5 w-3.5" />
-          )}
-        </button>
-        {/* Per-agent VISIBILITY toggle for archived child sessions.
-            Uses an eye icon (rather than the archive box) so it can sit next
-            to the archive-agent action without two identical glyphs colliding.
-            Hidden when the agent itself is archived to reduce visual noise. */}
-        {!archived && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleArchived();
-            }}
-            className={cn(
-              'flex items-center px-2 transition-colors',
-              // The eye toggle is always visible whenever there's something
-              // archived to look at OR the user has it currently on; otherwise
-              // it stays hover-only so the row reads cleanly at rest.
-              showArchived || hasArchived ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
-              showArchived
-                ? 'text-emerald-400 hover:text-emerald-300'
-                : 'text-fg-muted hover:text-fg-secondary',
+
+        <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+          <span
+            aria-hidden
+            className="absolute inset-y-0 right-full w-8 bg-gradient-to-r from-transparent to-surface-1"
+          />
+          <div className="flex items-center bg-surface-1">
+            {!archived && agent.status !== 'offline' && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onNewSession();
+                }}
+                className="flex items-center px-1.5 text-fg-muted transition-colors hover:text-fg-primary"
+                title="new session"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
             )}
-            title={
-              showArchived
-                ? 'hide archived sessions'
-                : hasArchived
-                  ? `show ${hiddenArchivedCount} archived session${hiddenArchivedCount === 1 ? '' : 's'}`
-                  : 'show archived sessions'
-            }
-          >
-            {showArchived ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-          </button>
-        )}
-        {/* Liveness dot — pinned to the rightmost slot so it reads as a
-            persistent status indicator. The hover-revealed action icons
-            (+ archive eye) sit to its left. */}
-        <span className="flex items-center pr-2">
-          <StatusDot status={agent.status} />
-        </span>
+            <button
+              onClick={toggleAgentArchive}
+              disabled={busy}
+              className={cn(
+                'flex items-center px-1.5 text-fg-muted transition-colors disabled:opacity-40 hover:text-fg-primary',
+                archived && 'text-fg-tertiary',
+              )}
+              title={archived ? 'restore agent' : 'archive agent (hides from sidebar)'}
+            >
+              {archived ? (
+                <ArchiveRestore className="h-3.5 w-3.5" />
+              ) : (
+                <Archive className="h-3.5 w-3.5" />
+              )}
+            </button>
+            {!archived && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleArchived();
+                }}
+                className={cn(
+                  'flex items-center px-2 transition-colors',
+                  showArchived
+                    ? 'text-emerald-400 hover:text-emerald-300'
+                    : 'text-fg-muted hover:text-fg-secondary',
+                )}
+                title={
+                  showArchived
+                    ? 'hide archived sessions'
+                    : hasArchived
+                      ? `show ${hiddenArchivedCount} archived session${hiddenArchivedCount === 1 ? '' : 's'}`
+                      : 'show archived sessions'
+                }
+              >
+                {showArchived ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+              </button>
+            )}
+          </div>
+        </div>
+
       </div>
 
       {open && (

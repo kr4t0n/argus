@@ -352,34 +352,30 @@ const CommandBlock = memo(function CommandBlock({
           open={activityOpen}
           onToggle={handleActivityToggle}
         />
-        <TodoWindow chunks={chunks} />
       </div>
 
-      {activityOpen && (
-        <div className="mt-4">
-          <ActivityPanel chunks={chunks} />
-        </div>
-      )}
-
-      {(bodyText || files.length > 0) && (
-        <AnswerBlock
-          bodyText={bodyText}
-          files={files}
-          workingDir={workingDir}
-          streaming={running && !finalChunk && !errorChunk}
-          sessionId={command.sessionId}
-          commandId={command.id}
-        />
-      )}
-
-      {errorChunk && (
-        <div className="mt-4 flex items-start gap-2.5 rounded-md border border-red-900/50 bg-red-950/20 px-3 py-2">
-          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
-          <pre className="text-xs font-mono text-red-300 whitespace-pre-wrap">
-            {errorChunk.content ?? 'error'}
-          </pre>
-        </div>
-      )}
+      <div className="mt-4 space-y-3">
+        <TodoWindow chunks={chunks} />
+        {activityOpen && <ActivityPanel chunks={chunks} />}
+        {(bodyText || files.length > 0) && (
+          <AnswerBlock
+            bodyText={bodyText}
+            files={files}
+            workingDir={workingDir}
+            streaming={running && !finalChunk && !errorChunk}
+            sessionId={command.sessionId}
+            commandId={command.id}
+          />
+        )}
+        {errorChunk && (
+          <div className="flex items-start gap-2.5 rounded-md bg-red-500/10 px-3 py-2 dark:bg-red-950/30">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />
+            <pre className="text-xs font-mono text-red-700 dark:text-red-400 whitespace-pre-wrap">
+              {errorChunk.content ?? 'error'}
+            </pre>
+          </div>
+        )}
+      </div>
     </div>
   );
 });
@@ -494,7 +490,7 @@ function AnswerBlock({
 
   return (
     <div
-      className="group relative mt-4 focus:outline-none"
+      className="group relative focus:outline-none"
       tabIndex={0}
       onPointerUp={handlePointerUp}
     >
@@ -549,10 +545,41 @@ function AnswerBlock({
 }
 
 function UserMessage({ text }: { text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [showFade, setShowFade] = useState(false);
+
+  function update() {
+    const el = ref.current;
+    if (!el) return;
+    const overflowing = el.scrollHeight - el.clientHeight > 1;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 4;
+    setShowFade(overflowing && !atBottom);
+  }
+
+  useLayoutEffect(update, [text]);
+
   return (
     <div className="flex justify-end">
-      <div className="max-h-36 max-w-[80%] overflow-y-auto no-scrollbar rounded-2xl bg-surface-2/80 px-4 py-2 text-sm text-fg-primary whitespace-pre-wrap leading-relaxed">
-        {text}
+      {/* Outer wrapper owns rounded-2xl + overflow-hidden so Safari's
+          rubber-band overscroll can't paint past the corner. */}
+      <div className="max-w-[80%] overflow-hidden rounded-2xl bg-surface-1 dark:bg-surface-2/80">
+        <div
+          ref={ref}
+          onScroll={update}
+          className="max-h-24 overflow-y-auto no-scrollbar px-4 py-2 text-sm text-fg-primary whitespace-pre-wrap leading-relaxed"
+          style={
+            showFade
+              ? {
+                  maskImage:
+                    'linear-gradient(to bottom, black calc(100% - 24px), transparent 100%)',
+                  WebkitMaskImage:
+                    'linear-gradient(to bottom, black calc(100% - 24px), transparent 100%)',
+                }
+              : undefined
+          }
+        >
+          {text}
+        </div>
       </div>
     </div>
   );

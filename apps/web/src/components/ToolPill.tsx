@@ -39,6 +39,7 @@ export const ToolPill = memo(function ToolPill({ tool, result }: Props) {
   const name = (meta.tool as string | undefined) ?? extractToolName(tool.content ?? '');
   const input = (meta.input ?? {}) as Record<string, unknown>;
   const Icon = iconFor(name);
+  const iconColor = iconColorFor(name);
   const { verb, arg, mono } = describe(name, input, tool.content ?? '');
   const hasInputDetail = Object.keys(input).length > 0;
   const isError = result?.kind === 'stderr';
@@ -46,55 +47,79 @@ export const ToolPill = memo(function ToolPill({ tool, result }: Props) {
   const resultMeta = (result?.meta ?? {}) as Record<string, unknown>;
   const isDiff = resultMeta.isDiff === true;
 
+  const [openBody, setOpenBody] = useState(isError);
+  const hasBody = !!resultText;
+  const expandable = hasInputDetail || hasBody;
+
   return (
-    <div className="my-1 overflow-hidden rounded-md border border-default/80 bg-surface-0/40">
+    <div className="group/tool my-px">
       <button
-        onClick={() => hasInputDetail && setOpenArgs((o) => !o)}
+        onClick={() => expandable && setOpenBody((o) => !o)}
         className={cn(
-          'group flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-fg-tertiary transition-colors',
-          hasInputDetail ? 'cursor-pointer hover:bg-surface-1/60' : 'cursor-default',
+          'flex w-full items-center gap-2 rounded-md px-2 py-1 text-xs transition-colors',
+          expandable ? 'cursor-pointer hover:bg-surface-1/60' : 'cursor-default',
         )}
       >
-        <Icon className="h-3.5 w-3.5 shrink-0 text-fg-tertiary group-hover:text-fg-secondary" />
-        <span className="text-fg-secondary">{verb}</span>
+        <Icon className={cn('h-3.5 w-3.5 shrink-0', iconColor)} />
+        <span className="text-fg-tertiary">{verb}</span>
         {arg && (
           <span
             className={cn(
-              'truncate text-fg-tertiary group-hover:text-fg-tertiary',
+              'truncate text-fg-muted',
               mono && 'font-mono text-[11px]',
             )}
           >
             {arg}
           </span>
         )}
-        {hasInputDetail && (
+        {isError && (
+          <span className="ml-auto inline-flex items-center gap-1 text-[10px] uppercase tracking-widest text-red-600 dark:text-red-400">
+            error
+          </span>
+        )}
+        {expandable && !isError && (
           <ChevronDown
             className={cn(
-              'ml-auto h-3 w-3 shrink-0 text-fg-muted transition-transform group-hover:text-fg-tertiary',
-              openArgs && 'rotate-180',
+              'ml-auto h-3 w-3 shrink-0 text-fg-muted transition-transform',
+              openBody && 'rotate-180',
             )}
           />
         )}
       </button>
 
-      {openArgs && hasInputDetail && (
-        <pre className="border-t border-default/80 bg-surface-0/60 px-3 py-2 text-[11px] font-mono leading-relaxed text-fg-tertiary overflow-x-auto">
-          {JSON.stringify(input, null, 2)}
-        </pre>
-      )}
-
-      {resultText && (isDiff ? (
-        <DiffBlock text={resultText} />
-      ) : (
-        <pre
-          className={cn(
-            'max-h-36 overflow-auto border-t border-default/80 bg-surface-0/40 px-3 py-2 text-[11px] font-mono leading-relaxed whitespace-pre-wrap',
-            isError ? 'text-red-400' : 'text-fg-tertiary',
+      {openBody && (
+        <div className="mb-1 ml-[22px] mt-1 space-y-1">
+          {hasInputDetail && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpenArgs((o) => !o);
+              }}
+              className="text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg-tertiary"
+            >
+              {openArgs ? 'hide input' : 'show input'}
+            </button>
           )}
-        >
-          {resultText}
-        </pre>
-      ))}
+          {openArgs && hasInputDetail && (
+            <pre className="rounded-md bg-surface-1/50 px-3 py-2 text-[11px] font-mono leading-relaxed text-fg-tertiary overflow-x-auto no-scrollbar">
+              {JSON.stringify(input, null, 2)}
+            </pre>
+          )}
+          {hasBody &&
+            (isDiff ? (
+              <DiffBlock text={resultText!} />
+            ) : (
+              <pre
+                className={cn(
+                  'max-h-36 overflow-auto rounded-md bg-surface-1/50 px-3 py-2 text-[11px] font-mono leading-relaxed whitespace-pre-wrap no-scrollbar',
+                  isError ? 'text-red-600 dark:text-red-400' : 'text-fg-tertiary',
+                )}
+              >
+                {resultText}
+              </pre>
+            ))}
+        </div>
+      )}
     </div>
   );
 });
@@ -108,7 +133,7 @@ export const ToolPill = memo(function ToolPill({ tool, result }: Props) {
 function DiffBlock({ text }: { text: string }) {
   const lines = text.split('\n');
   return (
-    <div className="max-h-36 overflow-auto border-t border-default/80 bg-surface-0/40 px-0 py-1 text-[11px] font-mono leading-relaxed">
+    <div className="max-h-36 overflow-auto rounded-md bg-surface-1/50 px-0 py-1 text-[11px] font-mono leading-relaxed no-scrollbar">
       {lines.map((line, i) => {
         if (line.startsWith('--- ') || line.startsWith('+++ ')) return null;
         // Per-line colors are paired light/dark: light needs darker
@@ -123,7 +148,7 @@ function DiffBlock({ text }: { text: string }) {
           cls = 'text-emerald-700 dark:text-emerald-300';
           bg = 'bg-emerald-500/10 dark:bg-emerald-500/5';
         } else if (line.startsWith('-') && !line.startsWith('---')) {
-          cls = 'text-red-700 dark:text-red-300';
+          cls = 'text-red-700 dark:text-red-400';
           bg = 'bg-red-500/10 dark:bg-red-500/5';
         } else if (line.startsWith('…')) {
           cls = 'text-fg-tertiary italic';
@@ -203,4 +228,32 @@ function iconFor(name: string): LucideIcon {
   if (n === 'fetch' || n === 'webfetch' || n === 'websearch') return Globe;
   if (n === 'codebase' || n === 'symbols') return FileCode2;
   return Wrench;
+}
+
+function iconColorFor(name: string): string {
+  const n = name.toLowerCase();
+  if (n === 'read' || n === 'cat' || n === 'open' || n === 'codebase' || n === 'symbols')
+    return 'text-blue-600/70 dark:text-blue-400/70';
+  if (
+    n === 'write' ||
+    n === 'create' ||
+    n === 'edit' ||
+    n === 'patch' ||
+    n === 'multiedit' ||
+    n === 'rename' ||
+    n === 'move' ||
+    n === 'mv'
+  )
+    return 'text-violet-600/70 dark:text-violet-400/70';
+  if (n === 'delete' || n === 'remove' || n === 'rm')
+    return 'text-rose-600/70 dark:text-rose-400/70';
+  if (n === 'grep' || n === 'search' || n === 'glob' || n === 'find' || n === 'ls')
+    return 'text-teal-600/70 dark:text-teal-400/70';
+  if (n === 'bash' || n === 'shell' || n === 'exec' || n === 'run')
+    return 'text-emerald-600/70 dark:text-emerald-400/70';
+  if (n === 'task' || n === 'todo' || n === 'todowrite')
+    return 'text-orange-600/70 dark:text-orange-400/70';
+  if (n === 'fetch' || n === 'webfetch' || n === 'websearch')
+    return 'text-indigo-600/70 dark:text-indigo-400/70';
+  return 'text-fg-muted';
 }

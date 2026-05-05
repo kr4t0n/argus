@@ -58,7 +58,6 @@ export default function App() {
   const upsertCommand = useSessionStore((s) => s.upsertCommand);
   const appendChunk = useSessionStore((s) => s.appendChunk);
   const backfill = useSessionStore((s) => s.backfill);
-  const entries = useSessionStore((s) => s.entries);
   const location = useLocation();
   const navigate = useNavigate();
   // Hold `navigate` in a ref so the WS handler closure (registered once

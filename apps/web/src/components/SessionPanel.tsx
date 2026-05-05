@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Menu, PanelRightClose, PanelRightOpen, Square } from 'lucide-react';
+import { Menu, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useAgentStore } from '../stores/agentStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
@@ -144,7 +144,7 @@ export function SessionPanel() {
   }
 
   if (error) {
-    return <div className="p-6 text-red-400 text-sm">{error}</div>;
+    return <div className="p-6 text-sm text-red-500 dark:text-red-400">{error}</div>;
   }
 
   if (!entry) return null;
@@ -167,7 +167,7 @@ export function SessionPanel() {
   return (
     <div className="flex h-full">
       <div className="flex flex-col flex-1 min-w-0">
-        <div className="h-12 shrink-0 flex items-center gap-3 px-5 border-b border-default">
+        <div className="shrink-0 flex items-center gap-3 px-5 pt-4 pb-3 min-h-[52px]">
           <button
             onClick={toggleSidebar}
             className="md:hidden text-fg-tertiary hover:text-fg-primary transition-colors"
@@ -177,19 +177,13 @@ export function SessionPanel() {
           </button>
           {agent && <AgentTypeIcon type={agent.type} />}
           <div className="flex items-center gap-2 min-w-0">
-            <div className="text-sm font-medium text-fg-primary truncate">
+            <div className="font-display text-base font-semibold tracking-tight text-fg-primary truncate">
               {entry.session.title}
             </div>
             {elapsed && <span className="text-xs text-fg-tertiary">· {elapsed}</span>}
           </div>
           <div className="ml-auto flex items-center gap-2">
             <UsageBadge chunks={entry.chunks} agentType={agent?.type} />
-            {running && (
-              <Button size="sm" variant="subtle" onClick={onCancel}>
-                <Square className="h-3 w-3" />
-                Cancel
-              </Button>
-            )}
             <Button
               size="icon"
               variant="ghost"
@@ -265,7 +259,6 @@ export function SessionPanel() {
           <ContextPane
             agent={agent}
             session={entry.session}
-            recentCommands={entry.commands}
             chunks={entry.chunks}
           />
         </div>
