@@ -220,11 +220,31 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   see the AGENTS.md note on stream-json drift.
 - `components/Sidebar.tsx` — agent-first tree: each agent is a top-level row
   with its sessions nested underneath and a `+ new session` affordance.
+  At rest the title (`name · machineGlyph`) takes the full row width up to
+  the right edge; hover reveals `+`, archive, and eye actions over a
+  surface-1 plate with a left-side gradient mask so the truncation reads
+  cleanly.
+- `components/ContextPane.tsx` — right-pane companion to a session. Header
+  shows agent identity + working dir + model. A collapsible `Details`
+  block surfaces agent + session metadata (machine, status, version,
+  working dir, registered, last seen, session title, external id,
+  updated, model). The bottom region is tabbed: **Commits** (`GitLogPanel`),
+  **Files** (`FileTree`), **Terminal** (`<TerminalPane>`).
+- `components/MachinePanel.tsx` — `/machines/:id` route. Header with
+  machine glyph + name + status dot + sidecar-update / new-agent buttons.
+  Below the header: 2:3 grid with Host KV + Supports adapters on the
+  left, agent list on the right. Each `AgentLine` shows `[type icon]
+  name [verb] [workingDir]` with a hover-only destroy action.
+- `pages/UserPanel.tsx` — `/user` route, settings-page layout. Sticky
+  account band at the top (email + role); below it a left section nav
+  (Stats / Preferences) and a scroll column with Activity (heatmap),
+  Usage (lifetime token ledger), and Preferences (notifications, user
+  rules editor). Capped at `max-w-6xl`.
 - `components/TerminalPane.tsx` — xterm.js bound to one agent. Owns the
   WebSocket plumbing, a debounced ResizeObserver for fit, base64 encoding
-  on input, and a duplicate-seq guard on output. Lives in a collapsible
-  section inside `ContextPane` so we don't pay the xterm cost until the
-  user clicks "open".
+  on input, and a duplicate-seq guard on output. Renders inside the
+  **Terminal** tab of `ContextPane` so we don't pay the xterm cost until
+  the user clicks the tab.
 
 ## Conventions
 
@@ -454,7 +474,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   variant is dead in the type; don't rely on it. Reading prev-status
   before upsert prevents re-fires on idempotent re-emits (the
   ingestor emits `active` on every interim chunk). `Notification.requestPermission()` MUST run inside a
-  user-gesture handler — `UserPanel.NotificationSettings` calls it
+  user-gesture handler — `UserPanel.NotificationToggle` calls it
   directly from the click handler, so don't refactor through
   `useEffect` without preserving the synchronous call chain.
   Suppression rule is inline in the handler:

@@ -4,27 +4,22 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '../../lib/utils';
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-1.5 rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-fg-tertiary disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-sm font-medium tracking-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg-primary/30 disabled:pointer-events-none disabled:opacity-40',
   {
     variants: {
       variant: {
-        // The "default" (primary) variant is intentionally inverted —
-        // a high-contrast filled button that pops against the page.
-        // In dark theme that's a near-white button with dark text;
-        // in light theme it's a near-black button with white text.
-        // dark: prefixes do the inversion in one step.
-        default:
-          'bg-neutral-900 text-white hover:bg-black dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white',
+        default: 'bg-primary text-primary-fg hover:bg-primary-hover',
         outline:
-          'border border-default bg-transparent text-fg-primary hover:bg-surface-2/60',
-        ghost: 'bg-transparent text-fg-primary hover:bg-surface-2/60',
+          'border border-default-strong bg-transparent text-fg-primary hover:border-fg-muted hover:bg-surface-1',
+        ghost:
+          'bg-transparent text-fg-secondary hover:bg-surface-2/60 hover:text-fg-primary',
         subtle: 'bg-surface-2/60 text-fg-primary hover:bg-surface-2',
         danger: 'bg-red-500/90 text-white hover:bg-red-500',
       },
       size: {
-        sm: 'h-7 px-2.5',
-        md: 'h-9 px-3.5',
-        lg: 'h-10 px-4',
+        sm: 'h-8 px-3',
+        md: 'h-9 px-4',
+        lg: 'h-11 px-5',
         icon: 'h-8 w-8',
       },
     },

@@ -13,8 +13,9 @@
   },
   "dependencies": {
     "@argus/shared-types": "workspace:*",
-    "@fontsource-variable/geist": "^5.1.1",
-    "@fontsource-variable/geist-mono": "^5.1.1",
+    "@fontsource-variable/fira-code": "^5.2.7",
+    "@fontsource-variable/instrument-sans": "^5.2.8",
+    "@fontsource-variable/onest": "^5.2.11",
     "@lobehub/icons": "^5.4.0",
     "@radix-ui/react-dialog": "^1.1.4",
     "@radix-ui/react-dropdown-menu": "^2.1.4",

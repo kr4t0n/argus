@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { ArrowUpCircle, Loader2, Menu, Server, Trash2 } from 'lucide-react';
-import type { AgentDTO, AvailableAdapter } from '@argus/shared-types';
+import { useParams, useNavigate } from 'react-router-dom';
+import { ArrowUpCircle, Loader2, Menu, Plus, Trash2 } from 'lucide-react';
+import type { AgentDTO, AvailableAdapter, SessionDTO } from '@argus/shared-types';
 import { useMachineStore } from '../stores/machineStore';
 import { useAgentStore } from '../stores/agentStore';
+import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
 import { useSidecarUpdateStore } from '../stores/sidecarUpdateStore';
 import { api, ApiError } from '../lib/api';
 import { StatusDot } from './ui/StatusDot';
 import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
 import { CreateAgentPopover } from './CreateAgentPopover';
+import { MachineIconGlyph } from './MachineIcon';
 import { Button } from './ui/Button';
 import { cn, relativeTime } from '../lib/utils';
 
@@ -84,115 +86,164 @@ export function MachinePanel() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="h-12 shrink-0 flex items-center gap-3 px-5 border-b border-default">
+      <div className="h-12 shrink-0 flex items-center gap-3 px-5 md:hidden">
         <button
           onClick={toggleSidebar}
-          className="md:hidden text-fg-tertiary hover:text-fg-primary transition-colors"
+          className="text-fg-tertiary hover:text-fg-primary transition-colors"
           title="show sidebar"
+          aria-label="show sidebar"
         >
           <Menu className="h-4 w-4" />
         </button>
-        <Server className="h-4 w-4 text-fg-tertiary" />
-        <div className="flex items-center gap-2 min-w-0">
-          <div className="text-sm font-medium text-fg-primary truncate">
-            {machine.name}
-          </div>
-          <span className="text-xs text-fg-tertiary truncate">
-            · {machine.os}/{machine.arch} · sidecar {machine.sidecarVersion}
-          </span>
-          <StatusDot status={machine.status === 'online' ? 'online' : 'offline'} />
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <div ref={createBtnRef} className="relative">
-            <Button
-              size="sm"
-              variant="subtle"
-              onClick={() => setShowCreate((v) => !v)}
-              disabled={machine.status === 'offline'}
-            >
-              new agent
-            </Button>
-            {showCreate && (
-              <CreateAgentPopover
-                machine={machine}
-                anchor={createBtnRef}
-                onClose={() => setShowCreate(false)}
-              />
-            )}
-          </div>
-        </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">
-        <Section title="Host">
-          <KV k="hostname" v={<span className="font-mono">{machine.hostname}</span>} />
-          <KV k="os" v={machine.os} />
-          <KV k="arch" v={machine.arch} />
-          <KV
-            k="sidecar"
-            v={
-              <span className="inline-flex items-center gap-1.5">
-                {machine.sidecarVersion}
-                <SidecarVersionBadge machineId={machineId} machineName={machine.name} />
-              </span>
-            }
-          />
-          <KV
-            k="registered"
-            v={<span title={machine.registeredAt}>{relativeTime(machine.registeredAt)} ago</span>}
-          />
-          <KV
-            k="last seen"
-            v={<span title={machine.lastSeenAt}>{relativeTime(machine.lastSeenAt)} ago</span>}
-          />
-        </Section>
-
-        <Section title={`Available adapters (${adapters.length})`}>
-          {adapters.length === 0 ? (
-            <div className="text-[11px] text-fg-tertiary">
-              no CLI adapters detected on this host's PATH
+      <div className="flex-1 overflow-y-auto px-10 py-10 no-scrollbar">
+        <div className="mx-auto max-w-6xl space-y-12">
+          <header className="flex items-center gap-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-surface-1 text-fg-secondary">
+              <MachineIconGlyph machineId={machine.id} className="h-5 w-5" />
             </div>
-          ) : (
-            <ul className="space-y-1">
-              {adapters.map((a) => (
-                <li
-                  key={a.type}
-                  className="flex items-center gap-2 text-[12px] text-fg-secondary"
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-3">
+                <h1 className="truncate font-display text-3xl font-semibold tracking-tight text-fg-primary">
+                  {machine.name}
+                </h1>
+                <StatusDot status={machine.status === 'online' ? 'online' : 'offline'} />
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <SidecarUpdateAction machineId={machineId} machineName={machine.name} />
+              <div ref={createBtnRef} className="relative">
+                <Button
+                  size="md"
+                  onClick={() => setShowCreate((v) => !v)}
+                  disabled={machine.status === 'offline'}
                 >
-                  <AgentTypeIcon type={a.type} />
-                  <span>{agentTypeLabel(a.type)}</span>
-                  <span className="ml-auto font-mono text-[10px] text-fg-tertiary">
-                    {a.binary}
-                    {a.version && ` · ${a.version}`}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Section>
+                  <Plus className="h-3.5 w-3.5" strokeWidth={2.5} />
+                  new agent
+                </Button>
+                {showCreate && (
+                  <CreateAgentPopover
+                    machine={machine}
+                    anchor={createBtnRef}
+                    onClose={() => setShowCreate(false)}
+                  />
+                )}
+              </div>
+            </div>
+          </header>
 
-        <Section title={`Agents (${agents.length})`}>
-          {agents.length === 0 ? (
-            <div className="text-[11px] text-fg-tertiary">no agents on this machine yet</div>
-          ) : (
-            <ul className="space-y-1">
-              {agents.map((a) => (
-                <AgentLine key={a.id} machineId={machine.id} agent={a} />
-              ))}
-            </ul>
-          )}
-        </Section>
+          <div className="grid gap-x-20 gap-y-10 md:grid-cols-[2fr_3fr]">
+            <div className="space-y-10">
+              <Section title="Host">
+                <div className="space-y-1">
+                  <KV k="id" v={<span className="font-mono">{machine.id}</span>} />
+                  <KV
+                    k="hostname"
+                    v={<span className="font-mono">{machine.hostname}</span>}
+                  />
+                  <KV k="os" v={`${machine.os}/${machine.arch}`} />
+                  <KV
+                    k="sidecar"
+                    v={<span className="font-mono">{machine.sidecarVersion}</span>}
+                  />
+                  <KV
+                    k="registered"
+                    v={
+                      <span title={machine.registeredAt}>
+                        {relativeTime(machine.registeredAt)} ago
+                      </span>
+                    }
+                  />
+                  <KV
+                    k="last seen"
+                    v={
+                      <span title={machine.lastSeenAt}>
+                        {relativeTime(machine.lastSeenAt)} ago
+                      </span>
+                    }
+                  />
+                </div>
+              </Section>
+
+              <SupportsFooter adapters={adapters} />
+            </div>
+
+            <Section title={`Agents · ${agents.length}`}>
+              {agents.length === 0 ? (
+                <div className="text-meta">
+                  no agents on this machine yet. spawn one to get started.
+                </div>
+              ) : (
+                <ul className="-mx-2 divide-y divide-default/40">
+                  {agents.map((a) => (
+                    <AgentLine key={a.id} machineId={machine.id} agent={a} />
+                  ))}
+                </ul>
+              )}
+            </Section>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
+function SupportsFooter({ adapters }: { adapters: AvailableAdapter[] }) {
+  if (adapters.length === 0) {
+    return (
+      <Section title="Supports">
+        <div className="text-meta">no CLI adapters detected on this host's PATH</div>
+      </Section>
+    );
+  }
+  return (
+    <Section title="Supports">
+      <ul className="space-y-1.5 text-xs text-fg-secondary">
+        {adapters.map((a) => (
+          <li
+            key={a.type}
+            className="flex items-center gap-2"
+            title={a.binary + (a.version ? ` · ${a.version}` : '')}
+          >
+            <AgentTypeIcon type={a.type} size={14} />
+            <span>{agentTypeLabel(a.type)}</span>
+            {a.version && (
+              <span className="ml-auto font-mono text-[11px] text-fg-tertiary">
+                {a.version}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Section>
+  );
+}
+
+function KV({ k, v }: { k: string; v: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 text-xs leading-6">
+      <span className="text-fg-tertiary">{k}</span>
+      <span className="max-w-[70%] truncate text-right text-fg-primary">{v}</span>
+    </div>
+  );
+}
+
 function AgentLine({ machineId, agent }: { machineId: string; agent: AgentDTO }) {
+  const navigate = useNavigate();
   const removeAgent = useAgentStore((s) => s.remove);
+  const sessions = useSessionStore((s) => s.sessions);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  async function destroy() {
+  const recentSession: SessionDTO | undefined = useMemo(() => {
+    const mine = Object.values(sessions).filter((s) => s.agentId === agent.id);
+    if (mine.length === 0) return undefined;
+    return mine.reduce((a, b) => (a.updatedAt > b.updatedAt ? a : b));
+  }, [sessions, agent.id]);
+
+  async function destroy(e: React.MouseEvent) {
+    e.stopPropagation();
     if (busy) return;
     if (!confirm(`Destroy agent "${agent.name}"? This deletes its sessions and history.`)) {
       return;
@@ -202,56 +253,119 @@ function AgentLine({ machineId, agent }: { machineId: string; agent: AgentDTO })
     try {
       await api.destroyAgent(machineId, agent.id);
       removeAgent(agent.id);
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'failed to destroy');
+    } catch (ex) {
+      setErr(ex instanceof ApiError ? ex.message : 'failed to destroy');
     } finally {
       setBusy(false);
     }
   }
 
+  function jumpToAgent() {
+    if (recentSession) navigate(`/sessions/${recentSession.id}`);
+  }
+
+  const verb = statusVerb(agent.status);
+  const contextLine = activityCaption(agent, recentSession);
+
+  // div + role="button" so the inner destroy <button> isn't nested
+  // in a button (invalid HTML).
   return (
-    <li className="group flex items-center gap-2 rounded-md px-1 py-1 hover:bg-surface-1">
-      <AgentTypeIcon type={agent.type} />
-      <span className="truncate text-[12px] text-fg-primary">{agent.name}</span>
-      <span className="truncate text-[10px] text-fg-tertiary">
-        · {agentTypeLabel(agent.type)}
-      </span>
-      <span className="ml-auto flex items-center gap-2">
-        {err && <span className="text-[10px] text-red-400">{err}</span>}
-        <StatusDot status={agent.status} />
+    <li>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={jumpToAgent}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            jumpToAgent();
+          }
+        }}
+        className="group flex w-full items-start gap-3 rounded-md px-2 py-3 text-left transition-colors hover:bg-surface-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-fg-tertiary cursor-pointer"
+      >
+        <AgentTypeIcon type={agent.type} size={16} className="mt-0.5 shrink-0 text-fg-secondary" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <span className="truncate text-sm font-medium text-fg-primary">{agent.name}</span>
+            <span className={cn('text-[11px] font-medium uppercase tracking-wider', verb.color)}>
+              {verb.label}
+            </span>
+            <span className="ml-auto truncate font-mono text-[11px] text-fg-tertiary">
+              {agent.workingDir ? trimDir(agent.workingDir) : '—'}
+            </span>
+          </div>
+          <div className="mt-0.5 flex items-baseline gap-2 text-meta">
+            <span>
+              {agentTypeLabel(agent.type)}
+              {agent.version && (
+                <>
+                  <span className="text-fg-muted"> · </span>
+                  <span className="font-mono">{agent.version}</span>
+                </>
+              )}
+            </span>
+            <span className="ml-auto truncate text-fg-muted">{contextLine}</span>
+          </div>
+        </div>
+        {err && <span className="mt-1 text-[11px] text-red-500 dark:text-red-400">{err}</span>}
         <button
           onClick={destroy}
           disabled={busy}
           className={cn(
-            'text-fg-muted transition-opacity hover:text-red-400 disabled:opacity-40',
+            'mt-1 text-fg-muted transition-opacity hover:text-red-500 disabled:opacity-40 dark:hover:text-red-400',
             'opacity-0 group-hover:opacity-100',
           )}
           title="destroy agent (irreversible)"
+          aria-label={`Destroy agent ${agent.name}`}
         >
-          <Trash2 className="h-3 w-3" />
+          <Trash2 className="h-3.5 w-3.5" />
         </button>
-      </span>
+      </div>
     </li>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <div className="text-[10px] uppercase tracking-widest text-fg-muted mb-2">
-        {title}
-      </div>
-      <div className="space-y-1">{children}</div>
-    </div>
-  );
+function statusVerb(status: AgentDTO['status']): { label: string; color: string } {
+  switch (status) {
+    case 'busy':
+      return { label: 'running', color: 'text-amber-600 dark:text-amber-400' };
+    case 'online':
+      return { label: 'idle', color: 'text-emerald-700 dark:text-emerald-400' };
+    case 'offline':
+      return { label: 'offline', color: 'text-fg-muted' };
+    case 'error':
+      return { label: 'error', color: 'text-red-600 dark:text-red-400' };
+    default:
+      return { label: status, color: 'text-fg-muted' };
+  }
 }
 
-function KV({ k, v }: { k: string; v: React.ReactNode }) {
+function activityCaption(agent: AgentDTO, recent: SessionDTO | undefined): string {
+  if (agent.status === 'busy') {
+    return recent ? `'${recent.title}'` : 'running';
+  }
+  if (agent.status === 'offline') {
+    return `last seen ${relativeTime(agent.lastHeartbeatAt)} ago`;
+  }
+  if (agent.status === 'error') {
+    return 'error';
+  }
+  if (recent) return `last active ${relativeTime(recent.updatedAt)} ago`;
+  return 'no sessions yet';
+}
+
+function trimDir(abs: string): string {
+  const home = abs.match(/^\/Users\/[^/]+\/(.+)$/);
+  if (home) return '~/' + home[1];
+  return abs;
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between text-xs">
-      <span className="text-fg-tertiary">{k}</span>
-      <span className="text-fg-primary truncate max-w-[60%]">{v}</span>
-    </div>
+    <section>
+      <h2 className="mb-3 text-caps">{title}</h2>
+      <div>{children}</div>
+    </section>
   );
 }
 
@@ -272,7 +386,7 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
  *      which causes this component to unmount once `updateAvailable`
  *      flips back to false.
  */
-function SidecarVersionBadge({
+function SidecarUpdateAction({
   machineId,
   machineName,
 }: {
@@ -299,44 +413,37 @@ function SidecarVersionBadge({
     const current = info.current ?? machine?.sidecarVersion ?? 'unknown';
     const msg = `Update sidecar on "${machineName}" from ${current} to ${info.latest}?\n\nThe sidecar will download the new binary and restart. Active sessions stay connected (the daemon re-attaches on restart).`;
     if (!confirm(msg)) return;
-
     begin(machineId, machineName, current);
     try {
       await api.updateSidecar(machineId);
       // Server returns 202 immediately — toast progression is driven
       // entirely by WS lifecycle events from here on.
-    } catch (e) {
-      const reason =
-        e instanceof ApiError ? e.message : 'failed to start update';
-      setFailed(machineId, current, reason);
+    } catch (ex) {
+      setFailed(machineId, current, ex instanceof ApiError ? ex.message : 'failed to start update');
     }
   }
 
   const title = offline
-    ? `machine is offline — sidecar update ${info.latest} available`
+    ? `machine offline — update ${info.latest} available when it reconnects`
     : inFlight
       ? `update to ${info.latest} in progress…`
-      : `click to update sidecar to ${info.latest} (current: ${info.current})`;
+      : `update sidecar from ${info.current} to ${info.latest}`;
 
   return (
-    <button
-      type="button"
+    <Button
+      size="md"
+      variant="outline"
       onClick={doUpdate}
       disabled={offline || inFlight}
       title={title}
-      className={cn(
-        'inline-flex items-center gap-1 rounded-full border border-emerald-700/60 bg-emerald-900/30 px-1.5 py-[1px] text-[10px] font-medium text-emerald-300 transition-colors',
-        'hover:border-emerald-500/70 hover:bg-emerald-800/50 hover:text-emerald-100',
-        'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-emerald-700/60 disabled:hover:bg-emerald-900/30 disabled:hover:text-emerald-300',
-      )}
     >
       {inFlight ? (
-        <Loader2 className="h-3 w-3 animate-spin" />
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
       ) : (
-        <ArrowUpCircle className="h-3 w-3" />
+        <ArrowUpCircle className="h-3.5 w-3.5" />
       )}
-      {info.latest}
-    </button>
+      Update <span className="font-mono text-[11px] text-fg-tertiary">{info.latest}</span>
+    </Button>
   );
 }
 

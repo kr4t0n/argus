@@ -33,8 +33,6 @@ const TREE_PREFETCH_DEPTH = 3;
 
 type Props = {
   agentId: string;
-  /** Cosmetic only: shown as a dim caption above the tree. */
-  rootLabel?: string | null;
 };
 
 /**
@@ -48,7 +46,7 @@ type Props = {
  * Double-clicking a file opens it as a preview tab in the main pane
  * (see FileTabStrip + FileViewer).
  */
-export function FileTree({ agentId, rootLabel }: Props) {
+export function FileTree({ agentId }: Props) {
   // Keyed by path (empty string = root). We never delete entries on
   // collapse — the UI just hides them — so that re-expanding is
   // instant. Collapse → expand → instant is the cursor-style UX the
@@ -215,41 +213,23 @@ export function FileTree({ agentId, rootLabel }: Props) {
 
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5">
-          {rootLabel ? (
-            <span title={rootLabel} className="truncate font-mono text-[10px] text-fg-tertiary">
-              {rootLabel}
-            </span>
-          ) : (
-            <span className="text-[10px] text-fg-muted">root</span>
-          )}
-          {/* Branch label moved to the GitLogPanel above — the panel's
-              header shows the same branch + detached state as the old
-              inline badge here, plus a list of recent commits. */}
-        </div>
-        <div className="flex items-center gap-1">
-          <IconButton
-            title={showAll ? 'Hide gitignored' : 'Show gitignored'}
-            onClick={() => setShowAll((v) => !v)}
-            active={showAll}
-          >
-            {showAll ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
-          </IconButton>
-          <IconButton title="Refresh" onClick={refreshAll}>
-            <RefreshCw
-              className={cn('h-3 w-3', rootState?.loading && 'animate-spin text-fg-secondary')}
-            />
-          </IconButton>
-        </div>
+      <div className="flex items-center justify-end gap-1">
+        <IconButton
+          title={showAll ? 'Hide gitignored' : 'Show gitignored'}
+          onClick={() => setShowAll((v) => !v)}
+          active={showAll}
+        >
+          {showAll ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+        </IconButton>
+        <IconButton title="Refresh" onClick={refreshAll}>
+          <RefreshCw
+            className={cn('h-3 w-3', rootState?.loading && 'animate-spin text-fg-secondary')}
+          />
+        </IconButton>
       </div>
-      <div
-        className={cn(
-          'h-56 overflow-y-auto overflow-x-hidden rounded-md border border-default bg-surface-0/60 px-1 py-1 font-mono text-[11px]',
-        )}
-      >
+      <div className="h-full min-h-56 overflow-y-auto overflow-x-hidden font-mono text-[11px] leading-[22px] no-scrollbar">
         {rootState?.error && (
-          <div className="px-2 py-1 text-[11px] text-red-400">{rootState.error}</div>
+          <div className="px-2 py-1 text-xs text-red-500 dark:text-red-400">{rootState.error}</div>
         )}
         {rootState?.loading && !rootState.entries.length && (
           <div className="flex items-center gap-1.5 px-2 py-1 text-fg-tertiary">
@@ -339,7 +319,7 @@ function DirNode({
                 if (!isDir) onOpenFile(entryPath);
               }}
               className={cn(
-                'group flex w-full items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-surface-1',
+                'group flex w-full items-center gap-1 rounded px-1 text-left hover:bg-surface-1',
                 isSelected && 'bg-surface-1 text-fg-primary',
                 e.gitignored && 'opacity-60',
               )}
@@ -382,7 +362,7 @@ function DirNode({
               <>
                 {child?.error && (
                   <div
-                    className="px-2 py-0.5 text-[11px] text-red-400"
+                    className="px-2 text-red-500 dark:text-red-400"
                     style={{ paddingLeft: 4 + (depth + 1) * 12 + 16 }}
                   >
                     {child.error}
@@ -390,7 +370,7 @@ function DirNode({
                 )}
                 {child && !child.error && child.entries.length === 0 && !child.loading && (
                   <div
-                    className="py-0.5 text-fg-muted"
+                    className="text-fg-muted"
                     style={{ paddingLeft: 4 + (depth + 1) * 12 + 16 }}
                   >
                     (empty)

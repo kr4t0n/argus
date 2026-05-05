@@ -65,7 +65,7 @@ export function SidecarUpdateBatchDismissAll() {
   return (
     <button
       onClick={dismissBatch}
-      className="pointer-events-auto self-end text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg-secondary"
+      className="pointer-events-auto self-end text-caps hover:text-fg-secondary"
     >
       dismiss all
     </button>
@@ -88,13 +88,13 @@ function UpdateToast({ update, onDismiss }: { update: MachineUpdate; onDismiss: 
       <div className="flex items-start gap-2">
         <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', color)} />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 text-[12px] font-medium text-fg-primary">
+          <div className="flex items-center gap-2 text-xs font-medium text-fg-primary">
             <span className="truncate">{update.machineName}</span>
-            <span className="ml-auto text-[10px] font-normal text-fg-tertiary">
+            <span className="ml-auto text-[11px] font-normal text-fg-tertiary">
               {phaseLabel(update.phase, update.restartMode)}
             </span>
           </div>
-          <div className="mt-0.5 truncate text-[11px] text-fg-tertiary">{phaseDetail(update)}</div>
+          <div className="mt-0.5 truncate text-meta">{phaseDetail(update)}</div>
         </div>
         <button
           onClick={onDismiss}
@@ -132,15 +132,15 @@ function BatchToast() {
         ) : (
           <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
         )}
-        <div className="text-[12px] font-medium text-fg-primary">Updating fleet</div>
-        <div className="ml-auto text-[10px] text-fg-tertiary">
+        <div className="text-xs font-medium text-fg-primary">Updating fleet</div>
+        <div className="ml-auto text-[11px] text-fg-tertiary">
           {completed}/{total - skipped} done
           {failed > 0 && ` · ${failed} failed`}
           {skipped > 0 && ` · ${skipped} skipped`}
         </div>
       </div>
       {inProgress && (
-        <div className="mt-1.5 truncate text-[11px] text-fg-tertiary">
+        <div className="mt-1.5 truncate text-meta">
           {inProgress.machineName} · {inProgress.fromVersion} → latest
         </div>
       )}
@@ -180,7 +180,7 @@ function phaseChrome(phase: UpdatePhase): {
     case 'completed':
       return { Icon: CheckCircle2, color: 'text-emerald-400' };
     case 'failed':
-      return { Icon: AlertTriangle, color: 'text-red-400' };
+      return { Icon: AlertTriangle, color: 'text-red-500 dark:text-red-400' };
   }
 }
 

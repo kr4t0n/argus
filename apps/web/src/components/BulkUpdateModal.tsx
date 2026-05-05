@@ -133,18 +133,17 @@ export function BulkUpdateModal({ onClose }: { onClose: () => void }) {
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg overflow-hidden rounded-lg border border-default bg-surface-0 shadow-2xl"
+        className="card w-full max-w-lg overflow-hidden bg-surface-0 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-default px-4 py-3">
-          <ArrowUpCircle className="h-4 w-4 text-emerald-400" />
-          <h2 className="text-sm font-medium text-fg-primary">
-            Update all sidecars
-          </h2>
+          <ArrowUpCircle className="h-4 w-4 text-emerald-500 dark:text-emerald-400" />
+          <h2 className="text-title">Update all sidecars</h2>
           <button
             onClick={onClose}
             className="ml-auto text-fg-tertiary hover:text-fg-primary"
             title="close"
+            aria-label="Close"
           >
             <X className="h-4 w-4" />
           </button>
@@ -158,13 +157,13 @@ export function BulkUpdateModal({ onClose }: { onClose: () => void }) {
           </p>
 
           {loadingVersions && (
-            <div className="rounded-md border border-default bg-surface-1/40 px-3 py-2 text-[11px] text-fg-tertiary">
+            <div className="rounded-md border border-default bg-surface-1/40 px-3 py-2 text-xs text-fg-tertiary">
               Resolving the latest sidecar release for each host…
             </div>
           )}
 
           {!loadingVersions && rows.length === 0 && (
-            <div className="rounded-md border border-default bg-surface-1/40 px-3 py-2 text-[11px] text-fg-tertiary">
+            <div className="rounded-md border border-default bg-surface-1/40 px-3 py-2 text-xs text-fg-tertiary">
               No machines registered.
             </div>
           )}
@@ -179,11 +178,11 @@ export function BulkUpdateModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="flex items-center gap-3 border-t border-default px-4 py-3">
-          <span className="text-[11px] text-fg-tertiary">
+          <span className="text-meta">
             {willUpdate.length} will update
             {skipped.length > 0 && ` · ${skipped.length} skipped`}
           </span>
-          {error && <span className="text-[11px] text-red-400">{error}</span>}
+          {error && <span className="text-xs text-red-500 dark:text-red-400">{error}</span>}
           <div className="ml-auto flex items-center gap-2">
             <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>
               Cancel
@@ -208,16 +207,16 @@ export function BulkUpdateModal({ onClose }: { onClose: () => void }) {
 
 function PreviewRow({ row }: { row: RowPreview }) {
   return (
-    <li className="flex items-center gap-2 px-3 py-2 text-[12px]">
+    <li className="flex items-center gap-2 px-3 py-2 text-xs">
       <span className="truncate text-fg-primary" title={row.machineName}>
         {row.machineName}
       </span>
-      <span className="ml-auto flex items-center gap-2 font-mono text-[10px]">
+      <span className="ml-auto flex items-center gap-2 font-mono text-[11px] tabular-nums">
         {row.outcome === 'will-update' && (
           <>
             <span className="text-fg-tertiary">{row.current}</span>
-            <ArrowUpCircle className="h-3 w-3 text-emerald-400" />
-            <span className="text-emerald-400">{row.latest}</span>
+            <ArrowUpCircle className="h-3 w-3 text-emerald-500 dark:text-emerald-400" />
+            <span className="text-emerald-500 dark:text-emerald-400">{row.latest}</span>
           </>
         )}
         {row.outcome === 'skipped-already-current' && (

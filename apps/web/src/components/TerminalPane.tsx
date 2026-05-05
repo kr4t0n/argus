@@ -267,7 +267,7 @@ export function TerminalPane({ agent }: Props) {
         <div className="text-xs text-fg-tertiary">
           this agent's sidecar has not opted into terminals.
         </div>
-        <div className="text-[11px] text-fg-muted">
+        <div className="text-xs text-fg-muted">
           set <span className="font-mono text-fg-tertiary">terminal.enabled: true</span> in its YAML
           and restart.
         </div>
@@ -275,79 +275,76 @@ export function TerminalPane({ agent }: Props) {
     );
   }
 
+  const isOpen = status.kind === 'open';
+  const isClosed = status.kind === 'closed' || status.kind === 'error';
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between text-[11px] text-fg-tertiary">
-        <span>
-          {status.kind === 'open' && 'connected'}
-          {status.kind === 'opening' && 'connecting…'}
-          {status.kind === 'closed' && `exited (${status.exitCode})`}
-          {status.kind === 'idle' && 'no session'}
-          {status.kind === 'error' && <span className="text-red-400">error: {status.message}</span>}
-        </span>
-        <div className="flex items-center gap-1">
-          {status.kind === 'idle' && (
+    <div className="flex h-full flex-col gap-1.5">
+      <div className="flex items-center justify-end gap-1">
+        {status.kind === 'opening' && (
+          <Loader2 className="h-3 w-3 animate-spin text-fg-tertiary" />
+        )}
+        {status.kind === 'idle' && (
+          <button
+            onClick={open}
+            title="open shell"
+            aria-label="open shell"
+            className="rounded p-1 text-fg-muted hover:bg-surface-1 hover:text-fg-tertiary"
+          >
+            <TerminalIcon className="h-3 w-3" />
+          </button>
+        )}
+        {isOpen && (
+          <button
+            onClick={close}
+            title="close shell"
+            aria-label="close shell"
+            className="rounded p-1 text-fg-muted hover:bg-surface-1 hover:text-fg-tertiary"
+          >
+            <Power className="h-3 w-3" />
+          </button>
+        )}
+        {isClosed && (
+          <>
             <button
-              onClick={open}
-              className="inline-flex items-center gap-1 rounded-md border border-default bg-surface-1 px-2 py-0.5 text-[11px] text-fg-secondary hover:bg-surface-2"
+              onClick={reset}
+              title="dismiss"
+              aria-label="dismiss"
+              className="rounded p-1 text-fg-muted hover:bg-surface-1 hover:text-fg-tertiary"
             >
-              <TerminalIcon className="h-3 w-3" /> open
+              <X className="h-3 w-3" />
             </button>
-          )}
-          {status.kind === 'opening' && (
-            <Loader2 className="h-3 w-3 animate-spin text-fg-tertiary" />
-          )}
-          {status.kind === 'open' && (
             <button
-              onClick={close}
-              title="close (sends SIGHUP-equivalent)"
-              className="inline-flex items-center gap-1 rounded-md border border-default bg-surface-1 px-2 py-0.5 text-[11px] text-fg-secondary hover:bg-surface-2"
+              onClick={() => {
+                reset();
+                open();
+              }}
+              title="restart"
+              aria-label="restart"
+              className="rounded p-1 text-fg-muted hover:bg-surface-1 hover:text-fg-tertiary"
             >
-              <Power className="h-3 w-3" /> close
+              <RotateCcw className="h-3 w-3" />
             </button>
-          )}
-          {(status.kind === 'closed' || status.kind === 'error') && (
-            <>
-              <button
-                onClick={reset}
-                title="dismiss"
-                className="inline-flex items-center rounded-md border border-default bg-surface-1 p-1 text-fg-tertiary hover:bg-surface-2"
-              >
-                <X className="h-3 w-3" />
-              </button>
-              <button
-                onClick={() => {
-                  reset();
-                  open();
-                }}
-                title="restart"
-                className="inline-flex items-center gap-1 rounded-md border border-default bg-surface-1 px-2 py-0.5 text-[11px] text-fg-secondary hover:bg-surface-2"
-              >
-                <RotateCcw className="h-3 w-3" /> restart
-              </button>
-            </>
-          )}
-        </div>
+          </>
+        )}
       </div>
 
       <div
         ref={containerRef}
         onClick={() => termRef.current?.focus()}
         className={cn(
-          'relative h-[280px] w-full rounded-md border border-default bg-surface-0 p-1.5',
-          // Keep the inner xterm canvas snug against the rounded border.
-          status.kind !== 'open' && status.kind !== 'closed' && 'flex items-center justify-center',
+          'min-h-0 flex-1 w-full p-2 font-mono text-[11px] leading-[16px]',
+          !isOpen && !isClosed && 'flex items-center justify-center',
         )}
       >
         {status.kind === 'idle' && (
-          <div className="text-center text-[11px] text-fg-muted">
+          <div className="text-center text-xs text-fg-muted">
             click <span className="text-fg-tertiary">open</span> to attach a shell on{' '}
             <span className="font-mono text-fg-tertiary">{agent.machineName}</span>
           </div>
         )}
         {status.kind === 'opening' && <Loader2 className="h-4 w-4 animate-spin text-fg-tertiary" />}
         {status.kind === 'error' && (
-          <div className="text-center text-[11px] text-red-400">{status.message}</div>
+          <div className="text-center text-xs text-red-500 dark:text-red-400">{status.message}</div>
         )}
       </div>
     </div>

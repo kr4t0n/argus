@@ -1,47 +1,32 @@
-@import '@fontsource-variable/geist';
-@import '@fontsource-variable/geist-mono';
+@import '@fontsource-variable/instrument-sans';
+@import '@fontsource-variable/onest';
+@import '@fontsource-variable/fira-code';
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /*
- * Theme tokens.
- *
- * Every color used by the dashboard funnels through one of these
- * semantic variables (exposed as Tailwind utilities like `bg-surface-0`
- * via tailwind.config.ts). Light values live under `:root`; dark
- * overrides under `.dark`. The `dark` class is toggled on <html> by
- * applyTheme() based on the persisted `theme` choice in uiStore
- * (light | dark | system).
- *
- * Values are stored as bare HSL components (no `hsl(...)` wrapper) so
- * Tailwind's slash-opacity modifier — `bg-surface-1/60` — keeps
- * working: the config wraps each in `hsl(var(--token) / <alpha-value>)`.
- *
- * Light palette is the "soft neutral" choice we agreed on:
- *   surface-0: #f8f8f8  page background, slightly off-white
- *   surface-1: #ffffff  cards/panels, pure white for contrast
- *   surface-2: #ededed  hover/active state on surface-1
- *
- * Dark palette mirrors what the codebase used before the migration:
- *   surface-0: neutral-950 (~#0a0a0a)
- *   surface-1: neutral-900 (~#171717)
- *   surface-2: neutral-800 (~#262626)
+ * Theme tokens. Stored as bare HSL components so Tailwind's
+ * slash-opacity modifier (`bg-surface-1/60`) keeps working — the
+ * config wraps each one in `hsl(var(--token) / <alpha-value>)`.
  */
 @layer base {
   :root {
     color-scheme: light;
 
-    --surface-0: 0 0% 97.3%; /* #f8f8f8 */
-    --surface-1: 0 0% 100%; /* #ffffff */
-    --surface-2: 0 0% 92.9%; /* #ededed */
-    --border: 0 0% 88.2%; /* #e1e1e1 */
-    --border-strong: 0 0% 80%; /* #cccccc */
-    --fg-primary: 0 0% 9%; /* #171717 (neutral-900) */
-    --fg-secondary: 0 0% 32.2%; /* #525252 (neutral-600) */
-    --fg-tertiary: 0 0% 45.1%; /* #737373 (neutral-500) */
-    --fg-muted: 0 0% 63.9%; /* #a3a3a3 (neutral-400) */
+    --surface-0: 0 0% 97.3%;
+    --surface-1: 0 0% 92%;
+    --surface-2: 0 0% 87%;
+    --border: 0 0% 91%;
+    --border-strong: 0 0% 82%;
+    --fg-primary: 0 0% 9%;
+    --fg-secondary: 0 0% 32.2%;
+    --fg-tertiary: 0 0% 45.1%;
+    --fg-muted: 0 0% 63.9%;
+    --primary-bg: 0 0% 9%;
+    --primary-bg-hover: 0 0% 0%;
+    --primary-fg: 0 0% 100%;
     --selection-bg: 0 0% 80%;
     --selection-fg: 0 0% 9%;
   }
@@ -49,15 +34,18 @@
   :root.dark {
     color-scheme: dark;
 
-    --surface-0: 0 0% 4%; /* neutral-950 */
-    --surface-1: 0 0% 9%; /* neutral-900 */
-    --surface-2: 0 0% 15%; /* neutral-800 */
-    --border: 0 0% 15%; /* neutral-800 */
-    --border-strong: 0 0% 25%; /* neutral-700 */
-    --fg-primary: 0 0% 96%; /* neutral-100 */
-    --fg-secondary: 0 0% 83%; /* neutral-300 */
-    --fg-tertiary: 0 0% 64%; /* neutral-400 */
-    --fg-muted: 0 0% 45%; /* neutral-500 */
+    --surface-0: 0 0% 4%;
+    --surface-1: 0 0% 9%;
+    --surface-2: 0 0% 15%;
+    --border: 0 0% 12%;
+    --border-strong: 0 0% 20%;
+    --fg-primary: 0 0% 96%;
+    --fg-secondary: 0 0% 83%;
+    --fg-tertiary: 0 0% 64%;
+    --fg-muted: 0 0% 45%;
+    --primary-bg: 0 0% 96%;
+    --primary-bg-hover: 0 0% 100%;
+    --primary-fg: 0 0% 9%;
     --selection-bg: 0 0% 25%;
     --selection-fg: 0 0% 98%;
   }
@@ -77,33 +65,35 @@
     color: hsl(var(--selection-fg));
   }
 
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border-strong) / 0.4) transparent;
+  }
   ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background-color: hsl(var(--border-strong));
+    background-color: transparent;
     border-radius: 9999px;
+    transition: background-color 150ms ease-out;
   }
-  ::-webkit-scrollbar-thumb:hover {
+  *:hover > ::-webkit-scrollbar-thumb,
+  :hover::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--border-strong) / 0.6);
+  }
+  ::-webkit-scrollbar-thumb:hover,
+  ::-webkit-scrollbar-thumb:active {
     background-color: hsl(var(--fg-muted));
   }
-
 }
 
-/* Chrome/Safari paint a fixed light-grey corner glyph on resizable
-   textareas (`::-webkit-resizer`) that ignores theme tokens — it
-   shows up as a jarring white square on dark surfaces. WebKit is
-   famously inconsistent about which `::-webkit-resizer` properties
-   it honors across versions, so this is intentionally shotgun:
-   `display: none` works on most builds, `visibility: hidden` covers
-   the rest, and zeroing the box stops the bg-paint pass from finding
-   anything to draw. Pulled out of `@layer base` so Tailwind preflight
-   can't re-introduce a default. Vertical resize still works via the
-   bottom-edge drag area. */
+/* WebKit paints a fixed light-grey ::-webkit-resizer glyph on resizable
+   textareas that ignores theme. Implementations vary across versions, so
+   this rule is intentionally shotgun. */
 textarea::-webkit-resizer,
 textarea::-webkit-scrollbar-corner {
   display: none !important;
@@ -115,38 +105,68 @@ textarea::-webkit-scrollbar-corner {
 }
 
 @layer components {
-  .surface {
-    @apply bg-surface-1 border border-default;
+  /*
+   * Typography roles. Five fixed sizes, no fractions.
+   *   .text-display   16 / semibold  — page titles, brand wordmark
+   *   .text-title     14 / medium    — panel titles, agent names
+   *   .text-body      14 / normal    — primary content, KV values
+   *   .text-meta      12 / normal    — timestamps, counts, mono details
+   *   .text-caps      11 / semibold  — section labels (sentence case)
+   */
+  .text-display {
+    @apply text-base font-semibold tracking-tight text-fg-primary;
   }
+  .text-title {
+    @apply text-sm font-medium tracking-tight text-fg-primary;
+  }
+  .text-body {
+    @apply text-sm leading-relaxed text-fg-primary;
+  }
+  .text-meta {
+    @apply text-xs text-fg-tertiary;
+  }
+  .text-caps {
+    @apply text-[11px] font-semibold tracking-normal text-fg-secondary;
+  }
+
+  /*
+   * Surface roles. Pick by structural position.
+   *   .panel           page background, no border
+   *   .panel-bordered  delineated pane; caller adds the edge
+   *   .card            raised surface for popovers, modals, composer
+   */
+  .panel {
+    @apply bg-surface-0;
+  }
+  .panel-bordered {
+    @apply bg-surface-0 border-default;
+  }
+  .card {
+    @apply bg-surface-1 rounded-lg shadow-[0_1px_0_rgba(15,15,15,0.04),0_4px_12px_-4px_rgba(15,15,15,0.08)] dark:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06),0_4px_12px_-4px_rgba(0,0,0,0.5)];
+  }
+
   .status-dot {
     @apply inline-block w-2 h-2 rounded-full;
   }
   .status-online {
-    @apply bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)];
+    @apply bg-emerald-600/90 ring-1 ring-emerald-600/15 dark:bg-emerald-500/80 dark:ring-emerald-400/15;
   }
   .status-busy {
-    @apply bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.6)];
+    @apply bg-amber-500/90 ring-1 ring-amber-500/15 dark:bg-amber-400/85 dark:ring-amber-300/15;
   }
   .status-error {
-    @apply bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)];
+    @apply bg-red-500/90 ring-1 ring-red-500/15 dark:bg-red-500/85 dark:ring-red-400/15;
   }
   .status-offline {
     @apply bg-fg-muted;
+  }
+  .brand-dot {
+    @apply h-2 w-2 rounded-full bg-emerald-600/90 ring-1 ring-emerald-600/15 dark:bg-emerald-500/80 dark:ring-emerald-400/15;
   }
   .typewriter-cursor::after {
     content: '▍';
     @apply ml-[2px] animate-blink text-fg-tertiary;
   }
-  /* Hide the scrollbar while leaving scroll behaviour (mouse wheel,
-     trackpad, keyboard) fully intact. Used on horizontal-only strips
-     like FileChips where the visible scrollbar would add noise without
-     much affordance value (the chips themselves clip and the user
-     learns to swipe). Cross-browser pieces:
-       - Firefox  → scrollbar-width: none
-       - IE/Edge  → -ms-overflow-style: none
-       - WebKit   → ::-webkit-scrollbar { display: none }
-     Defining it as a component class (not a utility) so Tailwind keeps
-     it through purge regardless of where it's used. */
   .no-scrollbar {
     scrollbar-width: none;
     -ms-overflow-style: none;
@@ -157,7 +177,7 @@ textarea::-webkit-scrollbar-corner {
 }
 
 .markdown p {
-  @apply my-2 leading-relaxed;
+  @apply my-3 leading-[1.7] text-fg-primary;
 }
 .markdown p:first-child {
   @apply mt-0;
@@ -165,34 +185,43 @@ textarea::-webkit-scrollbar-corner {
 .markdown p:last-child {
   @apply mb-0;
 }
+.markdown li {
+  @apply leading-[1.65] text-fg-primary;
+}
+.markdown strong {
+  @apply font-bold text-fg-primary;
+}
+.markdown em {
+  @apply italic;
+}
 .markdown code {
-  @apply font-mono text-[0.9em] bg-surface-2/70 px-1 py-0.5 rounded;
+  @apply rounded bg-surface-2/50 px-1.5 py-0.5 font-mono text-xs text-red-700 dark:bg-surface-2/40 dark:text-blue-200;
 }
 .markdown pre {
-  @apply font-mono text-sm bg-surface-2/70 px-3 py-2 rounded-md overflow-x-auto my-3;
+  @apply my-4 overflow-x-auto rounded-lg bg-surface-1 px-4 py-3 font-mono text-sm leading-relaxed text-fg-primary dark:bg-surface-2/80;
 }
 .markdown pre code {
-  @apply bg-transparent px-0 py-0;
+  @apply bg-transparent px-0 py-0 text-fg-primary dark:bg-transparent dark:text-fg-primary;
 }
 .markdown ul {
-  @apply list-disc pl-5 my-2;
+  @apply my-3 list-disc pl-5;
 }
 .markdown ol {
-  @apply list-decimal pl-5 my-2;
+  @apply my-3 list-decimal pl-5;
 }
 .markdown h1,
 .markdown h2,
 .markdown h3 {
-  @apply font-semibold my-2;
+  @apply mb-2 mt-5 font-semibold text-fg-primary;
+}
+.markdown h1:first-child,
+.markdown h2:first-child,
+.markdown h3:first-child {
+  @apply mt-0;
 }
 .markdown a {
-  @apply text-sky-500 hover:underline dark:text-sky-400;
+  @apply text-sky-600 hover:underline dark:text-sky-400;
 }
-/* GFM tables. Without these the table dumps as raw text — no borders,
-   no cell padding, no header background — because we don't ship a
-   prose plugin. Match the surrounding theme: subtle border, dim
-   header row, generous cell padding, and a horizontal scroll wrapper
-   so a wide table doesn't blow out the message column. */
 .markdown table {
   @apply my-3 w-full border-collapse text-sm;
   display: block;
@@ -215,13 +244,8 @@ textarea::-webkit-scrollbar-corner {
   @apply bg-surface-1/30;
 }
 
-/* shiki output for the file preview tabs. The shiki theme paints its
- * own background via an inline style on `pre.shiki`; we override it
- * to transparent so the surrounding surface shows through, keeping
- * the viewer visually aligned with the rest of the dashboard rather
- * than introducing a second surface. */
 .shiki-host pre.shiki {
-  @apply m-0 px-4 py-3 text-[13px] leading-relaxed;
+  @apply m-0 px-4 py-3 text-sm leading-relaxed;
   background-color: transparent !important;
   min-height: 100%;
 }

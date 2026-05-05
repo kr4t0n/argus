@@ -1,10 +1,6 @@
 import type { Config } from 'tailwindcss';
 import animate from 'tailwindcss-animate';
 
-// Wrap a CSS variable as an HSL color so Tailwind's slash-opacity
-// modifier (`bg-surface-1/60`) keeps working. The variable holds bare
-// HSL components ("0 0% 9%") — see `:root` / `.dark` blocks in
-// index.css — so this lives behind one `hsl()` call.
 const hsl = (v: string) => `hsl(var(${v}) / <alpha-value>)`;
 
 export default {
@@ -13,14 +9,21 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['"Geist Variable"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-        mono: ['"Geist Mono Variable"', 'ui-monospace', 'monospace'],
+        sans: [
+          '"Instrument Sans Variable"',
+          'ui-sans-serif',
+          'system-ui',
+          'sans-serif',
+        ],
+        display: [
+          '"Onest Variable"',
+          'ui-sans-serif',
+          'system-ui',
+          'sans-serif',
+        ],
+        mono: ['"Fira Code Variable"', 'ui-monospace', 'monospace'],
       },
       colors: {
-        // Semantic theme tokens. Replace literal neutral-* classes with
-        // these so a single `dark` class flip on <html> swaps the
-        // entire surface palette. See index.css for the variable
-        // definitions and the rationale behind each step.
         surface: {
           0: hsl('--surface-0'),
           1: hsl('--surface-1'),
@@ -32,22 +35,20 @@ export default {
           tertiary: hsl('--fg-tertiary'),
           muted: hsl('--fg-muted'),
         },
-        // `border-default` reads naturally as a class (`border-default`
-        // / `border border-default`) without colliding with Tailwind's
-        // built-in `border` utility (which sets width).
+        // Named `default` (not `border`) so it doesn't collide with
+        // Tailwind's built-in `border` width utility.
         default: hsl('--border'),
         'default-strong': hsl('--border-strong'),
-        agent: {
-          'claude-code': '#fb923c', // orange
-          codex: '#10b981', // emerald
-          'cursor-cli': '#38bdf8', // sky
-          custom: '#a3a3a3',
+        primary: {
+          DEFAULT: hsl('--primary-bg'),
+          hover: hsl('--primary-bg-hover'),
+          fg: hsl('--primary-fg'),
         },
-        tool: {
-          read: '#60a5fa',
-          write: '#a78bfa',
-          shell: '#34d399',
-          task: '#38bdf8',
+        agent: {
+          'claude-code': '#fb923c',
+          codex: '#10b981',
+          'cursor-cli': '#38bdf8',
+          custom: '#a3a3a3',
         },
       },
       keyframes: {

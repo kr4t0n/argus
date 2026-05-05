@@ -35,17 +35,17 @@ export function SessionCloneFailedToasts() {
           <div className="flex items-start gap-2">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 text-[12px] font-medium text-fg-primary">
+              <div className="flex items-center gap-2 text-xs font-medium text-fg-primary">
                 <span className="truncate">{f.sessionTitle}</span>
-                <span className="ml-auto text-[10px] font-normal text-fg-tertiary">
+                <span className="ml-auto text-[11px] font-normal text-fg-tertiary">
                   clone failed
                 </span>
               </div>
-              <div className="mt-0.5 text-[11px] text-fg-tertiary">
+              <div className="mt-0.5 text-meta">
                 Couldn't fork CLI state. Next prompt will start a fresh conversation.
               </div>
               {f.reason && (
-                <div className="mt-1 truncate text-[10px] text-fg-muted" title={f.reason}>
+                <div className="mt-1 truncate text-[11px] text-fg-muted" title={f.reason}>
                   {f.reason}
                 </div>
               )}

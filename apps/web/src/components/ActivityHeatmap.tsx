@@ -83,20 +83,15 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
   } | null>(null);
 
   // Solve for cell size: weeks * cell + (weeks - 1) * gap == wrapWidth
-  // → cell = (wrapWidth - (weeks - 1) * gap) / weeks. Kept fractional
-  // so the grid spans the container exactly (Math.floor previously
-  // left ~39 px of slack for a 726 px container at 53 weeks). Rects
-  // already render with anti-aliased rounded corners (rx=2), so
-  // sub-pixel widths blend in cleanly. Falls back to the `cell` prop
-  // until ResizeObserver fires the first measurement, and treats
-  // `cell` as a minimum so a narrow viewport horizontally scrolls
-  // (via the wrapper's overflow-x-auto) instead of crushing cells
-  // below 11 px.
+  // → cell = (wrapWidth - (weeks - 1) * gap) / weeks. `cell` is only
+  // the pre-measurement fallback; once we have a width, the grid fills
+  // the container (4 px floor so cells stay visible on very narrow
+  // viewports).
   const fitted =
     grid.weeks > 0 && wrapWidth > 0
       ? (wrapWidth - (grid.weeks - 1) * gap) / grid.weeks
       : cell;
-  const effectiveCell = Math.max(cell, fitted);
+  const effectiveCell = wrapWidth > 0 ? Math.max(4, fitted) : cell;
   const width = grid.weeks * effectiveCell + (grid.weeks - 1) * gap;
   const gridH = 7 * effectiveCell + 6 * gap;
   const height = MONTH_LABEL_H + gridH;
@@ -104,10 +99,10 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between">
-        <div className="text-[11px] uppercase tracking-widest text-fg-muted">
+        <div className="text-caps">
           {total.toLocaleString()} command{total === 1 ? '' : 's'} in the last year
         </div>
-        <div className="flex items-center gap-1.5 text-[10px] text-fg-muted">
+        <div className="flex items-center gap-1.5 text-[11px] text-fg-muted">
           <span>less</span>
           {[0, 1, 2, 3, 4].map((b) => (
             <span
@@ -119,7 +114,7 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
           <span>more</span>
         </div>
       </div>
-      <div ref={wrapRef} className="relative w-full overflow-x-auto">
+      <div ref={wrapRef} className="relative w-full">
         <svg
           width={width}
           height={height}
@@ -217,7 +212,7 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
 function HoverTooltip({ rect, day }: { rect: DOMRect; day: ActivityDay }) {
   return createPortal(
     <div
-      className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md border border-default bg-surface-1 px-2 py-1 text-[11px] text-fg-primary shadow-md"
+      className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md border border-default bg-surface-1 px-2 py-1 text-xs text-fg-primary shadow-md"
       style={{ left: rect.left + rect.width / 2, top: rect.top - 4 }}
     >
       <span className="font-medium">{day.count}</span>
