@@ -52,7 +52,7 @@ export const TodoWindow = memo(function TodoWindow({ chunks }: Props) {
   if (!todos || total === 0) return null;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-default bg-surface-1/60">
+    <div className="overflow-hidden rounded-lg bg-surface-1/60">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -72,7 +72,7 @@ export const TodoWindow = memo(function TodoWindow({ chunks }: Props) {
       </button>
 
       {open && (
-        <ul className="space-y-2.5 border-t border-default/80 px-3.5 py-3">
+        <ul className="space-y-2.5 px-3.5 pb-3">
           {todos.map((t, i) => (
             <TodoRow key={i} todo={t} />
           ))}

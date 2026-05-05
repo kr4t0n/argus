@@ -7,6 +7,10 @@ import { cn } from '../lib/utils';
 
 type Props = {
   agentId: string;
+  /** When true, omit the in-component "Recent commits" caps header +
+   *  refresh button. Used by ContextPane, which now wraps this panel
+   *  in a generic collapsible Section that owns the header itself. */
+  hideHeader?: boolean;
 };
 
 /**
@@ -21,7 +25,7 @@ type Props = {
  * the section disappears gracefully when the agent is pointed at a
  * directory without a `.git/`.
  */
-export function GitLogPanel({ agentId }: Props) {
+export function GitLogPanel({ agentId, hideHeader = false }: Props) {
   const [commits, setCommits] = useState<GitCommit[] | null>(null);
   const [git, setGit] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(false);
@@ -80,29 +84,48 @@ export function GitLogPanel({ agentId }: Props) {
   }
 
   return (
-    <div className="mb-4">
-      <div className="mb-1.5 flex items-center justify-between gap-1.5">
-        <div className="flex min-w-0 items-center gap-1.5 text-[10px] uppercase tracking-widest text-fg-muted">
-          <GitBranch className="h-3 w-3" />
-          <span>Recent commits</span>
-          <BranchLabel git={git} />
+    <div>
+      {!hideHeader ? (
+        <div className="mb-2.5 flex items-center justify-between gap-1.5">
+          <div className="flex min-w-0 items-center gap-1.5 text-caps">
+            <GitBranch className="h-3 w-3" />
+            <span>Recent commits</span>
+            <BranchLabel git={git} />
+          </div>
+          <button
+            type="button"
+            title="Refresh"
+            aria-label="Refresh"
+            onClick={fetchLog}
+            disabled={loading}
+            className="rounded p-1 text-fg-muted hover:bg-surface-1 hover:text-fg-tertiary disabled:opacity-50"
+          >
+            <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin text-fg-secondary')} />
+          </button>
         </div>
-        <button
-          type="button"
-          title="Refresh"
-          onClick={fetchLog}
-          disabled={loading}
-          className="text-fg-muted hover:text-fg-secondary disabled:opacity-50"
-        >
-          <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin text-fg-secondary')} />
-        </button>
-      </div>
+      ) : (
+        // Header is owned by the parent Section; show only the branch
+        // label + refresh affordance inline above the list.
+        <div className="mb-1.5 flex items-center justify-between gap-1.5 text-meta">
+          <BranchLabel git={git} />
+          <button
+            type="button"
+            title="Refresh"
+            aria-label="Refresh"
+            onClick={fetchLog}
+            disabled={loading}
+            className="rounded p-1 text-fg-muted hover:bg-surface-1 hover:text-fg-tertiary disabled:opacity-50"
+          >
+            <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin text-fg-secondary')} />
+          </button>
+        </div>
+      )}
       {/* Fixed height matches FileTree's `h-56` so the two right-pane
           sections read as one rhythm — `max-h-48` collapsed to content
           height during loading and on small chats, leaving a 1-row
           stub above a full-height tree which looked broken. */}
-      <div className="h-56 overflow-y-auto overflow-x-hidden rounded-md border border-default bg-surface-0/60 px-1 py-1 font-mono text-[11px]">
-        {error && <div className="px-2 py-1 text-[11px] text-red-400">{error}</div>}
+      <div className="h-full min-h-56 overflow-y-auto overflow-x-hidden font-mono text-[11px] leading-[22px] no-scrollbar">
+        {error && <div className="px-2 py-1 text-xs text-red-500 dark:text-red-400">{error}</div>}
         {/* Loading-on-first-fetch indicator. Mirrors the FileTree
             section so the right pane reads consistently — the header
             refresh icon also spins, but a body-level placeholder
@@ -115,10 +138,10 @@ export function GitLogPanel({ agentId }: Props) {
           </div>
         )}
         {!error && !loading && commits && commits.length === 0 && (
-          <div className="px-2 py-1 text-[11px] text-fg-muted">no commits</div>
+          <div className="px-2 py-1 text-xs text-fg-muted">no commits</div>
         )}
         {!error && commits && commits.length > 0 && (
-          <ul className="space-y-0.5">
+          <ul>
             {commits.map((c) => (
               <CommitRow key={c.sha} commit={c} />
             ))}
@@ -159,7 +182,7 @@ function CommitRow({ commit }: { commit: GitCommit }) {
     commit.subject;
   return (
     <li
-      className="group flex items-center gap-2 rounded px-1.5 py-1 hover:bg-surface-1/60"
+      className="group flex items-center gap-2 rounded px-1.5 hover:bg-surface-1/60"
       title={tooltip}
     >
       <span className="shrink-0 text-[10px] text-fg-muted">{commit.shortSha}</span>

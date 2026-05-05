@@ -45,7 +45,7 @@ export function UsageBadge({
 
   return (
     <Tooltip content={<UsageBreakdown u={total} ctx={ctx} />}>
-      <span className="inline-flex shrink-0 cursor-default items-center gap-1.5 rounded-md border border-default bg-surface-1/60 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-fg-tertiary">
+      <span className="inline-flex shrink-0 cursor-default items-center gap-1.5 rounded-md border border-default bg-surface-1/60 px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-fg-tertiary">
         {ctx && <ContextRing percent={ctx.percent} />}
         <span>{inOut}</span>
       </span>
@@ -127,24 +127,35 @@ function UsageBreakdown({ u, ctx }: { u: TokenUsage; ctx: SessionContext | null 
   }
 
   return (
-    <div className="font-mono text-[11px] tabular-nums">
+    <div className="text-[11px] tabular-nums">
       {ctx && (
         <>
-          <div className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5">
-            <RowCells
-              k="Context"
-              v={`${ctx.used.toLocaleString()} / ${ctx.window.toLocaleString()}`}
-            />
-            <RowCells k="" v={`${ctx.percent.toFixed(1)}%  ·  ${ctx.family}`} />
+          <div className="space-y-1.5">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="font-sans text-fg-secondary">{ctx.family}</span>
+              <span className="font-mono text-fg-primary">{ctx.percent.toFixed(1)}%</span>
+            </div>
+            <div className="h-1 overflow-hidden rounded-full bg-surface-2">
+              <div
+                className="h-full bg-fg-secondary/70"
+                style={{ width: `${Math.min(100, ctx.percent)}%` }}
+              />
+            </div>
+            <div className="flex items-baseline justify-between gap-3 font-mono text-fg-tertiary">
+              <span>{ctx.used.toLocaleString()}</span>
+              <span>/ {ctx.window.toLocaleString()}</span>
+            </div>
           </div>
-          <div className="my-1.5 border-t border-default" />
+          {totalRows.length > 0 && <div className="my-2 border-t border-default" />}
         </>
       )}
-      <div className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5">
-        {totalRows.map(([k, v]) => (
-          <RowCells key={k} k={k} v={v} />
-        ))}
-      </div>
+      {totalRows.length > 0 && (
+        <div className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 font-mono">
+          {totalRows.map(([k, v]) => (
+            <RowCells key={k} k={k} v={v} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

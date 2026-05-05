@@ -102,7 +102,7 @@ function PreviewableTextViewer({ file, content }: { file: OpenFile; content: str
         type="button"
         onClick={() => setShowSource((v) => !v)}
         title={showSource ? 'Show rendered preview' : 'Show source'}
-        className="absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-default bg-surface-0/80 px-2 py-1 text-[11px] text-fg-tertiary backdrop-blur transition-colors hover:border-default-strong hover:text-fg-primary"
+        className="absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-default bg-surface-0/80 px-2 py-1 text-xs text-fg-tertiary backdrop-blur transition-colors hover:border-default-strong hover:text-fg-primary"
       >
         {showSource ? (
           <>
@@ -230,8 +230,8 @@ function ErrorViewer({ message }: { message: string }) {
     <div className="flex h-full items-center justify-center px-6">
       <div
         className={cn(
-          'max-w-md rounded-md border border-red-900/50 bg-red-950/20 px-4 py-3',
-          'text-sm text-red-300',
+          'max-w-md rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 dark:border-red-900/50 dark:bg-red-950/20',
+          'text-sm text-red-600 dark:text-red-400',
         )}
       >
         {message}

@@ -27,15 +27,12 @@ export function Login() {
 
   return (
     <div className="h-screen flex items-center justify-center bg-surface-0">
-      <form
-        onSubmit={submit}
-        className="surface rounded-xl w-[360px] p-6 space-y-4"
-      >
+      <form onSubmit={submit} className="card w-[360px] p-6 space-y-4">
         <div className="flex items-center gap-2 mb-2">
-          <div className="h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.6)]" />
-          <h1 className="text-lg font-semibold tracking-tight">Argus</h1>
+          <div className="brand-dot h-2.5 w-2.5" />
+          <h1 className="text-display">Argus</h1>
         </div>
-        <p className="text-xs text-fg-tertiary -mt-2">
+        <p className="text-meta -mt-2">
           Agent management · multi-machine control plane
         </p>
 
@@ -47,7 +44,7 @@ export function Login() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
-            className="input"
+            className="w-full rounded-md border border-default bg-transparent px-3 py-2 text-sm text-fg-primary placeholder:text-fg-muted outline-none transition-colors focus:border-default-strong"
           />
         </Field>
         <Field label="Password">
@@ -58,26 +55,14 @@ export function Login() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
-            className="input"
+            className="w-full rounded-md border border-default bg-transparent px-3 py-2 text-sm text-fg-primary placeholder:text-fg-muted outline-none transition-colors focus:border-default-strong"
           />
         </Field>
-        {err && <p className="text-xs text-red-400">{err}</p>}
+        {err && <p className="text-xs text-red-500 dark:text-red-400">{err}</p>}
         <Button type="submit" className="w-full" disabled={submitting}>
           {submitting ? 'signing in…' : 'sign in'}
         </Button>
       </form>
-      <style>{`
-        .input {
-          width: 100%;
-          background: transparent;
-          border: 1px solid rgb(38 38 38);
-          border-radius: 6px;
-          padding: 0.5rem 0.75rem;
-          font-size: 0.875rem;
-          color: #fafafa;
-        }
-        .input:focus { outline: none; border-color: rgb(82 82 82); }
-      `}</style>
     </div>
   );
 }
@@ -91,9 +76,7 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="block text-[10px] uppercase tracking-wider text-fg-tertiary mb-1">
-        {label}
-      </span>
+      <span className="block text-caps mb-1">{label}</span>
       {children}
     </label>
   );
