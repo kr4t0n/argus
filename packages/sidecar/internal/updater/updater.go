@@ -32,6 +32,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -171,13 +172,18 @@ func Update(ctx context.Context, opts Options) (string, error) {
 	return rel.TagName, nil
 }
 
-// pickLatestRelease lists recent releases and returns the newest one whose
-// tag starts with `argus-sidecar-v`. The GitHub `/releases` endpoint already
-// returns results in descending publish order so the first match is the
-// newest. We deliberately do NOT use `/releases/latest` because that
-// endpoint always returns the single newest release across the whole
-// repository, which could be a different component (e.g. a future
-// `argus-web-v1.0.0`).
+// pickLatestRelease lists recent releases and returns the highest-versioned
+// one whose tag starts with `argus-sidecar-v`. We deliberately do NOT use
+// `/releases/latest` because that endpoint always returns the single newest
+// release across the whole repository, which could be a different component
+// (e.g. a future `argus-web-v1.0.0`).
+//
+// We also can't trust the API's response order: GitHub's `/releases` listing
+// isn't strictly sorted by semver or even by published_at — empirically a
+// stable v0.1.11 can appear above a later-published v0.1.12-rc.1 — so picking
+// "the first matching release" returned a stale version when --prerelease was
+// set. Instead we filter all returned releases by prefix + draft/prerelease
+// flags, then pick the max by semver-compliant version comparison.
 func pickLatestRelease(ctx context.Context, client *http.Client, repo string, includePrerelease bool) (*release, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=30", repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -203,6 +209,8 @@ func pickLatestRelease(ctx context.Context, client *http.Client, repo string, in
 	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
 		return nil, fmt.Errorf("decode releases: %w", err)
 	}
+	var best *release
+	var bestVer string
 	for i := range releases {
 		r := &releases[i]
 		if r.Draft {
@@ -214,9 +222,157 @@ func pickLatestRelease(ctx context.Context, client *http.Client, repo string, in
 		if !strings.HasPrefix(r.TagName, tagPrefix) {
 			continue
 		}
-		return r, nil
+		ver := strings.TrimPrefix(r.TagName, tagPrefix)
+		if !isValidVersion(ver) {
+			// Tag with our prefix but unparseable suffix — skip rather than
+			// risk picking a malformed release. Logged-out so a malformed
+			// tag never silently shadows a valid one.
+			continue
+		}
+		if best == nil || compareVersion(ver, bestVer) > 0 {
+			best = r
+			bestVer = ver
+		}
 	}
-	return nil, errors.New("no matching sidecar release found")
+	if best == nil {
+		return nil, errors.New("no matching sidecar release found")
+	}
+	return best, nil
+}
+
+// compareVersion compares two version strings of the form
+// `MAJOR.MINOR.PATCH[-PRE.IDS]` per SemVer 2.0.0 precedence rules.
+// Returns -1 if a < b, 0 if a == b, +1 if a > b. Both inputs must
+// have already passed isValidVersion.
+func compareVersion(a, b string) int {
+	aMain, aPre, _ := strings.Cut(a, "-")
+	bMain, bPre, _ := strings.Cut(b, "-")
+	if c := compareMain(aMain, bMain); c != 0 {
+		return c
+	}
+	// Per SemVer §11.3: a release version has higher precedence than a
+	// prerelease version with the same MAJOR.MINOR.PATCH.
+	switch {
+	case aPre == "" && bPre == "":
+		return 0
+	case aPre == "":
+		return 1
+	case bPre == "":
+		return -1
+	}
+	return comparePrerelease(aPre, bPre)
+}
+
+// compareMain compares the dotted MAJOR.MINOR.PATCH portion numerically.
+func compareMain(a, b string) int {
+	ap := strings.SplitN(a, ".", 3)
+	bp := strings.SplitN(b, ".", 3)
+	for i := 0; i < 3; i++ {
+		ai, _ := strconv.Atoi(ap[i])
+		bi, _ := strconv.Atoi(bp[i])
+		if ai != bi {
+			if ai < bi {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
+// comparePrerelease compares two dot-separated prerelease ID lists per
+// SemVer §11.4. Numeric IDs sort numerically, alphanumeric IDs sort
+// lexicographically, and numeric IDs always sort below alphanumeric IDs.
+// A shorter prefix-equal list sorts below a longer one.
+func comparePrerelease(a, b string) int {
+	ai := strings.Split(a, ".")
+	bi := strings.Split(b, ".")
+	n := len(ai)
+	if len(bi) < n {
+		n = len(bi)
+	}
+	for i := 0; i < n; i++ {
+		if c := compareIdent(ai[i], bi[i]); c != 0 {
+			return c
+		}
+	}
+	switch {
+	case len(ai) == len(bi):
+		return 0
+	case len(ai) < len(bi):
+		return -1
+	default:
+		return 1
+	}
+}
+
+func compareIdent(a, b string) int {
+	an, aIsNum := parseUint(a)
+	bn, bIsNum := parseUint(b)
+	switch {
+	case aIsNum && bIsNum:
+		switch {
+		case an < bn:
+			return -1
+		case an > bn:
+			return 1
+		default:
+			return 0
+		}
+	case aIsNum:
+		return -1
+	case bIsNum:
+		return 1
+	default:
+		switch {
+		case a < b:
+			return -1
+		case a > b:
+			return 1
+		default:
+			return 0
+		}
+	}
+}
+
+func parseUint(s string) (uint64, bool) {
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// isValidVersion accepts MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-PRE.IDS
+// where each main part is a non-negative integer and each prerelease ID
+// is non-empty. Build metadata (`+...`) is rejected — we don't use it
+// in our tag scheme and accepting it would only complicate ordering.
+func isValidVersion(v string) bool {
+	if strings.ContainsRune(v, '+') {
+		return false
+	}
+	main, pre, hasPre := strings.Cut(v, "-")
+	parts := strings.SplitN(main, ".", 3)
+	if len(parts) != 3 {
+		return false
+	}
+	for _, p := range parts {
+		if _, ok := parseUint(p); !ok {
+			return false
+		}
+	}
+	if !hasPre {
+		return true
+	}
+	if pre == "" {
+		return false // trailing `-` with no prerelease IDs
+	}
+	for _, id := range strings.Split(pre, ".") {
+		if id == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func findAsset(assets []asset, name string) *asset {
