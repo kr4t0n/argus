@@ -92,8 +92,7 @@ function TodoRow({ todo }: { todo: Todo }) {
 
   // Prefer activeForm for in_progress so the row reads as "doing X" instead
   // of the imperative form. Falls back to content for pending/completed.
-  const text =
-    todo.status === 'in_progress' && todo.activeForm ? todo.activeForm : todo.content;
+  const text = todo.status === 'in_progress' && todo.activeForm ? todo.activeForm : todo.content;
 
   return (
     <li className="flex items-start gap-2.5 text-xs leading-relaxed">
@@ -137,7 +136,11 @@ function extractLatestTodos(chunks: ResultChunkDTO[]): Todo[] | null {
     if (c.kind !== 'tool') continue;
     const meta = (c.meta ?? {}) as Record<string, unknown>;
     const name = typeof meta.tool === 'string' ? meta.tool.toLowerCase() : '';
-    if (name !== 'todowrite' && name !== 'todo' && name !== 'task') continue;
+    // `updatetodos` is cursor-agent's tool name when the sidecar mapper hasn't
+    // normalised it (older builds, or future cursor variants); tolerate it
+    // here so the panel still renders if the adapter falls behind.
+    if (name !== 'todowrite' && name !== 'todo' && name !== 'task' && name !== 'updatetodos')
+      continue;
     const input = (meta.input ?? {}) as Record<string, unknown>;
     const raw = input.todos;
     if (!Array.isArray(raw)) return null;
@@ -147,9 +150,7 @@ function extractLatestTodos(chunks: ResultChunkDTO[]): Todo[] | null {
       const row = item as Record<string, unknown>;
       const content = typeof row.content === 'string' ? row.content : '';
       if (!content) continue;
-      const statusRaw = typeof row.status === 'string' ? row.status : 'pending';
-      const status: TodoStatus =
-        statusRaw === 'completed' || statusRaw === 'in_progress' ? statusRaw : 'pending';
+      const status = normaliseTodoStatus(row.status);
       const activeForm =
         typeof row.activeForm === 'string' && row.activeForm ? row.activeForm : undefined;
       parsed.push({ content, status, activeForm });
@@ -157,4 +158,18 @@ function extractLatestTodos(chunks: ResultChunkDTO[]): Todo[] | null {
     return parsed.length > 0 ? parsed : null;
   }
   return null;
+}
+
+/**
+ * Coerce a raw status field into one of the three canonical values.
+ * Accepts both Claude Code's lowercase form and cursor-agent's
+ * `TODO_STATUS_*` enum so the panel renders correctly even if upstream
+ * stream-json drifts before the sidecar mapper catches up.
+ */
+function normaliseTodoStatus(raw: unknown): TodoStatus {
+  if (typeof raw !== 'string') return 'pending';
+  const s = raw.toUpperCase();
+  if (s === 'COMPLETED' || s === 'TODO_STATUS_COMPLETED') return 'completed';
+  if (s === 'IN_PROGRESS' || s === 'TODO_STATUS_IN_PROGRESS') return 'in_progress';
+  return 'pending';
 }
