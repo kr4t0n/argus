@@ -306,13 +306,14 @@ func mapClaudeLine(line string, state *fileEditState, workingDir string) []Chunk
 				return []Chunk{{Kind: protocol.KindProgress, Content: desc, Meta: ev}}
 			}
 		case "task_notification":
-			// Counterpart to `task_started`: posted on completion (status
-			// is in `status`, e.g. "completed") with a `summary` of what
-			// the task did. Surface that as the pill content; status +
-			// task_id + output_file ride along in Meta.
-			if sum, _ := ev["summary"].(string); sum != "" {
-				return []Chunk{{Kind: protocol.KindProgress, Content: sum, Meta: ev}}
-			}
+			// Drop entirely. Claude posts this on completion paired with the
+			// matching `task_started`, but `summary` is the same string as
+			// `description` on the started event — surfacing both produces
+			// a duplicate pill in the activity stream. We keep the started
+			// event (which appears at task kickoff, when the user actually
+			// wants the feedback) and rely on the next chunk to imply
+			// completion.
+			return nil
 		}
 		return []Chunk{{Kind: protocol.KindProgress, Content: t, Meta: ev}}
 
