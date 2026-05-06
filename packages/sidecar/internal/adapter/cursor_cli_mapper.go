@@ -332,7 +332,8 @@ func cursorToolNameFromKey(key string) string {
 		return "WebSearch"
 	case "webFetchToolCall":
 		return "WebFetch"
-	case "todoToolCall", "todoWriteToolCall":
+	case "todoToolCall", "todoWriteToolCall",
+		"updateTodosToolCall", "updateTodoToolCall":
 		return "TodoWrite"
 	}
 	prefix := strings.TrimSuffix(key, "ToolCall")
@@ -388,6 +389,13 @@ func cursorToolDisplay(kindKey string, args map[string]any) string {
 		return firstString(args, "query", "search_term")
 	case "webFetchToolCall":
 		return firstString(args, "url")
+	case "todoToolCall", "todoWriteToolCall",
+		"updateTodosToolCall", "updateTodoToolCall":
+		todos := toAnySlice(args["todos"])
+		if len(todos) == 0 {
+			return ""
+		}
+		return fmt.Sprintf("%d items", len(todos))
 	}
 	return FormatToolArgs(args)
 }
@@ -418,10 +426,59 @@ func cursorPrunedInput(kindKey string, args map[string]any) map[string]any {
 		// Intentionally drop streamContent / contents — we'd rather render
 		// the diff in the result chunk than inflate the started chunk with
 		// the full new file contents.
+	case "todoToolCall", "todoWriteToolCall",
+		"updateTodosToolCall", "updateTodoToolCall":
+		// Normalise cursor's todo payload into Claude Code's `TodoWrite`
+		// shape so the dashboard's TodoWindow can render uniformly:
+		//   - status: TODO_STATUS_{PENDING,IN_PROGRESS,COMPLETED} → lowercase
+		//   - keep only content + status (cursor extras like id, createdAt,
+		//     updatedAt, dependencies bloat the meta without helping the UI)
+		//   - drop top-level `merge` (cursor's update semantics flag) — every
+		//     TodoWrite chunk is rendered as a full replacement anyway.
+		raw := toAnySlice(args["todos"])
+		todos := make([]any, 0, len(raw))
+		for _, item := range raw {
+			row := toMap(item)
+			if row == nil {
+				continue
+			}
+			normalised := map[string]any{}
+			if c, ok := row["content"].(string); ok && c != "" {
+				normalised["content"] = c
+			}
+			if s, ok := row["status"].(string); ok {
+				normalised["status"] = normaliseCursorTodoStatus(s)
+			}
+			if af, ok := row["activeForm"].(string); ok && af != "" {
+				normalised["activeForm"] = af
+			}
+			todos = append(todos, normalised)
+		}
+		out["todos"] = todos
 	default:
 		for k, v := range args {
 			out[k] = v
 		}
 	}
 	return out
+}
+
+// normaliseCursorTodoStatus maps cursor-agent's TODO_STATUS_* enum values to
+// the lowercase form used by Claude Code's TodoWrite tool, which is what the
+// dashboard's TodoWindow expects. Unknown values fall back to "pending" so a
+// future cursor enum addition shows up as a not-yet-started row rather than
+// silently dropping the todo.
+func normaliseCursorTodoStatus(s string) string {
+	switch strings.ToUpper(s) {
+	case "TODO_STATUS_COMPLETED", "COMPLETED":
+		return "completed"
+	case "TODO_STATUS_IN_PROGRESS", "IN_PROGRESS":
+		return "in_progress"
+	case "TODO_STATUS_PENDING", "PENDING":
+		return "pending"
+	}
+	if s == "completed" || s == "in_progress" || s == "pending" {
+		return s
+	}
+	return "pending"
 }
