@@ -141,9 +141,15 @@ export default function App() {
         if (prevStatus !== 'active') return;
         if (p.status !== 'idle' && p.status !== 'failed') return;
 
+        // `visibilityState` only tracks tab visibility within the browser —
+        // it stays 'visible' when the user switches to a different OS app
+        // window. `hasFocus()` covers that gap so we still notify when the
+        // user is watching TV / using another app, even if Argus happens to
+        // be the foreground tab in an unfocused browser window.
         const tabVisible = document.visibilityState === 'visible';
+        const windowFocused = document.hasFocus();
         const activeSessionId = activeSessionIdFromPath(window.location.pathname);
-        if (tabVisible && activeSessionId === p.id) return;
+        if (tabVisible && windowFocused && activeSessionId === p.id) return;
 
         const title = entry?.session.title?.trim() || `session ${p.id.slice(0, 8)}`;
         const success = p.status === 'idle';
