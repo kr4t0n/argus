@@ -32,7 +32,10 @@ type Props = {
  * Inspired by the activity pill in vercel-labs/open-agents.
  */
 export function ActivityPill({ chunks, running, startedAt, endedAt, open, onToggle }: Props) {
-  const tools = chunks.filter((c) => c.kind === 'tool');
+  // Sub-agent tool calls live nested in <SubAgentWindow>, not in this
+  // top-level timeline — exclude them from both the count and the
+  // "last tool" summary so the capsule mirrors what's visible below.
+  const tools = chunks.filter((c) => c.kind === 'tool' && !isNestedSubAgentChunk(c));
   const items: TimelineItem[] = useMemo(() => buildTimeline(chunks), [chunks]);
 
   // Re-render on a 100 ms tick while the turn is live so the elapsed-time
@@ -164,6 +167,11 @@ function buildTimeline(chunks: ResultChunkDTO[]): TimelineItem[] {
   const consumed = new Set<string>();
   for (const c of chunks) {
     if (c.kind !== 'stdout' && c.kind !== 'stderr') continue;
+    // Sub-agent tool_results are scoped to the SubAgentWindow row —
+    // exclude them from the parent timeline's pairing index too, or
+    // they'd surface as orphaned output rows for tools the timeline
+    // intentionally hid.
+    if (isNestedSubAgentChunk(c)) continue;
     const tid = (c.meta as Record<string, unknown> | null | undefined)?.toolResultFor;
     if (typeof tid === 'string' && tid) resultByToolId.set(tid, c);
   }
@@ -189,6 +197,9 @@ function buildTimeline(chunks: ResultChunkDTO[]): TimelineItem[] {
       continue;
     }
     if (c.kind === 'tool') {
+      // Nested sub-agent tool calls render under their parent Agent
+      // row in <SubAgentWindow>. Skip here so we don't double-render.
+      if (isNestedSubAgentChunk(c)) continue;
       flushThought();
       const id = (c.meta as Record<string, unknown> | null | undefined)?.id;
       const result = typeof id === 'string' ? resultByToolId.get(id) : undefined;
@@ -197,6 +208,7 @@ function buildTimeline(chunks: ResultChunkDTO[]): TimelineItem[] {
       continue;
     }
     if (c.kind === 'stdout' || c.kind === 'stderr') {
+      if (isNestedSubAgentChunk(c)) continue;
       flushThought();
       if (consumed.has(c.id)) continue;
       out.push({ kind: 'output', chunk: c });
@@ -205,14 +217,33 @@ function buildTimeline(chunks: ResultChunkDTO[]): TimelineItem[] {
     // Drop content-less progress chunks — the claude-code sidecar emits
     // these for meta events (e.g. unknown stream-json types) that carry
     // no user-visible signal; rendering them as "working…" rows just
-    // clutters the timeline.
+    // clutters the timeline. Also drop Claude's `task_started` /
+    // `task_progress` narration: those describe a sub-agent action
+    // (e.g. "Running Print working directory") and the actual nested
+    // tool call already shows up in the SubAgentWindow row, so the
+    // narration is just duplicate noise in the parent timeline.
     if (c.kind === 'progress' && c.content) {
+      const meta = (c.meta ?? {}) as Record<string, unknown>;
+      if (typeof meta.tool_use_id === 'string' && meta.tool_use_id) continue;
       flushThought();
       out.push({ kind: 'progress', chunk: c });
     }
   }
   flushThought();
   return out;
+}
+
+/**
+ * True when a chunk belongs to a sub-agent dispatch — the Claude Code
+ * adapter sets `parentToolUseId` on every tool/result chunk emitted
+ * inside an Agent (Task) tool's nested run. SubAgentWindow groups
+ * those chunks under their parent Agent row, so the parent timeline
+ * intentionally excludes them.
+ */
+function isNestedSubAgentChunk(c: ResultChunkDTO): boolean {
+  const meta = (c.meta ?? {}) as Record<string, unknown>;
+  const pid = meta.parentToolUseId;
+  return typeof pid === 'string' && pid.length > 0;
 }
 
 function Sep() {

@@ -2,13 +2,20 @@ import { memo, useMemo, useState } from 'react';
 import { Bot, ChevronDown } from 'lucide-react';
 import type { ResultChunkDTO } from '@argus/shared-types';
 import { cn } from '../lib/utils';
+import { ToolPill } from './ToolPill';
 
 type Props = {
   chunks: ResultChunkDTO[];
 };
 
+type NestedTool = {
+  tool: ResultChunkDTO;
+  result?: ResultChunkDTO;
+};
+
 type SubAgentCall = {
-  /** Tool-use id; used as a stable React key and to pair the result. */
+  /** Tool-use id; used as a stable React key, to pair the result, and
+   *  to match `meta.parentToolUseId` on nested sub-agent chunks. */
   id: string;
   subagentType: string;
   description: string;
@@ -17,6 +24,8 @@ type SubAgentCall = {
   result?: string;
   /** True when the paired result chunk arrived as `stderr`. */
   isError: boolean;
+  /** Tool calls the sub-agent made, in chronological order. */
+  nested: NestedTool[];
 };
 
 /**
@@ -25,9 +34,10 @@ type SubAgentCall = {
  * Mirrors the `TodoWindow` shape — a collapsible card rendered above
  * the activity timeline — but with one row per invocation rather
  * than a single latest-replaces-all view, since each sub-agent call
- * is an independent task with its own prompt and reply. Open by
- * default; rows individually expand to reveal the prompt and the
- * paired tool_result.
+ * is an independent task with its own prompt and reply. Each row
+ * lists the nested tool calls the sub-agent made, paired with their
+ * tool_result chunks (linked via Claude Code's `parent_tool_use_id`
+ * on the parent stream — see ClaudeCode adapter).
  *
  * Returns null when the turn has no `Agent` tool calls. Adapter
  * tool-name matching is restricted to `agent` for now — Claude Code
@@ -74,7 +84,7 @@ export const SubAgentWindow = memo(function SubAgentWindow({ chunks }: Props) {
 });
 
 function SubAgentRow({ call }: { call: SubAgentCall }) {
-  const hasBody = !!call.prompt || !!call.result;
+  const hasBody = !!call.prompt || !!call.result || call.nested.length > 0;
   const [open, setOpen] = useState(call.isError);
   return (
     <li className="rounded-md">
@@ -99,6 +109,11 @@ function SubAgentRow({ call }: { call: SubAgentCall }) {
         >
           {call.description || 'no description'}
         </span>
+        {call.nested.length > 0 && (
+          <span className="tabular-nums text-[10px] text-fg-muted">
+            {call.nested.length} {call.nested.length === 1 ? 'tool' : 'tools'}
+          </span>
+        )}
         {call.isError && (
           <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-widest text-red-600 dark:text-red-400">
             error
@@ -125,6 +140,18 @@ function SubAgentRow({ call }: { call: SubAgentCall }) {
               </pre>
             </div>
           )}
+          {call.nested.length > 0 && (
+            <div>
+              <div className="mb-0.5 px-1 text-[10px] uppercase tracking-widest text-fg-muted">
+                tools
+              </div>
+              <div className="rounded-md bg-surface-2/40 px-1 py-1">
+                {call.nested.map((n) => (
+                  <ToolPill key={n.tool.id} tool={n.tool} result={n.result} />
+                ))}
+              </div>
+            </div>
+          )}
           {call.result && (
             <div>
               <div className="mb-0.5 px-1 text-[10px] uppercase tracking-widest text-fg-muted">
@@ -147,11 +174,15 @@ function SubAgentRow({ call }: { call: SubAgentCall }) {
 }
 
 /**
- * Walk the chunks once, collecting every `Agent` tool call in
- * chronological order and pairing each with its tool_result chunk
- * (matched on `meta.id` ↔ `meta.toolResultFor`, the same scheme the
- * activity timeline uses). Defensive on shape: any input fields we
- * can't read fall back to empty strings rather than dropping the row.
+ * Walk the chunks once, collect every `Agent` tool call, and group
+ * each sub-agent's nested tool/result chunks under it via the
+ * `parentToolUseId` meta field that the Claude Code adapter
+ * surfaces from `parent_tool_use_id` in the stream-json payload.
+ *
+ * Pairing scheme for tool/result is the same as ActivityPanel uses
+ * (`meta.id` ↔ `meta.toolResultFor`); the only addition here is the
+ * parent-id filter. Defensive on shape: any input fields we can't
+ * read fall back to empty strings rather than dropping the row.
  */
 function extractSubAgentCalls(chunks: ResultChunkDTO[]): SubAgentCall[] {
   const resultByToolId = new Map<string, ResultChunkDTO>();
@@ -159,6 +190,22 @@ function extractSubAgentCalls(chunks: ResultChunkDTO[]): SubAgentCall[] {
     if (c.kind !== 'stdout' && c.kind !== 'stderr') continue;
     const tid = (c.meta as Record<string, unknown> | null | undefined)?.toolResultFor;
     if (typeof tid === 'string' && tid) resultByToolId.set(tid, c);
+  }
+
+  // Collect nested tool chunks keyed by parent Agent tool_use_id, in
+  // chunk-order so the rendered list matches the order Claude
+  // streamed the calls.
+  const nestedByParent = new Map<string, NestedTool[]>();
+  for (const c of chunks) {
+    if (c.kind !== 'tool') continue;
+    const meta = (c.meta ?? {}) as Record<string, unknown>;
+    const parentId = meta.parentToolUseId;
+    if (typeof parentId !== 'string' || !parentId) continue;
+    const id = typeof meta.id === 'string' && meta.id ? meta.id : c.id;
+    const result = resultByToolId.get(id);
+    const list = nestedByParent.get(parentId) ?? [];
+    list.push({ tool: c, result });
+    nestedByParent.set(parentId, list);
   }
 
   const out: SubAgentCall[] = [];
@@ -183,6 +230,7 @@ function extractSubAgentCalls(chunks: ResultChunkDTO[]): SubAgentCall[] {
       prompt,
       result: paired?.content?.trim() || undefined,
       isError: paired?.kind === 'stderr',
+      nested: nestedByParent.get(id) ?? [],
     });
   }
   return out;
