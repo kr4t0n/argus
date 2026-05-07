@@ -32,10 +32,13 @@ type Props = {
  * Inspired by the activity pill in vercel-labs/open-agents.
  */
 export function ActivityPill({ chunks, running, startedAt, endedAt, open, onToggle }: Props) {
-  // Sub-agent tool calls live nested in <SubAgentWindow>, not in this
-  // top-level timeline — exclude them from both the count and the
-  // "last tool" summary so the capsule mirrors what's visible below.
-  const tools = chunks.filter((c) => c.kind === 'tool' && !isNestedSubAgentChunk(c));
+  // Tools that have their own dedicated panel above the timeline
+  // (TodoWindow, SubAgentWindow) are excluded from the capsule too —
+  // the count and "last tool" summary should mirror what's actually
+  // rendered below the capsule, not what's been factored out.
+  const tools = chunks.filter(
+    (c) => c.kind === 'tool' && !isNestedSubAgentChunk(c) && !isDedicatedPanelTool(c),
+  );
   const items: TimelineItem[] = useMemo(() => buildTimeline(chunks), [chunks]);
 
   // Re-render on a 100 ms tick while the turn is live so the elapsed-time
@@ -200,6 +203,18 @@ function buildTimeline(chunks: ResultChunkDTO[]): TimelineItem[] {
       // Nested sub-agent tool calls render under their parent Agent
       // row in <SubAgentWindow>. Skip here so we don't double-render.
       if (isNestedSubAgentChunk(c)) continue;
+      // Tools with dedicated panels above the timeline (TodoWrite →
+      // TodoWindow, Agent → SubAgentWindow) are also intentionally
+      // hidden — but we still mark their paired tool_result as
+      // consumed so it doesn't surface as an orphaned output row.
+      if (isDedicatedPanelTool(c)) {
+        const id = (c.meta as Record<string, unknown> | null | undefined)?.id;
+        if (typeof id === 'string') {
+          const result = resultByToolId.get(id);
+          if (result) consumed.add(result.id);
+        }
+        continue;
+      }
       flushThought();
       const id = (c.meta as Record<string, unknown> | null | undefined)?.id;
       const result = typeof id === 'string' ? resultByToolId.get(id) : undefined;
@@ -244,6 +259,26 @@ function isNestedSubAgentChunk(c: ResultChunkDTO): boolean {
   const meta = (c.meta ?? {}) as Record<string, unknown>;
   const pid = meta.parentToolUseId;
   return typeof pid === 'string' && pid.length > 0;
+}
+
+/**
+ * True when a tool chunk is one we render in a dedicated turn-level
+ * panel above the activity timeline — keep this matcher in sync with
+ * TodoWindow's `extractLatestTodos` and SubAgentWindow's
+ * `extractSubAgentCalls`. The activity timeline hides these so we
+ * don't double-render the same call (once in the panel + once as a
+ * timeline row).
+ */
+function isDedicatedPanelTool(c: ResultChunkDTO): boolean {
+  const meta = (c.meta ?? {}) as Record<string, unknown>;
+  const name = typeof meta.tool === 'string' ? meta.tool.toLowerCase() : '';
+  return (
+    name === 'agent' ||
+    name === 'todowrite' ||
+    name === 'todo' ||
+    name === 'task' ||
+    name === 'updatetodos'
+  );
 }
 
 function Sep() {
