@@ -10,6 +10,7 @@ import { splitDeltas } from '../lib/deltaSplit';
 import { ActivityPanel, ActivityPill } from './ActivityPill';
 import { FileChips, extractFiles } from './FileChips';
 import { TodoWindow } from './TodoWindow';
+import { SubAgentWindow } from './SubAgentWindow';
 import { Tooltip } from './ui/Tooltip';
 
 type Props = {
@@ -356,6 +357,7 @@ const CommandBlock = memo(function CommandBlock({
 
       <div className="mt-4 space-y-3">
         <TodoWindow chunks={chunks} />
+        <SubAgentWindow chunks={chunks} />
         {activityOpen && <ActivityPanel chunks={chunks} />}
         {(bodyText || files.length > 0) && (
           <AnswerBlock
