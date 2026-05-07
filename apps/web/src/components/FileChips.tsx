@@ -1,5 +1,6 @@
 import { FileText } from 'lucide-react';
 import type { ResultChunkDTO } from '@argus/shared-types';
+import { useFileTabsStore } from '../stores/fileTabsStore';
 
 /**
  * Pull file paths out of tool inputs (`file_path`, `path`, `filename`, `files[]`).
@@ -25,8 +26,20 @@ export function extractFiles(chunks: ResultChunkDTO[]): string[] {
     ];
     for (const v of candidates) {
       if (typeof v !== 'string' || !v) continue;
-      // Skip Bash-like commands; only count tools that operate on files.
-      if (tool === 'bash' || tool === 'shell') continue;
+      // Only count tools that operate on a single file. Skip:
+      //   - bash / shell — the `path` is part of a command line
+      //   - ls / list_dir / glob / grep — the `path` field is a
+      //     directory, and chips are meant to be openable previews
+      if (
+        tool === 'bash' ||
+        tool === 'shell' ||
+        tool === 'ls' ||
+        tool === 'list_dir' ||
+        tool === 'glob' ||
+        tool === 'grep'
+      ) {
+        continue;
+      }
       if (seen.has(v)) continue;
       seen.add(v);
       out.push(v);
@@ -61,13 +74,42 @@ export function displayPath(abs: string, workingDir?: string | null): string {
   return abs;
 }
 
+/**
+ * Convert a chip path to the form `api.readAgentFile()` expects (and
+ * the sidecar's `fs-read` accepts) — i.e. relative to the agent's
+ * `workingDir`, and not a directory.
+ *
+ * Returns `null` when the path is unopenable:
+ *   - file lives outside the workspace (sidecar would reject)
+ *   - path looks like a directory (`.`, empty, or trailing slash) —
+ *     `extractFiles` already drops the obvious dir-listing tools, but
+ *     this guard catches anything that slips through
+ */
+function toAgentRelative(path: string, workingDir?: string | null): string | null {
+  let rel: string;
+  if (path.startsWith('/')) {
+    rel = displayPath(path, workingDir);
+    if (rel === path) return null;
+  } else {
+    rel = path;
+  }
+  if (rel === '' || rel === '.' || rel.endsWith('/')) return null;
+  return rel;
+}
+
 export function FileChips({
   files,
   workingDir,
+  agentId,
 }: {
   files: string[];
   workingDir?: string | null;
+  /** When set, double-clicking a chip opens that file in the preview
+   *  pane (same store action the file-tabs strip uses). Omitted in
+   *  contexts where we don't have an agent to fetch the file from. */
+  agentId?: string | null;
 }) {
+  const openFile = useFileTabsStore((s) => s.openFile);
   if (files.length === 0) return null;
   // Single horizontal row, scroll left/right when chips overflow the
   // container width. `flex-nowrap` keeps chips on the same line;
@@ -81,13 +123,34 @@ export function FileChips({
     <div className="flex flex-nowrap items-center gap-1.5 overflow-x-auto no-scrollbar">
       {files.map((f) => {
         const shown = displayPath(f, workingDir);
+        const apiPath = agentId ? toAgentRelative(f, workingDir) : null;
+        // A chip is interactive only when we have both an agent AND a
+        // path inside the workspace. Files reached via absolute paths
+        // outside workingDir would be rejected by the sidecar.
+        const interactive = apiPath !== null;
+        // Tooltip combines the absolute path (when relativized) with
+        // the "double-click to preview" hint, since otherwise the
+        // double-click affordance is invisible.
+        const titleParts: string[] = [];
+        if (shown !== f) titleParts.push(f);
+        if (interactive) titleParts.push('Double-click to preview');
+        const title = titleParts.length ? titleParts.join('\n') : undefined;
         return (
           <span
             key={f}
-            // Hover reveals the absolute path so copy-out and "where on
-            // disk is this exactly?" both keep working when shown != f.
-            title={shown === f ? undefined : f}
-            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-md bg-surface-1/60 px-2 py-1 font-mono text-xs text-fg-tertiary hover:bg-surface-2/60 hover:text-fg-secondary transition-colors"
+            title={title}
+            onDoubleClick={
+              interactive
+                ? () => openFile({ agentId: agentId!, path: apiPath! })
+                : undefined
+            }
+            className={
+              'inline-flex flex-shrink-0 items-center gap-1.5 rounded-md bg-surface-1/60 px-2 py-1 font-mono text-xs text-fg-tertiary hover:bg-surface-2/60 hover:text-fg-secondary transition-colors' +
+              // `select-none` stops the double-click from highlighting
+              // the path text — without it the chip flashes selected
+              // every time the user opens a preview.
+              (interactive ? ' cursor-pointer select-none' : '')
+            }
           >
             <FileText className="h-3 w-3 flex-shrink-0 text-fg-tertiary" />
             <span className="truncate max-w-[260px]">{shown}</span>

@@ -281,6 +281,12 @@ func mapClaudeLine(line string, state *fileEditState, workingDir string) []Chunk
 		return []Chunk{{Kind: protocol.KindDelta, Delta: line}}
 	}
 	t, _ := ev["type"].(string)
+	// Sub-agent (Agent / Task tool) chunks carry `parent_tool_use_id`
+	// pointing at the dispatching tool_use. Surface it on every chunk
+	// meta we emit so the frontend can group nested tool calls under
+	// their parent in the SubAgentWindow card. Empty / missing on
+	// top-level chunks.
+	parentToolUseID, _ := ev["parent_tool_use_id"].(string)
 	switch t {
 	case "system":
 		sub, _ := ev["subtype"].(string)
@@ -306,13 +312,14 @@ func mapClaudeLine(line string, state *fileEditState, workingDir string) []Chunk
 				return []Chunk{{Kind: protocol.KindProgress, Content: desc, Meta: ev}}
 			}
 		case "task_notification":
-			// Counterpart to `task_started`: posted on completion (status
-			// is in `status`, e.g. "completed") with a `summary` of what
-			// the task did. Surface that as the pill content; status +
-			// task_id + output_file ride along in Meta.
-			if sum, _ := ev["summary"].(string); sum != "" {
-				return []Chunk{{Kind: protocol.KindProgress, Content: sum, Meta: ev}}
-			}
+			// Drop entirely. Claude posts this on completion paired with the
+			// matching `task_started`, but `summary` is the same string as
+			// `description` on the started event — surfacing both produces
+			// a duplicate pill in the activity stream. We keep the started
+			// event (which appears at task kickoff, when the user actually
+			// wants the feedback) and rely on the next chunk to imply
+			// completion.
+			return nil
 		}
 		return []Chunk{{Kind: protocol.KindProgress, Content: t, Meta: ev}}
 
@@ -339,10 +346,14 @@ func mapClaudeLine(line string, state *fileEditState, workingDir string) []Chunk
 					state.RememberBefore(toolID, resolveFilePath(workingDir, path))
 				}
 
+				meta := map[string]any{"tool": name, "input": input, "id": toolID}
+				if parentToolUseID != "" {
+					meta["parentToolUseId"] = parentToolUseID
+				}
 				out = append(out, Chunk{
 					Kind:    protocol.KindTool,
 					Content: fmt.Sprintf("%s %s", name, FormatToolArgs(input)),
-					Meta:    map[string]any{"tool": name, "input": input, "id": toolID},
+					Meta:    meta,
 				})
 			}
 		}
@@ -366,6 +377,9 @@ func mapClaudeLine(line string, state *fileEditState, workingDir string) []Chunk
 				}
 				body := stringifyAny(item["content"])
 				meta := map[string]any{"toolResultFor": toolUseID}
+				if parentToolUseID != "" {
+					meta["parentToolUseId"] = parentToolUseID
+				}
 
 				// If we snapshotted the file at tool_use, replace the
 				// (typically not-very-useful) text body with a unified diff.

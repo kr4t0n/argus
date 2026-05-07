@@ -12,6 +12,7 @@ import {
   Terminal,
   ListTree,
   Globe,
+  Bot,
   Wrench,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -205,6 +206,11 @@ function describe(name: string, input: Record<string, unknown>, fallback: string
     return { verb: 'Searched web for', arg: query, mono: false };
   if (n === 'task' || n === 'todo' || n === 'todowrite')
     return { verb: 'Updated todos', arg: '', mono: false };
+  if (n === 'agent') {
+    const subtype = (input.subagent_type as string | undefined) ?? '';
+    const desc = (input.description as string | undefined) ?? '';
+    return { verb: 'Sub-agent', arg: desc || subtype, mono: false };
+  }
 
   const arg = file ?? pattern ?? query ?? cmd ?? url ?? stripPrefix(fallback, name);
   return { verb: name || 'Called tool', arg: arg ?? '', mono: true };
@@ -225,6 +231,7 @@ function iconFor(name: string): LucideIcon {
   if (n === 'glob' || n === 'find' || n === 'ls') return FolderSearch;
   if (n === 'bash' || n === 'shell' || n === 'exec' || n === 'run') return Terminal;
   if (n === 'task' || n === 'todo' || n === 'todowrite') return ListTree;
+  if (n === 'agent') return Bot;
   if (n === 'fetch' || n === 'webfetch' || n === 'websearch') return Globe;
   if (n === 'codebase' || n === 'symbols') return FileCode2;
   return Wrench;
@@ -253,6 +260,8 @@ function iconColorFor(name: string): string {
     return 'text-emerald-600/70 dark:text-emerald-400/70';
   if (n === 'task' || n === 'todo' || n === 'todowrite')
     return 'text-orange-600/70 dark:text-orange-400/70';
+  if (n === 'agent')
+    return 'text-amber-600/80 dark:text-amber-400/80';
   if (n === 'fetch' || n === 'webfetch' || n === 'websearch')
     return 'text-indigo-600/70 dark:text-indigo-400/70';
   return 'text-fg-muted';

@@ -211,13 +211,17 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `components/TodoWindow.tsx` — per-turn task tracker rendered inside the
   sticky band right under `<ActivityPill>`. Sources its rows from the
   *latest* `TodoWrite`-style tool chunk in the command's chunks
-  (`meta.tool ∈ {todowrite, todo, task}`, `meta.input.todos`); each call
-  replaces the full list, no merging. Open by default, user-collapsible
-  via the chevron — there is intentionally no auto-collapse when all
-  todos complete (we want the finished plan to stay visible next to the
-  assistant's answer). Returns null for codex sessions / any turn
+  (`meta.tool ∈ {todowrite, todo, task, updatetodos}`, `meta.input.todos`);
+  each call replaces the full list, no merging. Open by default,
+  user-collapsible via the chevron — there is intentionally no auto-collapse
+  when all todos complete (we want the finished plan to stay visible next
+  to the assistant's answer). Returns null for codex sessions / any turn
   without a TodoWrite chunk. Shape parsing is deliberately defensive —
-  see the AGENTS.md note on stream-json drift.
+  cursor-agent ships todos with `TODO_STATUS_*` enum values and a
+  `updateTodosToolCall` key; the sidecar mapper normalises both into
+  Claude Code's lowercase form, and the component falls back to the same
+  normalisation on the off chance an older sidecar is in front. See the
+  AGENTS.md note on stream-json drift.
 - `components/Sidebar.tsx` — agent-first tree: each agent is a top-level row
   with its sessions nested underneath and a `+ new session` affordance.
   At rest the title (`name · machineGlyph`) takes the full row width up to

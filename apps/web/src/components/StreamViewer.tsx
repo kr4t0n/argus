@@ -10,6 +10,7 @@ import { splitDeltas } from '../lib/deltaSplit';
 import { ActivityPanel, ActivityPill } from './ActivityPill';
 import { FileChips, extractFiles } from './FileChips';
 import { TodoWindow } from './TodoWindow';
+import { SubAgentWindow } from './SubAgentWindow';
 import { Tooltip } from './ui/Tooltip';
 
 type Props = {
@@ -356,6 +357,7 @@ const CommandBlock = memo(function CommandBlock({
 
       <div className="mt-4 space-y-3">
         <TodoWindow chunks={chunks} />
+        <SubAgentWindow chunks={chunks} />
         {activityOpen && <ActivityPanel chunks={chunks} />}
         {(bodyText || files.length > 0) && (
           <AnswerBlock
@@ -365,6 +367,7 @@ const CommandBlock = memo(function CommandBlock({
             streaming={running && !finalChunk && !errorChunk}
             sessionId={command.sessionId}
             commandId={command.id}
+            agentId={command.agentId}
           />
         )}
         {errorChunk && (
@@ -431,6 +434,7 @@ function AnswerBlock({
   streaming,
   sessionId,
   commandId,
+  agentId,
 }: {
   bodyText: string;
   files: ReturnType<typeof extractFiles>;
@@ -438,6 +442,7 @@ function AnswerBlock({
   streaming: boolean;
   sessionId: string;
   commandId: string;
+  agentId: string;
 }) {
   const [copied, setCopied] = useState(false);
   const [forking, setForking] = useState(false);
@@ -502,7 +507,7 @@ function AnswerBlock({
       )}
       {files.length > 0 && (
         <div className={bodyText ? 'mt-4' : ''}>
-          <FileChips files={files} workingDir={workingDir} />
+          <FileChips files={files} workingDir={workingDir} agentId={agentId} />
         </div>
       )}
       {!streaming && bodyText && (
