@@ -4,6 +4,7 @@
   "private": true,
   "description": "Argus control plane (NestJS)",
   "main": "dist/main.js",
+  "packageManager": "pnpm@10.33.0",
   "scripts": {
     "build": "nest build",
     "dev": "nest start --watch",
