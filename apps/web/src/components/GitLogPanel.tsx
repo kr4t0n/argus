@@ -106,7 +106,7 @@ export function GitLogPanel({ agentId, hideHeader = false }: Props) {
       ) : (
         // Header is owned by the parent Section; show only the branch
         // label + refresh affordance inline above the list.
-        <div className="mb-1.5 flex items-center justify-between gap-1.5 text-meta">
+        <div className="mb-1.5 flex items-center gap-1.5 text-meta">
           <BranchLabel git={git} />
           <button
             type="button"
@@ -114,7 +114,7 @@ export function GitLogPanel({ agentId, hideHeader = false }: Props) {
             aria-label="Refresh"
             onClick={fetchLog}
             disabled={loading}
-            className="rounded p-1 text-fg-muted hover:bg-surface-1 hover:text-fg-tertiary disabled:opacity-50"
+            className="ml-auto rounded p-1 text-fg-muted hover:bg-surface-1 hover:text-fg-tertiary disabled:opacity-50"
           >
             <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin text-fg-secondary')} />
           </button>
