@@ -27,16 +27,16 @@ func claudeCodeProbe(client *http.Client) Probe {
 		creds, err := readClaudeCredentials()
 		if err != nil {
 			if errors.Is(err, errNoAuth) {
-				return tombstone(now, "claude-code", "claude-code-oauth", "not signed in"), nil
+				return nil, nil
 			}
 			return nil, err
 		}
 		token := creds.ClaudeAIOAuth.AccessToken
 		if token == "" {
-			// File present but empty accessToken — probably a half-
-			// completed login. Same surface as missing-file: tombstone
-			// so any prior real row gets replaced.
-			return tombstone(now, "claude-code", "claude-code-oauth", "not signed in"), nil
+			// File present but empty `accessToken`. Treat as "no auth"
+			// rather than fabricating a quota row; any prior session
+			// will have failed too.
+			return nil, nil
 		}
 
 		row := &protocol.AgentQuota{

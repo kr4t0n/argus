@@ -55,7 +55,7 @@ func cursorProbe(client *http.Client) Probe {
 		auth, err := readCursorAuth()
 		if err != nil {
 			if errors.Is(err, errNoAuth) {
-				return tombstone(now, "cursor-cli", "cursor-workos", "not signed in"), nil
+				return nil, nil
 			}
 			return nil, err
 		}

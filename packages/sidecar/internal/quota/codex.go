@@ -30,23 +30,21 @@ func codexProbe(client *http.Client) Probe {
 		auth, err := readCodexAuth()
 		if err != nil {
 			if errors.Is(err, errNoAuth) {
-				return tombstone(now, "codex", "codex-chatgpt", "not signed in"), nil
+				return nil, nil
 			}
 			return nil, err
 		}
 		// Only ChatGPT-mode users have a probeable usage endpoint.
-		// API-key Codex hits the OpenAI Platform API which has its own
-		// (paid-tier-gated) usage endpoint the CLI doesn't use; we
-		// surface this as a tombstone so the dashboard explains why
-		// the row is empty and any prior chatgpt-mode quota row is
-		// replaced when the user toggles modes.
+		// API-key Codex hits the OpenAI Platform API which has its
+		// own (paid-tier-gated) usage endpoint that the CLI doesn't
+		// use; out of scope for v1.
 		if auth.AuthMode != "chatgpt" {
-			return tombstone(now, "codex", "codex-chatgpt", "Codex is in API-key mode (no plan-quota endpoint)"), nil
+			return nil, nil
 		}
 		token := auth.Tokens.AccessToken
 		accountID := auth.Tokens.AccountID
 		if token == "" || accountID == "" {
-			return tombstone(now, "codex", "codex-chatgpt", "not signed in"), nil
+			return nil, nil
 		}
 
 		row := &protocol.AgentQuota{
