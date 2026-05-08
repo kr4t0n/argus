@@ -56,9 +56,49 @@ model Machine {
   archivedAt        DateTime?
 
   agents Agent[]
+  quotas MachineAgentQuota[]
 
   @@index([status])
   @@index([archivedAt])
+}
+
+// MachineAgentQuota stores the latest plan-quota snapshot one sidecar
+// has reported for one CLI on its host. The sidecar probes each
+// installed CLI's on-disk OAuth file every few minutes and forwards
+// the result inside machine-heartbeat events; this table caches the
+// most recent successful (or unsuccessful) snapshot per (machine,
+// agent type).
+//
+// Why a dedicated table instead of stuffing JSON onto Machine:
+//   - The data has its own update cadence (slow refresh, independent
+//     of the rest of the Machine row); narrowing writes here means a
+//     5-minute quota poll doesn't churn the Machine row's updatedAt.
+//   - `/me/quota` aggregates per agent type across all machines —
+//     much cleaner as a query against an indexed table than picking
+//     through a JSON array.
+//
+// `windows` carries an array of `QuotaWindow` records (see
+// `packages/shared-types/src/protocol.ts::QuotaWindow`). `error` is
+// non-empty when the probe ran but failed (vendor 4xx/5xx, expired
+// token, unparseable response) — we keep the row anyway so the
+// dashboard can render an "unknown" badge with the reason in a
+// tooltip rather than silently hiding a misconfigured CLI.
+model MachineAgentQuota {
+  id        String   @id @default(cuid())
+  machineId String
+  agentType String   // matches AgentType — "claude-code" | "codex" | …
+  source    String   // "claude-code-oauth" | "codex-chatgpt" | …
+  windows   Json
+  error     String?  @db.Text
+  // Sidecar wallclock when the probe ran. Used to break ties when
+  // multiple sidecars report the same agentType — the freshest wins.
+  checkedAt DateTime
+  updatedAt DateTime @updatedAt
+
+  machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+
+  @@unique([machineId, agentType])
+  @@index([agentType])
 }
 
 model Agent {

@@ -1,4 +1,5 @@
 import type {
+  AgentQuota,
   AgentStatus,
   AgentType,
   AvailableAdapter,
@@ -312,6 +313,40 @@ export interface UserActivityResponse {
  *  while looking at any single session. */
 export interface UserUsageResponse {
   usage: TokenUsage;
+}
+
+/**
+ * One row in `UserQuotaResponse`. Carries the freshest per-CLI plan
+ * quota the server has across the user's fleet of sidecars, plus the
+ * machine that reported it so the dashboard can attribute the data
+ * (e.g. "claude.ai login on `kyle-laptop`").
+ *
+ * `windows` is empty + `error` set when the probe ran but the vendor
+ * endpoint refused (401/429/etc); the dashboard surfaces this so users
+ * can tell "no auth" from "auth ok but vendor changed the endpoint."
+ */
+export interface UserQuotaRow {
+  type: AgentType;
+  source: AgentQuota['source'];
+  windows: AgentQuota['windows'];
+  error?: string;
+  /** ISO 8601 — when the sidecar last successfully probed the endpoint. */
+  checkedAt: string;
+  /** UUID of the machine whose sidecar produced this report. */
+  machineId: string;
+  /** Display name of that machine (denormalized so the dashboard doesn't
+   *  have to cross-reference the machine list). */
+  machineName: string;
+}
+
+/**
+ * REST response for `GET /me/quota`. One row per agent type the
+ * fleet has any data for. Adapter types installed on at least one
+ * sidecar but never successfully probed appear with an `error` row;
+ * adapter types nobody has ever signed into are simply absent.
+ */
+export interface UserQuotaResponse {
+  quotas: UserQuotaRow[];
 }
 
 /** REST response for `GET /me/rules`. `rules` is a free-form text

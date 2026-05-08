@@ -109,10 +109,85 @@ export interface MachineRegisterEvent {
 export interface MachineHeartbeatEvent {
   kind: 'machine-heartbeat';
   machineId: string;
+  /** Latest per-CLI plan quota the sidecar could probe from each agent's
+   *  on-disk auth file. Absent / empty when no probes have run yet (e.g.
+   *  fresh boot). Refreshed on a slow timer; piggy-backed on heartbeat
+   *  so it shares the existing lifecycle stream. */
+  quotas?: AgentQuota[];
   ts: number;
 }
 
 export type MachineLifecycleEvent = MachineRegisterEvent | MachineHeartbeatEvent;
+
+// ─────────────────────────────────────────────────────────────────────
+// Plan quota (sidecar → server, piggy-backed on machine-heartbeat)
+//
+// CLI vendors don't expose remaining quota on the CLI surface, so the
+// sidecar reads each tool's on-disk OAuth file and calls the same
+// undocumented endpoints the CLIs use internally for their own /status
+// command:
+//
+//   - claude-code → ~/.claude/.credentials.json,
+//                   GET https://api.anthropic.com/api/oauth/usage
+//                   (Authorization: Bearer <accessToken>,
+//                    anthropic-beta: oauth-2025-04-20)
+//   - codex       → ~/.codex/auth.json (auth_mode === 'chatgpt'),
+//                   GET https://chatgpt.com/backend-api/wham/usage
+//                   (Authorization: Bearer <tokens.access_token>,
+//                    ChatGPT-Account-Id: <tokens.account_id>)
+//
+// Both endpoints can change at any time; we degrade by reporting an
+// `error` per agent type rather than dropping the whole heartbeat.
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * One time-boxed plan window the user is being charged against. Both
+ * vendors expose at least two windows; we normalize them into the same
+ * shape so the dashboard can render them uniformly.
+ *
+ * `utilizationPercent` is the *used* fraction (0–100), not "remaining".
+ * Anthropic returns it as a utilization percent; ChatGPT returns
+ * percent-left, and the sidecar flips it before publishing so we always
+ * speak the same direction over the wire.
+ */
+export interface QuotaWindow {
+  /** Stable key: "five_hour" | "seven_day" | "weekly" | "seven_day_opus" | … */
+  key: string;
+  /** Short human label for the dashboard, e.g. "5-hour", "Weekly". */
+  label: string;
+  /** 0–100, percent of this window's quota the account has consumed. */
+  utilizationPercent: number;
+  /** ISO 8601 timestamp the window resets at, when the upstream
+   *  endpoint reported it. Absent when unknown. */
+  resetsAt?: string;
+}
+
+/**
+ * Plan quota for one CLI on one machine. The sidecar publishes one of
+ * these per agent type that has a usable on-disk auth file. Multiple
+ * machines may report the same `type`; the server keeps the most
+ * recently checked report and exposes it via `/me/quota`.
+ *
+ * `error` set + empty `windows` means the probe ran but failed
+ * (vendor 4xx/5xx, network error, unparseable response). The dashboard
+ * surfaces this as an "unknown" badge with the error in a tooltip
+ * rather than hiding the row, so users can tell "no auth" from
+ * "auth ok but vendor changed the endpoint."
+ */
+export interface AgentQuota {
+  /** Adapter type this quota belongs to (`claude-code` | `codex` | …). */
+  type: AgentType;
+  /** Which auth file / endpoint produced this result. Lets the dashboard
+   *  attribute the data and lets the server distinguish "different login
+   *  on the same agent type" if we ever support multi-tenant per type. */
+  source: 'claude-code-oauth' | 'codex-chatgpt' | (string & {});
+  windows: QuotaWindow[];
+  /** Human-readable failure reason when `windows` is empty. */
+  error?: string;
+  /** Sidecar wallclock when the probe ran (ms epoch). The server uses
+   *  this to pick the freshest report when multiple machines disagree. */
+  checkedAt: number;
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // Machine control plane (server → sidecar)

@@ -1,8 +1,11 @@
 import { ReactNode, useCallback, useEffect, useState } from 'react';
 import { Check, Loader2, User } from 'lucide-react';
 import type {
+  QuotaWindow,
   TokenUsage,
   UserActivityResponse,
+  UserQuotaResponse,
+  UserQuotaRow,
   UserUsageResponse,
 } from '@argus/shared-types';
 import { USER_RULES_MAX_BYTES, hasUsage } from '@argus/shared-types';
@@ -25,6 +28,9 @@ export function UserPanel() {
   const [usage, setUsage] = useState<UserUsageResponse | null>(null);
   const [usageError, setUsageError] = useState<string | null>(null);
 
+  const [quota, setQuota] = useState<UserQuotaResponse | null>(null);
+  const [quotaError, setQuotaError] = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     api
@@ -44,6 +50,15 @@ export function UserPanel() {
       .catch((err) => {
         if (cancelled) return;
         setUsageError(err instanceof ApiError ? err.message : 'failed to load usage');
+      });
+    api
+      .getMyQuota()
+      .then((d) => {
+        if (!cancelled) setQuota(d);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setQuotaError(err instanceof ApiError ? err.message : 'failed to load quota');
       });
     return () => {
       cancelled = true;
@@ -114,6 +129,13 @@ export function UserPanel() {
                 )}
                 {!usageError && !usage && <UsageLedgerSkeleton />}
                 {!usageError && usage && <UsageLedger usage={usage.usage} />}
+              </Subsection>
+              <Subsection title="Quota">
+                {quotaError && (
+                  <div className="text-sm text-red-500 dark:text-red-400">{quotaError}</div>
+                )}
+                {!quotaError && !quota && <QuotaListSkeleton />}
+                {!quotaError && quota && <QuotaList quotas={quota.quotas} />}
               </Subsection>
             </Group>
 
@@ -463,6 +485,145 @@ function UsageLedgerSkeleton() {
       ))}
     </dl>
   );
+}
+
+function QuotaList({ quotas }: { quotas: UserQuotaRow[] }) {
+  if (quotas.length === 0) {
+    return (
+      <div className="text-meta">
+        No quota data yet. Sign in to <code className="font-mono">claude</code> or{' '}
+        <code className="font-mono">codex</code> on a host running an Argus sidecar; the next
+        heartbeat (~5 min) will fetch your remaining plan windows.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-8">
+      {quotas.map((q) => (
+        <QuotaRow key={`${q.type}:${q.machineId}`} row={q} />
+      ))}
+    </div>
+  );
+}
+
+function QuotaRow({ row }: { row: UserQuotaRow }) {
+  return (
+    <div>
+      <div className="mb-3 flex items-baseline justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold tracking-tight text-fg-primary">
+            {labelForAgentType(row.type)}
+          </div>
+          <div className="mt-0.5 truncate text-[11px] text-fg-tertiary" title={row.machineName}>
+            via {row.machineName} · checked {timeAgo(row.checkedAt)}
+          </div>
+        </div>
+      </div>
+      {row.error && row.windows.length === 0 && (
+        <div
+          className="rounded-md border border-amber-300/50 bg-amber-50/50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-900/20 dark:text-amber-300"
+          title={row.error}
+        >
+          Couldn't read quota: {row.error}
+        </div>
+      )}
+      {row.windows.length > 0 && (
+        <dl className="space-y-3">
+          {row.windows.map((w) => (
+            <QuotaBar key={w.key} window={w} />
+          ))}
+        </dl>
+      )}
+    </div>
+  );
+}
+
+function QuotaBar({ window: w }: { window: QuotaWindow }) {
+  const used = Math.max(0, Math.min(100, w.utilizationPercent));
+  // Color the bar by how close we are to running out — same thresholds
+  // (60%/85%) as Anthropic's own /status display, picked because <60%
+  // reads as "fine", 60–85% as "be aware", >85% as "you might hit the
+  // wall this window."
+  const tone =
+    used >= 85
+      ? 'bg-red-500 dark:bg-red-400'
+      : used >= 60
+        ? 'bg-amber-500 dark:bg-amber-400'
+        : 'bg-emerald-500 dark:bg-emerald-400';
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-3">
+        <dt className="text-xs text-fg-secondary">{w.label}</dt>
+        <dd className="font-mono text-[11px] tabular-nums text-fg-tertiary">
+          {used}% used
+          {w.resetsAt && (
+            <span className="text-fg-muted"> · resets {formatResetAt(w.resetsAt)}</span>
+          )}
+        </dd>
+      </div>
+      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
+        <div
+          className={cn('h-full rounded-full transition-all', tone)}
+          style={{ width: `${used}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function QuotaListSkeleton() {
+  return (
+    <div className="space-y-8" role="status" aria-label="loading quota">
+      {[0, 1].map((i) => (
+        <div key={i}>
+          <div className="mb-3 h-4 w-32 animate-pulse rounded bg-surface-2" />
+          <div className="space-y-3">
+            <div className="h-1.5 w-full animate-pulse rounded-full bg-surface-2" />
+            <div className="h-1.5 w-full animate-pulse rounded-full bg-surface-2" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function labelForAgentType(t: string): string {
+  switch (t) {
+    case 'claude-code':
+      return 'Claude Code';
+    case 'codex':
+      return 'Codex';
+    case 'cursor-cli':
+      return 'Cursor CLI';
+    default:
+      return t;
+  }
+}
+
+function formatResetAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const diffMs = d.getTime() - Date.now();
+  if (diffMs <= 0) return 'now';
+  const minutes = diffMs / 60_000;
+  if (minutes < 60) return `in ${Math.round(minutes)}m`;
+  const hours = minutes / 60;
+  if (hours < 24) return `in ${hours.toFixed(hours < 10 ? 1 : 0)}h`;
+  const days = hours / 24;
+  return `in ${days.toFixed(days < 10 ? 1 : 0)}d`;
+}
+
+function timeAgo(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'unknown';
+  const diffMs = Date.now() - d.getTime();
+  if (diffMs < 60_000) return 'just now';
+  const minutes = diffMs / 60_000;
+  if (minutes < 60) return `${Math.round(minutes)}m ago`;
+  const hours = minutes / 60;
+  if (hours < 24) return `${hours.toFixed(hours < 10 ? 1 : 0)}h ago`;
+  const days = hours / 24;
+  return `${days.toFixed(days < 10 ? 1 : 0)}d ago`;
 }
 
 function formatApiDuration(ms: number): string {

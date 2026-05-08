@@ -1,8 +1,11 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type {
   AgentType,
+  QuotaWindow,
   TokenUsage,
   UserActivityResponse,
+  UserQuotaResponse,
+  UserQuotaRow,
   UserRulesResponse,
   UserUsageResponse,
 } from '@argus/shared-types';
@@ -110,6 +113,42 @@ export class UserService {
       if (u) total = sumUsage(total, u);
     }
     return { usage: total };
+  }
+
+  /**
+   * Latest plan-quota snapshot per CLI, picked across the user's
+   * entire fleet of sidecars. Quota itself isn't per-user — it's per
+   * vendor account — so when multiple machines report the same
+   * `agentType` we keep the freshest snapshot (the sidecar's own
+   * `checkedAt` wins, not the row's `updatedAt`, so cross-clock skew
+   * doesn't pick a slow box). Adapter types nobody has ever signed
+   * into are simply absent from the response.
+   *
+   * Userland filtering is not applied — Argus is single-tenant per
+   * deployment and every user can already see every machine via the
+   * machine list. If we ever flip that, this query needs to scope to
+   * machines the user has agents on.
+   */
+  async quota(_userId: string): Promise<UserQuotaResponse> {
+    const rows = await this.prisma.machineAgentQuota.findMany({
+      orderBy: { checkedAt: 'desc' },
+      include: { machine: { select: { id: true, name: true } } },
+    });
+    // First-seen wins because we sorted by checkedAt desc above.
+    const byType = new Map<string, UserQuotaRow>();
+    for (const r of rows) {
+      if (byType.has(r.agentType)) continue;
+      byType.set(r.agentType, {
+        type: r.agentType as AgentType,
+        source: r.source as UserQuotaRow['source'],
+        windows: ((r.windows ?? []) as unknown as QuotaWindow[]) ?? [],
+        error: r.error ?? undefined,
+        checkedAt: r.checkedAt.toISOString(),
+        machineId: r.machine.id,
+        machineName: r.machine.name,
+      });
+    }
+    return { quotas: [...byType.values()] };
   }
 
   /**

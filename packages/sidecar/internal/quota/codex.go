@@ -1,0 +1,263 @@
+package quota
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"time"
+
+	"github.com/kr4t0n/argus/sidecar/internal/protocol"
+)
+
+// codexProbe reads the user's Codex auth file and calls the same
+// /backend-api/wham/usage endpoint the CLI's own /status command uses
+// (see openai/codex#10869, openai/codex#15281, and the knightli.com
+// "codex-quota" guide). Only the ChatGPT-mode auth path is supported:
+// the api-key path doesn't have a public endpoint that exposes
+// remaining quota, so we drop the row in that case rather than
+// surface a permanent "unknown" error.
+//
+// The ChatGPT endpoint reports `percent_left`; we flip it to
+// utilization-used so the wire stays uniform with claude-code's
+// `utilization` semantics.
+func codexProbe(client *http.Client) Probe {
+	return func(ctx context.Context, now time.Time) (*protocol.AgentQuota, error) {
+		auth, err := readCodexAuth()
+		if err != nil {
+			if errors.Is(err, errNoAuth) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		// Only ChatGPT-mode users have a probeable usage endpoint.
+		// API-key Codex hits the OpenAI Platform API which has its
+		// own (paid-tier-gated) usage endpoint that the CLI doesn't
+		// use; out of scope for v1.
+		if auth.AuthMode != "chatgpt" {
+			return nil, nil
+		}
+		token := auth.Tokens.AccessToken
+		accountID := auth.Tokens.AccountID
+		if token == "" || accountID == "" {
+			return nil, nil
+		}
+
+		row := &protocol.AgentQuota{
+			Type:      "codex",
+			Source:    "codex-chatgpt",
+			Windows:   []protocol.QuotaWindow{},
+			CheckedAt: now.UnixMilli(),
+		}
+
+		status, body, err := httpGetJSON(ctx, client, "https://chatgpt.com/backend-api/wham/usage", map[string]string{
+			"Authorization":      "Bearer " + token,
+			"ChatGPT-Account-Id": accountID,
+			"Origin":             "https://chatgpt.com",
+			"Referer":            "https://chatgpt.com/",
+			"User-Agent":         "argus-sidecar",
+		})
+		if err != nil {
+			row.Error = truncate(err.Error(), 240)
+			return row, nil
+		}
+		if status >= 400 {
+			row.Error = fmt.Sprintf("chatgpt /wham/usage %d: %s", status, truncate(string(body), 200))
+			return row, nil
+		}
+
+		windows, err := parseChatGPTUsage(body)
+		if err != nil {
+			row.Error = "unparseable response: " + truncate(err.Error(), 200)
+			return row, nil
+		}
+		row.Windows = windows
+		if len(windows) == 0 {
+			row.Error = "no recognized windows in response"
+		}
+		return row, nil
+	}
+}
+
+type codexAuth struct {
+	AuthMode string `json:"auth_mode"`
+	Tokens   struct {
+		IDToken      string `json:"id_token"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		AccountID    string `json:"account_id"`
+	} `json:"tokens"`
+}
+
+func readCodexAuth() (*codexAuth, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("locate home dir: %w", err)
+	}
+	path := filepath.Join(home, ".codex", "auth.json")
+	var a codexAuth
+	if err := readJSONFile(path, &a); err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// parseChatGPTUsage normalizes the various shapes the wham/usage
+// endpoint has been observed to return. The community projects we
+// referenced documented both `rate_limit` / `rate_limits` flavors and
+// both `five_hour`+`weekly` and `primary_window`+`secondary_window`
+// nestings. We accept every flavor and emit the same QuotaWindow shape.
+//
+// We tolerate unknown shapes by returning an empty slice + nil error;
+// the caller turns that into a "no recognized windows" message.
+func parseChatGPTUsage(body []byte) ([]protocol.QuotaWindow, error) {
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	limitObj := pickRateLimitObject(raw)
+	if limitObj == nil {
+		// Some flavors put the windows at the top level. Fall back
+		// to that before giving up.
+		limitObj = raw
+	}
+
+	out := []protocol.QuotaWindow{}
+	for key, v := range limitObj {
+		obj, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		w, ok := chatgptWindowFrom(key, obj)
+		if !ok {
+			continue
+		}
+		out = append(out, w)
+	}
+	sortWindows(out)
+	return out, nil
+}
+
+func pickRateLimitObject(raw map[string]any) map[string]any {
+	for _, k := range []string{"rate_limit", "rate_limits"} {
+		if obj, ok := raw[k].(map[string]any); ok {
+			return obj
+		}
+	}
+	return nil
+}
+
+// chatgptWindowFrom picks one window's QuotaWindow out of one object
+// in the response. Recognizes `percent_left` / `remaining_percent` /
+// `utilization`, and either `reset_time_ms` (epoch millis) or
+// `reset_at` (ISO 8601). Returns false if neither shape matches.
+func chatgptWindowFrom(key string, obj map[string]any) (protocol.QuotaWindow, bool) {
+	utilization, ok := chatgptUtilization(obj)
+	if !ok {
+		return protocol.QuotaWindow{}, false
+	}
+	resetsAt := chatgptResetsAt(obj)
+	canonicalKey, label := normalizeCodexWindow(key, obj)
+	return protocol.QuotaWindow{
+		Key:                canonicalKey,
+		Label:              label,
+		UtilizationPercent: clampPercent(utilization),
+		ResetsAt:           resetsAt,
+	}, true
+}
+
+func chatgptUtilization(obj map[string]any) (float64, bool) {
+	if v, ok := numberFromAny(obj["percent_left"]); ok {
+		return 100 - v, true
+	}
+	if v, ok := numberFromAny(obj["remaining_percent"]); ok {
+		return 100 - v, true
+	}
+	if v, ok := numberFromAny(obj["utilization"]); ok {
+		return v, true
+	}
+	return 0, false
+}
+
+func chatgptResetsAt(obj map[string]any) string {
+	if s, ok := obj["reset_at"].(string); ok && s != "" {
+		return s
+	}
+	if ms, ok := numberFromAny(obj["reset_time_ms"]); ok && ms > 0 {
+		return time.UnixMilli(int64(ms)).UTC().Format(time.RFC3339)
+	}
+	if secs, ok := numberFromAny(obj["reset_time_seconds"]); ok && secs > 0 {
+		return time.Unix(int64(secs), 0).UTC().Format(time.RFC3339)
+	}
+	return ""
+}
+
+// normalizeCodexWindow maps the field name we found the window under
+// (or, for primary/secondary, the `limit_window_seconds` value) to the
+// canonical "five_hour"/"weekly" keys we render in the dashboard.
+// Unknown keys fall through unchanged so we don't lose data when
+// OpenAI adds a tier.
+func normalizeCodexWindow(rawKey string, obj map[string]any) (string, string) {
+	if rawKey == "primary_window" || rawKey == "secondary_window" {
+		// The primary/secondary nesting hides which window is which;
+		// `limit_window_seconds` disambiguates. 5h ≈ 18000, week ≈ 604800.
+		if secs, ok := numberFromAny(obj["limit_window_seconds"]); ok {
+			switch {
+			case secs <= 6*3600:
+				return "five_hour", "5-hour"
+			case secs >= 24*3600:
+				return "weekly", "Weekly"
+			}
+		}
+		// Fall back to the raw key — the dashboard will render it as
+		// "primary_window" rather than silently dropping it.
+		return rawKey, rawKey
+	}
+	switch rawKey {
+	case "five_hour":
+		return "five_hour", "5-hour"
+	case "weekly":
+		return "weekly", "Weekly"
+	}
+	return rawKey, rawKey
+}
+
+// sortWindows orders windows shortest-cycle first so the dashboard
+// renders 5-hour above 7-day above weekly etc. Anything we don't have
+// an explicit rank for sorts after the known set, alphabetically, so
+// ordering stays deterministic across refreshes (map iteration is
+// randomized otherwise).
+func sortWindows(ws []protocol.QuotaWindow) {
+	rank := map[string]int{
+		"five_hour":      1,
+		"seven_day":      2,
+		"seven_day_opus": 3,
+		"weekly":         4,
+		"extra_usage":    5,
+	}
+	sort.SliceStable(ws, func(i, j int) bool {
+		ri, oki := rank[ws[i].Key]
+		rj, okj := rank[ws[j].Key]
+		switch {
+		case oki && okj:
+			return ri < rj
+		case oki:
+			return true
+		case okj:
+			return false
+		}
+		return ws[i].Key < ws[j].Key
+	})
+}
+
+// unmarshal is a thin wrapper over json.Unmarshal that captures the
+// Anthropic claude-code probe path's needs in one call. Kept here
+// rather than next to the claude probe so we can reuse it if/when we
+// add cursor-cli.
+func unmarshal(body []byte, dst any) error {
+	return json.Unmarshal(body, dst)
+}

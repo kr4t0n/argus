@@ -147,6 +147,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     chunks back on `agent:{id}:result`, heartbeats, and gracefully
     drains on destroy. There is no per-agent process — supervisors are
     goroutines inside the single daemon.
+- `quota/` — per-CLI plan-quota prober. Runs on a 5-minute tick inside
+  the daemon, reads each tool's OAuth file
+  (`~/.claude/.credentials.json`, `~/.codex/auth.json`) and calls the
+  same internal endpoints the CLIs' own `/status` commands hit
+  (`api.anthropic.com/api/oauth/usage` for claude-code,
+  `chatgpt.com/backend-api/wham/usage` for codex). Both endpoints are
+  undocumented and reverse-engineered; failures degrade per-row so the
+  panel can still render the rest of the fleet. Latest snapshot is
+  cached in memory and piggy-backed onto the next `machine-heartbeat`
+  event — no extra Redis stream. ChatGPT mode flips the response's
+  `percent_left` semantics to a uniform "utilization-used" before
+  publishing so the wire stays the same shape across vendors.
   - `fs.go` / `fswatch.go` / `git.go` — workingDir browsing for the
     dashboard's right-pane file tree. `ListDirs` BFS-walks up to
     `maxDepth` levels (reusing a single `listDirWith` core + one
@@ -242,7 +254,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `pages/UserPanel.tsx` — `/user` route, settings-page layout. Sticky
   account band at the top (email + role); below it a left section nav
   (Stats / Preferences) and a scroll column with Activity (heatmap),
-  Usage (lifetime token ledger), and Preferences (notifications, user
+  Usage (lifetime token ledger), Quota (per-CLI plan windows pulled
+  from each sidecar's heartbeat — see `packages/sidecar/internal/quota`
+  and the `/me/quota` endpoint), and Preferences (notifications, user
   rules editor). Capped at `max-w-6xl`.
 - `components/TerminalPane.tsx` — xterm.js bound to one agent. Owns the
   WebSocket plumbing, a debounced ResizeObserver for fit, base64 encoding

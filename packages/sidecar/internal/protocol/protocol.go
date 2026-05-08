@@ -78,9 +78,37 @@ type MachineRegisterEvent struct {
 }
 
 type MachineHeartbeatEvent struct {
-	Kind      string `json:"kind"` // "machine-heartbeat"
-	MachineID string `json:"machineId"`
-	TS        int64  `json:"ts"`
+	Kind      string       `json:"kind"` // "machine-heartbeat"
+	MachineID string       `json:"machineId"`
+	Quotas    []AgentQuota `json:"quotas,omitempty"`
+	TS        int64        `json:"ts"`
+}
+
+// QuotaWindow is one time-boxed plan window the user is being charged
+// against. UtilizationPercent is the *used* fraction (0–100), not
+// "remaining" — Anthropic returns it in this direction; the codex prober
+// flips ChatGPT's percent_left before publishing so the wire is uniform.
+type QuotaWindow struct {
+	Key                string `json:"key"`             // "five_hour" | "seven_day" | "weekly" | …
+	Label              string `json:"label"`           // "5-hour", "Weekly"
+	UtilizationPercent int    `json:"utilizationPercent"`
+	ResetsAt           string `json:"resetsAt,omitempty"` // ISO 8601 (RFC3339)
+}
+
+// AgentQuota is the latest plan quota the sidecar could probe for one
+// adapter on this machine. See packages/shared-types/src/protocol.ts
+// for the matching TS shape.
+//
+// `Error` set + empty `Windows` means the probe ran but failed (vendor
+// 4xx/5xx, network error, unparseable response). The dashboard renders
+// these as "unknown" rows with the error in a tooltip rather than
+// hiding them, so users can tell "no auth" from "auth ok, endpoint changed."
+type AgentQuota struct {
+	Type      string        `json:"type"`            // "claude-code" | "codex" | …
+	Source    string        `json:"source"`          // "claude-code-oauth" | "codex-chatgpt"
+	Windows   []QuotaWindow `json:"windows"`
+	Error     string        `json:"error,omitempty"`
+	CheckedAt int64         `json:"checkedAt"` // ms epoch on the sidecar's clock
 }
 
 // ─────────── Machine control commands (server → sidecar) ───────────
