@@ -279,7 +279,7 @@ func cursorFetchSpendWindow(ctx context.Context, client *http.Client, cookie str
 
 	return protocol.QuotaWindow{
 		Key:                "monthly",
-		Label:              "Monthly",
+		Label:              "30-day",
 		UtilizationPercent: clampPercent(utilization),
 		ResetsAt:           resetsAt,
 	}, nil
