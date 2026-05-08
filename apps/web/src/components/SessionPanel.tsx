@@ -85,6 +85,25 @@ export function SessionPanel() {
     };
   }, [sessionId, loadSession]);
 
+  // `'done'` is the unread-completion marker the result-ingestor sets
+  // on success; the sidebar surfaces it as a green dot + bold title. As
+  // soon as the user is looking at the session, flip it back to `'idle'`
+  // so the marker disappears. Two paths trigger this:
+  //   1. Navigating into a session that was already 'done'.
+  //   2. The active turn lands while the panel is mounted — the WS
+  //      session:status event upserts the cached entry to 'done', this
+  //      effect re-runs, and we clear it.
+  // The server-side `markSeen` is a no-op for any other status, so we
+  // can fire-and-forget without checking what we're overwriting.
+  const sessionStatus = entry?.session.status;
+  useEffect(() => {
+    if (!sessionId) return;
+    if (sessionStatus !== 'done') return;
+    void api.markSessionSeen(sessionId).catch(() => {
+      /* silent — server-side is idempotent and the WS upsert will retry */
+    });
+  }, [sessionId, sessionStatus]);
+
   const running = useMemo(() => {
     if (!entry) return false;
     return entry.commands.some((c) =>

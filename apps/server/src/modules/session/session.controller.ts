@@ -179,6 +179,11 @@ export class SessionController {
     return this.sessions.unarchive(req.user.id, id);
   }
 
+  @Post(':id/seen')
+  markSeen(@Req() req: AuthedRequest, @Param('id') id: string) {
+    return this.sessions.markSeen(req.user.id, id);
+  }
+
   @Delete(':id')
   async remove(@Req() req: AuthedRequest, @Param('id') id: string) {
     await this.sessions.remove(req.user.id, id);

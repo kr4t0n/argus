@@ -401,6 +401,7 @@ function SessionRow({ session, active }: { session: SessionDTO; active: boolean 
     }
   }
 
+  const unread = !archived && session.status === 'done';
   const content = (
     <span className="flex items-center gap-1.5 min-w-0 flex-1">
       {!archived && session.status === 'active' && (
@@ -408,6 +409,12 @@ function SessionRow({ session, active }: { session: SessionDTO; active: boolean 
       )}
       {!archived && session.status === 'failed' && (
         <span className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />
+      )}
+      {unread && (
+        <span
+          className="h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0"
+          title="task complete — open to mark seen"
+        />
       )}
       {archived && <Archive className="h-3 w-3 shrink-0 text-fg-muted" />}
       {editing ? (
@@ -433,6 +440,7 @@ function SessionRow({ session, active }: { session: SessionDTO; active: boolean 
           className={cn(
             'truncate',
             archived ? 'text-fg-tertiary italic' : 'text-fg-secondary',
+            unread && 'font-semibold text-fg-primary',
             saving && 'opacity-60',
           )}
           onDoubleClick={startEdit}

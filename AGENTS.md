@@ -481,26 +481,33 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - **Task-completion notifications hook `session:status`, not
   `command:updated`**: the notifier in `App.tsx`'s `onSessionStatus`
   handler reads the prior session status BEFORE upserting and fires
-  on the `active → idle|failed` transition. The earlier-and-obvious
+  on the `active → done|failed` transition. The earlier-and-obvious
   choice of hooking `command:updated` is wrong: that event is
   emitted to room `session:{id}` (see `stream.gateway.ts:147`),
   which the browser only joins while `SessionPanel` is mounted —
   navigating away triggers `leaveSession` and the user stops
   receiving command updates entirely, so notifications would never
   fire in exactly the case they're meant for. `session:status` goes
-  to `user:{userId}` (always joined). Important: the `SessionStatus`
-  type allows `'done'` but the server never actually emits it —
-  `result-ingestor.service.ts` flips success to `'idle'` (re-using
-  the steady-state value) and failure to `'failed'`. So success is
-  encoded as `active → idle`, not `active → done`. The `'done'`
-  variant is dead in the type; don't rely on it. Reading prev-status
-  before upsert prevents re-fires on idempotent re-emits (the
-  ingestor emits `active` on every interim chunk). `Notification.requestPermission()` MUST run inside a
-  user-gesture handler — `UserPanel.NotificationToggle` calls it
-  directly from the click handler, so don't refactor through
-  `useEffect` without preserving the synchronous call chain.
-  Suppression rule is inline in the handler:
-  `(tabVisible AND activeSessionId === p.id)` — any other
+  to `user:{userId}` (always joined). Status semantics:
+  `result-ingestor.service.ts` flips success to `'done'` (the unread
+  marker the sidebar surfaces with a green dot + bold title) and
+  failure to `'failed'`; `'idle'` is the post-acknowledgement steady
+  state, reached after `SessionPanel`'s `markSeen` effect calls
+  `POST /sessions/:id/seen`. So the notification trigger is
+  `active → done`, not `active → idle` — by the time the user has
+  opened the session, the status is already idle and we don't want
+  to re-notify them about something they're looking at. Fork-created
+  sessions land directly at `'idle'` (no run yet, nothing to
+  acknowledge). Reading prev-status before upsert prevents re-fires
+  on idempotent re-emits (the ingestor emits `active` on every
+  interim chunk) and also prevents the `done → idle` transition
+  from triggering a second notification, since the prev-status
+  guard only matches `active`. `Notification.requestPermission()`
+  MUST run inside a user-gesture handler —
+  `UserPanel.NotificationToggle` calls it directly from the click
+  handler, so don't refactor through `useEffect` without preserving
+  the synchronous call chain. Suppression rule is inline in the
+  handler: `(tabVisible AND activeSessionId === p.id)` — any other
   combination earns a notify. The chime uses `AudioContext`
   oscillators (no bundled asset) which can be silently blocked by
   autoplay policy on browsers that haven't seen a user gesture yet,

@@ -251,6 +251,19 @@ export class SessionService {
     return dto;
   }
 
+  /**
+   * Flip a session from `'done'` (the unread-completion marker shown as
+   * a dot in the sidebar) back to `'idle'` once the user opens it. No-op
+   * for any other status, so callers can fire-and-forget on every view
+   * without having to gate it. Authorization-checked: throws via
+   * `get` if the session belongs to another user.
+   */
+  async markSeen(userId: string, id: string) {
+    const existing = await this.get(userId, id);
+    if (existing.status !== 'done') return SessionService.toDto(existing);
+    return this.setStatus(id, 'idle');
+  }
+
   async setExternalId(id: string, externalId: string) {
     const existing = await this.prisma.session.findUnique({
       where: { id },
