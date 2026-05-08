@@ -26,6 +26,7 @@
 package quota
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -88,14 +89,13 @@ type probeEntry struct {
 }
 
 // New builds a Prober wired to the default per-CLI probe set.
-// The probe set is fixed for now (claude-code + codex); when we add
-// cursor-cli we wire it here.
 func New(logger *log.Logger) *Prober {
 	client := &http.Client{Timeout: httpTimeout}
 	return &Prober{
 		probes: []probeEntry{
 			{name: "claude-code", fn: claudeCodeProbe(client)},
 			{name: "codex", fn: codexProbe(client)},
+			{name: "cursor-cli", fn: cursorProbe(client)},
 		},
 		log:    logger,
 		client: client,
@@ -186,14 +186,32 @@ var errNoAuth = fmt.Errorf("no auth configured")
 // + status code. Returns the body even on non-2xx so callers can
 // surface a useful slice of the upstream error in their AgentQuota.Error.
 func httpGetJSON(ctx context.Context, client *http.Client, rawURL string, headers map[string]string) (int, []byte, error) {
+	return httpJSON(ctx, client, http.MethodGet, rawURL, nil, headers)
+}
+
+// httpPostJSON mirrors httpGetJSON for endpoints the sidecar has to
+// POST to. The body is sent verbatim and `Content-Type: application/json`
+// is set automatically (unless the caller overrides it via headers).
+func httpPostJSON(ctx context.Context, client *http.Client, rawURL string, body []byte, headers map[string]string) (int, []byte, error) {
+	return httpJSON(ctx, client, http.MethodPost, rawURL, body, headers)
+}
+
+func httpJSON(ctx context.Context, client *http.Client, method, rawURL string, body []byte, headers map[string]string) (int, []byte, error) {
 	if _, err := url.Parse(rawURL); err != nil {
 		return 0, nil, fmt.Errorf("bad url: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	var reqBody io.Reader
+	if body != nil {
+		reqBody = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, reqBody)
 	if err != nil {
 		return 0, nil, err
 	}
 	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -202,11 +220,14 @@ func httpGetJSON(ctx context.Context, client *http.Client, rawURL string, header
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MiB hard cap
+	// Bumped past 1 MiB because Cursor's get-team-spend returns the
+	// entire team roster in one shot — ~600 KB on a ~5k-seat enterprise
+	// account. 4 MiB still cheaply caps a runaway payload.
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return resp.StatusCode, nil, err
 	}
-	return resp.StatusCode, body, nil
+	return resp.StatusCode, respBody, nil
 }
 
 // readJSONFile reads a small JSON file from disk into the destination.
