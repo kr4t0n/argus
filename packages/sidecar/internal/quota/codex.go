@@ -247,7 +247,7 @@ func normalizeCodexWindow(rawKey string, obj map[string]any) (string, string) {
 			case secs <= 6*3600:
 				return "five_hour", "5-hour"
 			case secs >= 24*3600:
-				return "weekly", "Weekly"
+				return "weekly", "7-day"
 			}
 		}
 		// Fall back to the raw key — the dashboard will render it as
@@ -258,7 +258,7 @@ func normalizeCodexWindow(rawKey string, obj map[string]any) (string, string) {
 	case "five_hour":
 		return "five_hour", "5-hour"
 	case "weekly":
-		return "weekly", "Weekly"
+		return "weekly", "7-day"
 	}
 	return rawKey, rawKey
 }

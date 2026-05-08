@@ -83,7 +83,17 @@ func claudeCodeProbe(client *http.Client) Probe {
 			if !ok {
 				continue
 			}
+			// Inactive plan-tier windows ship with `resets_at: null` and
+			// 0% utilization (e.g. `seven_day_sonnet`,
+			// `seven_day_omelette` for accounts that don't have those
+			// per-model limits) — drop them so the panel only shows
+			// windows the user is actually being charged against. Active
+			// windows with 0% used (a fresh 5-hour reset) still carry a
+			// real `resets_at` and survive this filter.
 			resetsAt, _ := obj["resets_at"].(string)
+			if resetsAt == "" {
+				continue
+			}
 			row.Windows = append(row.Windows, protocol.QuotaWindow{
 				Key:                key,
 				Label:              labelForClaudeKey(key),
