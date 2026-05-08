@@ -59,7 +59,13 @@ export class SessionService {
         userId,
         agentId,
         title: title?.trim() || 'New session',
-        status: 'active',
+        // Empty sessions start `'idle'`, not `'active'`. The sidebar's
+        // amber dot tracks `status === 'active'`, and a fresh row has
+        // no command in flight yet — `result-ingestor` flips status to
+        // `'active'` on the first streaming chunk, so the dot lights up
+        // exactly when something is actually running. Forks already
+        // use the same initial value (see `fork`).
+        status: 'idle',
       },
     });
     const dto = SessionService.toDto(s);
