@@ -59,12 +59,19 @@ const (
 )
 
 // Probe is one CLI's "go fetch the latest quota" function. Returns
-// AgentQuota with `Error` populated and `Windows` empty on failure
-// (rather than returning a Go error) so the result can be cached and
-// surfaced to the dashboard verbatim. Returning (nil, nil) means
-// "this CLI is unconfigured on this machine" (no auth file, no API
-// key) and the prober drops the row entirely instead of caching a
-// permanent "no auth" error.
+// AgentQuota with `Error` populated and `Windows` empty on any non-
+// success path (missing auth file, expired token, vendor 5xx,
+// unparseable response) so the result can be cached and surfaced to
+// the dashboard verbatim.
+//
+// In particular, "no auth file on this machine" must NOT collapse to
+// (nil, nil): a missing tombstone is silent on the wire (heartbeat's
+// Quotas field is `omitempty`), which means the server can't tell
+// "user hasn't signed in" apart from "we already reported this once,
+// don't change it" — and any prior good row would stick around in
+// `MachineAgentQuota` forever even after the user logged out. Probes
+// still MAY return (nil, nil) as a panic-safety escape hatch, but the
+// happy path is always a tombstone.
 type Probe func(ctx context.Context, now time.Time) (*protocol.AgentQuota, error)
 
 // Prober is the daemon-owned coordinator. Run() loops, each tick
@@ -176,11 +183,28 @@ func (p *Prober) refresh(ctx context.Context) {
 	p.mu.Unlock()
 }
 
-// errNoAuth signals "this CLI isn't configured on this box" — the
-// prober drops the row entirely so the dashboard doesn't see a
-// permanent "no auth" error for adapters the user simply hasn't
-// signed into. Probe implementations check for this with errors.Is.
+// errNoAuth signals "this CLI's auth file isn't present on this box."
+// Probe implementations check for it with errors.Is and turn it into
+// a tombstone AgentQuota (Windows empty, Error="not signed in") so
+// the server can replace any prior good row when the user logs out.
+// Returning Go errors (or nil, nil) for this case would make the
+// heartbeat silent on the type and leave stale rows in Postgres.
 var errNoAuth = fmt.Errorf("no auth configured")
+
+// tombstone builds an empty AgentQuota carrying just an error string.
+// Used by every probe's "auth missing / unusable" paths so the server
+// always sees a fresh row per type and the dashboard can render
+// "Couldn't read quota: <reason>" instead of staring at yesterday's
+// numbers from a CLI the user has since signed out of.
+func tombstone(now time.Time, agentType, source, reason string) *protocol.AgentQuota {
+	return &protocol.AgentQuota{
+		Type:      agentType,
+		Source:    source,
+		Windows:   []protocol.QuotaWindow{},
+		Error:     reason,
+		CheckedAt: now.UnixMilli(),
+	}
+}
 
 // httpGetJSON is a tiny shared helper: GET, expect JSON, return body
 // + status code. Returns the body even on non-2xx so callers can
