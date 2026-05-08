@@ -106,14 +106,28 @@ func readCodexAuth() (*codexAuth, error) {
 	return &a, nil
 }
 
-// parseChatGPTUsage normalizes the various shapes the wham/usage
-// endpoint has been observed to return. The community projects we
-// referenced documented both `rate_limit` / `rate_limits` flavors and
-// both `five_hour`+`weekly` and `primary_window`+`secondary_window`
-// nestings. We accept every flavor and emit the same QuotaWindow shape.
+// parseChatGPTUsage normalizes the shape ChatGPT's /backend-api/wham/usage
+// returns. As of writing (validated against a Pro Lite account in May
+// 2026), the response looks like:
 //
-// We tolerate unknown shapes by returning an empty slice + nil error;
-// the caller turns that into a "no recognized windows" message.
+//	{
+//	  "rate_limit": {
+//	    "allowed": true, "limit_reached": false,
+//	    "primary_window":   { "used_percent": 12, "limit_window_seconds": 18000,  "reset_at": 1778243769 },
+//	    "secondary_window": { "used_percent":  5, "limit_window_seconds": 604800, "reset_at": 1778637465 },
+//	    ...
+//	  },
+//	  "additional_rate_limits": [ ... per-feature limits ... ],
+//	  ...
+//	}
+//
+// We also tolerate the `rate_limits` (plural) / `percent_left` /
+// `remaining_percent` / `reset_time_ms` flavors community projects
+// documented earlier — same parser, same output shape — so a
+// future tweak on OpenAI's side doesn't black out the panel.
+//
+// Unknown shapes return an empty slice + nil error; the caller turns
+// that into a "no recognized windows" message.
 func parseChatGPTUsage(body []byte) ([]protocol.QuotaWindow, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -171,6 +185,13 @@ func chatgptWindowFrom(key string, obj map[string]any) (protocol.QuotaWindow, bo
 }
 
 func chatgptUtilization(obj map[string]any) (float64, bool) {
+	// Current shape (May 2026): `used_percent` is the canonical field
+	// and it's already in the "utilization-used" direction we publish.
+	if v, ok := numberFromAny(obj["used_percent"]); ok {
+		return v, true
+	}
+	// Older shapes some community probes documented — kept so an OpenAI
+	// rollback doesn't blank our panel.
 	if v, ok := numberFromAny(obj["percent_left"]); ok {
 		return 100 - v, true
 	}
@@ -187,6 +208,14 @@ func chatgptResetsAt(obj map[string]any) string {
 	if s, ok := obj["reset_at"].(string); ok && s != "" {
 		return s
 	}
+	// Current shape: `reset_at` is an epoch number in seconds (10 digits
+	// for the foreseeable future). We heuristic by magnitude in case
+	// OpenAI ever switches to ms — anything past ~year-33658 (10^12 s)
+	// is overwhelmingly more likely to be a millisecond timestamp than
+	// a real second one.
+	if n, ok := numberFromAny(obj["reset_at"]); ok && n > 0 {
+		return epochNumberToRFC3339(n)
+	}
 	if ms, ok := numberFromAny(obj["reset_time_ms"]); ok && ms > 0 {
 		return time.UnixMilli(int64(ms)).UTC().Format(time.RFC3339)
 	}
@@ -194,6 +223,14 @@ func chatgptResetsAt(obj map[string]any) string {
 		return time.Unix(int64(secs), 0).UTC().Format(time.RFC3339)
 	}
 	return ""
+}
+
+func epochNumberToRFC3339(n float64) string {
+	const msThreshold = 1e12 // ~year 33658 in seconds; anything bigger is millis
+	if n >= msThreshold {
+		return time.UnixMilli(int64(n)).UTC().Format(time.RFC3339)
+	}
+	return time.Unix(int64(n), 0).UTC().Format(time.RFC3339)
 }
 
 // normalizeCodexWindow maps the field name we found the window under
