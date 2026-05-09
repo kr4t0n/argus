@@ -46,6 +46,15 @@ utilization (latest turn, since each CLI re-sends full history on
 `--resume`). Hover for the full breakdown — input vs cache read vs
 cache write, USD cost, API time, and the matched model family.
 Donut hides when the model isn't in the window lookup table.
+- **Per-CLI plan-quota panel**: the `/user` page's "Quota" subsection
+shows how much of each subscription window you've burned (5-hour and
+weekly for Claude Code Pro/Max, ChatGPT Codex). Each sidecar reads the
+local CLI's OAuth file (`~/.claude/.credentials.json`,
+`~/.codex/auth.json`) and calls the same internal endpoints the CLIs'
+own `/status` commands use, refreshing every five minutes and piggy-
+backing the result on its existing heartbeat. Endpoints are
+undocumented and can change; failures degrade per-row so an expired
+token doesn't blank the whole panel.
 - **Task-completion notifications (opt-in)**: enable from `/user` and
 Argus shows a desktop notification + plays a short chime when a
 session finishes outside the route you're currently viewing — click

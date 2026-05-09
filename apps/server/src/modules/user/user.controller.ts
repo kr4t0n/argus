@@ -3,6 +3,7 @@ import { IsString, MaxLength } from 'class-validator';
 import type { Request } from 'express';
 import type {
   UserActivityResponse,
+  UserQuotaResponse,
   UserRulesResponse,
   UserUsageResponse,
 } from '@argus/shared-types';
@@ -42,6 +43,11 @@ export class UserController {
   @Get('usage')
   usage(@Req() req: AuthedRequest): Promise<UserUsageResponse> {
     return this.users.usage(req.user.id);
+  }
+
+  @Get('quota')
+  quota(@Req() req: AuthedRequest): Promise<UserQuotaResponse> {
+    return this.users.quota(req.user.id);
   }
 
   @Get('rules')
