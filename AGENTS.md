@@ -234,12 +234,25 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Claude Code's lowercase form, and the component falls back to the same
   normalisation on the off chance an older sidecar is in front. See the
   AGENTS.md note on stream-json drift.
-- `components/Sidebar.tsx` — agent-first tree: each agent is a top-level row
-  with its sessions nested underneath and a `+ new session` affordance.
-  At rest the title (`name · machineGlyph`) takes the full row width up to
-  the right edge; hover reveals `+`, archive, and eye actions over a
-  surface-1 plate with a left-side gradient mask so the truncation reads
-  cleanly.
+- `components/Sidebar.tsx` — project-first tree: top level groups
+  agents by `(workingDir, machineId)` — same path on different
+  machines lives on different physical filesystems, so they get
+  separate rows. Each project row shows a folder icon + the
+  workingDir basename + a small machine glyph (same affordance the
+  agent row used to carry); agents without a `workingDir` fall into
+  a per-machine `no project` bucket. A project expands directly into
+  its agents, each agent expands into its sessions — there is no
+  intermediate machine row in the tree (the machine identity is
+  conveyed by the glyph on the project line). The grouping is pure
+  derivation over the global `agentStore.order` — no schema change.
+  Expansion state lives in `uiStore.expanded` keyed by
+  `proj:<machineId>::<workingDir>` for projects and the raw agent id
+  for agents (default open at both levels). The `+ new session`,
+  archive, and eye actions still hover-reveal on the agent row over
+  a surface-1 plate with a left-side gradient mask. The bottom
+  `MachineList` is unchanged and remains the canonical entry point
+  for creating an agent on a machine that has no agents yet (and
+  therefore wouldn't appear in the project tree above).
 - `components/ContextPane.tsx` — right-pane companion to a session. Header
   shows agent identity + working dir + model. A collapsible `Details`
   block surfaces agent + session metadata (machine, status, version,
