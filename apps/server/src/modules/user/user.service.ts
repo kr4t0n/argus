@@ -9,12 +9,7 @@ import type {
   UserRulesResponse,
   UserUsageResponse,
 } from '@argus/shared-types';
-import {
-  USER_RULES_MAX_BYTES,
-  ZERO_USAGE,
-  parseUsage,
-  sumUsage,
-} from '@argus/shared-types';
+import { USER_RULES_MAX_BYTES } from '@argus/shared-types';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { MachineService } from '../machine/machine.service';
 
@@ -80,38 +75,56 @@ export class UserService {
   /**
    * Aggregate token usage across every session the user owns.
    *
-   * Token meta lives on each turn's `final` chunk; the field names
-   * differ between adapters (claude vs codex vs cursor vs custom),
-   * so we fan each chunk through the shared-types `parseUsage` with
-   * the agent's type — same parser the dashboard's per-session
-   * UsageBadge uses, keeping the totals consistent with what the user
-   * sees per-session.
+   * Reads the denormalized `Command.usage` JSONB written by the
+   * result-ingestor when each turn finalizes — `parseUsage` runs once
+   * at write time, the read path SUMs four numerics in Postgres.
    *
-   * Performance: a heavy user with ~5k final chunks parses in single-
-   * digit milliseconds in Node; the join + scan is the dominant cost.
-   * If this ever becomes hot we can denormalize a per-command
-   * `usage` JSONB column populated by the result-ingestor, but the
-   * straightforward scan is cheap enough for v1.
+   * The SUMs are over `(c.usage->>'<field>')::numeric` casts, which
+   * skip NULL rows automatically. `costUsd` and `durationApiMs` are
+   * optional in the stored shape; we only attach them to the response
+   * if at least one row carried them — matches `sumUsage`'s
+   * undefined-vs-zero semantics so codex-only users don't see a
+   * spurious "$0.00" cost line.
+   *
+   * If commands predating the denormalization haven't been backfilled
+   * yet (`Command.usage IS NULL` on completed rows), they're silently
+   * excluded. Run `pnpm -F @argus/server backfill:usage` to populate.
    */
   async usage(userId: string): Promise<UserUsageResponse> {
-    const rows = await this.prisma.resultChunk.findMany({
-      where: {
-        kind: 'final',
-        command: { session: { userId } },
-      },
-      select: {
-        meta: true,
-        command: { select: { agent: { select: { type: true } } } },
-      },
-    });
-
-    let total: TokenUsage = ZERO_USAGE;
-    for (const row of rows) {
-      const meta = (row.meta ?? null) as Record<string, unknown> | null;
-      const type = row.command.agent.type as AgentType;
-      const u = parseUsage(type, meta);
-      if (u) total = sumUsage(total, u);
-    }
+    type Row = {
+      input_tokens: string | null;
+      output_tokens: string | null;
+      cache_read_tokens: string | null;
+      cache_write_tokens: string | null;
+      cost_usd: string | null;
+      api_ms: string | null;
+      cost_rows: bigint;
+      api_ms_rows: bigint;
+    };
+    const rows = await this.prisma.$queryRaw<Row[]>`
+      SELECT
+        SUM((c.usage->>'inputTokens')::numeric)        AS input_tokens,
+        SUM((c.usage->>'outputTokens')::numeric)       AS output_tokens,
+        SUM((c.usage->>'cacheReadTokens')::numeric)    AS cache_read_tokens,
+        SUM((c.usage->>'cacheWriteTokens')::numeric)   AS cache_write_tokens,
+        SUM((c.usage->>'costUsd')::numeric)            AS cost_usd,
+        SUM((c.usage->>'durationApiMs')::numeric)      AS api_ms,
+        COUNT(*) FILTER (WHERE c.usage ? 'costUsd')        AS cost_rows,
+        COUNT(*) FILTER (WHERE c.usage ? 'durationApiMs')  AS api_ms_rows
+      FROM   "Command"  c
+      JOIN   "Session"  s ON s.id = c."sessionId"
+      WHERE  s."userId" = ${userId}
+        AND  c.usage IS NOT NULL
+    `;
+    const r = rows[0];
+    const total: TokenUsage = {
+      inputTokens: numOrZero(r?.input_tokens),
+      outputTokens: numOrZero(r?.output_tokens),
+      cacheReadTokens: numOrZero(r?.cache_read_tokens),
+      cacheWriteTokens: numOrZero(r?.cache_write_tokens),
+    };
+    if (r && r.cost_rows > 0n) total.costUsd = numOrZero(r.cost_usd);
+    if (r && r.api_ms_rows > 0n) total.durationApiMs = numOrZero(r.api_ms);
     return { usage: total };
   }
 
@@ -266,6 +279,15 @@ function toQuotaRow(r: QuotaRowWithMachine): UserQuotaRow {
     machineId: r.machine.id,
     machineName: r.machine.name,
   };
+}
+
+function numOrZero(v: string | null | undefined): number {
+  // pg returns NUMERIC SUMs as strings to preserve precision; for token
+  // counts and millisecond durations a JS number is plenty wide. NULL
+  // happens when no rows matched (or the column was NULL on every row).
+  if (v == null) return 0;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
 }
 
 function startOfUtcDay(d: Date): Date {

@@ -168,6 +168,13 @@ model Command {
   status      String    @default("pending")
   createdAt   DateTime  @default(now())
   completedAt DateTime?
+  // Normalized TokenUsage (shared-types/usage.ts) for this command's
+  // final chunk, written by the ingestor when the turn finalizes.
+  // NULL means "no usage" — either the turn hasn't finished yet, or
+  // it ended without a usage payload (cancellation, error, custom
+  // adapter that doesn't emit one). /me/usage SUMs this column to
+  // avoid scanning every final chunk's raw `meta` JSON.
+  usage       Json?
 
   session Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   agent   Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
