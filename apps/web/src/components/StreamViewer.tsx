@@ -523,6 +523,8 @@ function AnswerBlock({
 function UserMessage({ text }: { text: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [showFade, setShowFade] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function update() {
     const el = ref.current;
@@ -534,8 +536,23 @@ function UserMessage({ text }: { text: string }) {
 
   useLayoutEffect(update, [text]);
 
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    },
+    [],
+  );
+
+  const handleCopy = useCallback(async () => {
+    const ok = await copyTextToClipboard(text);
+    if (!ok) return;
+    setCopied(true);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setCopied(false), 1500);
+  }, [text]);
+
   return (
-    <div className="flex justify-end">
+    <div className="group flex flex-col items-end">
       {/* Outer wrapper owns rounded-2xl + overflow-hidden so Safari's
           rubber-band overscroll can't paint past the corner. */}
       <div className="max-w-[80%] overflow-hidden rounded-2xl bg-surface-1 dark:bg-surface-2/80">
@@ -556,6 +573,22 @@ function UserMessage({ text }: { text: string }) {
         >
           {text}
         </div>
+      </div>
+      <div className="mt-1 flex items-center opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
+        <Tooltip content={copied ? 'Copied' : 'Copy message'}>
+          <button
+            type="button"
+            onClick={handleCopy}
+            aria-label="Copy user message"
+            className="inline-flex h-6 w-6 items-center justify-center rounded text-fg-muted transition-colors hover:bg-surface-2/60 hover:text-fg-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-fg-tertiary"
+          >
+            {copied ? (
+              <Check className="h-3 w-3 text-emerald-500/80" />
+            ) : (
+              <Copy className="h-3 w-3" />
+            )}
+          </button>
+        </Tooltip>
       </div>
     </div>
   );
