@@ -138,13 +138,13 @@ export class UserService {
    *      /Cursor account reported from three different boxes
    *      collapses to one row, attributed to whichever box reported
    *      most recently.
-   *   2. For each agentType, partition the surviving groups into
-   *      real-account groups (fingerprint != '') and tombstone
-   *      groups (fingerprint = ''). If any real group exists, render
-   *      those (one row each — multiple accounts of the same CLI
-   *      both surface). Tombstones only render when *no* real group
-   *      exists for that agentType, so a desktop's "not signed in"
-   *      can never outrank a laptop's real row.
+   *   2. Drop tombstone groups (fingerprint = ''). They only exist
+   *      so a sidecar can clear a previously-good row when the user
+   *      logs out on that machine; once aggregated, an agentType with
+   *      nothing but tombstones means the user isn't signed in
+   *      anywhere, and the row should disappear entirely rather than
+   *      surface as "not signed in" — the empty-list hint on the web
+   *      UI tells the user how to sign in.
    *
    * Userland filtering is not applied — Argus is single-tenant per
    * deployment and every user already sees every machine via the
@@ -166,35 +166,11 @@ export class UserService {
       if (!freshest.has(key)) freshest.set(key, r);
     }
 
-    // Step 2: per agentType, prefer real-account groups. Tombstones
-    // (fingerprint='') are fall-back only.
-    const realByType = new Map<string, Row[]>();
-    const tombstoneByType = new Map<string, Row>();
-    for (const r of freshest.values()) {
-      if (r.fingerprint === '') {
-        // At most one tombstone group per agentType (all empty
-        // fingerprints share the same key in `freshest`).
-        tombstoneByType.set(r.agentType, r);
-      } else {
-        const list = realByType.get(r.agentType) ?? [];
-        list.push(r);
-        realByType.set(r.agentType, list);
-      }
-    }
-
+    // Step 2: emit one row per real account, dropping tombstones.
     const out: UserQuotaRow[] = [];
-    const allTypes = new Set<string>([
-      ...realByType.keys(),
-      ...tombstoneByType.keys(),
-    ]);
-    for (const type of allTypes) {
-      const reals = realByType.get(type);
-      if (reals && reals.length > 0) {
-        for (const r of reals) out.push(toQuotaRow(r));
-      } else {
-        const tomb = tombstoneByType.get(type);
-        if (tomb) out.push(toQuotaRow(tomb));
-      }
+    for (const r of freshest.values()) {
+      if (r.fingerprint === '') continue;
+      out.push(toQuotaRow(r));
     }
     return { quotas: out };
   }
