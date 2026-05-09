@@ -163,16 +163,16 @@ export interface QuotaWindow {
 }
 
 /**
- * Plan quota for one CLI on one machine. The sidecar publishes one of
- * these per agent type that has a usable on-disk auth file. Multiple
- * machines may report the same `type`; the server keeps the most
- * recently checked report and exposes it via `/me/quota`.
+ * Plan quota for one CLI / one signed-in account on one machine. The
+ * sidecar publishes one of these per (agentType, account it found
+ * locally), plus a tombstone (`fingerprint === ''` + `error`) for
+ * agentTypes the user isn't signed into so the server can tell apart
+ * "I logged out" from "this machine never had anything to say."
  *
- * `error` set + empty `windows` means the probe ran but failed
- * (vendor 4xx/5xx, network error, unparseable response). The dashboard
- * surfaces this as an "unknown" badge with the error in a tooltip
- * rather than hiding the row, so users can tell "no auth" from
- * "auth ok but vendor changed the endpoint."
+ * `error` set + empty `windows` means the probe ran but couldn't
+ * produce data — either the auth file is missing/empty (tombstone), or
+ * the vendor endpoint refused / changed shape. The dashboard renders
+ * an "unknown" row with the reason in a tooltip rather than hiding it.
  */
 export interface AgentQuota {
   /** Adapter type this quota belongs to (`claude-code` | `codex` | …). */
@@ -180,12 +180,24 @@ export interface AgentQuota {
   /** Which auth file / endpoint produced this result. Lets the dashboard
    *  attribute the data and lets the server distinguish "different login
    *  on the same agent type" if we ever support multi-tenant per type. */
-  source: 'claude-code-oauth' | 'codex-chatgpt' | (string & {});
+  source: 'claude-code-oauth' | 'codex-chatgpt' | 'cursor-workos' | (string & {});
+  /**
+   * Stable per-account fingerprint — sha256 of a domain-separated
+   * string built from the vendor's account id (Anthropic
+   * `account.uuid`, ChatGPT `tokens.account_id`, Cursor workos id).
+   * Lets `/me/quota` aggregate redundant reports of the same account
+   * across multiple machines, and keeps tombstones from the same
+   * machine in their own group ('') so they don't outrank real data
+   * from other machines on `checkedAt`. Empty string means
+   * "no account on this machine" — i.e. tombstone.
+   */
+  fingerprint: string;
   windows: QuotaWindow[];
   /** Human-readable failure reason when `windows` is empty. */
   error?: string;
   /** Sidecar wallclock when the probe ran (ms epoch). The server uses
-   *  this to pick the freshest report when multiple machines disagree. */
+   *  this to pick the freshest report when multiple machines report
+   *  the same `(type, fingerprint)`. */
   checkedAt: number;
 }
 

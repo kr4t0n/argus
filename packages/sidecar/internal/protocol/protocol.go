@@ -99,16 +99,19 @@ type QuotaWindow struct {
 // adapter on this machine. See packages/shared-types/src/protocol.ts
 // for the matching TS shape.
 //
-// `Error` set + empty `Windows` means the probe ran but failed (vendor
-// 4xx/5xx, network error, unparseable response). The dashboard renders
-// these as "unknown" rows with the error in a tooltip rather than
-// hiding them, so users can tell "no auth" from "auth ok, endpoint changed."
+// Fingerprint is a stable per-account hash (sha256 of a domain-separated
+// string built from the vendor's account id) — lets the server
+// aggregate redundant reports about the same account across machines
+// and keep tombstones in their own group so they don't outrank real
+// data via `checkedAt`. Empty string means "no account on this machine"
+// (i.e. tombstone — Error set, Windows empty).
 type AgentQuota struct {
-	Type      string        `json:"type"`            // "claude-code" | "codex" | …
-	Source    string        `json:"source"`          // "claude-code-oauth" | "codex-chatgpt"
-	Windows   []QuotaWindow `json:"windows"`
-	Error     string        `json:"error,omitempty"`
-	CheckedAt int64         `json:"checkedAt"` // ms epoch on the sidecar's clock
+	Type        string        `json:"type"`        // "claude-code" | "codex" | …
+	Source      string        `json:"source"`      // "claude-code-oauth" | "codex-chatgpt" | "cursor-workos"
+	Fingerprint string        `json:"fingerprint"` // sha256 hex; "" means tombstone (no signed-in account)
+	Windows     []QuotaWindow `json:"windows"`
+	Error       string        `json:"error,omitempty"`
+	CheckedAt   int64         `json:"checkedAt"` // ms epoch on the sidecar's clock
 }
 
 // ─────────── Machine control commands (server → sidecar) ───────────

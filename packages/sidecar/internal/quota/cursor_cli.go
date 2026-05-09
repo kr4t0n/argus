@@ -55,16 +55,17 @@ func cursorProbe(client *http.Client) Probe {
 		auth, err := readCursorAuth()
 		if err != nil {
 			if errors.Is(err, errNoAuth) {
-				return nil, nil
+				return tombstone(now, "cursor-cli", "cursor-workos", "not signed in"), nil
 			}
 			return nil, err
 		}
 
 		row := &protocol.AgentQuota{
-			Type:      "cursor-cli",
-			Source:    "cursor-workos",
-			Windows:   []protocol.QuotaWindow{},
-			CheckedAt: now.UnixMilli(),
+			Type:        "cursor-cli",
+			Source:      "cursor-workos",
+			Fingerprint: fingerprintFor("cursor-workos", auth.workosID),
+			Windows:     []protocol.QuotaWindow{},
+			CheckedAt:   now.UnixMilli(),
 		}
 
 		myID, err := cursorFetchSelfID(ctx, client, auth.cookie)

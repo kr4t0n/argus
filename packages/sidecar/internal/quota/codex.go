@@ -30,28 +30,30 @@ func codexProbe(client *http.Client) Probe {
 		auth, err := readCodexAuth()
 		if err != nil {
 			if errors.Is(err, errNoAuth) {
-				return nil, nil
+				return tombstone(now, "codex", "codex-chatgpt", "not signed in"), nil
 			}
 			return nil, err
 		}
-		// Only ChatGPT-mode users have a probeable usage endpoint.
-		// API-key Codex hits the OpenAI Platform API which has its
-		// own (paid-tier-gated) usage endpoint that the CLI doesn't
-		// use; out of scope for v1.
+		// API-key codex hits the OpenAI Platform API; that path has no
+		// public usage endpoint the CLI uses, so we can't produce a
+		// real row. Tombstone with a specific reason so the dashboard
+		// explains why the panel is empty *and* a prior chatgpt-mode
+		// row gets cleared if the user just toggled modes.
 		if auth.AuthMode != "chatgpt" {
-			return nil, nil
+			return tombstone(now, "codex", "codex-chatgpt", "Codex is in API-key mode (no plan-quota endpoint)"), nil
 		}
 		token := auth.Tokens.AccessToken
 		accountID := auth.Tokens.AccountID
 		if token == "" || accountID == "" {
-			return nil, nil
+			return tombstone(now, "codex", "codex-chatgpt", "not signed in"), nil
 		}
 
 		row := &protocol.AgentQuota{
-			Type:      "codex",
-			Source:    "codex-chatgpt",
-			Windows:   []protocol.QuotaWindow{},
-			CheckedAt: now.UnixMilli(),
+			Type:        "codex",
+			Source:      "codex-chatgpt",
+			Fingerprint: fingerprintFor("codex-chatgpt", accountID),
+			Windows:     []protocol.QuotaWindow{},
+			CheckedAt:   now.UnixMilli(),
 		}
 
 		status, body, err := httpGetJSON(ctx, client, "https://chatgpt.com/backend-api/wham/usage", map[string]string{

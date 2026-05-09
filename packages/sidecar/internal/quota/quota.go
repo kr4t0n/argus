@@ -28,6 +28,8 @@ package quota
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -58,13 +60,21 @@ const (
 	httpTimeout = 10 * time.Second
 )
 
-// Probe is one CLI's "go fetch the latest quota" function. Returns
-// AgentQuota with `Error` populated and `Windows` empty on failure
-// (rather than returning a Go error) so the result can be cached and
-// surfaced to the dashboard verbatim. Returning (nil, nil) means
-// "this CLI is unconfigured on this machine" (no auth file, no API
-// key) and the prober drops the row entirely instead of caching a
-// permanent "no auth" error.
+// Probe is one CLI's "go fetch the latest quota" function. Always
+// returns a non-nil AgentQuota on the happy path:
+//
+//   - signed in: `Fingerprint` set, `Windows` populated.
+//   - signed in but vendor refused / changed shape: `Fingerprint`
+//     set, `Windows` empty, `Error` carries the reason.
+//   - not signed in (auth file missing/empty): `Fingerprint=""` (the
+//     tombstone sentinel), `Windows` empty, `Error="not signed in"`.
+//
+// The (nil, nil) escape hatch remains for panic safety, but the
+// happy path is always one of the three above. Returning a tombstone
+// instead of nil for the "not signed in" case is what lets the server
+// clear out a previous good row when a user logs out — and the empty
+// fingerprint keeps it from competing against real-account rows from
+// other machines during `/me/quota` aggregation.
 type Probe func(ctx context.Context, now time.Time) (*protocol.AgentQuota, error)
 
 // Prober is the daemon-owned coordinator. Run() loops, each tick
@@ -176,11 +186,54 @@ func (p *Prober) refresh(ctx context.Context) {
 	p.mu.Unlock()
 }
 
-// errNoAuth signals "this CLI isn't configured on this box" — the
-// prober drops the row entirely so the dashboard doesn't see a
-// permanent "no auth" error for adapters the user simply hasn't
-// signed into. Probe implementations check for this with errors.Is.
+// errNoAuth signals "this CLI's auth file isn't present on this box."
+// Probes turn it into a tombstone AgentQuota (Fingerprint="", empty
+// Windows, Error="not signed in") so the server can replace any prior
+// good row from this same machine without competing against real
+// data from a different machine that's signed in.
 var errNoAuth = fmt.Errorf("no auth configured")
+
+// fingerprintDomain prefixes every account-id we hash so fingerprints
+// can't collide across CLIs (and so a leaked DB row's hash isn't
+// directly searchable against, say, a published list of cursor
+// workos ids without also knowing the prefix).
+const fingerprintDomain = "argus-quota-fp-v1:"
+
+// fingerprintFor returns the sidecar's stable per-account fingerprint:
+// sha256(domain || ":" || source || ":" || rawID) hex. `source` is
+// folded in so the same numeric/UUID id used by two different vendors
+// never collides on the rare chance their id namespaces overlap.
+//
+// Empty rawID returns the empty string (the tombstone sentinel) — never
+// hash "". A caller producing a tombstone should just pass "" directly.
+func fingerprintFor(source, rawID string) string {
+	if rawID == "" {
+		return ""
+	}
+	h := sha256.New()
+	h.Write([]byte(fingerprintDomain))
+	h.Write([]byte(source))
+	h.Write([]byte(":"))
+	h.Write([]byte(rawID))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// tombstone builds an empty AgentQuota carrying just an error string.
+// Used by every probe's "auth missing / unusable" paths so the server
+// can replace the same machine's prior real row without the tombstone
+// outranking other machines' real rows during `/me/quota` aggregation
+// — that aggregation groups by (agentType, fingerprint), and tombstones
+// always have fingerprint="" so they live in their own group.
+func tombstone(now time.Time, agentType, source, reason string) *protocol.AgentQuota {
+	return &protocol.AgentQuota{
+		Type:        agentType,
+		Source:      source,
+		Fingerprint: "",
+		Windows:     []protocol.QuotaWindow{},
+		Error:       reason,
+		CheckedAt:   now.UnixMilli(),
+	}
+}
 
 // httpGetJSON is a tiny shared helper: GET, expect JSON, return body
 // + status code. Returns the body even on non-2xx so callers can

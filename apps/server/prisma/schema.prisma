@@ -63,19 +63,25 @@ model Machine {
 }
 
 // MachineAgentQuota stores the latest plan-quota snapshot one sidecar
-// has reported for one CLI on its host. The sidecar probes each
-// installed CLI's on-disk OAuth file every few minutes and forwards
-// the result inside machine-heartbeat events; this table caches the
-// most recent successful (or unsuccessful) snapshot per (machine,
-// agent type).
+// has reported for (machine, agent type, signed-in account). The
+// sidecar probes each installed CLI's on-disk OAuth file every few
+// minutes and forwards the result inside machine-heartbeat events;
+// this table caches the most recent successful (or unsuccessful)
+// snapshot.
 //
-// Why a dedicated table instead of stuffing JSON onto Machine:
-//   - The data has its own update cadence (slow refresh, independent
-//     of the rest of the Machine row); narrowing writes here means a
-//     5-minute quota poll doesn't churn the Machine row's updatedAt.
-//   - `/me/quota` aggregates per agent type across all machines —
-//     much cleaner as a query against an indexed table than picking
-//     through a JSON array.
+// Why three columns in the unique key (and not just two):
+//   - Quota is fundamentally an *account*-level concept, not a
+//     machine-level one. Two machines signed into the same Anthropic
+//     account see the same numbers; two different accounts on the
+//     same machine over time are genuinely different observations.
+//   - `fingerprint` is the sidecar's stable per-account hash (sha256
+//     of "argus-quota-fp-v1:<source>:<vendor account id>"). It's
+//     opaque to the server — we store and key on it but never reverse
+//     it. Empty string means "no signed-in account on this machine"
+//     (a tombstone the sidecar emits after a logout); tombstones from
+//     different machines all hash to the same key '' but live in
+//     their own group at aggregation time, so they never outrank a
+//     real-account row from another machine via `checkedAt`.
 //
 // `windows` carries an array of `QuotaWindow` records (see
 // `packages/shared-types/src/protocol.ts::QuotaWindow`). `error` is
@@ -84,21 +90,25 @@ model Machine {
 // dashboard can render an "unknown" badge with the reason in a
 // tooltip rather than silently hiding a misconfigured CLI.
 model MachineAgentQuota {
-  id        String   @id @default(cuid())
-  machineId String
-  agentType String   // matches AgentType — "claude-code" | "codex" | …
-  source    String   // "claude-code-oauth" | "codex-chatgpt" | …
-  windows   Json
-  error     String?  @db.Text
+  id          String   @id @default(cuid())
+  machineId   String
+  agentType   String   // matches AgentType — "claude-code" | "codex" | "cursor-cli" | …
+  source      String   // "claude-code-oauth" | "codex-chatgpt" | "cursor-workos" | …
+  // Stable per-account hash. Empty string is the tombstone sentinel —
+  // "this machine isn't signed in for this agentType right now."
+  fingerprint String
+  windows     Json
+  error       String?  @db.Text
   // Sidecar wallclock when the probe ran. Used to break ties when
-  // multiple sidecars report the same agentType — the freshest wins.
+  // multiple sidecars report the same (agentType, fingerprint) — the
+  // freshest report wins.
   checkedAt DateTime
   updatedAt DateTime @updatedAt
 
   machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
 
-  @@unique([machineId, agentType])
-  @@index([agentType])
+  @@unique([machineId, agentType, fingerprint])
+  @@index([agentType, fingerprint])
 }
 
 model Agent {

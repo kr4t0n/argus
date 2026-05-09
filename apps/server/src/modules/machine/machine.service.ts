@@ -588,37 +588,60 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Upsert one row in MachineAgentQuota per AgentQuota the sidecar
-   * reported on a machine-heartbeat. We trust the sidecar's `checkedAt`
-   * over the server's wallclock so that when two sidecars on different
-   * boxes report the same agent type, the freshest probe wins later
-   * during aggregation in `/me/quota`.
+   * Persist quota rows the sidecar shipped on a machine-heartbeat.
+   * Each row keys on (machineId, agentType, fingerprint) so the same
+   * Anthropic/ChatGPT/Cursor account reported by multiple machines
+   * dedupes naturally at aggregation time.
    *
-   * Failures here are swallowed and logged: heartbeat ingestion is
-   * the hot path that flips a machine's status to online, and a
-   * quota write hiccup must never block that.
+   * Per-machine invariant: at most one fingerprint live per
+   * (machineId, agentType). Without this, a logout (fingerprint='')
+   * coexists in the table with the previous real row (fingerprint=
+   * hash(account)) and `/me/quota` happily picks the still-fresh
+   * real row, defeating the whole point of the tombstone. So before
+   * upserting, we delete any other rows for this machine+type whose
+   * fingerprint differs from the one we're about to write.
+   *
+   * Failures are swallowed and logged: heartbeat ingestion flips
+   * Machine.status, and a quota write hiccup must never block that.
    */
   private async persistQuotas(machineId: string, quotas: AgentQuota[]) {
     for (const q of quotas) {
+      const fingerprint = q.fingerprint ?? '';
       const data = {
         machineId,
         agentType: q.type,
         source: q.source,
+        fingerprint,
         windows: (q.windows ?? []) as unknown as Prisma.InputJsonValue,
         error: q.error ?? null,
         checkedAt: new Date(q.checkedAt),
       };
-      await this.prisma.machineAgentQuota
-        .upsert({
-          where: { machineId_agentType: { machineId, agentType: q.type } },
-          create: data,
-          update: data,
-        })
-        .catch((err) => {
-          this.logger.warn(
-            `quota upsert failed for ${machineId}/${q.type}: ${(err as Error).message}`,
-          );
-        });
+      try {
+        await this.prisma.$transaction([
+          this.prisma.machineAgentQuota.deleteMany({
+            where: {
+              machineId,
+              agentType: q.type,
+              fingerprint: { not: fingerprint },
+            },
+          }),
+          this.prisma.machineAgentQuota.upsert({
+            where: {
+              machineId_agentType_fingerprint: {
+                machineId,
+                agentType: q.type,
+                fingerprint,
+              },
+            },
+            create: data,
+            update: data,
+          }),
+        ]);
+      } catch (err) {
+        this.logger.warn(
+          `quota upsert failed for ${machineId}/${q.type}: ${(err as Error).message}`,
+        );
+      }
     }
   }
 
