@@ -2,6 +2,9 @@
 # Multi-stage build for the Argus NestJS control plane.
 #
 # Stage layout:
+#   0. base     — node:alpine + openssl + pnpm. Shared by deps and
+#                 runtime so pnpm is installed exactly once and the npm
+#                 cache mount is reused across cold rebuilds.
 #   1. deps     — install full workspace deps once for cache reuse.
 #   2. builder  — copy source, build shared-types, generate Prisma client,
 #                 compile the NestJS server, then `pnpm deploy --prod`
@@ -9,10 +12,18 @@
 #   3. runtime  — minimal node:alpine that runs prisma migrate deploy at
 #                 boot, then `node dist/main.js`.
 
-# ── Stage 1: install deps ─────────────────────────────────────────────
-FROM node:20-alpine AS deps
-RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
+# ── Stage 0: shared base with pnpm + system deps ──────────────────────
+# pnpm is installed via `npm install -g` (not corepack) so the binary
+# lives at a fixed path baked into the image. corepack's cache is
+# content-addressed under $HOME and isn't preserved by BuildKit cache
+# mounts, which would force a re-download on every cold container start.
+FROM node:20-alpine AS base
 RUN apk add --no-cache openssl
+RUN --mount=type=cache,id=npm,target=/root/.npm \
+    npm install -g pnpm@10.33.0
+
+# ── Stage 1: install deps ─────────────────────────────────────────────
+FROM base AS deps
 WORKDIR /repo
 
 # Copy only manifests so the install layer is cached as long as no
@@ -41,9 +52,8 @@ RUN pnpm --filter @argus/shared-types build \
 RUN pnpm --filter @argus/server deploy --prod --legacy /deploy
 
 # ── Stage 3: runtime ──────────────────────────────────────────────────
-FROM node:20-alpine AS runtime
-RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
-RUN apk add --no-cache openssl tini
+FROM base AS runtime
+RUN apk add --no-cache tini
 WORKDIR /app
 ENV NODE_ENV=production
 

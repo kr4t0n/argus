@@ -13,7 +13,12 @@
 
 # ── Stage 1: install deps ─────────────────────────────────────────────
 FROM node:20-alpine AS deps
-RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
+# Install pnpm via npm (not corepack) with a BuildKit cache on npm's
+# download cache so cold rebuilds reuse the pnpm tarball instead of
+# refetching it. corepack's content-addressed cache can't be preserved
+# by cache mounts, which is why we use npm here.
+RUN --mount=type=cache,id=npm,target=/root/.npm \
+    npm install -g pnpm@10.33.0
 WORKDIR /repo
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json tsconfig.base.json ./
