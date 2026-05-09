@@ -1,8 +1,11 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type {
   AgentType,
+  QuotaWindow,
   TokenUsage,
   UserActivityResponse,
+  UserQuotaResponse,
+  UserQuotaRow,
   UserRulesResponse,
   UserUsageResponse,
 } from '@argus/shared-types';
@@ -113,6 +116,77 @@ export class UserService {
   }
 
   /**
+   * Latest plan-quota snapshot per CLI / per signed-in account, picked
+   * across the user's entire fleet of sidecars.
+   *
+   * Aggregation is two-step:
+   *   1. Group rows by (agentType, fingerprint). For each group, the
+   *      sidecar's freshest `checkedAt` wins — same Anthropic/ChatGPT
+   *      /Cursor account reported from three different boxes
+   *      collapses to one row, attributed to whichever box reported
+   *      most recently.
+   *   2. For each agentType, partition the surviving groups into
+   *      real-account groups (fingerprint != '') and tombstone
+   *      groups (fingerprint = ''). If any real group exists, render
+   *      those (one row each — multiple accounts of the same CLI
+   *      both surface). Tombstones only render when *no* real group
+   *      exists for that agentType, so a desktop's "not signed in"
+   *      can never outrank a laptop's real row.
+   *
+   * Userland filtering is not applied — Argus is single-tenant per
+   * deployment and every user already sees every machine via the
+   * machine list. If we ever flip that, this query needs to scope to
+   * machines the user has agents on.
+   */
+  async quota(_userId: string): Promise<UserQuotaResponse> {
+    const rows = await this.prisma.machineAgentQuota.findMany({
+      orderBy: { checkedAt: 'desc' },
+      include: { machine: { select: { id: true, name: true } } },
+    });
+
+    // Step 1: per (agentType, fingerprint), keep the freshest row.
+    // checkedAt-desc order means first-seen wins.
+    type Row = (typeof rows)[number];
+    const freshest = new Map<string, Row>();
+    for (const r of rows) {
+      const key = `${r.agentType}\x00${r.fingerprint}`;
+      if (!freshest.has(key)) freshest.set(key, r);
+    }
+
+    // Step 2: per agentType, prefer real-account groups. Tombstones
+    // (fingerprint='') are fall-back only.
+    const realByType = new Map<string, Row[]>();
+    const tombstoneByType = new Map<string, Row>();
+    for (const r of freshest.values()) {
+      if (r.fingerprint === '') {
+        // At most one tombstone group per agentType (all empty
+        // fingerprints share the same key in `freshest`).
+        tombstoneByType.set(r.agentType, r);
+      } else {
+        const list = realByType.get(r.agentType) ?? [];
+        list.push(r);
+        realByType.set(r.agentType, list);
+      }
+    }
+
+    const out: UserQuotaRow[] = [];
+    const allTypes = new Set<string>([
+      ...realByType.keys(),
+      ...tombstoneByType.keys(),
+    ]);
+    for (const type of allTypes) {
+      const reals = realByType.get(type);
+      if (reals && reals.length > 0) {
+        for (const r of reals) out.push(toQuotaRow(r));
+      } else {
+        const tomb = tombstoneByType.get(type);
+        if (tomb) out.push(toQuotaRow(tomb));
+      }
+    }
+    return { quotas: out };
+  }
+
+  /**
    * Free-form rules the user wants every CLI agent they spawn to
    * follow. Stored in `User.rules`; NULL becomes empty string in the
    * response so the client doesn't have to disambiguate "never set"
@@ -170,6 +244,28 @@ export class UserService {
 
     return { rules: synced };
   }
+}
+
+type QuotaRowWithMachine = {
+  agentType: string;
+  source: string;
+  fingerprint: string;
+  windows: unknown;
+  error: string | null;
+  checkedAt: Date;
+  machine: { id: string; name: string };
+};
+
+function toQuotaRow(r: QuotaRowWithMachine): UserQuotaRow {
+  return {
+    type: r.agentType as AgentType,
+    source: r.source as UserQuotaRow['source'],
+    windows: ((r.windows ?? []) as unknown as QuotaWindow[]) ?? [],
+    error: r.error ?? undefined,
+    checkedAt: r.checkedAt.toISOString(),
+    machineId: r.machine.id,
+    machineName: r.machine.name,
+  };
 }
 
 function startOfUtcDay(d: Date): Date {

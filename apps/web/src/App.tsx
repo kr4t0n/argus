@@ -125,21 +125,20 @@ export default function App() {
         // the room. `session:status` is broadcast to `user:{id}` so
         // the browser keeps receiving it after navigating away, which
         // is exactly when we want to notify. Read prev status BEFORE
-        // upserting so we detect the active → idle/failed transition
+        // upserting so we detect the active → done/failed transition
         // and don't re-fire on idempotent re-emits.
         //
-        // SessionStatus's type allows 'done' but the server never
-        // actually emits it — successful completion uses 'idle' (see
-        // result-ingestor.service.ts: it goes 'failed' on errors,
-        // 'idle' on success, and 'active' on every interim chunk).
-        // So the active → idle transition IS our success signal.
+        // Successful completion lands as `'done'` (an unread marker the
+        // sidebar surfaces with a green dot); SessionPanel flips it back
+        // to `'idle'` once the user opens the session via the
+        // `markSessionSeen` round trip. Failures land as `'failed'`.
         const entry = useSessionStore.getState().entries[p.id];
         const prevStatus = entry?.session.status;
         if (entry) upsertSession({ ...entry.session, status: p.status });
 
         if (!useUIStore.getState().notificationsEnabled) return;
         if (prevStatus !== 'active') return;
-        if (p.status !== 'idle' && p.status !== 'failed') return;
+        if (p.status !== 'done' && p.status !== 'failed') return;
 
         // `visibilityState` only tracks tab visibility within the browser —
         // it stays 'visible' when the user switches to a different OS app
@@ -152,7 +151,7 @@ export default function App() {
         if (tabVisible && windowFocused && activeSessionId === p.id) return;
 
         const title = entry?.session.title?.trim() || `session ${p.id.slice(0, 8)}`;
-        const success = p.status === 'idle';
+        const success = p.status === 'done';
         playDoneSound(success);
         showCompletionNotification({
           sessionId: p.id,

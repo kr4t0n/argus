@@ -7,6 +7,8 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
+  Folder,
+  FolderOpen,
   MoreVertical,
   PanelLeftClose,
   Pencil,
@@ -28,11 +30,65 @@ import { ThemeToggle } from './ThemeToggle';
 import { UserRow } from './UserRow';
 import { api } from '../lib/api';
 
+const NO_PROJECT_KEY = '__none__';
+
+function basename(path: string): string {
+  const trimmed = path.replace(/\/+$/, '');
+  const idx = trimmed.lastIndexOf('/');
+  return idx >= 0 ? trimmed.slice(idx + 1) || trimmed : trimmed;
+}
+
+interface ProjectGroup {
+  key: string;
+  label: string;
+  fullPath: string | null;
+  machineId: string;
+  agentIds: string[];
+}
+
+/**
+ * Bucket the global agent `order` into projects, where a project is a
+ * unique `(workingDir, machineId)` pair — same path on different
+ * machines lives on different physical filesystems, so they shouldn't
+ * be merged. Agents with no `workingDir` fall into a synthetic
+ * "no project" bucket per machine so they remain reachable.
+ *
+ * Input order is preserved so adding/removing an agent doesn't
+ * reshuffle unrelated rows.
+ */
+function groupAgents(order: string[], agents: Record<string, AgentDTO>): ProjectGroup[] {
+  const projects: ProjectGroup[] = [];
+  const projectIndex = new Map<string, number>();
+
+  for (const id of order) {
+    const a = agents[id];
+    if (!a) continue;
+    const wd = (a.workingDir ?? '').trim();
+    const wdKey = wd || NO_PROJECT_KEY;
+    const key = `${a.machineId}::${wdKey}`;
+    let pIdx = projectIndex.get(key);
+    if (pIdx === undefined) {
+      pIdx = projects.length;
+      projectIndex.set(key, pIdx);
+      projects.push({
+        key,
+        label: wd ? basename(wd) : 'no project',
+        fullPath: wd || null,
+        machineId: a.machineId,
+        agentIds: [],
+      });
+    }
+    projects[pIdx].agentIds.push(id);
+  }
+  return projects;
+}
+
 export function Sidebar() {
   const { sessionId } = useParams();
   const nav = useNavigate();
   const agents = useAgentStore((s) => s.agents);
   const order = useAgentStore((s) => s.order);
+  const machines = useMachineStore((s) => s.machines);
   const sessions = useSessionStore((s) => s.sessions);
   const upsertSession = useSessionStore((s) => s.upsertSession);
   const expanded = useUIStore((s) => s.expanded);
@@ -58,6 +114,13 @@ export function Sidebar() {
     list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
+  const visibleOrder = showArchivedAgents
+    ? order
+    : order.filter((id) => !agents[id]?.archivedAt);
+  const projects = groupAgents(visibleOrder, agents);
+  const hiddenArchivedAgentCount = order.length - visibleOrder.length;
+  const hasArchivedAgents = order.some((id) => agents[id]?.archivedAt);
+
   return (
     <aside className="h-full w-full flex flex-col border-r border-default bg-surface-0">
       <div className="shrink-0 pl-6 pr-4 pt-4 pb-3 flex items-center justify-between min-h-[52px]">
@@ -75,62 +138,52 @@ export function Sidebar() {
       </div>
 
       <div className="flex-1 overflow-y-auto py-1 px-2">
-        {order.length === 0 && (
+        {projects.length === 0 && (
           <div className="px-4 py-6 text-xs text-fg-tertiary">
             No agents yet — hover a machine below and click{' '}
             <Plus className="inline h-3 w-3 -mt-0.5" /> to create one.
           </div>
         )}
-        {(() => {
-          const visibleOrder = showArchivedAgents
-            ? order
-            : order.filter((id) => !agents[id]?.archivedAt);
-          const hiddenArchivedAgentCount = order.length - visibleOrder.length;
+        {projects.map((p) => {
+          const projOpen = expanded[`proj:${p.key}`] !== false;
           return (
-            <>
-              {visibleOrder.map((id) => {
-                const a = agents[id];
-                if (!a) return null;
-                const agentSessions = sessionsByAgent[a.id] ?? [];
-                const isOpen = expanded[a.id] !== false;
-                const archivedVisible = showArchived[a.id] ?? false;
-                return (
-                  <AgentRow
-                    key={a.id}
-                    agent={a}
-                    sessions={agentSessions}
-                    activeSessionId={sessionId}
-                    open={isOpen}
-                    showArchived={archivedVisible}
-                    onToggle={() => toggle(a.id)}
-                    onNewSession={() => startSession(a.id)}
-                    onToggleArchived={() => toggleShowArchived(a.id)}
-                    onAgentArchived={upsertAgent}
-                  />
-                );
-              })}
-              {!showArchivedAgents && hiddenArchivedAgentCount > 0 && (
-                <button
-                  onClick={toggleShowArchivedAgents}
-                  className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-xs rounded-md text-fg-muted hover:text-fg-secondary hover:bg-surface-1 transition-colors"
-                >
-                  <Archive className="h-3 w-3" />
-                  {hiddenArchivedAgentCount} archived agent
-                  {hiddenArchivedAgentCount === 1 ? '' : 's'}
-                </button>
-              )}
-              {showArchivedAgents && order.some((id) => agents[id]?.archivedAt) && (
-                <button
-                  onClick={toggleShowArchivedAgents}
-                  className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-xs rounded-md text-emerald-400 hover:text-emerald-300 hover:bg-surface-1 transition-colors"
-                >
-                  <Archive className="h-3 w-3" />
-                  hide archived agents
-                </button>
-              )}
-            </>
+            <ProjectRow
+              key={p.key}
+              project={p}
+              open={projOpen}
+              onToggle={() => toggle(`proj:${p.key}`)}
+              expanded={expanded}
+              onToggleAgent={toggle}
+              machine={machines[p.machineId]}
+              agents={agents}
+              sessionsByAgent={sessionsByAgent}
+              activeSessionId={sessionId}
+              showArchivedMap={showArchived}
+              onToggleShowArchived={toggleShowArchived}
+              onAgentArchived={upsertAgent}
+              onNewSession={startSession}
+            />
           );
-        })()}
+        })}
+        {!showArchivedAgents && hiddenArchivedAgentCount > 0 && (
+          <button
+            onClick={toggleShowArchivedAgents}
+            className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-xs rounded-md text-fg-muted hover:text-fg-secondary hover:bg-surface-1 transition-colors"
+          >
+            <Archive className="h-3 w-3" />
+            {hiddenArchivedAgentCount} archived agent
+            {hiddenArchivedAgentCount === 1 ? '' : 's'}
+          </button>
+        )}
+        {showArchivedAgents && hasArchivedAgents && (
+          <button
+            onClick={toggleShowArchivedAgents}
+            className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-xs rounded-md text-emerald-400 hover:text-emerald-300 hover:bg-surface-1 transition-colors"
+          >
+            <Archive className="h-3 w-3" />
+            hide archived agents
+          </button>
+        )}
       </div>
 
       <MachineList />
@@ -139,12 +192,106 @@ export function Sidebar() {
   );
 }
 
+function ProjectRow({
+  project,
+  open,
+  onToggle,
+  expanded,
+  onToggleAgent,
+  machine,
+  agents,
+  sessionsByAgent,
+  activeSessionId,
+  showArchivedMap,
+  onToggleShowArchived,
+  onAgentArchived,
+  onNewSession,
+}: {
+  project: ProjectGroup;
+  open: boolean;
+  onToggle: () => void;
+  expanded: Record<string, boolean>;
+  onToggleAgent: (key: string) => void;
+  machine: MachineDTO | undefined;
+  agents: Record<string, AgentDTO>;
+  sessionsByAgent: Record<string, SessionDTO[]>;
+  activeSessionId: string | undefined;
+  showArchivedMap: Record<string, boolean>;
+  onToggleShowArchived: (agentId: string) => void;
+  onAgentArchived: (agent: AgentDTO) => void;
+  onNewSession: (agentId: string) => void | Promise<void>;
+}) {
+  // Fall back to the agent's denormalized machine name if the Machine
+  // row hasn't loaded yet (boot race between /agents and /machines).
+  const fallbackMachineName = agents[project.agentIds[0]]?.machineName ?? project.machineId;
+  const machineName = machine?.name ?? fallbackMachineName;
+  const machineMeta = machine
+    ? `${machine.hostname} · ${machine.os}/${machine.arch} · sidecar ${machine.sidecarVersion}`
+    : machineName;
+  const titleParts = [project.fullPath ?? 'agents without a workingDir', machineMeta];
+
+  return (
+    <div className="mb-0.5">
+      <button
+        onClick={onToggle}
+        className="group flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left transition-colors hover:bg-surface-1"
+        title={titleParts.join(' · ')}
+      >
+        <ChevronRight
+          className={cn('h-3 w-3 text-fg-tertiary transition-transform', open && 'rotate-90')}
+        />
+        {open ? (
+          <FolderOpen className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
+        ) : (
+          <Folder className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
+        )}
+        <span className="min-w-0 truncate text-sm font-medium text-fg-primary">
+          {project.label}
+        </span>
+        <MachineIconGlyph
+          machineId={project.machineId}
+          className="h-3 w-3 shrink-0 text-fg-muted"
+        />
+        <span className="ml-auto pl-1 text-meta text-fg-muted">{project.agentIds.length}</span>
+      </button>
+
+      {open && (
+        <div className="ml-4 mt-0.5 border-l border-default pl-1">
+          {project.agentIds.map((id) => {
+            const a = agents[id];
+            if (!a) return null;
+            const agentSessions = sessionsByAgent[a.id] ?? [];
+            const isOpen = expanded[a.id] !== false;
+            const archivedVisible = showArchivedMap[a.id] ?? false;
+            return (
+              <AgentRow
+                key={a.id}
+                agent={a}
+                sessions={agentSessions}
+                activeSessionId={activeSessionId}
+                open={isOpen}
+                showArchived={archivedVisible}
+                onToggle={() => onToggleAgent(a.id)}
+                onNewSession={() => onNewSession(a.id)}
+                onToggleArchived={() => onToggleShowArchived(a.id)}
+                onAgentArchived={onAgentArchived}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * Bottom-of-sidebar machine roster. Shows every host that has run
  * `argus-sidecar init` against this server, even ones currently
  * offline — so an operator can queue an agent on a machine before
  * it reconnects (the create-agent command is durably buffered on
- * the per-machine Redis stream).
+ * the per-machine Redis stream). This is also the canonical entry
+ * point for creating an agent on a machine that has no agents yet
+ * (and therefore wouldn't appear in the project tree above).
  *
  * Hover a machine to reveal a `+` action that opens the
  * CreateAgentPopover. The popover is rendered inline next to the
@@ -401,6 +548,7 @@ function SessionRow({ session, active }: { session: SessionDTO; active: boolean 
     }
   }
 
+  const unread = !archived && session.status === 'done';
   const content = (
     <span className="flex items-center gap-1.5 min-w-0 flex-1">
       {!archived && session.status === 'active' && (
@@ -408,6 +556,12 @@ function SessionRow({ session, active }: { session: SessionDTO; active: boolean 
       )}
       {!archived && session.status === 'failed' && (
         <span className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />
+      )}
+      {unread && (
+        <span
+          className="h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0"
+          title="task complete — open to mark seen"
+        />
       )}
       {archived && <Archive className="h-3 w-3 shrink-0 text-fg-muted" />}
       {editing ? (
@@ -433,6 +587,7 @@ function SessionRow({ session, active }: { session: SessionDTO; active: boolean 
           className={cn(
             'truncate',
             archived ? 'text-fg-tertiary italic' : 'text-fg-secondary',
+            unread && 'font-semibold text-fg-primary',
             saving && 'opacity-60',
           )}
           onDoubleClick={startEdit}
@@ -540,7 +695,7 @@ function AgentRow({
   }
 
   return (
-    <div>
+    <div className="mb-0.5">
       <div
         className={cn(
           'group relative flex items-center rounded-md transition-colors hover:bg-surface-1',
@@ -549,7 +704,7 @@ function AgentRow({
       >
         <button
           onClick={onToggle}
-          className="flex min-w-0 flex-1 items-center gap-1.5 px-2.5 py-1 pr-2 leading-5"
+          className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 pr-2 leading-5"
         >
           <ChevronRight
             className={cn('h-3 w-3 text-fg-tertiary transition-transform', open && 'rotate-90')}
@@ -560,18 +715,10 @@ function AgentRow({
               'min-w-0 truncate text-sm',
               archived ? 'text-fg-tertiary italic' : 'text-fg-primary',
             )}
-            title={
-              archived
-                ? `${agent.name} · ${agent.machineName} (archived)`
-                : `${agent.name} · ${agent.machineName}`
-            }
+            title={archived ? `${agent.name} (archived)` : agent.name}
           >
             {agent.name || agent.id}
           </span>
-          <MachineIconGlyph
-            machineId={agent.machineId}
-            className="h-3 w-3 shrink-0 text-fg-muted"
-          />
         </button>
 
         <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
@@ -632,7 +779,6 @@ function AgentRow({
             )}
           </div>
         </div>
-
       </div>
 
       {open && (

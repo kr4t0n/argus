@@ -161,7 +161,7 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
         })
         .then((cmd) => this.gateway.emitCommandUpdated(CommandService.toDto(cmd)))
         .catch(() => {});
-      await this.sessions.setStatus(chunk.sessionId, status === 'failed' ? 'failed' : 'idle');
+      await this.sessions.setStatus(chunk.sessionId, status === 'failed' ? 'failed' : 'done');
     } else {
       await this.sessions.setStatus(chunk.sessionId, 'active');
     }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/kr4t0n/argus/sidecar/internal/bus"
 	"github.com/kr4t0n/argus/sidecar/internal/protocol"
+	"github.com/kr4t0n/argus/sidecar/internal/quota"
 	"github.com/kr4t0n/argus/sidecar/internal/sidecarlink"
 	"github.com/kr4t0n/argus/sidecar/internal/terminal"
 )
@@ -58,6 +59,10 @@ type Daemon struct {
 	// to decide which adapter types to offer in the create-agent UI.
 	availableAdapters []protocol.AvailableAdapter
 	hostname          string
+
+	// quota is the per-CLI plan-quota prober. Lazy: built in Run() and
+	// shut down with the daemon. Heartbeats read its cached snapshot.
+	quota *quota.Prober
 
 	// Remote-update bookkeeping. update gates concurrent updates and
 	// tracks the post-shutdown restart action; runCancel is the
@@ -148,11 +153,17 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	d.maybeStartTerminalLink(ctx)
 
+	d.quota = quota.New(d.log)
+
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		d.machineHeartbeatLoop(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		d.quota.Run(ctx)
 	}()
 
 	consumer := "c-" + uuid.NewString()[:8]
@@ -206,9 +217,14 @@ func (d *Daemon) machineHeartbeatLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			var quotas []protocol.AgentQuota
+			if d.quota != nil {
+				quotas = d.quota.Latest()
+			}
 			err := d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.MachineHeartbeatEvent{
 				Kind:      "machine-heartbeat",
 				MachineID: d.cache.MachineID,
+				Quotas:    quotas,
 				TS:        time.Now().UnixMilli(),
 			})
 			if err != nil {

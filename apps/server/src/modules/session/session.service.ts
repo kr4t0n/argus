@@ -59,7 +59,13 @@ export class SessionService {
         userId,
         agentId,
         title: title?.trim() || 'New session',
-        status: 'active',
+        // Empty sessions start `'idle'`, not `'active'`. The sidebar's
+        // amber dot tracks `status === 'active'`, and a fresh row has
+        // no command in flight yet — `result-ingestor` flips status to
+        // `'active'` on the first streaming chunk, so the dot lights up
+        // exactly when something is actually running. Forks already
+        // use the same initial value (see `fork`).
+        status: 'idle',
       },
     });
     const dto = SessionService.toDto(s);
@@ -249,6 +255,19 @@ export class SessionService {
     const dto = SessionService.toDto(s);
     this.gateway.emitSessionStatus(dto);
     return dto;
+  }
+
+  /**
+   * Flip a session from `'done'` (the unread-completion marker shown as
+   * a dot in the sidebar) back to `'idle'` once the user opens it. No-op
+   * for any other status, so callers can fire-and-forget on every view
+   * without having to gate it. Authorization-checked: throws via
+   * `get` if the session belongs to another user.
+   */
+  async markSeen(userId: string, id: string) {
+    const existing = await this.get(userId, id);
+    if (existing.status !== 'done') return SessionService.toDto(existing);
+    return this.setStatus(id, 'idle');
   }
 
   async setExternalId(id: string, externalId: string) {

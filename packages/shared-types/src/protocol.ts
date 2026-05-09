@@ -109,10 +109,97 @@ export interface MachineRegisterEvent {
 export interface MachineHeartbeatEvent {
   kind: 'machine-heartbeat';
   machineId: string;
+  /** Latest per-CLI plan quota the sidecar could probe from each agent's
+   *  on-disk auth file. Absent / empty when no probes have run yet (e.g.
+   *  fresh boot). Refreshed on a slow timer; piggy-backed on heartbeat
+   *  so it shares the existing lifecycle stream. */
+  quotas?: AgentQuota[];
   ts: number;
 }
 
 export type MachineLifecycleEvent = MachineRegisterEvent | MachineHeartbeatEvent;
+
+// ─────────────────────────────────────────────────────────────────────
+// Plan quota (sidecar → server, piggy-backed on machine-heartbeat)
+//
+// CLI vendors don't expose remaining quota on the CLI surface, so the
+// sidecar reads each tool's on-disk OAuth file and calls the same
+// undocumented endpoints the CLIs use internally for their own /status
+// command:
+//
+//   - claude-code → ~/.claude/.credentials.json,
+//                   GET https://api.anthropic.com/api/oauth/usage
+//                   (Authorization: Bearer <accessToken>,
+//                    anthropic-beta: oauth-2025-04-20)
+//   - codex       → ~/.codex/auth.json (auth_mode === 'chatgpt'),
+//                   GET https://chatgpt.com/backend-api/wham/usage
+//                   (Authorization: Bearer <tokens.access_token>,
+//                    ChatGPT-Account-Id: <tokens.account_id>)
+//
+// Both endpoints can change at any time; we degrade by reporting an
+// `error` per agent type rather than dropping the whole heartbeat.
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * One time-boxed plan window the user is being charged against. Both
+ * vendors expose at least two windows; we normalize them into the same
+ * shape so the dashboard can render them uniformly.
+ *
+ * `utilizationPercent` is the *used* fraction (0–100), not "remaining".
+ * Anthropic returns it as a utilization percent; ChatGPT returns
+ * percent-left, and the sidecar flips it before publishing so we always
+ * speak the same direction over the wire.
+ */
+export interface QuotaWindow {
+  /** Stable key: "five_hour" | "seven_day" | "weekly" | "seven_day_opus" | … */
+  key: string;
+  /** Short human label for the dashboard, e.g. "5-hour", "Weekly". */
+  label: string;
+  /** 0–100, percent of this window's quota the account has consumed. */
+  utilizationPercent: number;
+  /** ISO 8601 timestamp the window resets at, when the upstream
+   *  endpoint reported it. Absent when unknown. */
+  resetsAt?: string;
+}
+
+/**
+ * Plan quota for one CLI / one signed-in account on one machine. The
+ * sidecar publishes one of these per (agentType, account it found
+ * locally), plus a tombstone (`fingerprint === ''` + `error`) for
+ * agentTypes the user isn't signed into so the server can tell apart
+ * "I logged out" from "this machine never had anything to say."
+ *
+ * `error` set + empty `windows` means the probe ran but couldn't
+ * produce data — either the auth file is missing/empty (tombstone), or
+ * the vendor endpoint refused / changed shape. The dashboard renders
+ * an "unknown" row with the reason in a tooltip rather than hiding it.
+ */
+export interface AgentQuota {
+  /** Adapter type this quota belongs to (`claude-code` | `codex` | …). */
+  type: AgentType;
+  /** Which auth file / endpoint produced this result. Lets the dashboard
+   *  attribute the data and lets the server distinguish "different login
+   *  on the same agent type" if we ever support multi-tenant per type. */
+  source: 'claude-code-oauth' | 'codex-chatgpt' | 'cursor-workos' | (string & {});
+  /**
+   * Stable per-account fingerprint — sha256 of a domain-separated
+   * string built from the vendor's account id (Anthropic
+   * `account.uuid`, ChatGPT `tokens.account_id`, Cursor workos id).
+   * Lets `/me/quota` aggregate redundant reports of the same account
+   * across multiple machines, and keeps tombstones from the same
+   * machine in their own group ('') so they don't outrank real data
+   * from other machines on `checkedAt`. Empty string means
+   * "no account on this machine" — i.e. tombstone.
+   */
+  fingerprint: string;
+  windows: QuotaWindow[];
+  /** Human-readable failure reason when `windows` is empty. */
+  error?: string;
+  /** Sidecar wallclock when the probe ran (ms epoch). The server uses
+   *  this to pick the freshest report when multiple machines report
+   *  the same `(type, fingerprint)`. */
+  checkedAt: number;
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // Machine control plane (server → sidecar)

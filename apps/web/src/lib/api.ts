@@ -17,6 +17,7 @@ import type {
   SidecarVersionInfo,
   TerminalDTO,
   UserActivityResponse,
+  UserQuotaResponse,
   UserRulesResponse,
   UserUsageResponse,
 } from '@argus/shared-types';
@@ -121,6 +122,11 @@ export const api = {
   archiveSession: (id: string) => http<SessionDTO>(`/sessions/${id}/archive`, { method: 'POST' }),
   unarchiveSession: (id: string) =>
     http<SessionDTO>(`/sessions/${id}/unarchive`, { method: 'POST' }),
+  /** Flip a 'done' session back to 'idle' once the user has opened it,
+   *  clearing the sidebar's unread dot. No-op server-side for any other
+   *  status, so callers can fire-and-forget on every view. */
+  markSessionSeen: (id: string) =>
+    http<SessionDTO>(`/sessions/${id}/seen`, { method: 'POST' }),
   deleteSession: (id: string) => http<void>(`/sessions/${id}`, { method: 'DELETE' }),
   forkSession: (id: string, body: { commandId: string; title?: string }) =>
     http<SessionDTO>(`/sessions/${id}/fork`, {
@@ -192,6 +198,12 @@ export const api = {
    *  parsed server-side with the same per-adapter `parseUsage` the
    *  per-session UsageBadge uses, so the totals never disagree. */
   getMyUsage: () => http<UserUsageResponse>('/me/usage'),
+
+  /** Latest plan-quota snapshot per CLI, picked across the user's
+   *  fleet of sidecars. Returns one row per agent type that has at
+   *  least one report on file; agent types nobody has signed into are
+   *  simply absent from the response. */
+  getMyQuota: () => http<UserQuotaResponse>('/me/quota'),
 
   /** Free-form rules the user wants every CLI agent they spawn to
    *  follow. Empty string = no rules set. Sidecar sync to actual

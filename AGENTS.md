@@ -147,6 +147,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     chunks back on `agent:{id}:result`, heartbeats, and gracefully
     drains on destroy. There is no per-agent process — supervisors are
     goroutines inside the single daemon.
+- `quota/` — per-CLI plan-quota prober. Runs on a 5-minute tick inside
+  the daemon, reads each tool's OAuth file
+  (`~/.claude/.credentials.json`, `~/.codex/auth.json`) and calls the
+  same internal endpoints the CLIs' own `/status` commands hit
+  (`api.anthropic.com/api/oauth/usage` for claude-code,
+  `chatgpt.com/backend-api/wham/usage` for codex). Both endpoints are
+  undocumented and reverse-engineered; failures degrade per-row so the
+  panel can still render the rest of the fleet. Latest snapshot is
+  cached in memory and piggy-backed onto the next `machine-heartbeat`
+  event — no extra Redis stream. ChatGPT mode flips the response's
+  `percent_left` semantics to a uniform "utilization-used" before
+  publishing so the wire stays the same shape across vendors.
   - `fs.go` / `fswatch.go` / `git.go` — workingDir browsing for the
     dashboard's right-pane file tree. `ListDirs` BFS-walks up to
     `maxDepth` levels (reusing a single `listDirWith` core + one
@@ -222,12 +234,25 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Claude Code's lowercase form, and the component falls back to the same
   normalisation on the off chance an older sidecar is in front. See the
   AGENTS.md note on stream-json drift.
-- `components/Sidebar.tsx` — agent-first tree: each agent is a top-level row
-  with its sessions nested underneath and a `+ new session` affordance.
-  At rest the title (`name · machineGlyph`) takes the full row width up to
-  the right edge; hover reveals `+`, archive, and eye actions over a
-  surface-1 plate with a left-side gradient mask so the truncation reads
-  cleanly.
+- `components/Sidebar.tsx` — project-first tree: top level groups
+  agents by `(workingDir, machineId)` — same path on different
+  machines lives on different physical filesystems, so they get
+  separate rows. Each project row shows a folder icon + the
+  workingDir basename + a small machine glyph (same affordance the
+  agent row used to carry); agents without a `workingDir` fall into
+  a per-machine `no project` bucket. A project expands directly into
+  its agents, each agent expands into its sessions — there is no
+  intermediate machine row in the tree (the machine identity is
+  conveyed by the glyph on the project line). The grouping is pure
+  derivation over the global `agentStore.order` — no schema change.
+  Expansion state lives in `uiStore.expanded` keyed by
+  `proj:<machineId>::<workingDir>` for projects and the raw agent id
+  for agents (default open at both levels). The `+ new session`,
+  archive, and eye actions still hover-reveal on the agent row over
+  a surface-1 plate with a left-side gradient mask. The bottom
+  `MachineList` is unchanged and remains the canonical entry point
+  for creating an agent on a machine that has no agents yet (and
+  therefore wouldn't appear in the project tree above).
 - `components/ContextPane.tsx` — right-pane companion to a session. Header
   shows agent identity + working dir + model. A collapsible `Details`
   block surfaces agent + session metadata (machine, status, version,
@@ -242,7 +267,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `pages/UserPanel.tsx` — `/user` route, settings-page layout. Sticky
   account band at the top (email + role); below it a left section nav
   (Stats / Preferences) and a scroll column with Activity (heatmap),
-  Usage (lifetime token ledger), and Preferences (notifications, user
+  Usage (lifetime token ledger), Quota (per-CLI plan windows pulled
+  from each sidecar's heartbeat — see `packages/sidecar/internal/quota`
+  and the `/me/quota` endpoint), and Preferences (notifications, user
   rules editor). Capped at `max-w-6xl`.
 - `components/TerminalPane.tsx` — xterm.js bound to one agent. Owns the
   WebSocket plumbing, a debounced ResizeObserver for fit, base64 encoding
@@ -481,26 +508,33 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - **Task-completion notifications hook `session:status`, not
   `command:updated`**: the notifier in `App.tsx`'s `onSessionStatus`
   handler reads the prior session status BEFORE upserting and fires
-  on the `active → idle|failed` transition. The earlier-and-obvious
+  on the `active → done|failed` transition. The earlier-and-obvious
   choice of hooking `command:updated` is wrong: that event is
   emitted to room `session:{id}` (see `stream.gateway.ts:147`),
   which the browser only joins while `SessionPanel` is mounted —
   navigating away triggers `leaveSession` and the user stops
   receiving command updates entirely, so notifications would never
   fire in exactly the case they're meant for. `session:status` goes
-  to `user:{userId}` (always joined). Important: the `SessionStatus`
-  type allows `'done'` but the server never actually emits it —
-  `result-ingestor.service.ts` flips success to `'idle'` (re-using
-  the steady-state value) and failure to `'failed'`. So success is
-  encoded as `active → idle`, not `active → done`. The `'done'`
-  variant is dead in the type; don't rely on it. Reading prev-status
-  before upsert prevents re-fires on idempotent re-emits (the
-  ingestor emits `active` on every interim chunk). `Notification.requestPermission()` MUST run inside a
-  user-gesture handler — `UserPanel.NotificationToggle` calls it
-  directly from the click handler, so don't refactor through
-  `useEffect` without preserving the synchronous call chain.
-  Suppression rule is inline in the handler:
-  `(tabVisible AND activeSessionId === p.id)` — any other
+  to `user:{userId}` (always joined). Status semantics:
+  `result-ingestor.service.ts` flips success to `'done'` (the unread
+  marker the sidebar surfaces with a green dot + bold title) and
+  failure to `'failed'`; `'idle'` is the post-acknowledgement steady
+  state, reached after `SessionPanel`'s `markSeen` effect calls
+  `POST /sessions/:id/seen`. So the notification trigger is
+  `active → done`, not `active → idle` — by the time the user has
+  opened the session, the status is already idle and we don't want
+  to re-notify them about something they're looking at. Fork-created
+  sessions land directly at `'idle'` (no run yet, nothing to
+  acknowledge). Reading prev-status before upsert prevents re-fires
+  on idempotent re-emits (the ingestor emits `active` on every
+  interim chunk) and also prevents the `done → idle` transition
+  from triggering a second notification, since the prev-status
+  guard only matches `active`. `Notification.requestPermission()`
+  MUST run inside a user-gesture handler —
+  `UserPanel.NotificationToggle` calls it directly from the click
+  handler, so don't refactor through `useEffect` without preserving
+  the synchronous call chain. Suppression rule is inline in the
+  handler: `(tabVisible AND activeSessionId === p.id)` — any other
   combination earns a notify. The chime uses `AudioContext`
   oscillators (no bundled asset) which can be silently blocked by
   autoplay policy on browsers that haven't seen a user gesture yet,
