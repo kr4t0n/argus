@@ -556,14 +556,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   calls `parseUsage` once when each turn finalizes and stores the
   normalized `TokenUsage` JSON on the Command row. `/me/usage` SUMs
   that column in Postgres instead of re-parsing every `final` chunk's
-  raw `meta`, which is what made the panel slow for heavy users. If
-  you add a new adapter or change `parseUsage`'s output shape, the
-  stored values from before the change won't be retroactively
-  recomputed — old rows will keep the previous shape until you run
-  `pnpm -F @argus/server backfill:usage`. NULL on a completed Command
-  row means "no usage payload" (cancellation, error, custom adapter
-  that doesn't emit one), not "in flight" — the `/me/usage` query
-  filters to `usage IS NOT NULL` so NULLs cost nothing.
+  raw `meta`, which is what made the panel slow for heavy users.
+  Pre-denormalization rows are populated by SQL migration
+  `6_backfill_command_usage`, which mirrors `parseUsage`'s adapter
+  switch one-for-one — if you change `parseUsage`'s output shape,
+  history won't be retroactively recomputed; ship a follow-up data
+  migration. NULL on a completed Command row means "no usage payload"
+  (cancellation, error, custom adapter that doesn't emit one), not
+  "in flight" — the `/me/usage` query filters to `usage IS NOT NULL`
+  so NULLs cost nothing.
 - **GHA cache budget cap**: GitHub enforces ~10 GB of cache per repo.
   Buildx with `mode=max` writes every intermediate stage; tag pushes
   (`refs/heads/refs/tags/v*`) write under their own ref scope and are
