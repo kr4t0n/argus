@@ -405,6 +405,7 @@ go run ./cmd/sidecar
 | Build everything                    | `pnpm build`                                          |
 | Apply a Prisma migration            | `pnpm --filter @argus/server exec prisma migrate dev` |
 | Re-seed the admin user              | `pnpm --filter @argus/server seed`                    |
+| Backfill `Command.usage` after the migration | `pnpm --filter @argus/server backfill:usage`   |
 | List adapters compiled into sidecar | `./packages/sidecar/bin/argus-sidecar --list-adapters`|
 | Re-init sidecar config              | `argus-sidecar init --force`                          |
 | Show sidecar's cached config path   | `argus-sidecar version`                               |

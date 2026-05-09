@@ -16,7 +16,8 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "backfill:usage": "tsx prisma/backfill-command-usage.ts"
   },
   "dependencies": {
     "@argus/shared-types": "workspace:*",
