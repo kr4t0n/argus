@@ -167,12 +167,19 @@ export class UserService {
     }
 
     // Step 2: emit one row per real account, dropping tombstones.
-    const out: UserQuotaRow[] = [];
-    for (const r of freshest.values()) {
-      if (r.fingerprint === '') continue;
-      out.push(toQuotaRow(r));
-    }
-    return { quotas: out };
+    // Sort by (agentType, machineName, fingerprint) so the panel's row
+    // order is stable across refreshes — without this, the response
+    // followed `checkedAt desc` and shuffled every time a sidecar's
+    // 5-min probe re-cached. fingerprint is the final tiebreaker so
+    // two boxes with the same name still order deterministically.
+    const surviving = [...freshest.values()].filter((r) => r.fingerprint !== '');
+    surviving.sort(
+      (a, b) =>
+        a.agentType.localeCompare(b.agentType) ||
+        a.machine.name.localeCompare(b.machine.name) ||
+        a.fingerprint.localeCompare(b.fingerprint),
+    );
+    return { quotas: surviving.map(toQuotaRow) };
   }
 
   /**
