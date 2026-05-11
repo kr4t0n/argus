@@ -8,12 +8,13 @@ import { api, ApiError } from '../lib/api';
 import { useSessionStore } from '../stores/sessionStore';
 import { splitDeltas } from '../lib/deltaSplit';
 import { ActivityPanel, ActivityPill } from './ActivityPill';
-import { FileChips, extractFiles } from './FileChips';
+import { FileChips, extractFiles, toAgentRelative } from './FileChips';
 import { TodoWindow } from './TodoWindow';
 import { SubAgentWindow } from './SubAgentWindow';
 import { MarkdownCodeBlock } from './MarkdownCodeBlock';
 import { Tooltip } from './ui/Tooltip';
 import { copyTextToClipboard } from '../lib/clipboard';
+import { useFileTabsStore } from '../stores/fileTabsStore';
 
 type Props = {
   commands: CommandDTO[];
@@ -419,6 +420,48 @@ function AnswerBlock({
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
   const upsertSession = useSessionStore((s) => s.upsertSession);
+  const openFile = useFileTabsStore((s) => s.openFile);
+
+  // Render markdown anchors so paths that resolve inside the agent's
+  // workspace open the file preview on double-click (matching the
+  // FileChips affordance) instead of trying to navigate the browser
+  // to a relative URL like `site/src/foo.astro`, which the browser
+  // would resolve against the current host.
+  const markdownComponents = useMemo(
+    () => ({
+      pre: MarkdownCodeBlock,
+      a({ href, children }: { href?: string; children?: React.ReactNode }) {
+        // Real URLs / fragments / mail / tel — leave as a normal anchor,
+        // but force a new tab so they can't replace the app.
+        if (!href || /^[a-z][a-z0-9+\-.]*:/i.test(href) || href.startsWith('#')) {
+          return (
+            <a href={href} target="_blank" rel="noreferrer noopener">
+              {children}
+            </a>
+          );
+        }
+        const rel = toAgentRelative(href, workingDir);
+        if (!rel) {
+          // Outside the workspace, a directory, or we have no agent
+          // to fetch from — render as inert text so the broken
+          // relative URL can't be followed by a stray click.
+          return <span className="font-mono text-fg-secondary">{children}</span>;
+        }
+        return (
+          <span
+            role="button"
+            tabIndex={0}
+            title="Double-click to preview"
+            onDoubleClick={() => openFile({ agentId, path: rel })}
+            className="cursor-pointer select-none text-sky-600 hover:underline dark:text-sky-400"
+          >
+            {children}
+          </span>
+        );
+      },
+    }),
+    [agentId, workingDir, openFile],
+  );
 
   useEffect(
     () => () => {
@@ -470,7 +513,7 @@ function AnswerBlock({
     >
       {bodyText && (
         <div className="markdown text-sm leading-relaxed text-fg-primary max-w-none">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: MarkdownCodeBlock }}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
             {bodyText}
           </ReactMarkdown>
           {streaming && <span className="typewriter-cursor" />}
