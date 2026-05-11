@@ -193,6 +193,39 @@ func (p *Prober) refresh(ctx context.Context) {
 // data from a different machine that's signed in.
 var errNoAuth = fmt.Errorf("no auth configured")
 
+// retryOnAuthFailure runs `once` twice if the first call returned
+// authFailed=true. Returns the retry's row when the retry succeeded
+// (no transport error); otherwise the first call's row.
+//
+// Why this exists: both Anthropic and OpenAI invalidate the previous
+// access token the moment a refresh mints a new one, even though the
+// JWT's `exp` claim is still hours away. The CLIs (claude-code,
+// codex) silently refresh during normal use and rewrite their on-disk
+// credential files afterwards. A probe that read just before the
+// rewrite — but sent the request just after the server-side
+// invalidation — gets a 401 even though the user's session is
+// healthy. Re-reading the file and trying once more closes most of
+// that race window without any sidecar-side refresh logic of our own
+// (which would race the CLI in the other direction). No backoff:
+// by the time we got the failed response back from the network, the
+// CLI has overwhelmingly likely finished writing the new pair.
+func retryOnAuthFailure(
+	once func() (*protocol.AgentQuota, bool, error),
+) (*protocol.AgentQuota, error) {
+	row, authFailed, err := once()
+	if err != nil {
+		return nil, err
+	}
+	if !authFailed {
+		return row, nil
+	}
+	row2, _, err2 := once()
+	if err2 == nil && row2 != nil {
+		return row2, nil
+	}
+	return row, nil
+}
+
 // fingerprintDomain prefixes every account-id we hash so fingerprints
 // can't collide across CLIs (and so a leaked DB row's hash isn't
 // directly searchable against, say, a published list of cursor

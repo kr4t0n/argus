@@ -85,7 +85,7 @@ export function displayPath(abs: string, workingDir?: string | null): string {
  *     `extractFiles` already drops the obvious dir-listing tools, but
  *     this guard catches anything that slips through
  */
-function toAgentRelative(path: string, workingDir?: string | null): string | null {
+export function toAgentRelative(path: string, workingDir?: string | null): string | null {
   let rel: string;
   if (path.startsWith('/')) {
     rel = displayPath(path, workingDir);

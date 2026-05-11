@@ -401,12 +401,19 @@ function UsageLedger({ usage }: { usage: TokenUsage }) {
       </div>
     );
   }
-  const formatTokens = (n: number) =>
-    n >= 1_000_000
-      ? `${(n / 1_000_000).toFixed(1)}M`
-      : n >= 1_000
-        ? `${(n / 1_000).toFixed(1)}k`
-        : n.toLocaleString();
+  const formatTokens = (n: number) => {
+    const units: Array<{ value: number; suffix: string }> = [
+      { value: 1e15, suffix: 'Q' },
+      { value: 1e12, suffix: 'T' },
+      { value: 1e9, suffix: 'B' },
+      { value: 1e6, suffix: 'M' },
+      { value: 1e3, suffix: 'k' },
+    ];
+    for (const { value, suffix } of units) {
+      if (n >= value) return `${(n / value).toFixed(1)}${suffix}`;
+    }
+    return n.toLocaleString();
+  };
 
   const entries: Array<{
     label: string;

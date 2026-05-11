@@ -552,6 +552,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   against the upstream announcement, not release-note rumors. Unknown
   models return `null` so the ring just hides instead of rendering a
   misleading percentage; the bare ↑/↓ arrows stay visible.
+- **`Command.usage` is denormalized at write time**: the result-ingestor
+  calls `parseUsage` once when each turn finalizes and stores the
+  normalized `TokenUsage` JSON on the Command row. `/me/usage` SUMs
+  that column in Postgres instead of re-parsing every `final` chunk's
+  raw `meta`, which is what made the panel slow for heavy users.
+  Pre-denormalization rows are populated by SQL migration
+  `6_backfill_command_usage`, which mirrors `parseUsage`'s adapter
+  switch one-for-one — if you change `parseUsage`'s output shape,
+  history won't be retroactively recomputed; ship a follow-up data
+  migration. NULL on a completed Command row means "no usage payload"
+  (cancellation, error, custom adapter that doesn't emit one), not
+  "in flight" — the `/me/usage` query filters to `usage IS NOT NULL`
+  so NULLs cost nothing.
 - **GHA cache budget cap**: GitHub enforces ~10 GB of cache per repo.
   Buildx with `mode=max` writes every intermediate stage; tag pushes
   (`refs/heads/refs/tags/v*`) write under their own ref scope and are

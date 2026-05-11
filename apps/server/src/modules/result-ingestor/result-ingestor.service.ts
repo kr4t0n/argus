@@ -1,11 +1,13 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import type {
+  AgentType,
   ResultChunk,
   ResultChunkDTO,
   SessionCloneFailedEvent,
   SessionExternalIdEvent,
 } from '@argus/shared-types';
-import { consumerGroups, streamKeys } from '@argus/shared-types';
+import { consumerGroups, parseUsage, streamKeys } from '@argus/shared-types';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
@@ -105,6 +107,32 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Compute the normalized TokenUsage value to write onto Command.usage
+   * for a finalizing chunk. Returns:
+   *   - a JSON object if the chunk has a parseable usage payload,
+   *   - `undefined` if there's nothing to write (so the update can omit
+   *     the column rather than overwrite a previously-written value).
+   *
+   * `undefined` is the deliberate "leave alone" signal — `null` would
+   * blank the column, which we don't want for retry / out-of-order
+   * deliveries where the usage already landed.
+   */
+  private async computeCommandUsage(
+    chunk: ResultChunk,
+  ): Promise<Prisma.InputJsonValue | undefined> {
+    const meta = (chunk.meta ?? null) as Record<string, unknown> | null;
+    if (!meta) return undefined;
+    const cmd = await this.prisma.command.findUnique({
+      where: { id: chunk.commandId },
+      select: { agent: { select: { type: true } } },
+    });
+    if (!cmd) return undefined;
+    const parsed = parseUsage(cmd.agent.type as AgentType, meta);
+    if (!parsed) return undefined;
+    return parsed as unknown as Prisma.InputJsonValue;
+  }
+
   private async handle(ev: ResultEnvelope) {
     const kind = (ev as { kind?: string }).kind;
     if (kind === 'session-external-id') {
@@ -154,10 +182,20 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
 
     if (chunk.isFinal || chunk.kind === 'final' || chunk.kind === 'error') {
       const status = chunk.kind === 'error' ? 'failed' : 'completed';
+      // Denormalize parsed token usage onto the Command row so /me/usage
+      // can SUM a column instead of re-parsing every final chunk's
+      // `meta` blob. Finals are rare (one per turn), so the extra
+      // read-then-update is cheap; the read is needed to pick the
+      // adapter-specific parser without trusting the chunk envelope.
+      const usageData = await this.computeCommandUsage(chunk);
       await this.prisma.command
         .update({
           where: { id: chunk.commandId },
-          data: { status, completedAt: new Date() },
+          data: {
+            status,
+            completedAt: new Date(),
+            ...(usageData !== undefined ? { usage: usageData } : {}),
+          },
         })
         .then((cmd) => this.gateway.emitCommandUpdated(CommandService.toDto(cmd)))
         .catch(() => {});

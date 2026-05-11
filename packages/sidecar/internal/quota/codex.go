@@ -25,64 +25,79 @@ import (
 // The ChatGPT endpoint reports `percent_left`; we flip it to
 // utilization-used so the wire stays uniform with claude-code's
 // `utilization` semantics.
+//
+// Wrapped in retryOnAuthFailure: if the upstream returns 401 the
+// most likely cause is the codex CLI having silently refreshed its
+// access token between our last creds read and this probe. Re-read
+// the file and try once more. See the helper for the full rationale.
 func codexProbe(client *http.Client) Probe {
 	return func(ctx context.Context, now time.Time) (*protocol.AgentQuota, error) {
-		auth, err := readCodexAuth()
-		if err != nil {
-			if errors.Is(err, errNoAuth) {
-				return tombstone(now, "codex", "codex-chatgpt", "not signed in"), nil
-			}
-			return nil, err
-		}
-		// API-key codex hits the OpenAI Platform API; that path has no
-		// public usage endpoint the CLI uses, so we can't produce a
-		// real row. Tombstone with a specific reason so the dashboard
-		// explains why the panel is empty *and* a prior chatgpt-mode
-		// row gets cleared if the user just toggled modes.
-		if auth.AuthMode != "chatgpt" {
-			return tombstone(now, "codex", "codex-chatgpt", "Codex is in API-key mode (no plan-quota endpoint)"), nil
-		}
-		token := auth.Tokens.AccessToken
-		accountID := auth.Tokens.AccountID
-		if token == "" || accountID == "" {
-			return tombstone(now, "codex", "codex-chatgpt", "not signed in"), nil
-		}
-
-		row := &protocol.AgentQuota{
-			Type:        "codex",
-			Source:      "codex-chatgpt",
-			Fingerprint: fingerprintFor("codex-chatgpt", accountID),
-			Windows:     []protocol.QuotaWindow{},
-			CheckedAt:   now.UnixMilli(),
-		}
-
-		status, body, err := httpGetJSON(ctx, client, "https://chatgpt.com/backend-api/wham/usage", map[string]string{
-			"Authorization":      "Bearer " + token,
-			"ChatGPT-Account-Id": accountID,
-			"Origin":             "https://chatgpt.com",
-			"Referer":            "https://chatgpt.com/",
-			"User-Agent":         "argus-sidecar",
+		return retryOnAuthFailure(func() (*protocol.AgentQuota, bool, error) {
+			return codexProbeOnce(ctx, client, now)
 		})
-		if err != nil {
-			row.Error = truncate(err.Error(), 240)
-			return row, nil
-		}
-		if status >= 400 {
-			row.Error = fmt.Sprintf("chatgpt /wham/usage %d: %s", status, truncate(string(body), 200))
-			return row, nil
-		}
-
-		windows, err := parseChatGPTUsage(body)
-		if err != nil {
-			row.Error = "unparseable response: " + truncate(err.Error(), 200)
-			return row, nil
-		}
-		row.Windows = windows
-		if len(windows) == 0 {
-			row.Error = "no recognized windows in response"
-		}
-		return row, nil
 	}
+}
+
+// codexProbeOnce is one attempt at the probe described on codexProbe.
+// The middle return value is true iff this attempt returned an HTTP
+// 401 from /backend-api/wham/usage — the signal the wrapper uses to
+// decide whether re-reading the creds file and retrying might help.
+func codexProbeOnce(ctx context.Context, client *http.Client, now time.Time) (*protocol.AgentQuota, bool, error) {
+	auth, err := readCodexAuth()
+	if err != nil {
+		if errors.Is(err, errNoAuth) {
+			return tombstone(now, "codex", "codex-chatgpt", "not signed in"), false, nil
+		}
+		return nil, false, err
+	}
+	// API-key codex hits the OpenAI Platform API; that path has no
+	// public usage endpoint the CLI uses, so we can't produce a
+	// real row. Tombstone with a specific reason so the dashboard
+	// explains why the panel is empty *and* a prior chatgpt-mode
+	// row gets cleared if the user just toggled modes.
+	if auth.AuthMode != "chatgpt" {
+		return tombstone(now, "codex", "codex-chatgpt", "Codex is in API-key mode (no plan-quota endpoint)"), false, nil
+	}
+	token := auth.Tokens.AccessToken
+	accountID := auth.Tokens.AccountID
+	if token == "" || accountID == "" {
+		return tombstone(now, "codex", "codex-chatgpt", "not signed in"), false, nil
+	}
+
+	row := &protocol.AgentQuota{
+		Type:        "codex",
+		Source:      "codex-chatgpt",
+		Fingerprint: fingerprintFor("codex-chatgpt", accountID),
+		Windows:     []protocol.QuotaWindow{},
+		CheckedAt:   now.UnixMilli(),
+	}
+
+	status, body, err := httpGetJSON(ctx, client, "https://chatgpt.com/backend-api/wham/usage", map[string]string{
+		"Authorization":      "Bearer " + token,
+		"ChatGPT-Account-Id": accountID,
+		"Origin":             "https://chatgpt.com",
+		"Referer":            "https://chatgpt.com/",
+		"User-Agent":         "argus-sidecar",
+	})
+	if err != nil {
+		row.Error = truncate(err.Error(), 240)
+		return row, false, nil
+	}
+	if status >= 400 {
+		row.Error = fmt.Sprintf("chatgpt /wham/usage %d: %s", status, truncate(string(body), 200))
+		return row, status == http.StatusUnauthorized, nil
+	}
+
+	windows, err := parseChatGPTUsage(body)
+	if err != nil {
+		row.Error = "unparseable response: " + truncate(err.Error(), 200)
+		return row, false, nil
+	}
+	row.Windows = windows
+	if len(windows) == 0 {
+		row.Error = "no recognized windows in response"
+	}
+	return row, false, nil
 }
 
 type codexAuth struct {
