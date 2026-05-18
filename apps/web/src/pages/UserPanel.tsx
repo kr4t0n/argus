@@ -7,6 +7,7 @@ import type {
   UserQuotaResponse,
   UserQuotaRow,
   UserUsageResponse,
+  WindowedUsage,
 } from '@argus/shared-types';
 import { USER_RULES_MAX_BYTES, hasUsage } from '@argus/shared-types';
 import { ApiError, api } from '../lib/api';
@@ -128,7 +129,7 @@ export function UserPanel() {
                   <div className="text-sm text-red-500 dark:text-red-400">{usageError}</div>
                 )}
                 {!usageError && !usage && <UsageLedgerSkeleton />}
-                {!usageError && usage && <UsageLedger usage={usage.usage} />}
+                {!usageError && usage && <UsageSection usage={usage.usage} />}
               </Subsection>
               <Subsection title="Quota">
                 {quotaError && (
@@ -393,11 +394,79 @@ function RulesEditor() {
   );
 }
 
-function UsageLedger({ usage }: { usage: TokenUsage }) {
+type UsageWindow = '7d' | '30d' | 'all';
+
+const USAGE_WINDOWS: ReadonlyArray<{ id: UsageWindow; label: string }> = [
+  { id: '7d', label: '7 days' },
+  { id: '30d', label: '30 days' },
+  { id: 'all', label: 'All time' },
+];
+
+/** One payload, three windows — the toggle just selects which slice of
+ *  `WindowedUsage` the ledger renders; no refetch. Defaults to 30 days
+ *  because that's the most actionable "what am I spending lately" view;
+ *  "All time" preserves the pre-windows behavior for anyone who wants
+ *  the lifetime headline. */
+function UsageSection({ usage }: { usage: WindowedUsage }) {
+  const [window, setWindow] = useState<UsageWindow>('30d');
+  const current =
+    window === '7d' ? usage.last7Days : window === '30d' ? usage.last30Days : usage.lifetime;
+  const emptyHint =
+    window === 'all'
+      ? 'No completed turns yet. Usage appears once an agent finishes a prompt.'
+      : `No usage in the last ${window === '7d' ? '7' : '30'} days.`;
+  return (
+    <div>
+      <div className="mb-6">
+        <UsageWindowToggle value={window} onChange={setWindow} />
+      </div>
+      <UsageLedger usage={current} emptyHint={emptyHint} />
+    </div>
+  );
+}
+
+function UsageWindowToggle({
+  value,
+  onChange,
+}: {
+  value: UsageWindow;
+  onChange: (w: UsageWindow) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="usage time window"
+      className="inline-flex rounded-md bg-surface-1 p-0.5"
+    >
+      {USAGE_WINDOWS.map((w) => {
+        const active = w.id === value;
+        return (
+          <button
+            key={w.id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(w.id)}
+            className={cn(
+              'rounded-[5px] px-3 py-1 text-xs font-medium transition-colors',
+              active
+                ? 'bg-surface-2 text-fg-primary'
+                : 'text-fg-tertiary hover:text-fg-secondary',
+            )}
+          >
+            {w.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function UsageLedger({ usage, emptyHint }: { usage: TokenUsage; emptyHint?: string }) {
   if (!hasUsage(usage)) {
     return (
       <div className="text-meta">
-        No completed turns yet. Usage appears once an agent finishes a prompt.
+        {emptyHint ?? 'No completed turns yet. Usage appears once an agent finishes a prompt.'}
       </div>
     );
   }

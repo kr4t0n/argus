@@ -46,6 +46,12 @@ utilization (latest turn, since each CLI re-sends full history on
 `--resume`). Hover for the full breakdown — input vs cache read vs
 cache write, USD cost, API time, and the matched model family.
 Donut hides when the model isn't in the window lookup table.
+- **Token-usage ledger with time windows**: the `/user` page's
+"Usage" subsection tallies input / output / cache-read / cache-write
+tokens, USD cost, and API time across every session you own. A
+segmented toggle switches between the trailing **7 days**, **30 days**,
+and **all time** (default 30 days) — the server returns all three
+windows in one response, so switching is instant with no refetch.
 - **Per-CLI plan-quota panel**: the `/user` page's "Quota" subsection
 shows how much of each subscription window you've burned (5-hour and
 weekly for Claude Code Pro/Max, ChatGPT Codex). Each sidecar reads the
