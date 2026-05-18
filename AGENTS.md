@@ -219,7 +219,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   WS pushes new chunks via `appendChunk`, which guards duplicates by `id`.
 - `components/StreamViewer.tsx` — the streaming display. Groups chunks by
   command, concatenates `delta`s, renders tool pills, stdout, errors, and a
-  cursor while running.
+  cursor while running. Final-answer markdown is rendered with
+  `MarkdownCodeBlock` as the custom `<pre>` renderer; that component
+  detects ```` ```html ```` fenced blocks and renders them through the
+  shared `HtmlPreview` component, defaulting to the rendered view with
+  a Source toggle. `HtmlPreview` has two sandbox postures keyed off its
+  `autoHeight` prop: `FileViewer` (`.html` files) uses the strict
+  `sandbox=""` and is sized by its container; the chat code-block path
+  passes `autoHeight` so the iframe grows to its content's
+  `scrollHeight` (measured on load + a `ResizeObserver`), which
+  requires `sandbox="allow-same-origin"`. Neither path enables
+  `allow-scripts` — no JavaScript in the previewed document ever runs,
+  so granting same-origin for measurement is safe. Color-scheme
+  injection follows the dashboard theme in both modes.
 - `components/TodoWindow.tsx` — per-turn task tracker rendered inside the
   sticky band right under `<ActivityPill>`. Sources its rows from the
   *latest* `TodoWrite`-style tool chunk in the command's chunks

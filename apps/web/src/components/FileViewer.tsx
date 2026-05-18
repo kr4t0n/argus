@@ -8,6 +8,7 @@ import { highlightCode, languageForPath } from '../lib/shiki';
 import { useResolvedTheme } from '../lib/theme';
 import { useFileTabsStore, type OpenFile } from '../stores/fileTabsStore';
 import { cn } from '../lib/utils';
+import { HtmlPreview } from './HtmlPreview';
 
 type Props = { file: OpenFile };
 
@@ -125,49 +126,6 @@ function PreviewableTextViewer({ file, content }: { file: OpenFile; content: str
       )}
     </div>
   );
-}
-
-/**
- * Render an HTML file inside a fully-locked-down iframe. `sandbox=""`
- * (empty value) blocks scripts, forms, top-level navigation, plugins,
- * and pop-ups, and keeps the iframe in a unique origin so it can't
- * touch the parent dashboard's storage / cookies. Inline CSS still
- * applies, so a static page renders the way the author intended; any
- * external resources (CDN scripts, cross-origin images) won't load —
- * that's the trade-off we accept for previewing untrusted content
- * pulled off a remote agent's working tree.
- *
- * Theme handling: a plain HTML page (no body bg, no styles) inherits
- * UA defaults — black text on white. Hard to read on the dashboard's
- * dark theme, and pure-white iframe-bg-on-dark-app is jarring too.
- * We inject a `:root { color-scheme }` style matching the dashboard's
- * resolved theme, so the iframe's UA defaults flip to dark text/bg
- * when the dashboard is dark. Pages that declare their own colors
- * still win — color-scheme only affects UA defaults, not authored CSS.
- */
-function HtmlPreview({ content, name }: { content: string; name: string }) {
-  const theme = useResolvedTheme();
-  const srcDoc = useMemo(() => injectColorScheme(content, theme), [content, theme]);
-  return <iframe title={name} srcDoc={srcDoc} sandbox="" className="h-full w-full" />;
-}
-
-/**
- * Insert a `<style>:root{color-scheme:…}</style>` into the user's
- * HTML so the iframe's UA defaults follow the dashboard theme. We try
- * to land it inside an existing `<head>`; failing that, after `<html>`;
- * and as a final fallback, wrap the input in a minimal standards-mode
- * document. Wrapping is the right call for body fragments — leaving
- * the input doctype-less would put the iframe in quirks mode.
- */
-function injectColorScheme(content: string, theme: 'light' | 'dark'): string {
-  const style = `<style>:root{color-scheme:${theme}}</style>`;
-  if (/<head\b[^>]*>/i.test(content)) {
-    return content.replace(/<head\b[^>]*>/i, (m) => m + style);
-  }
-  if (/<html\b[^>]*>/i.test(content)) {
-    return content.replace(/<html\b[^>]*>/i, (m) => `${m}<head>${style}</head>`);
-  }
-  return `<!DOCTYPE html><html><head>${style}</head><body>${content}</body></html>`;
 }
 
 function TextViewer({ path, content }: { path: string; content: string }) {
