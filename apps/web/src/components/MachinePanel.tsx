@@ -130,6 +130,7 @@ export function MachinePanel() {
                   />
                 )}
               </div>
+              <DeleteMachineAction machineId={machineId} machineName={machine.name} />
             </div>
           </header>
 
@@ -444,6 +445,86 @@ function SidecarUpdateAction({
       )}
       Update <span className="font-mono text-[11px] text-fg-tertiary">{info.latest}</span>
     </Button>
+  );
+}
+
+/**
+ * Destructive "delete machine" button in the panel header, beside
+ * "new agent". Enabled only when the machine is offline — the server
+ * 409s an online delete because the live sidecar would re-register
+ * and resurrect the row, so we mirror that constraint client-side
+ * (disabled + explanatory tooltip) rather than letting the user fire
+ * a doomed request. There is no archive fallback by design: removal
+ * is an offline-only hard-delete that cascades every agent, session,
+ * and history row on the host.
+ *
+ * On success we navigate to the dashboard root: the row is gone, so
+ * `/machines/:id` would otherwise render the "machine not found"
+ * placeholder. The `machine:removed` WS event drops it from every
+ * store; the local `remove()` just avoids a one-frame flash here.
+ */
+function DeleteMachineAction({
+  machineId,
+  machineName,
+}: {
+  machineId: string;
+  machineName: string;
+}) {
+  const navigate = useNavigate();
+  const machine = useMachineStore((s) => s.machines[machineId]);
+  const removeMachine = useMachineStore((s) => s.remove);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  if (!machine) return null;
+  const offline = machine.status === 'offline';
+
+  async function doDelete() {
+    if (!offline || busy) return;
+    const msg =
+      `Delete machine "${machineName}"?\n\n` +
+      `This permanently removes the machine and every agent on it, ` +
+      `along with all their sessions and history. This cannot be undone.`;
+    if (!confirm(msg)) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.deleteMachine(machineId);
+      removeMachine(machineId);
+      navigate('/');
+    } catch (ex) {
+      setErr(ex instanceof ApiError ? ex.message : 'failed to delete machine');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="relative">
+      <Button
+        size="md"
+        variant="danger"
+        onClick={doDelete}
+        disabled={!offline || busy}
+        title={
+          offline
+            ? `delete machine "${machineName}" (irreversible)`
+            : 'stop the sidecar before deleting this machine'
+        }
+        aria-label={`Delete machine ${machineName}`}
+      >
+        {busy ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Trash2 className="h-3.5 w-3.5" />
+        )}
+        delete
+      </Button>
+      {err && (
+        <span className="absolute right-0 top-full mt-1 whitespace-nowrap text-[11px] text-red-500 dark:text-red-400">
+          {err}
+        </span>
+      )}
+    </div>
   );
 }
 

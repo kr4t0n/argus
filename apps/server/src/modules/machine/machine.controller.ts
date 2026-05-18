@@ -111,6 +111,14 @@ export class MachineController {
     await this.service.destroyAgent(id, agentId);
   }
 
+  // Hard-delete a machine. Rejected (409) unless the machine is
+  // offline — see MachineService.removeMachine for why.
+  @Delete(':id')
+  @HttpCode(204)
+  async remove(@Param('id') id: string) {
+    await this.service.removeMachine(id);
+  }
+
   @Get(':id/sidecar/version')
   getSidecarVersion(@Param('id') id: string) {
     return this.sidecarUpdate.getVersionInfo(id);
