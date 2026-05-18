@@ -279,7 +279,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `pages/UserPanel.tsx` — `/user` route, settings-page layout. Sticky
   account band at the top (email + role); below it a left section nav
   (Stats / Preferences) and a scroll column with Activity (heatmap),
-  Usage (lifetime token ledger), Quota (per-CLI plan windows pulled
+  Usage (token ledger with a rolling 7-day / 30-day / all-time
+  segmented toggle — one `/me/usage` payload carries all three, the
+  toggle is pure client-side slicing, defaults to 30 days), Quota
+  (per-CLI plan windows pulled
   from each sidecar's heartbeat — see `packages/sidecar/internal/quota`
   and the `/me/quota` endpoint), and Preferences (notifications, user
   rules editor). Capped at `max-w-6xl`.
@@ -575,7 +578,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   calls `parseUsage` once when each turn finalizes and stores the
   normalized `TokenUsage` JSON on the Command row. `/me/usage` SUMs
   that column in Postgres instead of re-parsing every `final` chunk's
-  raw `meta`, which is what made the panel slow for heavy users.
+  raw `meta`, which is what made the panel slow for heavy users. It
+  emits all three windows (7-day / 30-day / lifetime) from a single
+  scan via conditional aggregation — the rolling buckets are
+  `SUM(...) FILTER (WHERE c."createdAt" >= NOW() - INTERVAL 'N days')`,
+  now-anchored not calendar-aligned, reusing the
+  `@@index([sessionId, createdAt])` the activity grid already leans on.
+  The optional `costUsd` / `durationApiMs` undefined-vs-zero contract
+  is enforced *per window* (a `*_rows` COUNT scoped to the same
+  filter), so a recent codex-only stretch never shows a spurious
+  "$0.00" even when the lifetime total has a real cost.
   Pre-denormalization rows are populated by SQL migration
   `6_backfill_command_usage`, which mirrors `parseUsage`'s adapter
   switch one-for-one — if you change `parseUsage`'s output shape,

@@ -306,13 +306,28 @@ export interface UserActivityResponse {
   days: ActivityDay[];
 }
 
-/** REST response for `GET /me/usage`. Lifetime totals across every
- *  session the user owns, parsed per-adapter on the server using
- *  the same `parseUsage` the dashboard's per-session UsageBadge
- *  uses — so the totals never disagree with what the user sees
- *  while looking at any single session. */
+/** Token totals bucketed by a rolling time window. `lifetime` is
+ *  every command the user owns; `last30Days` / `last7Days` are the
+ *  same SUM scoped to `Command.createdAt >= now() - interval`. The
+ *  windows are rolling (now-anchored, not calendar-aligned) and each
+ *  carries the optional-field contract independently — a window with
+ *  no cost-bearing turns omits `costUsd` even when `lifetime` has one,
+ *  so recent codex-only activity never sprouts a spurious "$0.00". */
+export interface WindowedUsage {
+  last7Days: TokenUsage;
+  last30Days: TokenUsage;
+  lifetime: TokenUsage;
+}
+
+/** REST response for `GET /me/usage`. Totals across every session the
+ *  user owns, parsed per-adapter on the server using the same
+ *  `parseUsage` the dashboard's per-session UsageBadge uses — so the
+ *  totals never disagree with what the user sees while looking at any
+ *  single session. Bucketed into rolling 7-/30-day windows plus the
+ *  all-time lifetime total; the panel toggles between them client-side
+ *  off this single payload. */
 export interface UserUsageResponse {
-  usage: TokenUsage;
+  usage: WindowedUsage;
 }
 
 /**
