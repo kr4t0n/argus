@@ -74,9 +74,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `Machine` rows, replies with a `sync-agents` reconcile so the
   sidecar's cached agent set converges with the server's. Exposes
   REST (`GET /machines`, `POST /machines/:id/agents`,
-  `DELETE /machines/:id/agents/:agentId`) and emits `machine:upsert`
-  / `machine:status` / `machine:removed` / `agent:spawn-failed` over
-  WS. Also publishes `create-agent` / `destroy-agent` commands on
+  `DELETE /machines/:id/agents/:agentId`, `DELETE /machines/:id`) and
+  emits `machine:upsert` / `machine:status` / `machine:removed` /
+  `agent:spawn-failed` over WS. Also publishes `create-agent` / `destroy-agent` commands on
   `machine:{mid}:control`.
 - `agent-registry/` — `Agent` CRUD: list, get, archive/unarchive, plus
   the shared `agentToDto` mapper. Lifecycle ingestion lives in
@@ -381,9 +381,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Session/Command/Result). This is the supported way to delete an
   agent — the sidebar's per-agent "trash" hits this. There is no
   separate destroy for sessions; archive and re-create instead.
-  Machine rows are not user-deletable: stale machines are reaped by
-  the periodic sweeper after a grace window and their agents
-  destroyed alongside.
+  Machine rows *are* user-deletable, but only while the machine is
+  offline: `DELETE /machines/:id` hard-deletes the row (cascading to
+  its agents → sessions/commands/chunks/terminals and quota rows) and
+  emits `machine:removed`. Deleting an *online* machine is rejected
+  with 409 — its sidecar would re-register and resurrect the row (the
+  `machine-register` upsert even clears `archivedAt`), so the operator
+  must stop the sidecar first. Machines have no soft-archive
+  affordance by design (the `archivedAt` column exists but no endpoint
+  sets it; a re-register clears it). The periodic sweeper only flips
+  stale machines/agents to `offline` — it never reaps rows.
 - **Terminal == remote shell access**: ticking "attach interactive
   terminal" when creating an agent lets *any* dashboard user spawn
   shells on that host as the sidecar daemon's UID. Treat this as equivalent to handing out SSH; only

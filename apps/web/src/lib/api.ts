@@ -83,6 +83,8 @@ export const api = {
     }),
   destroyAgent: (machineId: string, agentId: string) =>
     http<void>(`/machines/${machineId}/agents/${agentId}`, { method: 'DELETE' }),
+  deleteMachine: (id: string) =>
+    http<void>(`/machines/${id}`, { method: 'DELETE' }),
 
   listSessions: (opts?: { includeArchived?: boolean }) =>
     http<SessionDTO[]>(`/sessions${opts?.includeArchived ? '?includeArchived=true' : ''}`),

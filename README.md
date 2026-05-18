@@ -273,6 +273,15 @@ Created agents are cached in `~/.config/argus/sidecar.json`, so a
 sidecar restart immediately re-spawns every supervisor without waiting
 for the server's reconcile broadcast.
 
+To remove a machine from the dashboard, open its panel and use the
+**delete** button next to "new agent". Deletion is permitted only
+while the machine is **offline**: it hard-deletes the machine and
+cascades to every agent, session, and history row on that host, and
+the action cannot be undone. The button is disabled for an online
+machine because a running sidecar would simply re-register and
+recreate the row — stop the sidecar (`argus-sidecar stop`) first, then
+delete.
+
 To upgrade an installed sidecar in place to the latest published release
 for its OS/arch, run:
 

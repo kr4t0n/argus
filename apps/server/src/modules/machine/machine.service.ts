@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -229,6 +230,37 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     });
     await this.prisma.agent.delete({ where: { id: agentId } });
     this.gateway.emitAgentRemoved(agentId);
+  }
+
+  /**
+   * Hard-delete a Machine row and everything under it: agents →
+   * sessions/commands/chunks/terminals, plus its quota rows — all
+   * `onDelete: Cascade`, so one delete drains the whole subtree.
+   * Emits `machine:removed` so every connected dashboard drops the
+   * row from its store.
+   *
+   * Gated on the machine being offline. A live sidecar re-registers
+   * via `machine-register`, whose upsert would immediately resurrect
+   * the row (and even reset `archivedAt`) — deleting an online host
+   * is therefore futile, so we 409 and tell the operator to stop the
+   * sidecar first. There is no soft-archive counterpart by design:
+   * the only supported removal is this offline hard-delete.
+   */
+  async removeMachine(id: string): Promise<void> {
+    const machine = await this.prisma.machine.findUnique({
+      where: { id },
+      select: { id: true, name: true, status: true },
+    });
+    if (!machine) throw new NotFoundException('machine not found');
+    if (machine.status === 'online') {
+      throw new ConflictException(
+        'machine is online — stop the sidecar before deleting it',
+      );
+    }
+
+    await this.prisma.machine.delete({ where: { id } });
+    this.gateway.emitMachineRemoved(id);
+    this.logger.log(`machine ${id} (${machine.name}) deleted`);
   }
 
   /**
