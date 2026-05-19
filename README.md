@@ -280,13 +280,15 @@ sidecar restart immediately re-spawns every supervisor without waiting
 for the server's reconcile broadcast.
 
 To remove a machine from the dashboard, open its panel and use the
-**delete** button next to "new agent". Deletion is permitted only
-while the machine is **offline**: it hard-deletes the machine and
-cascades to every agent, session, and history row on that host, and
-the action cannot be undone. The button is disabled for an online
-machine because a running sidecar would simply re-register and
-recreate the row — stop the sidecar (`argus-sidecar stop`) first, then
-delete.
+**delete** button next to "new agent" (works at any status). This is
+a **soft delete**: the machine and its agents disappear from the
+dashboard, but nothing is destroyed — every session, command, and
+result stays in the database and remains viewable in your session
+history. The removal is sticky: even if that machine's sidecar keeps
+running or restarts, the server ignores it and the machine will not
+reappear. There is no un-delete from the UI, so the confirmation is
+final; the sidecar process itself is left untouched (stop it with
+`argus-sidecar stop` on the host if you also want to retire it).
 
 To upgrade an installed sidecar in place to the latest published release
 for its OS/arch, run:

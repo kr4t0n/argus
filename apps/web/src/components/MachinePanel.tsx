@@ -450,13 +450,13 @@ function SidecarUpdateAction({
 
 /**
  * Destructive "delete machine" button in the panel header, beside
- * "new agent". Enabled only when the machine is offline — the server
- * 409s an online delete because the live sidecar would re-register
- * and resurrect the row, so we mirror that constraint client-side
- * (disabled + explanatory tooltip) rather than letting the user fire
- * a doomed request. There is no archive fallback by design: removal
- * is an offline-only hard-delete that cascades every agent, session,
- * and history row on the host.
+ * "new agent". Soft-deletes the machine: it disappears from every
+ * dashboard and its agents are hidden, but NO data is destroyed —
+ * all session history stays in Postgres and remains viewable through
+ * the (user-scoped) session list. The server-side tombstone is
+ * sticky, so this is safe at any status: a still-running or
+ * restarting sidecar can't bring the machine back. Terminal by
+ * design — there is no un-delete from the UI.
  *
  * On success we navigate to the dashboard root: the row is gone, so
  * `/machines/:id` would otherwise render the "machine not found"
@@ -471,20 +471,17 @@ function DeleteMachineAction({
   machineName: string;
 }) {
   const navigate = useNavigate();
-  const machine = useMachineStore((s) => s.machines[machineId]);
   const removeMachine = useMachineStore((s) => s.remove);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  if (!machine) return null;
-  const offline = machine.status === 'offline';
-
   async function doDelete() {
-    if (!offline || busy) return;
+    if (busy) return;
     const msg =
       `Delete machine "${machineName}"?\n\n` +
-      `This permanently removes the machine and every agent on it, ` +
-      `along with all their sessions and history. This cannot be undone.`;
+      `It will be removed from the dashboard and its agents hidden, ` +
+      `but all session history is kept and stays viewable. ` +
+      `This can't be undone from the UI.`;
     if (!confirm(msg)) return;
     setBusy(true);
     setErr(null);
@@ -504,12 +501,8 @@ function DeleteMachineAction({
         size="md"
         variant="danger"
         onClick={doDelete}
-        disabled={!offline || busy}
-        title={
-          offline
-            ? `delete machine "${machineName}" (irreversible)`
-            : 'stop the sidecar before deleting this machine'
-        }
+        disabled={busy}
+        title={`delete machine "${machineName}"`}
         aria-label={`Delete machine ${machineName}`}
       >
         {busy ? (

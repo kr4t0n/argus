@@ -384,16 +384,27 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Session/Command/Result). This is the supported way to delete an
   agent — the sidebar's per-agent "trash" hits this. There is no
   separate destroy for sessions; archive and re-create instead.
-  Machine rows *are* user-deletable, but only while the machine is
-  offline: `DELETE /machines/:id` hard-deletes the row (cascading to
-  its agents → sessions/commands/chunks/terminals and quota rows) and
-  emits `machine:removed`. Deleting an *online* machine is rejected
-  with 409 — its sidecar would re-register and resurrect the row (the
-  `machine-register` upsert even clears `archivedAt`), so the operator
-  must stop the sidecar first. Machines have no soft-archive
-  affordance by design (the `archivedAt` column exists but no endpoint
-  sets it; a re-register clears it). The periodic sweeper only flips
-  stale machines/agents to `offline` — it never reaps rows.
+  Machines are **soft-deleted**, not destroyed: `DELETE /machines/:id`
+  sets the sticky `Machine.deletedAt` tombstone, flips status offline,
+  archives the machine's agents (sets their `archivedAt`), suffixes
+  the `@unique` `name` (so a fresh install can reuse the human name),
+  and emits `machine:removed`. **No rows are deleted** — the agents'
+  sessions/commands/chunks/terminals survive untouched and stay
+  viewable through the user-scoped session list; only the *active*
+  surfaces (machine list, sidebar) hide them. Safe at any status, so
+  there's no online guard. `deletedAt` differs from `archivedAt`
+  precisely because the `machine-register` handler resets `archivedAt`
+  to null on every re-register: the lifecycle consumer instead
+  *ignores* any event (`machine-register` skips the upsert;
+  `machine-heartbeat` is an `updateMany` filtered on `deletedAt: null`)
+  from a tombstoned machine and never clears `deletedAt`, so a
+  still-running or restarting sidecar can no longer resurrect it. The
+  delete is terminal — there is no un-delete endpoint or UI. The
+  periodic sweeper only flips stale machines/agents to `offline` — it
+  never reaps rows. Known quirk: a deleted machine's sidecar keeps
+  running and its supervisors' per-*agent* register/heartbeat events
+  still update those (already-archived, hidden) Agent rows; harmless,
+  since they're filtered from every active view.
 - **Terminal == remote shell access**: ticking "attach interactive
   terminal" when creating an agent lets *any* dashboard user spawn
   shells on that host as the sidecar daemon's UID. Treat this as equivalent to handing out SSH; only
