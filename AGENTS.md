@@ -224,14 +224,29 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   detects ```` ```html ```` fenced blocks and renders them through the
   shared `HtmlPreview` component, defaulting to the rendered view with
   a Source toggle. `HtmlPreview` has two sandbox postures keyed off its
-  `autoHeight` prop: `FileViewer` (`.html` files) uses the strict
-  `sandbox=""` and is sized by its container; the chat code-block path
-  passes `autoHeight` so the iframe grows to its content's
-  `scrollHeight` (measured on load + a `ResizeObserver`), which
-  requires `sandbox="allow-same-origin"`. Neither path enables
-  `allow-scripts` — no JavaScript in the previewed document ever runs,
-  so granting same-origin for measurement is safe. Color-scheme
-  injection follows the dashboard theme in both modes.
+  `autoHeight` prop. `FileViewer` (`.html` files) uses the strict
+  `sandbox=""`: opaque origin, no scripts, sized by its container —
+  remote-tree file content stays fully inert. The chat code-block path
+  passes `autoHeight` and uses `sandbox="allow-scripts"`, so model-
+  generated pages can run JS (Chart.js and other CDN-loaded libraries
+  work). It deliberately does NOT add `allow-same-origin`: the frame is
+  a unique opaque origin, so its scripts can't reach the dashboard's
+  window, cookies, `localStorage`, or APIs. `allow-scripts` +
+  `allow-same-origin` from our own origin is the one combination that
+  escapes the sandbox into the user's session — we never grant it.
+  Because an opaque origin blocks the parent from reading
+  `contentDocument`, auto-height is no longer measured from outside:
+  an injected bootstrap script postMessages its own `scrollHeight` and
+  the parent (validating `event.source` identity — `event.origin` is
+  `"null"`) grows the frame. Color-scheme injection follows the
+  dashboard theme in both modes. Gotchas: (1) chat-path scripts can
+  still reach the network — that's how CDN libs load, but it also means
+  they could beacon out; accepted because the opaque frame holds no
+  session or privileged data, and a no-network CSP is intentionally not
+  injected since it would block those same libs. (2) While a final
+  answer streams, `srcDoc` changes per token and the iframe reloads, so
+  the bootstrap and any chart code re-run on each partial — noisy but
+  isolated and harmless; it settles when the block completes.
 - `components/TodoWindow.tsx` — per-turn task tracker rendered inside the
   sticky band right under `<ActivityPill>`. Sources its rows from the
   *latest* `TodoWrite`-style tool chunk in the command's chunks
