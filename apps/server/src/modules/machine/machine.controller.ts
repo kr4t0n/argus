@@ -111,8 +111,8 @@ export class MachineController {
     await this.service.destroyAgent(id, agentId);
   }
 
-  // Hard-delete a machine. Rejected (409) unless the machine is
-  // offline — see MachineService.removeMachine for why.
+  // Soft-delete a machine (sticky tombstone; history preserved).
+  // Safe at any status — see MachineService.removeMachine.
   @Delete(':id')
   @HttpCode(204)
   async remove(@Param('id') id: string) {

@@ -128,9 +128,15 @@ export class SidecarUpdateService implements OnModuleDestroy {
   async updateOne(machineId: string): Promise<SidecarUpdateAccepted> {
     const machine = await this.prisma.machine.findUnique({
       where: { id: machineId },
-      select: { id: true, sidecarVersion: true, status: true, archivedAt: true },
+      select: {
+        id: true,
+        sidecarVersion: true,
+        status: true,
+        archivedAt: true,
+        deletedAt: true,
+      },
     });
-    if (!machine) throw new NotFoundException('machine not found');
+    if (!machine || machine.deletedAt) throw new NotFoundException('machine not found');
     if (machine.archivedAt) {
       throw new BadRequestException('machine is archived');
     }
@@ -167,7 +173,7 @@ export class SidecarUpdateService implements OnModuleDestroy {
       );
     }
     const machines = await this.prisma.machine.findMany({
-      where: { archivedAt: null },
+      where: { archivedAt: null, deletedAt: null },
       select: { id: true, name: true, sidecarVersion: true, status: true },
       orderBy: [{ name: 'asc' }],
     });
@@ -264,9 +270,9 @@ export class SidecarUpdateService implements OnModuleDestroy {
   async getVersionInfo(machineId: string): Promise<SidecarVersionInfo> {
     const machine = await this.prisma.machine.findUnique({
       where: { id: machineId },
-      select: { id: true, sidecarVersion: true },
+      select: { id: true, sidecarVersion: true, deletedAt: true },
     });
-    if (!machine) throw new NotFoundException('machine not found');
+    if (!machine || machine.deletedAt) throw new NotFoundException('machine not found');
 
     const latest = await this.getLatestTag();
     // Normalize the stored version: the running sidecar reports its
