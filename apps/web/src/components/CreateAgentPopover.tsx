@@ -34,20 +34,43 @@ type Props = {
   /** The row the popover is anchored to; used for positioning. */
   anchor: React.RefObject<HTMLElement | null>;
   onClose: () => void;
+  /**
+   * Prefill values for workingDir and the terminal toggle. By default
+   * they prefill the form fields (still editable); when `inherited`
+   * is set the fields are *replaced* by a read-only summary and these
+   * values are used directly at submit time.
+   */
+  defaults?: {
+    workingDir?: string;
+    supportsTerminal?: boolean;
+  };
+  /**
+   * When true, hide the workingDir input and terminal checkbox — the
+   * agent inherits both from its parent project, so the form
+   * collapses to just adapter + name. ProjectRow sets this so an
+   * agent can't drift apart from the project's path/terminal setting.
+   */
+  inherited?: boolean;
 };
 
 const POPOVER_WIDTH = 288; // 18rem (Tailwind w-72)
 const VIEWPORT_MARGIN = 8; // keep this far from the edge
 
-export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
+export function CreateAgentPopover({
+  machine,
+  anchor,
+  onClose,
+  defaults,
+  inherited = false,
+}: Props) {
   const upsertAgent = useAgentStore((s) => s.upsert);
   const adapters = (machine.availableAdapters ?? []) as AvailableAdapter[];
   const defaultType = adapters[0]?.type ?? '';
 
   const [type, setType] = useState<string>(defaultType);
   const [name, setName] = useState('');
-  const [workingDir, setWorkingDir] = useState('');
-  const [supportsTerminal, setSupportsTerminal] = useState(false);
+  const [workingDir, setWorkingDir] = useState(defaults?.workingDir ?? '');
+  const [supportsTerminal, setSupportsTerminal] = useState(defaults?.supportsTerminal ?? false);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const popRef = useRef<HTMLDivElement>(null);
@@ -237,24 +260,38 @@ export function CreateAgentPopover({ machine, anchor, onClose }: Props) {
           />
         </Field>
 
-        <Field label="working dir (optional)">
-          <input
-            value={workingDir}
-            onChange={(e) => setWorkingDir(e.target.value)}
-            placeholder="/Users/you/projects/foo"
-            className="w-full rounded-md bg-surface-2/40 px-3 py-2 font-mono text-xs text-fg-primary outline-none transition-colors placeholder:text-fg-muted focus:bg-surface-2"
-          />
-        </Field>
+        {!inherited && (
+          <>
+            <Field label="working dir (optional)">
+              <input
+                value={workingDir}
+                onChange={(e) => setWorkingDir(e.target.value)}
+                placeholder="/Users/you/projects/foo"
+                className="w-full rounded-md bg-surface-2/40 px-3 py-2 font-mono text-xs text-fg-primary outline-none transition-colors placeholder:text-fg-muted focus:bg-surface-2"
+              />
+            </Field>
 
-        <label className="flex items-center gap-2 px-0.5 py-1 text-xs text-fg-secondary cursor-pointer">
-          <input
-            type="checkbox"
-            checked={supportsTerminal}
-            onChange={(e) => setSupportsTerminal(e.target.checked)}
-            className="h-3.5 w-3.5 accent-emerald-500"
-          />
-          attach interactive terminal
-        </label>
+            <label className="flex items-center gap-2 px-0.5 py-1 text-xs text-fg-secondary cursor-pointer">
+              <input
+                type="checkbox"
+                checked={supportsTerminal}
+                onChange={(e) => setSupportsTerminal(e.target.checked)}
+                className="h-3.5 w-3.5 accent-emerald-500"
+              />
+              attach interactive terminal
+            </label>
+          </>
+        )}
+
+        {inherited && (
+          <div className="rounded-md bg-surface-2/40 px-3 py-2 text-meta text-fg-tertiary space-y-0.5">
+            <div className="truncate">
+              working dir:{' '}
+              <span className="font-mono text-fg-secondary">{workingDir || '—'}</span>
+            </div>
+            <div>terminal: {supportsTerminal ? 'attached' : 'off'}</div>
+          </div>
+        )}
 
         {err && (
           <div className="rounded border border-red-500/30 bg-red-500/10 px-2 py-1.5 text-xs text-red-600 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-400">

@@ -20,10 +20,12 @@ import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
 import { useSidecarUpdateStore } from '../stores/sidecarUpdateStore';
+import { useProjectStore, type LocalProject } from '../stores/projectStore';
 import { cn, relativeTime } from '../lib/utils';
 import { StatusDot } from './ui/StatusDot';
 import { AgentTypeIcon } from './ui/AgentTypeIcon';
 import { CreateAgentPopover } from './CreateAgentPopover';
+import { CreateProjectPopover } from './CreateProjectPopover';
 import { BulkUpdateModal } from './BulkUpdateModal';
 import { MachineIcon, MachineIconGlyph } from './MachineIcon';
 import { ThemeToggle } from './ThemeToggle';
@@ -44,6 +46,11 @@ interface ProjectGroup {
   fullPath: string | null;
   machineId: string;
   agentIds: string[];
+  /** Present when the row is backed by a user-created local project. */
+  local?: LocalProject;
+  /** True when the row's placeholder is archived. Cascades to agents +
+   *  sessions on toggle (see ProjectRow.toggleProjectArchive). */
+  archived: boolean;
 }
 
 /**
@@ -53,10 +60,19 @@ interface ProjectGroup {
  * be merged. Agents with no `workingDir` fall into a synthetic
  * "no project" bucket per machine so they remain reachable.
  *
- * Input order is preserved so adding/removing an agent doesn't
- * reshuffle unrelated rows.
+ * User-created `LocalProject` placeholders are merged in as a second
+ * pass: a matching `(machineId, workingDir)` overlays the row's label
+ * with the user-chosen name; an unmatched placeholder appears as an
+ * empty project row so a fresh project shows up before its first agent
+ * is created. Input order is preserved so adding/removing an agent
+ * doesn't reshuffle unrelated rows.
  */
-function groupAgents(order: string[], agents: Record<string, AgentDTO>): ProjectGroup[] {
+function groupProjects(
+  order: string[],
+  agents: Record<string, AgentDTO>,
+  localProjects: Record<string, LocalProject>,
+  localOrder: string[],
+): ProjectGroup[] {
   const projects: ProjectGroup[] = [];
   const projectIndex = new Map<string, number>();
 
@@ -76,10 +92,35 @@ function groupAgents(order: string[], agents: Record<string, AgentDTO>): Project
         fullPath: wd || null,
         machineId: a.machineId,
         agentIds: [],
+        archived: false,
       });
     }
     projects[pIdx].agentIds.push(id);
   }
+
+  for (const lkey of localOrder) {
+    const lp = localProjects[lkey];
+    if (!lp) continue;
+    const key = `${lp.machineId}::${lp.workingDir}`;
+    const pIdx = projectIndex.get(key);
+    if (pIdx === undefined) {
+      projectIndex.set(key, projects.length);
+      projects.push({
+        key,
+        label: lp.name || basename(lp.workingDir),
+        fullPath: lp.workingDir,
+        machineId: lp.machineId,
+        agentIds: [],
+        local: lp,
+        archived: !!lp.archivedAt,
+      });
+    } else {
+      projects[pIdx].label = lp.name || projects[pIdx].label;
+      projects[pIdx].local = lp;
+      projects[pIdx].archived = !!lp.archivedAt;
+    }
+  }
+
   return projects;
 }
 
@@ -99,6 +140,8 @@ export function Sidebar() {
   const toggleShowArchivedAgents = useUIStore((s) => s.toggleShowArchivedAgents);
   const upsertAgent = useAgentStore((s) => s.upsert);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
+  const localProjects = useProjectStore((s) => s.projects);
+  const localProjectOrder = useProjectStore((s) => s.order);
 
   async function startSession(agentId: string) {
     const { session } = await api.createSession({ agentId });
@@ -117,9 +160,14 @@ export function Sidebar() {
   const visibleOrder = showArchivedAgents
     ? order
     : order.filter((id) => !agents[id]?.archivedAt);
-  const projects = groupAgents(visibleOrder, agents);
+  const visibleLocalOrder = showArchivedAgents
+    ? localProjectOrder
+    : localProjectOrder.filter((k) => !localProjects[k]?.archivedAt);
+  const projects = groupProjects(visibleOrder, agents, localProjects, visibleLocalOrder);
   const hiddenArchivedAgentCount = order.length - visibleOrder.length;
-  const hasArchivedAgents = order.some((id) => agents[id]?.archivedAt);
+  const hasArchivedAgents =
+    order.some((id) => agents[id]?.archivedAt) ||
+    Object.values(localProjects).some((p) => !!p.archivedAt);
 
   return (
     <aside className="h-full w-full flex flex-col border-r border-default bg-surface-0">
@@ -140,7 +188,7 @@ export function Sidebar() {
       <div className="flex-1 overflow-y-auto py-1 px-2">
         {projects.length === 0 && (
           <div className="px-4 py-6 text-xs text-fg-tertiary">
-            No agents yet — hover a machine below and click{' '}
+            No projects yet — hover a machine below and click{' '}
             <Plus className="inline h-3 w-3 -mt-0.5" /> to create one.
           </div>
         )}
@@ -230,30 +278,244 @@ function ProjectRow({
     : machineName;
   const titleParts = [project.fullPath ?? 'agents without a workingDir', machineMeta];
 
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [createAgentOpen, setCreateAgentOpen] = useState(false);
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const upsertSession = useSessionStore((s) => s.upsertSession);
+  const setProjectArchived = useProjectStore((s) => s.setArchived);
+  const addProject = useProjectStore((s) => s.add);
+  // The `+` only makes sense when we have a real working dir to anchor
+  // the new agent to and the machine is online. The synthetic
+  // "no project" bucket has no path to prefill, so we hide the action
+  // there — agents already without a workingDir can still be created
+  // from MachinePanel's free-form popover.
+  const canCreateAgent =
+    !!project.fullPath &&
+    !!machine &&
+    machine.status !== 'offline' &&
+    !project.archived;
+  // Archive on a project means "this project + everything under it is
+  // archived." Hidden on the synthetic "no project" bucket — there's
+  // no path to anchor a placeholder against, and the action would
+  // affect every machine's working-dir-less agents together which is
+  // not what the user wants.
+  const canArchive = !!project.fullPath;
+
+  async function toggleProjectArchive(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (archiveBusy || !project.fullPath) return;
+    setArchiveBusy(true);
+    try {
+      if (project.archived) {
+        // Restore. Prefer the snapshot — un-archive only what this
+        // cascade originally archived, so any individual archives the
+        // user made BEFORE the cascade stay archived. Fall through to
+        // a broad restore (un-archive everything currently archived
+        // in the project) only for legacy placeholders that pre-date
+        // the snapshot — those can't distinguish the two cases.
+        const snapAgents = project.local?.archivedAgentIds;
+        const snapSessions = project.local?.archivedSessionIds;
+        const hasSnapshot = snapAgents !== undefined || snapSessions !== undefined;
+
+        if (hasSnapshot) {
+          const sessionResults = await Promise.all(
+            (snapSessions ?? []).map((id) =>
+              api.unarchiveSession(id).catch(() => null),
+            ),
+          );
+          sessionResults.forEach((s) => s && upsertSession(s));
+
+          const agentResults = await Promise.all(
+            (snapAgents ?? []).map((id) =>
+              api.unarchiveAgent(id).catch(() => null),
+            ),
+          );
+          agentResults.forEach((a) => a && onAgentArchived(a));
+        } else {
+          const sessionRestores: Promise<SessionDTO | null>[] = [];
+          for (const agentId of project.agentIds) {
+            for (const s of sessionsByAgent[agentId] ?? []) {
+              if (s.archivedAt) {
+                sessionRestores.push(api.unarchiveSession(s.id).catch(() => null));
+              }
+            }
+          }
+          const sessionResults = await Promise.all(sessionRestores);
+          sessionResults.forEach((s) => s && upsertSession(s));
+
+          const agentRestores = project.agentIds
+            .filter((id) => agents[id]?.archivedAt)
+            .map((id) => api.unarchiveAgent(id).catch(() => null));
+          const agentResults = await Promise.all(agentRestores);
+          agentResults.forEach((a) => a && onAgentArchived(a));
+        }
+
+        setProjectArchived(project.key, false);
+      } else {
+        // Archive: snapshot the items we actually flip (skipping ones
+        // already archived) so restore can be surgical. Sessions
+        // first, then agents, then persist the placeholder + snapshot.
+        // Auto-create the placeholder for purely agent-derived rows
+        // so the project keeps a stable identity to restore from.
+        const sessionIdsToArchive: string[] = [];
+        for (const agentId of project.agentIds) {
+          for (const s of sessionsByAgent[agentId] ?? []) {
+            if (!s.archivedAt) sessionIdsToArchive.push(s.id);
+          }
+        }
+        const agentIdsToArchive = project.agentIds.filter(
+          (id) => agents[id] && !agents[id]?.archivedAt,
+        );
+
+        const sessionResults = await Promise.allSettled(
+          sessionIdsToArchive.map((id) => api.archiveSession(id)),
+        );
+        const archivedSessionIds: string[] = [];
+        sessionResults.forEach((r, i) => {
+          if (r.status === 'fulfilled') {
+            upsertSession(r.value);
+            archivedSessionIds.push(sessionIdsToArchive[i]);
+          }
+        });
+
+        const agentResults = await Promise.allSettled(
+          agentIdsToArchive.map((id) => api.archiveAgent(id)),
+        );
+        const archivedAgentIds: string[] = [];
+        agentResults.forEach((r, i) => {
+          if (r.status === 'fulfilled') {
+            onAgentArchived(r.value);
+            archivedAgentIds.push(agentIdsToArchive[i]);
+          }
+        });
+
+        if (!project.local) {
+          addProject({
+            machineId: project.machineId,
+            name: project.label,
+            workingDir: project.fullPath,
+            supportsTerminal:
+              agents[project.agentIds[0]]?.supportsTerminal ?? false,
+            archivedAt: new Date().toISOString(),
+            archivedAgentIds,
+            archivedSessionIds,
+          });
+        } else {
+          setProjectArchived(project.key, true, {
+            archivedAgentIds,
+            archivedSessionIds,
+          });
+        }
+      }
+    } catch {
+      /* swallow — toast surface not wired yet */
+    } finally {
+      setArchiveBusy(false);
+    }
+  }
+
   return (
     <div className="mb-0.5">
-      <button
-        onClick={onToggle}
-        className="group flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left transition-colors hover:bg-surface-1"
-        title={titleParts.join(' · ')}
-      >
-        <ChevronRight
-          className={cn('h-3 w-3 text-fg-tertiary transition-transform', open && 'rotate-90')}
-        />
-        {open ? (
-          <FolderOpen className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
-        ) : (
-          <Folder className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
+      <div
+        ref={rowRef}
+        className={cn(
+          'group relative flex items-center rounded-md transition-colors hover:bg-surface-1',
+          project.archived && 'opacity-70',
         )}
-        <span className="min-w-0 truncate text-sm font-medium text-fg-primary">
-          {project.label}
-        </span>
-        <MachineIconGlyph
-          machineId={project.machineId}
-          className="h-3 w-3 shrink-0 text-fg-muted"
-        />
-        <span className="ml-auto pl-1 text-meta text-fg-muted">{project.agentIds.length}</span>
-      </button>
+      >
+        <button
+          onClick={onToggle}
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left"
+          title={titleParts.join(' · ')}
+        >
+          <ChevronRight
+            className={cn('h-3 w-3 text-fg-tertiary transition-transform', open && 'rotate-90')}
+          />
+          {open ? (
+            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
+          ) : (
+            <Folder className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
+          )}
+          <span
+            className={cn(
+              'min-w-0 truncate text-sm font-medium',
+              project.archived ? 'italic text-fg-tertiary' : 'text-fg-primary',
+            )}
+          >
+            {project.label}
+          </span>
+          <MachineIconGlyph
+            machineId={project.machineId}
+            className="h-3 w-3 shrink-0 text-fg-muted"
+          />
+          <span className="ml-auto pl-1 text-meta text-fg-muted">{project.agentIds.length}</span>
+        </button>
+
+        {(canCreateAgent || canArchive) && (
+          <div className="pointer-events-none absolute inset-y-0 right-1 flex items-center opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+            <span
+              aria-hidden
+              className="absolute inset-y-0 right-full w-8 bg-gradient-to-r from-transparent to-surface-1"
+            />
+            <div className="flex items-center bg-surface-1">
+              {canCreateAgent && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setCreateAgentOpen(true);
+                  }}
+                  className="flex items-center px-1.5 text-fg-muted transition-colors hover:text-fg-primary"
+                  title="create agent in this project"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              )}
+              {canArchive && (
+                <button
+                  onClick={toggleProjectArchive}
+                  disabled={archiveBusy}
+                  className={cn(
+                    'flex items-center px-1.5 text-fg-muted transition-colors disabled:opacity-40 hover:text-fg-primary',
+                    project.archived && 'text-fg-tertiary',
+                  )}
+                  title={
+                    project.archived
+                      ? 'restore project (agents + sessions)'
+                      : 'archive project (cascades to agents + sessions)'
+                  }
+                >
+                  {project.archived ? (
+                    <ArchiveRestore className="h-3.5 w-3.5" />
+                  ) : (
+                    <Archive className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {createAgentOpen && machine && (
+          <CreateAgentPopover
+            machine={machine}
+            anchor={rowRef}
+            onClose={() => setCreateAgentOpen(false)}
+            inherited
+            defaults={{
+              workingDir: project.fullPath ?? undefined,
+              // Prefer the placeholder's terminal default; if this row
+              // is purely agent-derived, fall back to whatever the
+              // first existing agent in the project uses so new
+              // agents match the established convention.
+              supportsTerminal:
+                project.local?.supportsTerminal ??
+                agents[project.agentIds[0]]?.supportsTerminal ??
+                false,
+            }}
+          />
+        )}
+      </div>
 
       {open && (
         <div className="ml-4 mt-0.5 border-l border-default pl-1">
@@ -278,6 +540,12 @@ function ProjectRow({
               />
             );
           })}
+          {project.agentIds.length === 0 && (
+            <div className="px-2 py-1 text-meta text-fg-muted italic">
+              empty project — hover the row and click{' '}
+              <Plus className="inline h-3 w-3 -mt-0.5" /> to create an agent
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -287,16 +555,15 @@ function ProjectRow({
 /**
  * Bottom-of-sidebar machine roster. Shows every host that has run
  * `argus-sidecar init` against this server, even ones currently
- * offline — so an operator can queue an agent on a machine before
- * it reconnects (the create-agent command is durably buffered on
- * the per-machine Redis stream). This is also the canonical entry
- * point for creating an agent on a machine that has no agents yet
- * (and therefore wouldn't appear in the project tree above).
+ * offline.
  *
- * Hover a machine to reveal a `+` action that opens the
- * CreateAgentPopover. The popover is rendered inline next to the
- * row (not via a Portal) so its position naturally tracks the row
- * as the user scrolls the sidebar.
+ * Hover a machine to reveal a `+` that opens CreateProjectPopover —
+ * the entry point for creating a *project* on this machine. Projects
+ * are client-only placeholders (see `useProjectStore`); they appear
+ * in the upper tree as empty rows until an agent is created inside
+ * them via the project row's own hover `+`. Agents on this machine
+ * also keep flowing through MachinePanel's free-form popover for
+ * cases where you don't want a project anchor.
  */
 function MachineList() {
   const order = useMachineStore((s) => s.order);
@@ -460,7 +727,7 @@ function MachineRow({
           'ml-0.5 flex items-center text-fg-tertiary transition-opacity hover:text-fg-primary',
           popoverOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
         )}
-        title="create agent on this machine"
+        title="create project on this machine"
       >
         <Plus className="h-3.5 w-3.5" />
       </button>
@@ -472,7 +739,7 @@ function MachineRow({
       </span>
 
       {popoverOpen && (
-        <CreateAgentPopover machine={machine} anchor={anchorRef} onClose={onClosePopover} />
+        <CreateProjectPopover machine={machine} anchor={anchorRef} onClose={onClosePopover} />
       )}
     </div>
   );
