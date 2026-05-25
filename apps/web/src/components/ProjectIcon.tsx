@@ -40,18 +40,17 @@ export function ProjectIconGlyph({
    *  no effect when a letter is picked — letters don't have an
    *  open/closed state. */
   open?: boolean;
+  /** Sizing + color are caller-controlled. Pass both a dimension
+   *  (h-X w-X) AND a font-size (text-X) so the letter case lines up
+   *  with the SVG case at the requested footprint. `leading-none`
+   *  is applied internally so callers don't have to remember it. */
   className?: string;
 }) {
   if (iconKey) {
-    // text-[11px] keeps the line height (with leading-none) under the
-    // 14px box that h-3.5 enforces — without it, the inherited
-    // text-base (16px) line overflows the box and nudges the row's
-    // perceived height when switching from Folder to a letter.
-    // overflow-hidden is belt-and-suspenders.
     return (
       <span
         className={cn(
-          'inline-flex shrink-0 items-center justify-center overflow-hidden text-[11px] font-semibold leading-none',
+          'inline-flex shrink-0 items-center justify-center overflow-hidden font-semibold leading-none',
           className,
         )}
       >
@@ -135,7 +134,11 @@ export function ProjectIcon({
           className,
         )}
       >
-        <ProjectIconGlyph iconKey={iconKey} open={open} className="h-3.5 w-3.5" />
+        <ProjectIconGlyph
+          iconKey={iconKey}
+          open={open}
+          className="h-3.5 w-3.5 text-[11px]"
+        />
       </button>
       {pickerOpen && canPick && workingDir && (
         <ProjectIconPicker

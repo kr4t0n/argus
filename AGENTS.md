@@ -322,7 +322,29 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   path to anchor an agent against — agents without a workingDir
   still get created through `MachinePanel`'s free-form popover,
   which keeps using `CreateAgentPopover` directly in its default
-  (agent-mode) form.
+  (agent-mode) form. Each project row's folder icon is itself a
+  picker (`ProjectIcon`/`ProjectIconGlyph`) — clicking opens a
+  6×5 letter grid plus a `reset to folder` action; the picked
+  A-Z glyph persists to `LocalProject.iconKey` and renders in
+  place of the default Folder in both the main sidebar and the
+  rail. No auto-default from the project name — picking is what
+  binds the letter to the project in the user's memory. Rename
+  is the pencil action in the project row's hover stack and
+  commits via `useProjectStore.add()` on the existing key
+  (creates a placeholder for purely agent-derived rows).
+- `lib/projects.ts` — shared `groupProjects()` derivation +
+  `ProjectGroup` type consumed by both `Sidebar` and
+  `SidebarRail`. Pure function over `(agentOrder, agents,
+  localProjects, localOrder)`; callers pre-filter the orders for
+  whatever archived-visibility posture they want.
+- `components/SidebarRail.tsx` — collapsed-mode rail (48px wide).
+  Renders one tile per project using the same `groupProjects()`
+  derivation as the main sidebar, with `ProjectIconGlyph` for the
+  glyph. Click jumps to the project's most-recent non-archived
+  session across any of its agents. Archived projects/agents and
+  the synthetic `no project` bucket are hidden — the rail is for
+  active-state navigation, not history. Machine strip + logout at
+  the bottom unchanged.
 - `components/ContextPane.tsx` — right-pane companion to a session. Header
   shows agent identity + working dir + model. A collapsible `Details`
   block surfaces agent + session metadata (machine, status, version,
