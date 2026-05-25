@@ -272,11 +272,65 @@ function ProjectRow({
   const titleParts = [project.fullPath ?? 'sessions without a workingDir', machineMeta];
 
   const rowRef = useRef<HTMLDivElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const [createSessionOpen, setCreateSessionOpen] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(project.label);
   const upsertSession = useSessionStore((s) => s.upsertSession);
   const setProjectArchived = useProjectStore((s) => s.setArchived);
   const addProject = useProjectStore((s) => s.add);
+
+  // Mirror SessionRow's inline-edit pattern: focus + select on enter,
+  // sync draft to source of truth when not editing so external label
+  // updates (e.g. cascade restore) don't get stranded in the input.
+  useEffect(() => {
+    if (editing) {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    }
+  }, [editing]);
+  useEffect(() => {
+    if (!editing) setDraft(project.label);
+  }, [project.label, editing]);
+
+  // The "no project" bucket has no path → no project identity to rename.
+  // Synthetic group, not a placeholder candidate.
+  const canRename = !!project.fullPath;
+
+  function startEdit(e: React.MouseEvent | React.SyntheticEvent) {
+    if (!canRename) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDraft(project.label);
+    setEditing(true);
+  }
+  function commitRename() {
+    const next = draft.trim();
+    setEditing(false);
+    if (!next || next === project.label || !project.fullPath) {
+      setDraft(project.label);
+      return;
+    }
+    // Re-add with the new name — `add()` merges on (machineId,
+    // workingDir) so this updates an existing placeholder or
+    // creates one for a purely agent-derived row. supportsTerminal
+    // is preserved from the placeholder (or falls back to the first
+    // agent's value to match the rest of the file's convention).
+    addProject({
+      machineId: project.machineId,
+      name: next,
+      workingDir: project.fullPath,
+      supportsTerminal:
+        project.local?.supportsTerminal ??
+        agents[project.agentIds[0]]?.supportsTerminal ??
+        false,
+    });
+  }
+  function cancelRename() {
+    setDraft(project.label);
+    setEditing(false);
+  }
 
   // Flatten: every session under every agent in the project, most-
   // recent first. Agents are no longer rendered as their own rows
@@ -435,41 +489,94 @@ function ProjectRow({
           project.archived && 'opacity-70',
         )}
       >
-        <button
-          onClick={onToggle}
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left"
-          title={titleParts.join(' · ')}
-        >
-          <ChevronRight
-            className={cn('h-3 w-3 text-fg-tertiary transition-transform', open && 'rotate-90')}
-          />
-          {open ? (
-            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
-          ) : (
-            <Folder className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
-          )}
-          <span
-            className={cn(
-              'min-w-0 truncate text-sm font-medium',
-              project.archived ? 'italic text-fg-tertiary' : 'text-fg-primary',
+        {editing ? (
+          // Edit mode: no `title` on the wrapper — a native tooltip
+          // would otherwise hover over the input itself. Chevron stays
+          // visible (and decorative) so the row shape doesn't shift.
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left">
+            <ChevronRight
+              className={cn(
+                'h-3 w-3 text-fg-tertiary transition-transform',
+                open && 'rotate-90',
+              )}
+            />
+            {open ? (
+              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
+            ) : (
+              <Folder className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
             )}
+            <input
+              ref={renameInputRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={commitRename}
+              onClick={(e) => e.preventDefault()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitRename();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  cancelRename();
+                }
+              }}
+              className="min-w-0 flex-1 rounded bg-surface-2 px-1 py-0.5 text-sm font-medium text-fg-primary outline-none ring-1 ring-default-strong focus:ring-fg-tertiary"
+            />
+            <MachineIconGlyph
+              machineId={project.machineId}
+              className="h-3 w-3 shrink-0 text-fg-muted"
+            />
+            <span className="ml-auto pl-1 text-meta text-fg-muted">{visibleSessions.length}</span>
+          </div>
+        ) : (
+          <button
+            onClick={onToggle}
+            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left"
+            title={titleParts.join(' · ')}
           >
-            {project.label}
-          </span>
-          <MachineIconGlyph
-            machineId={project.machineId}
-            className="h-3 w-3 shrink-0 text-fg-muted"
-          />
-          <span className="ml-auto pl-1 text-meta text-fg-muted">{visibleSessions.length}</span>
-        </button>
+            <ChevronRight
+              className={cn(
+                'h-3 w-3 text-fg-tertiary transition-transform',
+                open && 'rotate-90',
+              )}
+            />
+            {open ? (
+              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
+            ) : (
+              <Folder className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
+            )}
+            <span
+              className={cn(
+                'min-w-0 truncate text-sm font-medium',
+                project.archived ? 'italic text-fg-tertiary' : 'text-fg-primary',
+              )}
+            >
+              {project.label}
+            </span>
+            <MachineIconGlyph
+              machineId={project.machineId}
+              className="h-3 w-3 shrink-0 text-fg-muted"
+            />
+            <span className="ml-auto pl-1 text-meta text-fg-muted">{visibleSessions.length}</span>
+          </button>
+        )}
 
-        {(canCreateSession || canArchive) && (
+        {!editing && (canCreateSession || canArchive || canRename) && (
           <div className="pointer-events-none absolute inset-y-0 right-1 flex items-center opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
             <span
               aria-hidden
               className="absolute inset-y-0 right-full w-8 bg-gradient-to-r from-transparent to-surface-1"
             />
             <div className="flex items-center bg-surface-1">
+              {canRename && (
+                <button
+                  onClick={startEdit}
+                  className="flex items-center px-1.5 text-fg-muted transition-colors hover:text-fg-primary"
+                  title="rename project"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+              )}
               {canCreateSession && (
                 <button
                   onClick={(e) => {
