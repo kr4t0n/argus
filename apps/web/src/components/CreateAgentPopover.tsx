@@ -120,9 +120,16 @@ export function CreateAgentPopover({
       setPos({ top, left });
     }
     place();
+    // Re-place when the popover's own size changes — e.g. the error
+    // block appearing after a failed submit. setPos updates top/left,
+    // not size, so this can't loop.
+    const pop = popRef.current;
+    const observer = pop ? new ResizeObserver(() => place()) : null;
+    if (observer && pop) observer.observe(pop);
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
     return () => {
+      observer?.disconnect();
       window.removeEventListener('resize', place);
       window.removeEventListener('scroll', place, true);
     };

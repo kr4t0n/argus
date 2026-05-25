@@ -4,6 +4,9 @@ import { Loader2, X } from 'lucide-react';
 import type { MachineDTO } from '@argus/shared-types';
 import { useProjectStore, projectKey } from '../stores/projectStore';
 import { useUIStore } from '../stores/uiStore';
+import { useAgentStore } from '../stores/agentStore';
+import { useSessionStore } from '../stores/sessionStore';
+import { api } from '../lib/api';
 import { cn } from '../lib/utils';
 
 /**
@@ -14,6 +17,19 @@ import { cn } from '../lib/utils';
  * calling the server — the sidebar's project tree merges placeholders
  * with agent-derived projects. Agents for the project are created
  * later from the project row's hover `+`.
+ *
+ * Same-workingDir resubmit: a project is keyed by
+ * `(machineId, workingDir)`, so creating at an existing workingDir
+ * merges into the existing placeholder. The popover shows an inline
+ * banner when this is about to happen and adapts behavior so the
+ * outcome matches user intent:
+ *  - non-archived existing → silent rename via merge, submit label
+ *    flips to "update"
+ *  - archived existing → submit also runs the snapshot-based cascade
+ *    restore (un-archives the placeholder's `archivedAgentIds` and
+ *    `archivedSessionIds`), label flips to "restore". This fixes the
+ *    silent-failure case where submitting against an archived row
+ *    used to merge metadata but leave the row hidden.
  */
 type Props = {
   machine: MachineDTO;
@@ -26,7 +42,10 @@ const VIEWPORT_MARGIN = 8;
 
 export function CreateProjectPopover({ machine, anchor, onClose }: Props) {
   const addProject = useProjectStore((s) => s.add);
+  const projects = useProjectStore((s) => s.projects);
   const setExpanded = useUIStore((s) => s.toggleAgentExpanded);
+  const upsertAgent = useAgentStore((s) => s.upsert);
+  const upsertSession = useSessionStore((s) => s.upsertSession);
 
   const [name, setName] = useState('');
   const [workingDir, setWorkingDir] = useState('');
@@ -35,6 +54,16 @@ export function CreateProjectPopover({ machine, anchor, onClose }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  // Look up an existing project at the current workingDir on this
+  // machine — used to show the inline banner and drive the submit
+  // path. Recomputed on every keystroke so the banner tracks live.
+  const trimmedDir = workingDir.trim();
+  const existing = trimmedDir
+    ? projects[projectKey(machine.id, trimmedDir)]
+    : undefined;
+  const isRestoring = !!existing?.archivedAt;
+  const isUpdating = !!existing && !existing.archivedAt;
 
   useLayoutEffect(() => {
     function place() {
@@ -54,9 +83,19 @@ export function CreateProjectPopover({ machine, anchor, onClose }: Props) {
       setPos({ top, left });
     }
     place();
+    // Re-place when the popover's own size changes — the inline
+    // banner appearing/disappearing as the user types workingDir
+    // grows or shrinks the popover, and resize/scroll listeners
+    // can't catch a size change driven by the popover's own content.
+    // No loop risk: setPos updates top/left, not size, so the
+    // observer doesn't refire from its own callback.
+    const pop = popRef.current;
+    const observer = pop ? new ResizeObserver(() => place()) : null;
+    if (observer && pop) observer.observe(pop);
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
     return () => {
+      observer?.disconnect();
       window.removeEventListener('resize', place);
       window.removeEventListener('scroll', place, true);
     };
@@ -78,20 +117,58 @@ export function CreateProjectPopover({ machine, anchor, onClose }: Props) {
     };
   }, [onClose]);
 
-  const canSubmit = !!name.trim() && !!workingDir.trim() && !submitting;
+  const canSubmit = !!name.trim() && !!trimmedDir && !submitting;
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!canSubmit) return;
     setSubmitting(true);
     setErr(null);
     try {
+      // When restoring an archived placeholder via this flow, cascade
+      // its archive snapshot back to active. Matches the snapshot
+      // posture in ProjectRow.toggleProjectArchive: per-item `.catch`
+      // so a since-destroyed row 404s harmlessly. Legacy placeholders
+      // (no snapshot fields) just get archivedAt cleared via add() —
+      // the user can use the row's archive button later for the broad
+      // restore if they want individually-archived items un-archived.
+      if (isRestoring && existing) {
+        const snapSessions = existing.archivedSessionIds;
+        const snapAgents = existing.archivedAgentIds;
+
+        if (snapSessions !== undefined) {
+          const sessionResults = await Promise.all(
+            snapSessions.map((id) => api.unarchiveSession(id).catch(() => null)),
+          );
+          sessionResults.forEach((s) => s && upsertSession(s));
+        }
+        if (snapAgents !== undefined) {
+          const agentResults = await Promise.all(
+            snapAgents.map((id) => api.unarchiveAgent(id).catch(() => null)),
+          );
+          agentResults.forEach((a) => a && upsertAgent(a));
+        }
+      }
+
+      // Always pass archivedAt: null so creating against an archived
+      // workingDir un-archives the placeholder (the silent-failure
+      // case before this change). For non-archived merges it's a
+      // harmless reaffirmation.
       const created = addProject({
         machineId: machine.id,
         name: name.trim(),
-        workingDir: workingDir.trim(),
+        workingDir: trimmedDir,
         supportsTerminal,
+        archivedAt: null,
       });
+      // Snapshot is meaningful only while archived; clearing it here
+      // keeps the persisted placeholder tidy and matches the
+      // setArchived(false) cleanup semantics in projectStore.
+      if (isRestoring) {
+        useProjectStore
+          .getState()
+          .setArchived(projectKey(created.machineId, created.workingDir), false);
+      }
       // Force-open the project row so the user lands on a visible,
       // expanded project and can immediately click its `+` to add an
       // agent. The `expanded` map's default-open semantics aren't
@@ -120,7 +197,7 @@ export function CreateProjectPopover({ machine, anchor, onClose }: Props) {
     >
       <div className="mb-4 flex items-center justify-between">
         <div className="text-caps">
-          new project on{' '}
+          {isRestoring ? 'restore project on' : isUpdating ? 'update project on' : 'new project on'}{' '}
           <span className="text-fg-secondary normal-case tracking-normal text-xs font-normal">
             {machine.name}
           </span>
@@ -134,6 +211,23 @@ export function CreateProjectPopover({ machine, anchor, onClose }: Props) {
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
+
+      {existing && (
+        <div className="mb-3 rounded-md bg-surface-2/40 px-3 py-2 text-xs text-amber-600 dark:text-amber-300">
+          {isRestoring ? (
+            <>
+              restores the archived project{' '}
+              <span className="font-medium">&ldquo;{existing.name}&rdquo;</span> and its sessions
+            </>
+          ) : (
+            <>
+              updates the existing project{' '}
+              <span className="font-medium">&ldquo;{existing.name}&rdquo;</span> at this working
+              dir
+            </>
+          )}
+        </div>
+      )}
 
       <form onSubmit={submit} className="space-y-4">
         <Field label="name">
@@ -190,7 +284,7 @@ export function CreateProjectPopover({ machine, anchor, onClose }: Props) {
             )}
           >
             {submitting && <Loader2 className="h-3 w-3 animate-spin" />}
-            create
+            {isRestoring ? 'restore' : isUpdating ? 'update' : 'create'}
           </button>
         </div>
       </form>
