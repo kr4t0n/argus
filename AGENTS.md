@@ -261,44 +261,47 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Claude Code's lowercase form, and the component falls back to the same
   normalisation on the off chance an older sidecar is in front. See the
   AGENTS.md note on stream-json drift.
-- `components/Sidebar.tsx` — project-first tree: top level groups
-  agents by `(workingDir, machineId)` — same path on different
+- `components/Sidebar.tsx` — flat project → session tree. Top level
+  groups agents by `(workingDir, machineId)` — same path on different
   machines lives on different physical filesystems, so they get
   separate rows. Each project row shows a folder icon + label +
-  small machine glyph; agents without a `workingDir` fall into a
-  per-machine `no project` bucket. A project expands directly into
-  its agents, each agent expands into its sessions — there is no
-  intermediate machine row in the tree. **Creation hierarchy
-  matches the tree**: the bottom `MachineList`'s hover `+` opens
-  `CreateProjectPopover` (name + workingDir + terminal default —
-  no adapter) which writes a placeholder into `useProjectStore`;
-  the project row's own hover `+` opens `CreateAgentPopover` in
-  `inherited` mode — the workingDir and terminal fields are hidden
-  and the project's values are used silently at submit so an agent
-  can't drift apart from its parent project (form collapses to
-  just adapter + name). For purely agent-derived rows with no
-  placeholder, `supportsTerminal` falls back to the first existing
-  agent's value so new agents match the established convention;
-  the agent row's hover `+` still creates a session. Projects are
-  derived in two passes by `groupProjects()`: first from
-  `agentStore.order` (so any agent's workingDir surfaces a row even
-  with no placeholder), then overlaid with `useProjectStore`
-  placeholders (which take over the row's label and let empty
-  projects render before their first agent). Same `(machineId,
-  workingDir)` key on both sides, so a placeholder and its later
-  agents collapse into one row. Placeholders are client-only and
-  persisted under `argus.projects` — promote to a server entity
-  when the flow stabilises. Archiving a project from its hover
-  action cascades client-side: every non-archived session under
-  every non-archived agent is archived via REST (skipping items
-  already archived individually), then the agents themselves, then
-  the placeholder's `archivedAt` is set together with a snapshot
-  of the IDs the cascade actually flipped (`archivedAgentIds` +
-  `archivedSessionIds`). Restore consults the snapshot and only
-  un-archives those IDs — so a session the user archived
-  individually BEFORE the project archive stays archived after
-  restore. `Promise.allSettled` is used on the archive path so
-  per-item failures don't poison the snapshot; the restore path
+  small machine glyph; sessions whose agent has no `workingDir`
+  fall into a per-machine `no project` bucket. **A project expands
+  directly into its sessions** — there is no agent row in the tree.
+  Each `SessionRow` leads with the agent type icon
+  (`AgentTypeIcon` driven by `agents[s.agentId]?.type`), so the
+  user can tell a claude session from a codex one without the agent
+  layer being visible. **Creation hierarchy** mirrors the tree: the
+  bottom `MachineList`'s hover `+` opens `CreateProjectPopover`
+  (name + workingDir + terminal default — no adapter), which writes
+  a placeholder into `useProjectStore`; the project row's hover `+`
+  opens `CreateAgentPopover` in `asSession` mode, which collects
+  adapter + session name only, then **auto-vivifies** the agent —
+  reuses an `existingAgents` entry of the chosen type within the
+  project if there is one, otherwise creates a new agent with an
+  auto-generated `${type}-${randomHex}` name in the background,
+  then creates a session titled with the user's input and navigates
+  to it. The agent layer is implementation detail in the sidebar:
+  multiple sessions of the same type in one project share a single
+  supervisor process. Projects are derived in two passes by
+  `groupProjects()`: first from `agentStore.order` (so any agent's
+  workingDir surfaces a row even with no placeholder), then
+  overlaid with `useProjectStore` placeholders (which take over the
+  row's label and let empty projects render before their first
+  agent). Same `(machineId, workingDir)` key on both sides, so a
+  placeholder and its later agents collapse into one row.
+  Placeholders are client-only and persisted under `argus.projects`
+  — promote to a server entity when the flow stabilises. Archiving
+  a project from its hover action cascades client-side: every
+  non-archived session under every non-archived agent is archived
+  via REST (skipping items already archived individually), then
+  the agents themselves, then the placeholder's `archivedAt` is set
+  together with a snapshot of the IDs the cascade actually flipped
+  (`archivedAgentIds` + `archivedSessionIds`). Restore consults the
+  snapshot and only un-archives those IDs — so a session the user
+  archived individually BEFORE the project archive stays archived
+  after restore. `Promise.allSettled` is used on the archive path
+  so per-item failures don't poison the snapshot; the restore path
   uses per-item `.catch` so a since-destroyed row 404s without
   blocking the rest. The store auto-creates a placeholder for a
   purely agent-derived row so the project keeps a stable identity
@@ -307,16 +310,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   a broad restore that un-archives everything currently archived
   in the project — accept the bluntness for backward compatibility.
   The `showArchivedAgents` toggle reveals archived placeholders as
-  well as archived agents.
-  Expansion state lives in
-  `uiStore.expanded` keyed by `proj:<machineId>::<workingDir>` for
-  projects and the raw agent id for agents (default open at both
-  levels; the project popover force-opens its new row on submit
-  in case it was previously toggled closed). The synthetic `no
-  project` bucket hides the project-row `+` since it has no path
-  to prefill — agents without a workingDir still get created
-  through `MachinePanel`'s free-form popover, which keeps using
-  `CreateAgentPopover` directly.
+  well as archived agents. Per-project show-archived state (the
+  eye toggle, which moved from the agent row to the project row in
+  the flatten) lives in `uiStore.showArchived` keyed by
+  `project.key` — old agent-id-keyed entries from before the
+  flatten survive as harmless orphans. Expansion state lives in
+  `uiStore.expanded` keyed by `proj:<machineId>::<workingDir>`
+  (default open; the project popover force-opens its new row on
+  submit in case it was previously toggled closed). The synthetic
+  `no project` bucket hides the project-row `+` since it has no
+  path to anchor an agent against — agents without a workingDir
+  still get created through `MachinePanel`'s free-form popover,
+  which keeps using `CreateAgentPopover` directly in its default
+  (agent-mode) form.
 - `components/ContextPane.tsx` — right-pane companion to a session. Header
   shows agent identity + working dir + model. A collapsible `Details`
   block surfaces agent + session metadata (machine, status, version,

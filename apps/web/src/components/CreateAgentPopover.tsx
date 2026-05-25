@@ -1,9 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { Loader2, X } from 'lucide-react';
-import type { AvailableAdapter, MachineDTO } from '@argus/shared-types';
+import type { AgentDTO, AvailableAdapter, MachineDTO } from '@argus/shared-types';
 import { api, ApiError } from '../lib/api';
 import { useAgentStore } from '../stores/agentStore';
+import { useSessionStore } from '../stores/sessionStore';
 import { agentTypeLabel, AgentTypeIcon } from './ui/AgentTypeIcon';
 import { cn } from '../lib/utils';
 
@@ -35,22 +37,33 @@ type Props = {
   anchor: React.RefObject<HTMLElement | null>;
   onClose: () => void;
   /**
-   * Prefill values for workingDir and the terminal toggle. By default
-   * they prefill the form fields (still editable); when `inherited`
-   * is set the fields are *replaced* by a read-only summary and these
-   * values are used directly at submit time.
+   * Prefill values for workingDir and the terminal toggle. In agent
+   * mode they prefill the form fields (still editable); in
+   * `asSession` mode the fields are hidden and these values are used
+   * silently at agent creation time.
    */
   defaults?: {
     workingDir?: string;
     supportsTerminal?: boolean;
   };
   /**
-   * When true, hide the workingDir input and terminal checkbox — the
-   * agent inherits both from its parent project, so the form
-   * collapses to just adapter + name. ProjectRow sets this so an
-   * agent can't drift apart from the project's path/terminal setting.
+   * Switches the popover from "create agent" to "create session":
+   *  - title + name label flip to session terminology
+   *  - workingDir + terminal inputs vanish (values from `defaults`)
+   *  - submit auto-vivifies a project-scoped agent (reuses an
+   *    `existingAgents` entry of the chosen type, creates one with
+   *    an auto-generated name if none exists), then creates a session
+   *    titled with the user's input, then navigates to it
+   * `MachinePanel` keeps the default (agent mode) for raw agent
+   * creation; only `ProjectRow` flips this on.
    */
-  inherited?: boolean;
+  asSession?: boolean;
+  /**
+   * Existing agents in the project context. Used by `asSession` mode
+   * to look up a same-type agent to reuse before creating a new one.
+   * Empty/omitted in agent mode.
+   */
+  existingAgents?: AgentDTO[];
 };
 
 const POPOVER_WIDTH = 288; // 18rem (Tailwind w-72)
@@ -61,9 +74,12 @@ export function CreateAgentPopover({
   anchor,
   onClose,
   defaults,
-  inherited = false,
+  asSession = false,
+  existingAgents,
 }: Props) {
   const upsertAgent = useAgentStore((s) => s.upsert);
+  const upsertSession = useSessionStore((s) => s.upsertSession);
+  const nav = useNavigate();
   const adapters = (machine.availableAdapters ?? []) as AvailableAdapter[];
   const defaultType = adapters[0]?.type ?? '';
 
@@ -138,16 +154,46 @@ export function CreateAgentPopover({
     setSubmitting(true);
     setErr(null);
     try {
-      const created = await api.createAgent(machine.id, {
-        name: name.trim(),
-        type,
-        workingDir: workingDir.trim() || undefined,
-        supportsTerminal,
-      });
-      upsertAgent(created);
-      onClose();
+      if (asSession) {
+        // Auto-vivify: reuse an existing same-type agent in this
+        // project if one's there, otherwise stand a new one up with
+        // an auto-generated name (the user named the session, not
+        // the agent — the agent is hidden in this flow).
+        const reuse = (existingAgents ?? []).find((a) => a.type === type);
+        let agentId: string;
+        if (reuse) {
+          agentId = reuse.id;
+        } else {
+          const created = await api.createAgent(machine.id, {
+            name: `${type}-${Math.random().toString(16).slice(2, 8)}`,
+            type,
+            workingDir: defaults?.workingDir,
+            supportsTerminal: defaults?.supportsTerminal ?? false,
+          });
+          upsertAgent(created);
+          agentId = created.id;
+        }
+        const { session } = await api.createSession({
+          agentId,
+          title: name.trim(),
+        });
+        upsertSession(session);
+        nav(`/sessions/${session.id}`);
+        onClose();
+      } else {
+        const created = await api.createAgent(machine.id, {
+          name: name.trim(),
+          type,
+          workingDir: workingDir.trim() || undefined,
+          supportsTerminal,
+        });
+        upsertAgent(created);
+        onClose();
+      }
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'failed to create agent');
+      setErr(
+        e instanceof ApiError ? e.message : `failed to create ${asSession ? 'session' : 'agent'}`,
+      );
     } finally {
       setSubmitting(false);
     }
@@ -166,14 +212,20 @@ export function CreateAgentPopover({
         visibility: pos ? 'visible' : 'hidden',
       }}
       role="dialog"
-      aria-label={`Create agent on ${machine.name}`}
+      aria-label={asSession ? 'Create session' : `Create agent on ${machine.name}`}
     >
       <div className="mb-4 flex items-center justify-between">
         <div className="text-caps">
-          new agent on{' '}
-          <span className="text-fg-secondary normal-case tracking-normal text-xs font-normal">
-            {machine.name}
-          </span>
+          {asSession ? (
+            <>new session</>
+          ) : (
+            <>
+              new agent on{' '}
+              <span className="text-fg-secondary normal-case tracking-normal text-xs font-normal">
+                {machine.name}
+              </span>
+            </>
+          )}
         </div>
         <button
           onClick={onClose}
@@ -187,7 +239,8 @@ export function CreateAgentPopover({
 
       {machine.status === 'offline' && (
         <div className="mb-3 rounded-md bg-surface-2/40 px-3 py-2 text-xs text-amber-600 dark:text-amber-300">
-          this machine is offline; the agent will queue and start when the sidecar reconnects
+          this machine is offline; the {asSession ? 'session' : 'agent'} will queue and start
+          when the sidecar reconnects
         </div>
       )}
       {adapters.length === 0 && (
@@ -250,17 +303,17 @@ export function CreateAgentPopover({
           )}
         </Field>
 
-        <Field label="name">
+        <Field label={asSession ? 'session name' : 'name'}>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="api-bot, frontend, …"
+            placeholder={asSession ? 'refactor checkout flow, …' : 'api-bot, frontend, …'}
             autoFocus
             className="w-full rounded-md bg-surface-2/40 px-3 py-2 text-sm text-fg-primary outline-none transition-colors placeholder:text-fg-muted focus:bg-surface-2"
           />
         </Field>
 
-        {!inherited && (
+        {!asSession && (
           <>
             <Field label="working dir (optional)">
               <input
@@ -281,16 +334,6 @@ export function CreateAgentPopover({
               attach interactive terminal
             </label>
           </>
-        )}
-
-        {inherited && (
-          <div className="rounded-md bg-surface-2/40 px-3 py-2 text-meta text-fg-tertiary space-y-0.5">
-            <div className="truncate">
-              working dir:{' '}
-              <span className="font-mono text-fg-secondary">{workingDir || '—'}</span>
-            </div>
-            <div>terminal: {supportsTerminal ? 'attached' : 'off'}</div>
-          </div>
         )}
 
         {err && (
