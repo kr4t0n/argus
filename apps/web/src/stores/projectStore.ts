@@ -39,6 +39,14 @@ export interface LocalProject {
    */
   archivedAgentIds?: string[];
   archivedSessionIds?: string[];
+  /**
+   * User-picked single-character glyph (A-Z) shown in place of the
+   * default Folder icon in the sidebar and rail. No default — until
+   * the user explicitly picks, the row uses Folder so the picked
+   * letter is a deliberate visual memory aid rather than an
+   * auto-derived hint.
+   */
+  iconKey?: string;
 }
 
 export function projectKey(machineId: string, workingDir: string): string {
@@ -56,11 +64,13 @@ interface ProjectState {
   add(
     input: Omit<
       LocalProject,
-      'id' | 'createdAt' | 'archivedAt' | 'archivedAgentIds' | 'archivedSessionIds'
+      'id' | 'createdAt' | 'archivedAt' | 'archivedAgentIds' | 'archivedSessionIds' | 'iconKey'
     > & {
       archivedAt?: string | null;
       archivedAgentIds?: string[];
       archivedSessionIds?: string[];
+      /** A-Z letter, or `null` to clear back to the default folder. */
+      iconKey?: string | null;
     },
   ): LocalProject;
   setArchived(key: string, archived: boolean, snapshot?: ArchiveSnapshot): void;
@@ -91,6 +101,11 @@ export const useProjectStore = create<ProjectState>()(
             ...(input.archivedSessionIds !== undefined
               ? { archivedSessionIds: input.archivedSessionIds }
               : {}),
+            // Same posture for iconKey — `null` from caller clears back
+            // to default (Folder), `undefined` leaves existing alone.
+            ...(input.iconKey !== undefined
+              ? { iconKey: input.iconKey === null ? undefined : input.iconKey }
+              : {}),
           };
           set({ projects: { ...get().projects, [key]: merged } });
           return merged;
@@ -108,6 +123,7 @@ export const useProjectStore = create<ProjectState>()(
           archivedAt: input.archivedAt ?? null,
           archivedAgentIds: input.archivedAgentIds,
           archivedSessionIds: input.archivedSessionIds,
+          iconKey: input.iconKey ?? undefined,
         };
         set({
           projects: { ...get().projects, [key]: created },

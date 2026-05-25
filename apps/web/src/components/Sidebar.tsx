@@ -7,8 +7,6 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
-  Folder,
-  FolderOpen,
   MoreVertical,
   PanelLeftClose,
   Pencil,
@@ -26,6 +24,7 @@ import { StatusDot } from './ui/StatusDot';
 import { AgentTypeIcon } from './ui/AgentTypeIcon';
 import { CreateAgentPopover } from './CreateAgentPopover';
 import { CreateProjectPopover } from './CreateProjectPopover';
+import { ProjectIcon } from './ProjectIcon';
 import { BulkUpdateModal } from './BulkUpdateModal';
 import { MachineIcon, MachineIconGlyph } from './MachineIcon';
 import { ThemeToggle } from './ThemeToggle';
@@ -500,11 +499,15 @@ function ProjectRow({
                 open && 'rotate-90',
               )}
             />
-            {open ? (
-              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
-            ) : (
-              <Folder className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
-            )}
+            <ProjectIcon
+              projectKey={project.key}
+              machineId={project.machineId}
+              workingDir={project.fullPath}
+              label={project.label}
+              agentIds={project.agentIds}
+              open={open}
+              className="text-fg-tertiary"
+            />
             <input
               ref={renameInputRef}
               value={draft}
@@ -540,11 +543,15 @@ function ProjectRow({
                 open && 'rotate-90',
               )}
             />
-            {open ? (
-              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
-            ) : (
-              <Folder className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
-            )}
+            <ProjectIcon
+              projectKey={project.key}
+              machineId={project.machineId}
+              workingDir={project.fullPath}
+              label={project.label}
+              agentIds={project.agentIds}
+              open={open}
+              className="text-fg-tertiary"
+            />
             <span
               className={cn(
                 'min-w-0 truncate text-sm font-medium',
