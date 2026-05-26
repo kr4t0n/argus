@@ -7,90 +7,38 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
-  Folder,
-  FolderOpen,
   MoreVertical,
   PanelLeftClose,
   Pencil,
   Plus,
 } from 'lucide-react';
-import type { AgentDTO, MachineDTO, SessionDTO } from '@argus/shared-types';
+import type { AgentDTO, AgentType, MachineDTO, SessionDTO } from '@argus/shared-types';
 import { useAgentStore } from '../stores/agentStore';
 import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
 import { useSidecarUpdateStore } from '../stores/sidecarUpdateStore';
+import { useProjectStore } from '../stores/projectStore';
+import { groupProjects, type ProjectGroup } from '../lib/projects';
 import { cn, relativeTime } from '../lib/utils';
 import { StatusDot } from './ui/StatusDot';
 import { AgentTypeIcon } from './ui/AgentTypeIcon';
 import { CreateAgentPopover } from './CreateAgentPopover';
+import { CreateProjectPopover } from './CreateProjectPopover';
+import { ProjectIcon } from './ProjectIcon';
 import { BulkUpdateModal } from './BulkUpdateModal';
 import { MachineIcon, MachineIconGlyph } from './MachineIcon';
 import { ThemeToggle } from './ThemeToggle';
 import { UserRow } from './UserRow';
 import { api } from '../lib/api';
 
-const NO_PROJECT_KEY = '__none__';
-
-function basename(path: string): string {
-  const trimmed = path.replace(/\/+$/, '');
-  const idx = trimmed.lastIndexOf('/');
-  return idx >= 0 ? trimmed.slice(idx + 1) || trimmed : trimmed;
-}
-
-interface ProjectGroup {
-  key: string;
-  label: string;
-  fullPath: string | null;
-  machineId: string;
-  agentIds: string[];
-}
-
-/**
- * Bucket the global agent `order` into projects, where a project is a
- * unique `(workingDir, machineId)` pair — same path on different
- * machines lives on different physical filesystems, so they shouldn't
- * be merged. Agents with no `workingDir` fall into a synthetic
- * "no project" bucket per machine so they remain reachable.
- *
- * Input order is preserved so adding/removing an agent doesn't
- * reshuffle unrelated rows.
- */
-function groupAgents(order: string[], agents: Record<string, AgentDTO>): ProjectGroup[] {
-  const projects: ProjectGroup[] = [];
-  const projectIndex = new Map<string, number>();
-
-  for (const id of order) {
-    const a = agents[id];
-    if (!a) continue;
-    const wd = (a.workingDir ?? '').trim();
-    const wdKey = wd || NO_PROJECT_KEY;
-    const key = `${a.machineId}::${wdKey}`;
-    let pIdx = projectIndex.get(key);
-    if (pIdx === undefined) {
-      pIdx = projects.length;
-      projectIndex.set(key, pIdx);
-      projects.push({
-        key,
-        label: wd ? basename(wd) : 'no project',
-        fullPath: wd || null,
-        machineId: a.machineId,
-        agentIds: [],
-      });
-    }
-    projects[pIdx].agentIds.push(id);
-  }
-  return projects;
-}
 
 export function Sidebar() {
   const { sessionId } = useParams();
-  const nav = useNavigate();
   const agents = useAgentStore((s) => s.agents);
   const order = useAgentStore((s) => s.order);
   const machines = useMachineStore((s) => s.machines);
   const sessions = useSessionStore((s) => s.sessions);
-  const upsertSession = useSessionStore((s) => s.upsertSession);
   const expanded = useUIStore((s) => s.expanded);
   const toggle = useUIStore((s) => s.toggleAgentExpanded);
   const showArchived = useUIStore((s) => s.showArchived);
@@ -99,12 +47,8 @@ export function Sidebar() {
   const toggleShowArchivedAgents = useUIStore((s) => s.toggleShowArchivedAgents);
   const upsertAgent = useAgentStore((s) => s.upsert);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
-
-  async function startSession(agentId: string) {
-    const { session } = await api.createSession({ agentId });
-    upsertSession(session);
-    nav(`/sessions/${session.id}`);
-  }
+  const localProjects = useProjectStore((s) => s.projects);
+  const localProjectOrder = useProjectStore((s) => s.order);
 
   const sessionsByAgent: Record<string, SessionDTO[]> = {};
   for (const s of Object.values(sessions)) {
@@ -117,9 +61,19 @@ export function Sidebar() {
   const visibleOrder = showArchivedAgents
     ? order
     : order.filter((id) => !agents[id]?.archivedAt);
-  const projects = groupAgents(visibleOrder, agents);
-  const hiddenArchivedAgentCount = order.length - visibleOrder.length;
-  const hasArchivedAgents = order.some((id) => agents[id]?.archivedAt);
+  const visibleLocalOrder = showArchivedAgents
+    ? localProjectOrder
+    : localProjectOrder.filter((k) => !localProjects[k]?.archivedAt);
+  const projects = groupProjects(visibleOrder, agents, localProjects, visibleLocalOrder);
+  // In the flat tree projects (placeholders) are the unit of
+  // navigation, not agents — so the toggle counts archived
+  // placeholders. Agents archived individually via MachinePanel
+  // (no placeholder touched) won't surface here; that's fine since
+  // they aren't a sidebar concept in the flatten.
+  const archivedProjectCount = Object.values(localProjects).filter(
+    (p) => !!p.archivedAt,
+  ).length;
+  const hiddenArchivedProjectCount = showArchivedAgents ? 0 : archivedProjectCount;
 
   return (
     <aside className="h-full w-full flex flex-col border-r border-default bg-surface-0">
@@ -140,7 +94,7 @@ export function Sidebar() {
       <div className="flex-1 overflow-y-auto py-1 px-2">
         {projects.length === 0 && (
           <div className="px-4 py-6 text-xs text-fg-tertiary">
-            No agents yet — hover a machine below and click{' '}
+            No projects yet — hover a machine below and click{' '}
             <Plus className="inline h-3 w-3 -mt-0.5" /> to create one.
           </div>
         )}
@@ -152,8 +106,6 @@ export function Sidebar() {
               project={p}
               open={projOpen}
               onToggle={() => toggle(`proj:${p.key}`)}
-              expanded={expanded}
-              onToggleAgent={toggle}
               machine={machines[p.machineId]}
               agents={agents}
               sessionsByAgent={sessionsByAgent}
@@ -161,27 +113,26 @@ export function Sidebar() {
               showArchivedMap={showArchived}
               onToggleShowArchived={toggleShowArchived}
               onAgentArchived={upsertAgent}
-              onNewSession={startSession}
             />
           );
         })}
-        {!showArchivedAgents && hiddenArchivedAgentCount > 0 && (
+        {!showArchivedAgents && hiddenArchivedProjectCount > 0 && (
           <button
             onClick={toggleShowArchivedAgents}
             className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-xs rounded-md text-fg-muted hover:text-fg-secondary hover:bg-surface-1 transition-colors"
           >
             <Archive className="h-3 w-3" />
-            {hiddenArchivedAgentCount} archived agent
-            {hiddenArchivedAgentCount === 1 ? '' : 's'}
+            {hiddenArchivedProjectCount} archived project
+            {hiddenArchivedProjectCount === 1 ? '' : 's'}
           </button>
         )}
-        {showArchivedAgents && hasArchivedAgents && (
+        {showArchivedAgents && archivedProjectCount > 0 && (
           <button
             onClick={toggleShowArchivedAgents}
             className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-xs rounded-md text-emerald-400 hover:text-emerald-300 hover:bg-surface-1 transition-colors"
           >
             <Archive className="h-3 w-3" />
-            hide archived agents
+            hide archived projects
           </button>
         )}
       </div>
@@ -196,8 +147,6 @@ function ProjectRow({
   project,
   open,
   onToggle,
-  expanded,
-  onToggleAgent,
   machine,
   agents,
   sessionsByAgent,
@@ -205,21 +154,22 @@ function ProjectRow({
   showArchivedMap,
   onToggleShowArchived,
   onAgentArchived,
-  onNewSession,
 }: {
   project: ProjectGroup;
   open: boolean;
   onToggle: () => void;
-  expanded: Record<string, boolean>;
-  onToggleAgent: (key: string) => void;
   machine: MachineDTO | undefined;
   agents: Record<string, AgentDTO>;
   sessionsByAgent: Record<string, SessionDTO[]>;
   activeSessionId: string | undefined;
+  /**
+   * Per-project show-archived state, keyed by `project.key` (was
+   * per-agent before the flatten). Old agent-id-keyed entries in
+   * `uiStore.showArchived` survive as harmless orphans.
+   */
   showArchivedMap: Record<string, boolean>;
-  onToggleShowArchived: (agentId: string) => void;
+  onToggleShowArchived: (projectKey: string) => void;
   onAgentArchived: (agent: AgentDTO) => void;
-  onNewSession: (agentId: string) => void | Promise<void>;
 }) {
   // Fall back to the agent's denormalized machine name if the Machine
   // row hasn't loaded yet (boot race between /agents and /machines).
@@ -228,56 +178,427 @@ function ProjectRow({
   const machineMeta = machine
     ? `${machine.hostname} · ${machine.os}/${machine.arch} · sidecar ${machine.sidecarVersion}`
     : machineName;
-  const titleParts = [project.fullPath ?? 'agents without a workingDir', machineMeta];
+  const titleParts = [project.fullPath ?? 'sessions without a workingDir', machineMeta];
+
+  const rowRef = useRef<HTMLDivElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const [createSessionOpen, setCreateSessionOpen] = useState(false);
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(project.label);
+  const upsertSession = useSessionStore((s) => s.upsertSession);
+  const setProjectArchived = useProjectStore((s) => s.setArchived);
+  const addProject = useProjectStore((s) => s.add);
+
+  // Mirror SessionRow's inline-edit pattern: focus + select on enter,
+  // sync draft to source of truth when not editing so external label
+  // updates (e.g. cascade restore) don't get stranded in the input.
+  useEffect(() => {
+    if (editing) {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    }
+  }, [editing]);
+  useEffect(() => {
+    if (!editing) setDraft(project.label);
+  }, [project.label, editing]);
+
+  // The "no project" bucket has no path → no project identity to rename.
+  // Synthetic group, not a placeholder candidate.
+  const canRename = !!project.fullPath;
+
+  function startEdit(e: React.MouseEvent | React.SyntheticEvent) {
+    if (!canRename) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDraft(project.label);
+    setEditing(true);
+  }
+  function commitRename() {
+    const next = draft.trim();
+    setEditing(false);
+    if (!next || next === project.label || !project.fullPath) {
+      setDraft(project.label);
+      return;
+    }
+    // Re-add with the new name — `add()` merges on (machineId,
+    // workingDir) so this updates an existing placeholder or
+    // creates one for a purely agent-derived row. supportsTerminal
+    // is preserved from the placeholder (or falls back to the first
+    // agent's value to match the rest of the file's convention).
+    addProject({
+      machineId: project.machineId,
+      name: next,
+      workingDir: project.fullPath,
+      supportsTerminal:
+        project.local?.supportsTerminal ??
+        agents[project.agentIds[0]]?.supportsTerminal ??
+        false,
+    });
+  }
+  function cancelRename() {
+    setDraft(project.label);
+    setEditing(false);
+  }
+
+  // Flatten: every session under every agent in the project, most-
+  // recent first. Agents are no longer rendered as their own rows
+  // in the tree — the AgentTypeIcon prefix on each SessionRow carries
+  // the agent identity instead.
+  const allSessions = project.agentIds
+    .flatMap((id) => sessionsByAgent[id] ?? [])
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const archivedVisible = showArchivedMap[project.key] ?? false;
+  const visibleSessions = archivedVisible
+    ? allSessions
+    : allSessions.filter((s) => !s.archivedAt);
+  const hiddenArchivedCount = allSessions.length - visibleSessions.length;
+  const hasArchivedSessions = allSessions.some((s) => !!s.archivedAt);
+  // Resolve a usable list of project-context agents for the session
+  // popover's auto-vivify lookup.
+  const projectAgents = project.agentIds
+    .map((id) => agents[id])
+    .filter((a): a is AgentDTO => !!a);
+
+  // The `+` opens the session popover. Only meaningful when we have
+  // a real workingDir to anchor a (possibly new) agent against and
+  // the machine is online. The synthetic "no project" bucket has no
+  // path, so we hide the action there.
+  const canCreateSession =
+    !!project.fullPath &&
+    !!machine &&
+    machine.status !== 'offline' &&
+    !project.archived;
+  // Archive cascades through agents + sessions. Hidden on the "no
+  // project" bucket — there's no path to anchor a placeholder
+  // against, and the action would affect every machine's working-
+  // dir-less agents together.
+  const canArchive = !!project.fullPath;
+
+  async function toggleProjectArchive(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (archiveBusy || !project.fullPath) return;
+    setArchiveBusy(true);
+    try {
+      if (project.archived) {
+        // Restore. Prefer the snapshot — un-archive only what this
+        // cascade originally archived, so any individual archives the
+        // user made BEFORE the cascade stay archived. Fall through to
+        // a broad restore (un-archive everything currently archived
+        // in the project) only for legacy placeholders that pre-date
+        // the snapshot — those can't distinguish the two cases.
+        const snapAgents = project.local?.archivedAgentIds;
+        const snapSessions = project.local?.archivedSessionIds;
+        const hasSnapshot = snapAgents !== undefined || snapSessions !== undefined;
+
+        if (hasSnapshot) {
+          const sessionResults = await Promise.all(
+            (snapSessions ?? []).map((id) =>
+              api.unarchiveSession(id).catch(() => null),
+            ),
+          );
+          sessionResults.forEach((s) => s && upsertSession(s));
+
+          const agentResults = await Promise.all(
+            (snapAgents ?? []).map((id) =>
+              api.unarchiveAgent(id).catch(() => null),
+            ),
+          );
+          agentResults.forEach((a) => a && onAgentArchived(a));
+        } else {
+          const sessionRestores: Promise<SessionDTO | null>[] = [];
+          for (const agentId of project.agentIds) {
+            for (const s of sessionsByAgent[agentId] ?? []) {
+              if (s.archivedAt) {
+                sessionRestores.push(api.unarchiveSession(s.id).catch(() => null));
+              }
+            }
+          }
+          const sessionResults = await Promise.all(sessionRestores);
+          sessionResults.forEach((s) => s && upsertSession(s));
+
+          const agentRestores = project.agentIds
+            .filter((id) => agents[id]?.archivedAt)
+            .map((id) => api.unarchiveAgent(id).catch(() => null));
+          const agentResults = await Promise.all(agentRestores);
+          agentResults.forEach((a) => a && onAgentArchived(a));
+        }
+
+        setProjectArchived(project.key, false);
+      } else {
+        // Archive: snapshot the items we actually flip (skipping ones
+        // already archived) so restore can be surgical. Sessions
+        // first, then agents, then persist the placeholder + snapshot.
+        // Auto-create the placeholder for purely agent-derived rows
+        // so the project keeps a stable identity to restore from.
+        const sessionIdsToArchive: string[] = [];
+        for (const agentId of project.agentIds) {
+          for (const s of sessionsByAgent[agentId] ?? []) {
+            if (!s.archivedAt) sessionIdsToArchive.push(s.id);
+          }
+        }
+        const agentIdsToArchive = project.agentIds.filter(
+          (id) => agents[id] && !agents[id]?.archivedAt,
+        );
+
+        const sessionResults = await Promise.allSettled(
+          sessionIdsToArchive.map((id) => api.archiveSession(id)),
+        );
+        const archivedSessionIds: string[] = [];
+        sessionResults.forEach((r, i) => {
+          if (r.status === 'fulfilled') {
+            upsertSession(r.value);
+            archivedSessionIds.push(sessionIdsToArchive[i]);
+          }
+        });
+
+        const agentResults = await Promise.allSettled(
+          agentIdsToArchive.map((id) => api.archiveAgent(id)),
+        );
+        const archivedAgentIds: string[] = [];
+        agentResults.forEach((r, i) => {
+          if (r.status === 'fulfilled') {
+            onAgentArchived(r.value);
+            archivedAgentIds.push(agentIdsToArchive[i]);
+          }
+        });
+
+        if (!project.local) {
+          addProject({
+            machineId: project.machineId,
+            name: project.label,
+            workingDir: project.fullPath,
+            supportsTerminal:
+              agents[project.agentIds[0]]?.supportsTerminal ?? false,
+            archivedAt: new Date().toISOString(),
+            archivedAgentIds,
+            archivedSessionIds,
+          });
+        } else {
+          setProjectArchived(project.key, true, {
+            archivedAgentIds,
+            archivedSessionIds,
+          });
+        }
+      }
+    } catch {
+      /* swallow — toast surface not wired yet */
+    } finally {
+      setArchiveBusy(false);
+    }
+  }
 
   return (
     <div className="mb-0.5">
-      <button
-        onClick={onToggle}
-        className="group flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left transition-colors hover:bg-surface-1"
-        title={titleParts.join(' · ')}
-      >
-        <ChevronRight
-          className={cn('h-3 w-3 text-fg-tertiary transition-transform', open && 'rotate-90')}
-        />
-        {open ? (
-          <FolderOpen className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
-        ) : (
-          <Folder className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
+      <div
+        ref={rowRef}
+        className={cn(
+          'group relative flex items-center rounded-md transition-colors hover:bg-surface-1',
+          project.archived && 'opacity-70',
         )}
-        <span className="min-w-0 truncate text-sm font-medium text-fg-primary">
-          {project.label}
-        </span>
-        <MachineIconGlyph
-          machineId={project.machineId}
-          className="h-3 w-3 shrink-0 text-fg-muted"
-        />
-        <span className="ml-auto pl-1 text-meta text-fg-muted">{project.agentIds.length}</span>
-      </button>
+      >
+        {editing ? (
+          // Edit mode: no `title` on the wrapper — a native tooltip
+          // would otherwise hover over the input itself. Chevron stays
+          // visible (and decorative) so the row shape doesn't shift.
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left">
+            <ChevronRight
+              className={cn(
+                'h-3 w-3 text-fg-tertiary transition-transform',
+                open && 'rotate-90',
+              )}
+            />
+            <ProjectIcon
+              projectKey={project.key}
+              machineId={project.machineId}
+              workingDir={project.fullPath}
+              label={project.label}
+              agentIds={project.agentIds}
+              open={open}
+              className="text-fg-tertiary"
+            />
+            <input
+              ref={renameInputRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={commitRename}
+              onClick={(e) => e.preventDefault()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitRename();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  cancelRename();
+                }
+              }}
+              className="min-w-0 flex-1 rounded bg-surface-2 px-1 py-0.5 text-sm font-medium text-fg-primary outline-none ring-1 ring-default-strong focus:ring-fg-tertiary"
+            />
+            <MachineIconGlyph
+              machineId={project.machineId}
+              className="h-3 w-3 shrink-0 text-fg-muted"
+            />
+            <span className="ml-auto pl-1 text-meta text-fg-muted">{visibleSessions.length}</span>
+          </div>
+        ) : (
+          <button
+            onClick={onToggle}
+            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left"
+            title={titleParts.join(' · ')}
+          >
+            <ChevronRight
+              className={cn(
+                'h-3 w-3 text-fg-tertiary transition-transform',
+                open && 'rotate-90',
+              )}
+            />
+            <ProjectIcon
+              projectKey={project.key}
+              machineId={project.machineId}
+              workingDir={project.fullPath}
+              label={project.label}
+              agentIds={project.agentIds}
+              open={open}
+              className="text-fg-tertiary"
+            />
+            <span
+              className={cn(
+                'min-w-0 truncate text-sm font-medium',
+                project.archived ? 'italic text-fg-tertiary' : 'text-fg-primary',
+              )}
+            >
+              {project.label}
+            </span>
+            <MachineIconGlyph
+              machineId={project.machineId}
+              className="h-3 w-3 shrink-0 text-fg-muted"
+            />
+            <span className="ml-auto pl-1 text-meta text-fg-muted">{visibleSessions.length}</span>
+          </button>
+        )}
+
+        {!editing && (canCreateSession || canArchive || canRename) && (
+          <div className="pointer-events-none absolute inset-y-0 right-1 flex items-center opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+            <span
+              aria-hidden
+              className="absolute inset-y-0 right-full w-8 bg-gradient-to-r from-transparent to-surface-1"
+            />
+            <div className="flex items-center bg-surface-1">
+              {canRename && (
+                <button
+                  onClick={startEdit}
+                  className="flex items-center px-1.5 text-fg-muted transition-colors hover:text-fg-primary"
+                  title="rename project"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+              )}
+              {canCreateSession && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setCreateSessionOpen(true);
+                  }}
+                  className="flex items-center px-1.5 text-fg-muted transition-colors hover:text-fg-primary"
+                  title="create session in this project"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              )}
+              {canArchive && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleShowArchived(project.key);
+                  }}
+                  className={cn(
+                    'flex items-center px-1.5 transition-colors',
+                    archivedVisible
+                      ? 'text-emerald-400 hover:text-emerald-300'
+                      : 'text-fg-muted hover:text-fg-secondary',
+                  )}
+                  title={
+                    archivedVisible
+                      ? 'hide archived sessions'
+                      : hasArchivedSessions
+                        ? `show ${hiddenArchivedCount} archived session${hiddenArchivedCount === 1 ? '' : 's'}`
+                        : 'show archived sessions'
+                  }
+                >
+                  {archivedVisible ? (
+                    <Eye className="h-3.5 w-3.5" />
+                  ) : (
+                    <EyeOff className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              )}
+              {canArchive && (
+                <button
+                  onClick={toggleProjectArchive}
+                  disabled={archiveBusy}
+                  className={cn(
+                    'flex items-center px-1.5 text-fg-muted transition-colors disabled:opacity-40 hover:text-fg-primary',
+                    project.archived && 'text-fg-tertiary',
+                  )}
+                  title={
+                    project.archived
+                      ? 'restore project (sessions inside)'
+                      : 'archive project (cascades to sessions inside)'
+                  }
+                >
+                  {project.archived ? (
+                    <ArchiveRestore className="h-3.5 w-3.5" />
+                  ) : (
+                    <Archive className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {createSessionOpen && machine && (
+          <CreateAgentPopover
+            machine={machine}
+            anchor={rowRef}
+            onClose={() => setCreateSessionOpen(false)}
+            asSession
+            existingAgents={projectAgents}
+            defaults={{
+              workingDir: project.fullPath ?? undefined,
+              // Prefer the placeholder's terminal default; if this row
+              // is purely agent-derived, fall back to whatever the
+              // first existing agent in the project uses so new
+              // agents match the established convention.
+              supportsTerminal:
+                project.local?.supportsTerminal ??
+                agents[project.agentIds[0]]?.supportsTerminal ??
+                false,
+            }}
+          />
+        )}
+      </div>
 
       {open && (
-        <div className="ml-4 mt-0.5 border-l border-default pl-1">
-          {project.agentIds.map((id) => {
-            const a = agents[id];
-            if (!a) return null;
-            const agentSessions = sessionsByAgent[a.id] ?? [];
-            const isOpen = expanded[a.id] !== false;
-            const archivedVisible = showArchivedMap[a.id] ?? false;
-            return (
-              <AgentRow
-                key={a.id}
-                agent={a}
-                sessions={agentSessions}
-                activeSessionId={activeSessionId}
-                open={isOpen}
-                showArchived={archivedVisible}
-                onToggle={() => onToggleAgent(a.id)}
-                onNewSession={() => onNewSession(a.id)}
-                onToggleArchived={() => onToggleShowArchived(a.id)}
-                onAgentArchived={onAgentArchived}
-              />
-            );
-          })}
+        <div className="ml-4 mt-0.5 space-y-0.5 border-l border-default pl-1">
+          {visibleSessions.map((s) => (
+            <SessionRow
+              key={s.id}
+              session={s}
+              active={activeSessionId === s.id}
+              agentType={agents[s.agentId]?.type}
+            />
+          ))}
+          {visibleSessions.length === 0 && (
+            <div className="px-2 py-1 text-meta text-fg-muted italic">
+              {hasArchivedSessions && !archivedVisible
+                ? 'all sessions archived — click the eye to reveal'
+                : canCreateSession
+                  ? 'no sessions yet — hover the row and click + to create one'
+                  : 'no sessions'}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -287,16 +608,15 @@ function ProjectRow({
 /**
  * Bottom-of-sidebar machine roster. Shows every host that has run
  * `argus-sidecar init` against this server, even ones currently
- * offline — so an operator can queue an agent on a machine before
- * it reconnects (the create-agent command is durably buffered on
- * the per-machine Redis stream). This is also the canonical entry
- * point for creating an agent on a machine that has no agents yet
- * (and therefore wouldn't appear in the project tree above).
+ * offline.
  *
- * Hover a machine to reveal a `+` action that opens the
- * CreateAgentPopover. The popover is rendered inline next to the
- * row (not via a Portal) so its position naturally tracks the row
- * as the user scrolls the sidebar.
+ * Hover a machine to reveal a `+` that opens CreateProjectPopover —
+ * the entry point for creating a *project* on this machine. Projects
+ * are client-only placeholders (see `useProjectStore`); they appear
+ * in the upper tree as empty rows until an agent is created inside
+ * them via the project row's own hover `+`. Agents on this machine
+ * also keep flowing through MachinePanel's free-form popover for
+ * cases where you don't want a project anchor.
  */
 function MachineList() {
   const order = useMachineStore((s) => s.order);
@@ -460,7 +780,7 @@ function MachineRow({
           'ml-0.5 flex items-center text-fg-tertiary transition-opacity hover:text-fg-primary',
           popoverOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
         )}
-        title="create agent on this machine"
+        title="create project on this machine"
       >
         <Plus className="h-3.5 w-3.5" />
       </button>
@@ -472,13 +792,25 @@ function MachineRow({
       </span>
 
       {popoverOpen && (
-        <CreateAgentPopover machine={machine} anchor={anchorRef} onClose={onClosePopover} />
+        <CreateProjectPopover machine={machine} anchor={anchorRef} onClose={onClosePopover} />
       )}
     </div>
   );
 }
 
-function SessionRow({ session, active }: { session: SessionDTO; active: boolean }) {
+function SessionRow({
+  session,
+  active,
+  agentType,
+}: {
+  session: SessionDTO;
+  active: boolean;
+  /** The session's parent agent type — drives the leading icon so the
+   *  user can tell a claude session from a codex one without an agent
+   *  row to nest under. Undefined while the agent record is still
+   *  loading; the icon component renders a generic glyph then. */
+  agentType?: AgentType;
+}) {
   const nav = useNavigate();
   const upsertSession = useSessionStore((s) => s.upsertSession);
   const [editing, setEditing] = useState(false);
@@ -551,6 +883,7 @@ function SessionRow({ session, active }: { session: SessionDTO; active: boolean 
   const unread = !archived && session.status === 'done';
   const content = (
     <span className="flex items-center gap-1.5 min-w-0 flex-1">
+      {agentType && <AgentTypeIcon type={agentType} />}
       {!archived && session.status === 'active' && (
         <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
       )}
@@ -650,144 +983,3 @@ function SessionRow({ session, active }: { session: SessionDTO; active: boolean 
   );
 }
 
-function AgentRow({
-  agent,
-  sessions,
-  activeSessionId,
-  open,
-  showArchived,
-  onToggle,
-  onNewSession,
-  onToggleArchived,
-  onAgentArchived,
-}: {
-  agent: AgentDTO;
-  sessions: SessionDTO[];
-  activeSessionId: string | undefined;
-  open: boolean;
-  showArchived: boolean;
-  onToggle: () => void;
-  onNewSession: () => void;
-  onToggleArchived: () => void;
-  onAgentArchived: (agent: AgentDTO) => void;
-}) {
-  const archived = !!agent.archivedAt;
-  const [busy, setBusy] = useState(false);
-  const visibleSessions = showArchived ? sessions : sessions.filter((s) => !s.archivedAt);
-  const hiddenArchivedCount = sessions.length - visibleSessions.length;
-  const hasArchived = sessions.some((s) => !!s.archivedAt);
-
-  async function toggleAgentArchive(e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    if (busy) return;
-    setBusy(true);
-    try {
-      const updated = archived
-        ? await api.unarchiveAgent(agent.id)
-        : await api.archiveAgent(agent.id);
-      onAgentArchived(updated);
-    } catch {
-      /* swallow — toast surface not wired yet */
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="mb-0.5">
-      <div
-        className={cn(
-          'group relative flex items-center rounded-md transition-colors hover:bg-surface-1',
-          archived && 'opacity-70',
-        )}
-      >
-        <button
-          onClick={onToggle}
-          className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 pr-2 leading-5"
-        >
-          <ChevronRight
-            className={cn('h-3 w-3 text-fg-tertiary transition-transform', open && 'rotate-90')}
-          />
-          <AgentTypeIcon type={agent.type} />
-          <span
-            className={cn(
-              'min-w-0 truncate text-sm',
-              archived ? 'text-fg-tertiary italic' : 'text-fg-primary',
-            )}
-            title={archived ? `${agent.name} (archived)` : agent.name}
-          >
-            {agent.name || agent.id}
-          </span>
-        </button>
-
-        <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-          <span
-            aria-hidden
-            className="absolute inset-y-0 right-full w-8 bg-gradient-to-r from-transparent to-surface-1"
-          />
-          <div className="flex items-center bg-surface-1">
-            {!archived && agent.status !== 'offline' && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onNewSession();
-                }}
-                className="flex items-center px-1.5 text-fg-muted transition-colors hover:text-fg-primary"
-                title="new session"
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </button>
-            )}
-            <button
-              onClick={toggleAgentArchive}
-              disabled={busy}
-              className={cn(
-                'flex items-center px-1.5 text-fg-muted transition-colors disabled:opacity-40 hover:text-fg-primary',
-                archived && 'text-fg-tertiary',
-              )}
-              title={archived ? 'restore agent' : 'archive agent (hides from sidebar)'}
-            >
-              {archived ? (
-                <ArchiveRestore className="h-3.5 w-3.5" />
-              ) : (
-                <Archive className="h-3.5 w-3.5" />
-              )}
-            </button>
-            {!archived && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleArchived();
-                }}
-                className={cn(
-                  'flex items-center px-2 transition-colors',
-                  showArchived
-                    ? 'text-emerald-400 hover:text-emerald-300'
-                    : 'text-fg-muted hover:text-fg-secondary',
-                )}
-                title={
-                  showArchived
-                    ? 'hide archived sessions'
-                    : hasArchived
-                      ? `show ${hiddenArchivedCount} archived session${hiddenArchivedCount === 1 ? '' : 's'}`
-                      : 'show archived sessions'
-                }
-              >
-                {showArchived ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {open && (
-        <div className="ml-5 mt-0.5 border-l border-default pl-2 space-y-0.5">
-          {visibleSessions.map((s) => (
-            <SessionRow key={s.id} session={s} active={activeSessionId === s.id} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
