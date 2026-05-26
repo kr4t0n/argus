@@ -358,7 +358,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   name [verb] [workingDir]` with a hover-only destroy action.
 - `pages/UserPanel.tsx` — `/user` route, settings-page layout. Sticky
   account band at the top (email + role); below it a left section nav
-  (Stats / Preferences) and a scroll column with Activity (heatmap),
+  (Stats / Preferences) and a scroll column with Activity (a `Grid` /
+  `Curve` segmented toggle over one `/me/activity` payload — `Grid` is
+  the GitHub-style `ActivityHeatmap`, `Curve` is `ActivityLineChart`, a
+  by-day commands line; pure client-side view swap, defaults to Grid),
   Usage (token ledger with a rolling 7-day / 30-day / all-time
   segmented toggle — one `/me/usage` payload carries all three, the
   toggle is pure client-side slicing, defaults to 30 days), Quota

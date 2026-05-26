@@ -1,6 +1,7 @@
 import { ReactNode, useCallback, useEffect, useState } from 'react';
 import { Check, Loader2, User } from 'lucide-react';
 import type {
+  ActivityDay,
   QuotaWindow,
   TokenUsage,
   UserActivityResponse,
@@ -15,6 +16,7 @@ import { cn } from '../lib/utils';
 import { useAuthStore } from '../stores/authStore';
 import { useUIStore } from '../stores/uiStore';
 import { ActivityHeatmap } from '../components/ActivityHeatmap';
+import { ActivityLineChart } from '../components/ActivityLineChart';
 import { Button } from '../components/ui/Button';
 import { requestNotificationPermission } from '../lib/notifications';
 
@@ -122,7 +124,7 @@ export function UserPanel() {
                     <Loader2 className="h-3.5 w-3.5 animate-spin" /> loading…
                   </div>
                 )}
-                {!activityError && activity && <ActivityHeatmap days={activity.days} />}
+                {!activityError && activity && <ActivityView days={activity.days} />}
               </Subsection>
               <Subsection title="Usage">
                 {usageError && (
@@ -174,6 +176,55 @@ export function UserPanel() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+type ActivityViewMode = 'grid' | 'line';
+
+const ACTIVITY_VIEWS: ReadonlyArray<{ id: ActivityViewMode; label: string }> = [
+  { id: 'grid', label: 'Grid' },
+  { id: 'line', label: 'Curve' },
+];
+
+/** Same activity payload, two readings: the GitHub-style heatmap grid
+ *  and a by-day commands curve. The toggle just swaps the view — no
+ *  refetch. Defaults to the grid to preserve the prior behavior. */
+function ActivityView({ days }: { days: ActivityDay[] }) {
+  const [view, setView] = useState<ActivityViewMode>('grid');
+  return (
+    <div className="flex flex-col gap-4">
+      <div
+        role="tablist"
+        aria-label="activity view"
+        className="inline-flex self-start rounded-md bg-surface-1 p-0.5"
+      >
+        {ACTIVITY_VIEWS.map((v) => {
+          const active = v.id === view;
+          return (
+            <button
+              key={v.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setView(v.id)}
+              className={cn(
+                'rounded-[5px] px-3 py-1 text-xs font-medium transition-colors',
+                active
+                  ? 'bg-surface-2 text-fg-primary'
+                  : 'text-fg-tertiary hover:text-fg-secondary',
+              )}
+            >
+              {v.label}
+            </button>
+          );
+        })}
+      </div>
+      {view === 'grid' ? (
+        <ActivityHeatmap days={days} />
+      ) : (
+        <ActivityLineChart days={days} />
+      )}
     </div>
   );
 }
