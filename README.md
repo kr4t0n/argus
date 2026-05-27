@@ -86,6 +86,13 @@ WebSocket (not Redis) for sub-10 ms keystroke echo, usable for
 full-screen TUIs like `vim` and `htop`. Treat the opt-in as remote
 shell access: only enable on hosts where every dashboard user is
 trusted to that level.
+- **Per-project notes (opt-in extension)**: enable the **Notes**
+extension from `/user` → Extensions and the session right panel grows
+a **Note** tab beside Terminal — a free-form scratchpad scoped to the
+project (the `machineId` + working-directory pair every session in
+that directory shares). Both the enablement and the notes themselves
+are saved to your account, so they follow you across browsers and
+devices, and every session in the same working dir sees the same note.
 - **Redis Streams** for the bus: durable, replayable, no extra ops weight on
 top of the Redis you already run.
 

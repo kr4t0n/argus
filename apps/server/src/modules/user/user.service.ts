@@ -1,15 +1,17 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type {
   AgentType,
+  ProjectNotesResponse,
   QuotaWindow,
   TokenUsage,
   UserActivityResponse,
+  UserExtensionsResponse,
   UserQuotaResponse,
   UserQuotaRow,
   UserRulesResponse,
   UserUsageResponse,
 } from '@argus/shared-types';
-import { USER_RULES_MAX_BYTES } from '@argus/shared-types';
+import { PROJECT_NOTES_MAX_BYTES, USER_RULES_MAX_BYTES } from '@argus/shared-types';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { MachineService } from '../machine/machine.service';
 
@@ -324,6 +326,109 @@ export class UserService {
 
     return { rules: synced };
   }
+
+  /**
+   * Free-form notes the user keeps for a project — the
+   * `(machineId, workingDir)` pair every session in that directory
+   * shares. Missing row → empty string so the client doesn't have to
+   * disambiguate "never written" from "explicitly cleared." Unlike
+   * rules these are personal scratch and are never synced to sidecars.
+   */
+  async getProjectNotes(
+    userId: string,
+    machineId: string,
+    workingDir: string,
+  ): Promise<ProjectNotesResponse> {
+    const row = await this.prisma.projectNote.findUnique({
+      where: { userId_machineId_workingDir: { userId, machineId, workingDir } },
+      select: { notes: true },
+    });
+    return { notes: row?.notes ?? '' };
+  }
+
+  /**
+   * Persist project notes. Hard-caps at PROJECT_NOTES_MAX_BYTES via
+   * TextEncoder so multi-byte characters count correctly. An empty
+   * string deletes the row — there's no "no notes" sentinel to keep,
+   * and a missing row already reads back as "". Otherwise upserts so
+   * the first save creates the row and later saves overwrite it.
+   */
+  async setProjectNotes(
+    userId: string,
+    machineId: string,
+    workingDir: string,
+    notes: string,
+  ): Promise<ProjectNotesResponse> {
+    const bytes = new TextEncoder().encode(notes).byteLength;
+    if (bytes > PROJECT_NOTES_MAX_BYTES) {
+      throw new BadRequestException(
+        `notes too large: ${bytes} bytes > ${PROJECT_NOTES_MAX_BYTES} byte limit`,
+      );
+    }
+
+    const key = { userId_machineId_workingDir: { userId, machineId, workingDir } };
+    if (notes.length === 0) {
+      // deleteMany (not delete) so clearing a never-saved note is a
+      // no-op rather than a P2025 throw.
+      await this.prisma.projectNote.deleteMany({ where: { userId, machineId, workingDir } });
+      return { notes: '' };
+    }
+
+    const row = await this.prisma.projectNote.upsert({
+      where: key,
+      create: { userId, machineId, workingDir, notes },
+      update: { notes },
+      select: { notes: true },
+    });
+    return { notes: row.notes };
+  }
+
+  /**
+   * Which opt-in extensions the user has enabled. An account-level
+   * preference (synced across browsers), stored as a JSON map so new
+   * extensions don't need a migration. Any missing/non-boolean key
+   * reads as `false`, so a never-set or partial blob is safe.
+   */
+  async getExtensions(userId: string): Promise<UserExtensionsResponse> {
+    const row = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { extensions: true },
+    });
+    if (!row) throw new NotFoundException('user not found');
+    return coerceExtensions(row.extensions);
+  }
+
+  /**
+   * Replace the user's stored extension flags with the given set. The
+   * client always sends the full known set, so a straight overwrite
+   * keeps DB and client in agreement without read-modify-write races.
+   */
+  async setExtensions(
+    userId: string,
+    next: UserExtensionsResponse,
+  ): Promise<UserExtensionsResponse> {
+    const updated = await this.prisma.user
+      .update({
+        where: { id: userId },
+        data: { extensions: { notes: next.notes } },
+        select: { extensions: true },
+      })
+      .catch((err) => {
+        if ((err as { code?: string }).code === 'P2025') {
+          throw new NotFoundException('user not found');
+        }
+        throw err;
+      });
+    return coerceExtensions(updated.extensions);
+  }
+}
+
+/** Normalize the stored `User.extensions` JSON (which may be null, a
+ *  partial object, or — defensively — any JSON) into the typed flag
+ *  set, defaulting every unknown/missing key to `false`. */
+function coerceExtensions(raw: unknown): UserExtensionsResponse {
+  const map = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  return { notes: map.notes === true };
 }
 
 type QuotaRowWithMachine = {
