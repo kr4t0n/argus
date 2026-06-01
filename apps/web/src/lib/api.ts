@@ -10,13 +10,16 @@ import type {
   LoginResponse,
   MachineDTO,
   OpenTerminalRequest,
+  ProjectNotesResponse,
   ResultChunkDTO,
   SessionDTO,
   SidecarUpdateAccepted,
   SidecarUpdateBatchAccepted,
   SidecarVersionInfo,
   TerminalDTO,
+  UpdateUserExtensionsRequest,
   UserActivityResponse,
+  UserExtensionsResponse,
   UserQuotaResponse,
   UserRulesResponse,
   UserUsageResponse,
@@ -215,6 +218,30 @@ export const api = {
     http<UserRulesResponse>('/me/rules', {
       method: 'PUT',
       body: JSON.stringify({ rules }),
+    }),
+
+  /** Per-project scratchpad notes, keyed by the (machineId, workingDir)
+   *  pair that defines a project. Empty string = no notes. Backs the
+   *  Notes extension's panel in the session right pane. */
+  getProjectNotes: (machineId: string, workingDir: string) => {
+    const q = new URLSearchParams({ machineId, workingDir });
+    return http<ProjectNotesResponse>(`/me/project-notes?${q.toString()}`);
+  },
+  setProjectNotes: (machineId: string, workingDir: string, notes: string) => {
+    const q = new URLSearchParams({ machineId, workingDir });
+    return http<ProjectNotesResponse>(`/me/project-notes?${q.toString()}`, {
+      method: 'PUT',
+      body: JSON.stringify({ notes }),
+    });
+  },
+
+  /** Account-level opt-in extension flags, synced across browsers.
+   *  Loaded at bootstrap to reconcile the local uiStore cache. */
+  getMyExtensions: () => http<UserExtensionsResponse>('/me/extensions'),
+  setMyExtensions: (ext: UpdateUserExtensionsRequest) =>
+    http<UserExtensionsResponse>('/me/extensions', {
+      method: 'PUT',
+      body: JSON.stringify(ext),
     }),
 
   /** Recent commits for the agent's workingDir. The response also

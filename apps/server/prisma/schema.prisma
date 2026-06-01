@@ -23,8 +23,39 @@ model User {
   // follow-up). NULL = "no rules set" — distinct from "" so a future
   // "clear rules" gesture has a target.
   rules        String?   @db.Text
+  // Opt-in extensions the user has enabled, as a JSON map of
+  // extension-id → boolean (e.g. {"notes": true}). An account-level
+  // preference so toggling on one browser is reflected everywhere —
+  // unlike device-local UI state (theme, notification permission)
+  // which stays in the browser. JSON rather than a column-per-extension
+  // so adding an extension needs no migration. NULL = nothing enabled.
+  extensions   Json?
 
-  sessions Session[]
+  sessions     Session[]
+  projectNotes ProjectNote[]
+}
+
+// A free-form note the user keeps for a "project" — the
+// (machineId, workingDir) pair every session in that directory
+// shares. Projects have no first-class row of their own (the sidebar
+// derives them from agents' workingDirs), so the note is keyed by the
+// triple directly. One note per (user, machine, workingDir): editing
+// from any session in that directory edits the same note. Unlike
+// User.rules these are personal scratch, never synced to sidecars.
+model ProjectNote {
+  id         String   @id @default(cuid())
+  userId     String
+  machineId  String
+  workingDir String
+  notes      String   @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, machineId, workingDir])
+  @@index([machineId])
 }
 
 // A Machine is a host running one argus-sidecar process. The sidecar
@@ -66,8 +97,9 @@ model Machine {
   // stays viewable through the normal session UI.
   deletedAt         DateTime?
 
-  agents Agent[]
-  quotas MachineAgentQuota[]
+  agents       Agent[]
+  quotas       MachineAgentQuota[]
+  projectNotes ProjectNote[]
 
   @@index([status])
   @@index([archivedAt])

@@ -110,6 +110,14 @@ export function UserPanel() {
                   Preferences
                 </a>
               </li>
+              <li>
+                <a
+                  href="#extensions"
+                  className="block text-sm text-fg-secondary transition-colors hover:text-fg-primary"
+                >
+                  Extensions
+                </a>
+              </li>
             </ul>
           </nav>
 
@@ -168,6 +176,14 @@ export function UserPanel() {
               >
                 <RulesEditor />
               </Row>
+            </Group>
+
+            <Group id="extensions" title="Extensions">
+              <Row
+                title="Notes"
+                description="Adds a Note tab beside Terminal in each session's right panel — a free-form scratchpad scoped to the project (every session sharing the same working directory sees the same note). Notes are saved to your account, so they follow you across browsers and devices."
+                control={<NotesExtensionToggle />}
+              />
             </Group>
 
             {/* Trailing room so the last Group can scroll up to the
@@ -324,6 +340,50 @@ function NotificationToggle() {
         {busy ? (
           <>
             <Loader2 className="h-3 w-3 animate-spin" /> requesting…
+          </>
+        ) : enabled ? (
+          'Disable'
+        ) : (
+          'Enable'
+        )}
+      </Button>
+      {error && (
+        <p className="max-w-xs text-right text-xs text-red-500 dark:text-red-400">{error}</p>
+      )}
+    </div>
+  );
+}
+
+function NotesExtensionToggle() {
+  const enabled = useUIStore((s) => s.notesExtensionEnabled);
+  const setEnabled = useUIStore((s) => s.setNotesExtensionEnabled);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // The flag is account-level (synced across browsers), so persist it
+  // server-side. Flip the local cache optimistically for an instant
+  // response, then revert if the PUT fails.
+  const onToggle = useCallback(async () => {
+    const next = !enabled;
+    setError(null);
+    setEnabled(next);
+    setBusy(true);
+    try {
+      await api.setMyExtensions({ notes: next });
+    } catch (err) {
+      setEnabled(!next);
+      setError(err instanceof ApiError ? err.message : 'failed to save');
+    } finally {
+      setBusy(false);
+    }
+  }, [enabled, setEnabled]);
+
+  return (
+    <div className="flex flex-col items-end gap-2">
+      <Button onClick={onToggle} disabled={busy} size="sm" variant={enabled ? 'subtle' : 'default'}>
+        {busy ? (
+          <>
+            <Loader2 className="h-3 w-3 animate-spin" /> saving…
           </>
         ) : enabled ? (
           'Disable'

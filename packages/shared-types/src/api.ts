@@ -383,3 +383,43 @@ export interface UpdateUserRulesRequest {
  *  typical AGENTS.md / CLAUDE.md / .cursorrules file (a few KB at
  *  most) while staying well under any realistic Postgres TEXT limit. */
 export const USER_RULES_MAX_BYTES = 32_768;
+
+/** REST response for `GET /me/project-notes?machineId=…&workingDir=…`.
+ *  `notes` is a free-form scratchpad the user keeps for a project — a
+ *  project being the `(machineId, workingDir)` pair every session in
+ *  that directory shares. Empty string means "no notes yet"; the
+ *  response always carries a string so the client never has to
+ *  disambiguate null vs unset. */
+export interface ProjectNotesResponse {
+  notes: string;
+}
+
+/** Request body for `PUT /me/project-notes`. The project the note
+ *  belongs to is identified by the `machineId` / `workingDir` query
+ *  params; the body carries only the text. Server enforces an upper
+ *  bound (PROJECT_NOTES_MAX_BYTES). */
+export interface UpdateProjectNotesRequest {
+  notes: string;
+}
+
+/** Hard cap for stored project-notes text. Mirrors USER_RULES_MAX_BYTES
+ *  — notes are a freeform scratchpad, 32 KB is plenty while staying
+ *  well under any realistic Postgres TEXT limit. */
+export const PROJECT_NOTES_MAX_BYTES = 32_768;
+
+/** REST response for `GET /me/extensions`. Which opt-in extensions the
+ *  user has enabled — an account-level preference (synced across
+ *  browsers/devices), distinct from device-local UI state like theme.
+ *  One boolean per extension; absent extensions read as `false`. As
+ *  extensions are added this gains fields. Stored server-side as a
+ *  JSON map so new extensions need no migration. */
+export interface UserExtensionsResponse {
+  /** Notes extension — adds a per-project Note tab to the session pane. */
+  notes: boolean;
+}
+
+/** Request body for `PUT /me/extensions`. The client sends the full
+ *  set of known extension flags; the server replaces its stored map. */
+export interface UpdateUserExtensionsRequest {
+  notes: boolean;
+}

@@ -350,7 +350,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   block surfaces agent + session metadata (machine, status, version,
   working dir, registered, last seen, session title, external id,
   updated, model). The bottom region is tabbed: **Commits** (`GitLogPanel`),
-  **Files** (`FileTree`), **Terminal** (`<TerminalPane>`).
+  **Files** (`FileTree`), **Terminal** (`<TerminalPane>`), and — only when
+  the Notes extension is on (`uiStore.notesExtensionEnabled`) and the agent
+  has a `workingDir` — **Note** (`<NotePane>`).
 - `components/MachinePanel.tsx` — `/machines/:id` route. Header with
   machine glyph + name + status dot + sidecar-update / new-agent buttons.
   Below the header: 2:3 grid with Host KV + Supports adapters on the
@@ -367,13 +369,30 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   toggle is pure client-side slicing, defaults to 30 days), Quota
   (per-CLI plan windows pulled
   from each sidecar's heartbeat — see `packages/sidecar/internal/quota`
-  and the `/me/quota` endpoint), and Preferences (notifications, user
-  rules editor). Capped at `max-w-6xl`.
+  and the `/me/quota` endpoint), Preferences (notifications, user
+  rules editor), and Extensions (opt-in features; currently just
+  **Notes**). The on/off flag is an account-level preference persisted
+  server-side via `GET`/`PUT /me/extensions` (a JSON map on `User`, so
+  new extensions need no migration); `uiStore.notesExtensionEnabled` is
+  a localStorage cache for synchronous, flash-free reads, reconciled
+  against the server on bootstrap (`App.tsx`). Capped at `max-w-6xl`.
 - `components/TerminalPane.tsx` — xterm.js bound to one agent. Owns the
   WebSocket plumbing, a debounced ResizeObserver for fit, base64 encoding
   on input, and a duplicate-seq guard on output. Renders inside the
   **Terminal** tab of `ContextPane` so we don't pay the xterm cost until
   the user clicks the tab.
+- `components/NotePane.tsx` — free-form per-project scratchpad in the
+  **Note** tab of `ContextPane`. A "project" has no DB row of its own
+  (the sidebar derives projects from agents' `workingDir`s), so the note
+  is keyed by the `(userId, machineId, workingDir)` triple in the
+  `ProjectNote` table and reached via `GET`/`PUT /me/project-notes`
+  (machineId + workingDir as query params). Two sessions in the same
+  working dir edit the same note. Debounced autosave (~700 ms) rather
+  than a Save button; byte-capped at `PROJECT_NOTES_MAX_BYTES`. Both the
+  extension on/off flag and the note *content* are server-persisted per
+  user (see `/me/extensions` and `/me/project-notes`), so they survive
+  browser switches. Unlike `User.rules`, notes are personal scratch and
+  are never fanned out to sidecars.
 
 ## Conventions
 

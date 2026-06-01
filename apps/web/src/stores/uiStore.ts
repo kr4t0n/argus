@@ -31,6 +31,14 @@ interface UIState {
    *  `Notification.permission` so a user who revokes permission in
    *  browser settings silently no-ops without us re-prompting. */
   notificationsEnabled: boolean;
+  /** Extensions → Notes: when on, the session right-pane gains a "Note"
+   *  tab beside Terminal for per-project scratchpad notes. The server is
+   *  the source of truth (an account-level preference synced across
+   *  browsers via `/me/extensions`); this persisted copy is a cache so
+   *  the UI reads it synchronously with no flash, reconciled against the
+   *  server on bootstrap (see App.tsx). Off by default — extensions are
+   *  opt-in. */
+  notesExtensionEnabled: boolean;
   toggleSidebar: () => void;
   setSidebarWidth: (w: number) => void;
   toggleContextPane: () => void;
@@ -41,6 +49,7 @@ interface UIState {
   setDraft: (agentId: string, v: string) => void;
   setTheme: (t: ThemePreference) => void;
   setNotificationsEnabled: (v: boolean) => void;
+  setNotesExtensionEnabled: (v: boolean) => void;
 }
 
 export const SIDEBAR_MIN = 220;
@@ -61,6 +70,7 @@ export const useUIStore = create<UIState>()(
       drafts: {},
       theme: 'system',
       notificationsEnabled: false,
+      notesExtensionEnabled: false,
       toggleSidebar() {
         set({ sidebarOpen: !get().sidebarOpen });
       },
@@ -101,6 +111,9 @@ export const useUIStore = create<UIState>()(
       },
       setNotificationsEnabled(v) {
         set({ notificationsEnabled: v });
+      },
+      setNotesExtensionEnabled(v) {
+        set({ notesExtensionEnabled: v });
       },
     }),
     { name: 'argus.ui' },

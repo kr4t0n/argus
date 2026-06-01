@@ -5,9 +5,11 @@ import { AgentTypeIcon } from './ui/AgentTypeIcon';
 import { StatusDot } from './ui/StatusDot';
 import { FileTree } from './FileTree';
 import { GitLogPanel } from './GitLogPanel';
+import { NotePane } from './NotePane';
 import { TerminalPane } from './TerminalPane';
 import { cn, relativeTime } from '../lib/utils';
 import { useSessionModel } from '../lib/usage';
+import { useUIStore } from '../stores/uiStore';
 
 type Props = {
   agent: AgentDTO | undefined;
@@ -19,9 +21,14 @@ type Props = {
   chunks: ResultChunkDTO[];
 };
 
-type TabKey = 'commits' | 'files' | 'terminal';
+type TabKey = 'commits' | 'files' | 'terminal' | 'note';
 
 export function ContextPane({ agent, session, chunks }: Props) {
+  // Notes extension: when on, a "Note" tab joins the pane for a
+  // per-project scratchpad. It needs a project to attach to — i.e. a
+  // workingDir — so the tab only appears when the agent has one (same
+  // gate the Commits/Files tabs use).
+  const notesEnabled = useUIStore((s) => s.notesExtensionEnabled);
   // Model surfaces in the very first system / init progress chunk a
   // turn emits, so it appears almost immediately on session open.
   // Token usage (input/output/cache) lives in the header badge's
@@ -37,8 +44,11 @@ export function ContextPane({ agent, session, chunks }: Props) {
       t.push({ key: 'files', label: 'Files' });
     }
     t.push({ key: 'terminal', label: 'Terminal' });
+    if (notesEnabled && agent.workingDir) {
+      t.push({ key: 'note', label: 'Note' });
+    }
     return t;
-  }, [agent]);
+  }, [agent, notesEnabled]);
 
   const [active, setActive] = useState<TabKey>('commits');
   useEffect(() => {
@@ -120,6 +130,9 @@ export function ContextPane({ agent, session, chunks }: Props) {
             <FileTree key={agent.id} agentId={agent.id} />
           )}
           {active === 'terminal' && <TerminalPane key={agent.id} agent={agent} />}
+          {active === 'note' && agent.workingDir && (
+            <NotePane key={agent.id} machineId={agent.machineId} workingDir={agent.workingDir} />
+          )}
         </div>
       </div>
     </aside>
