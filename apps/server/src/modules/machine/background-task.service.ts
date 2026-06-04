@@ -15,6 +15,17 @@ import { StreamGateway } from '../gateway/stream.gateway';
 const CONSUMER = 'server-1';
 
 /**
+ * How long the in-memory "dismissed" tombstone lingers after a user
+ * clicks the X on a card. Within this window, any further events for
+ * the same taskId are silently dropped — otherwise a still-alive
+ * argus-bg's next progress frame would just re-upsert the row and the
+ * card would pop back in, undoing the dismiss. 10 minutes is plenty
+ * for the common case (sidecar restart re-tails the JSONL on disk and
+ * replays a few seconds of events) without growing the set unbounded.
+ */
+const DISMISSED_TTL_MS = 10 * 60_000;
+
+/**
  * In-memory registry of every active-or-recently-ended background
  * task, keyed by (machineId, workingDir, taskId). Populated by this
  * service's own consumer loop on the dedicated
@@ -34,6 +45,10 @@ export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
 
   // machineId → workingDir → taskId → DTO
   private readonly state = new Map<string, Map<string, Map<string, BackgroundTaskDTO>>>();
+  // dismissed (machineId|workingDir|taskId) → unix ms. Lazily expired
+  // by isDismissed() — a check that's already on the hot path of every
+  // ingested event, so no separate GC ticker is needed.
+  private readonly dismissed = new Map<string, number>();
 
   private running = false;
   private loopPromise?: Promise<void>;
@@ -116,6 +131,7 @@ export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
   }
 
   handleStarted(ev: BackgroundTaskStartedEvent) {
+    if (this.isDismissed(ev.machineId, ev.workingDir, ev.taskId)) return;
     const dto: BackgroundTaskDTO = {
       taskId: ev.taskId,
       machineId: ev.machineId,
@@ -131,6 +147,7 @@ export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
   }
 
   handleProgress(ev: BackgroundTaskProgressEvent) {
+    if (this.isDismissed(ev.machineId, ev.workingDir, ev.taskId)) return;
     const existing = this.find(ev.machineId, ev.workingDir, ev.taskId);
     // No `start` seen yet (sidecar restarted mid-task, or the start
     // line was lost): synthesize a minimal record so the UI still
@@ -159,6 +176,7 @@ export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
   }
 
   handleEnded(ev: BackgroundTaskEndedEvent) {
+    if (this.isDismissed(ev.machineId, ev.workingDir, ev.taskId)) return;
     const existing = this.find(ev.machineId, ev.workingDir, ev.taskId);
     const next: BackgroundTaskDTO = existing
       ? { ...existing }
@@ -188,9 +206,19 @@ export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
    * Returns false if there was no such task — surfaced as a 404 by
    * the controller so a stale double-click doesn't appear successful.
    *
+   * Works for cards in any state, including still-running. The main
+   * use case is recovering from a crashed `argus-bg` (e.g. OOM kill)
+   * where the wrapper never wrote its `end` event — the card would
+   * otherwise be stuck mid-progress forever.
+   *
+   * Records a dismissed tombstone (`DISMISSED_TTL_MS`) so any later
+   * events for the same taskId — from a still-alive argus-bg, or
+   * from the sidecar re-tailing the JSONL after a restart — get
+   * silently dropped instead of resurrecting the card.
+   *
    * Dismissal is global, not per-user — every dashboard viewing this
-   * project sees the card disappear. Matches how auto-eviction
-   * behaved before; per-user "hide for me" would need DB state.
+   * project sees the card disappear. Per-user "hide for me" would
+   * need DB state.
    */
   dismissTask(machineId: string, workingDir: string, taskId: string): boolean {
     const tasks = this.state.get(machineId)?.get(workingDir);
@@ -205,7 +233,25 @@ export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
     if (this.state.get(machineId)?.size === 0) {
       this.state.delete(machineId);
     }
+    this.dismissed.set(dismissalKey(machineId, workingDir, taskId), Date.now());
     this.gateway.emitBackgroundTaskRemoved({ machineId, workingDir, taskId });
+    return true;
+  }
+
+  /**
+   * Was this taskId dismissed within DISMISSED_TTL_MS? Lazy expiry:
+   * stale entries are cleared on the same lookup that finds them,
+   * so the dismissed map stays bounded by recent activity without
+   * needing a separate timer.
+   */
+  private isDismissed(machineId: string, workingDir: string, taskId: string): boolean {
+    const key = dismissalKey(machineId, workingDir, taskId);
+    const ts = this.dismissed.get(key);
+    if (ts === undefined) return false;
+    if (Date.now() - ts > DISMISSED_TTL_MS) {
+      this.dismissed.delete(key);
+      return false;
+    }
     return true;
   }
 
@@ -244,6 +290,10 @@ export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
   ): BackgroundTaskDTO | undefined {
     return this.state.get(machineId)?.get(workingDir)?.get(taskId);
   }
+}
+
+function dismissalKey(machineId: string, workingDir: string, taskId: string): string {
+  return `${machineId}\x00${workingDir}\x00${taskId}`;
 }
 
 /** Decode the JSON payload XADD'd by the sidecar's bus.Publish. Same

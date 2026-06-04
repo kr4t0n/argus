@@ -164,9 +164,12 @@ function TaskCard({
       ? Math.max(0, Math.min(100, task.percent))
       : undefined;
 
-  // Dismiss is only exposed on ended cards. If we showed it on a
-  // running card, the next progress event would just re-upsert and
-  // the card would pop back in — confusing UX. Wait for end.
+  // Dismiss is available in any state. For ended cards this is the
+  // ordinary "I'm done looking at this" gesture; for still-running
+  // cards it's a recovery hatch for stuck rows whose argus-bg died
+  // without writing its end event (most often: OOM kill by the
+  // kernel). The server records a short-TTL tombstone, so a
+  // still-alive wrapper's later events can't resurrect the row.
   const [dismissing, setDismissing] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
   const onDismiss = useCallback(async () => {
@@ -211,22 +214,20 @@ function TaskCard({
         >
           {relativeTime(new Date(task.startedAt).toISOString())}
         </span>
-        {ended && (
-          <button
-            type="button"
-            onClick={onDismiss}
-            disabled={dismissing}
-            title="Dismiss"
-            aria-label="Dismiss task"
-            className="-mr-1 -mt-0.5 shrink-0 rounded p-0.5 text-fg-muted transition-colors hover:bg-surface-2/80 hover:text-fg-primary disabled:opacity-40"
-          >
-            {dismissing ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <X className="h-3 w-3" />
-            )}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={onDismiss}
+          disabled={dismissing}
+          title={ended ? 'Dismiss' : 'Dismiss (will not reappear)'}
+          aria-label="Dismiss task"
+          className="-mr-1 -mt-0.5 shrink-0 rounded p-0.5 text-fg-muted transition-colors hover:bg-surface-2/80 hover:text-fg-primary disabled:opacity-40"
+        >
+          {dismissing ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <X className="h-3 w-3" />
+          )}
+        </button>
       </div>
 
       {/* Bar + metadata only render once we have a real percent reading.
