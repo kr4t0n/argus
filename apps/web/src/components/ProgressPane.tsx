@@ -239,11 +239,11 @@ function TaskCard({
             <div
               className={cn(
                 'h-full transition-all duration-200',
-                failed
-                  ? 'bg-red-500 dark:bg-red-400'
-                  : done
-                    ? 'bg-emerald-500 dark:bg-emerald-400'
-                    : 'bg-fg-primary',
+                // running + done both use emerald — the icon already
+                // distinguishes the two states (Terminal vs ✓), and
+                // a non-green running bar reads as "stalled" against
+                // the green track in the user's theme.
+                failed ? 'bg-red-500 dark:bg-red-400' : 'bg-emerald-500 dark:bg-emerald-400',
                 indeterminate && 'animate-pulse w-full',
               )}
               style={
