@@ -112,11 +112,15 @@ func (a *CodexAdapter) Execute(
 	}
 	flags = append(flags, a.extraArgs...)
 
+	// "--" is the POSIX end-of-options marker: without it, a prompt that
+	// starts with "-" or "--" (e.g. user types "--help" or a CLI-style
+	// snippet) would be parsed as a flag by codex's arg parser and either
+	// error out or invoke a side-effect like printing help.
 	var args []string
 	if cmd.ExternalID != "" {
-		args = append(flags, "resume", cmd.ExternalID, cmd.Prompt)
+		args = append(flags, "resume", cmd.ExternalID, "--", cmd.Prompt)
 	} else {
-		args = append(flags, cmd.Prompt)
+		args = append(flags, "--", cmd.Prompt)
 	}
 
 	// Per-run state so mapCodexLine can snapshot file contents at item.started

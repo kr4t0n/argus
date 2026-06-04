@@ -115,6 +115,18 @@ func claudeCodeProbeOnce(ctx context.Context, client *http.Client, now time.Time
 		return row, false, nil
 	}
 	for key, v := range raw {
+		// Restrict to the two generic windows the panel renders.
+		// /api/oauth/usage also ships per-model variants
+		// (`seven_day_sonnet`, `seven_day_opus`, `seven_day_omelette`,
+		// …) and an `extra_usage` bucket, but those are redundant
+		// noise next to the headline 5-hour / 7-day rows the CLI's own
+		// /status command shows. Whitelist instead of dropping by
+		// `resets_at == null`: on accounts where per-model caps are
+		// actually billed, those variants carry a real `resets_at`
+		// and would otherwise slip through.
+		if key != "five_hour" && key != "seven_day" {
+			continue
+		}
 		obj, ok := v.(map[string]any)
 		if !ok {
 			continue
@@ -123,13 +135,6 @@ func claudeCodeProbeOnce(ctx context.Context, client *http.Client, now time.Time
 		if !ok {
 			continue
 		}
-		// Inactive plan-tier windows ship with `resets_at: null` and
-		// 0% utilization (e.g. `seven_day_sonnet`,
-		// `seven_day_omelette` for accounts that don't have those
-		// per-model limits) — drop them so the panel only shows
-		// windows the user is actually being charged against. Active
-		// windows with 0% used (a fresh 5-hour reset) still carry a
-		// real `resets_at` and survive this filter.
 		resetsAt, _ := obj["resets_at"].(string)
 		if resetsAt == "" {
 			continue
@@ -201,19 +206,14 @@ func readClaudeCredentials() (*claudeCredentials, error) {
 }
 
 // labelForClaudeKey maps the snake-case keys Anthropic publishes to
-// the short labels the dashboard renders. Unknown keys fall through
-// to a title-cased version so we don't lose data on plan-tier
-// additions we haven't seen yet.
+// the short labels the dashboard renders. Only called for the keys
+// the probe whitelists above; the default branch is defensive.
 func labelForClaudeKey(key string) string {
 	switch key {
 	case "five_hour":
 		return "5-hour"
 	case "seven_day":
 		return "7-day"
-	case "seven_day_opus":
-		return "7-day Opus"
-	case "extra_usage":
-		return "Extra credits"
 	default:
 		return key
 	}
