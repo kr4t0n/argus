@@ -673,7 +673,13 @@ export interface AgentDestroyedEvent {
 export type MachineLifecycleAck = AgentSpawnedEvent | AgentSpawnFailedEvent | AgentDestroyedEvent;
 
 /** Anything the server expects on `agent:lifecycle`. Ordering matters:
- *  more specific kinds first so TS narrows correctly. */
+ *  more specific kinds first so TS narrows correctly.
+ *
+ *  `BackgroundTask{Started,Progress,Ended}Event` deliberately are NOT
+ *  in this union — they ride a dedicated `agent:background` stream
+ *  (see streamKeys.background) so chatty progress frames can't trim
+ *  the shared lifecycle stream via MAXLEN. They're consumed by
+ *  BackgroundTaskService.consumeLoop, not MachineService.handle. */
 export type AnyLifecycleEvent =
   | RegisterEvent
   | HeartbeatEvent
@@ -688,9 +694,6 @@ export type AnyLifecycleEvent =
   | FSChangedEvent
   | GitLogResponseEvent
   | GitChangedEvent
-  | BackgroundTaskStartedEvent
-  | BackgroundTaskProgressEvent
-  | BackgroundTaskEndedEvent
   | SidecarUpdateStartedEvent
   | SidecarUpdateDownloadedEvent
   | SidecarUpdateFailedEvent;
@@ -898,6 +901,12 @@ export const streamKeys = {
    *  server's single sweep loop can preserve causal ordering between
    *  machine-register and agent-register. */
   lifecycle: 'agent:lifecycle',
+  /** Background-task progress events from `argus-bg` (start / progress /
+   *  ended). Split off from `lifecycle` because a fast tqdm bar emits
+   *  20+ events/sec — at 500 MAXLEN those bursts would silently trim
+   *  heartbeats / fs-changed / sidecar-update events. Higher MAXLEN +
+   *  its own consumer keep both planes fast. */
+  background: 'agent:background',
   command: (agentId: string) => `agent:${agentId}:cmd`,
   result: (agentId: string) => `agent:${agentId}:result`,
   /** Per-machine control plane: server publishes Create/Destroy/Sync
@@ -914,6 +923,9 @@ export const streamKeys = {
  *  `packages/sidecar/internal/protocol/protocol.go::StreamMaxLen`. */
 export const streamMaxLen = (streamKey: string): number => {
   if (streamKey === streamKeys.lifecycle) return 500;
+  // See the streamKeys.background comment for why this is much larger
+  // than lifecycle: a single chatty tqdm bar would otherwise self-trim.
+  if (streamKey === streamKeys.background) return 5000;
   if (streamKey.endsWith(':cmd')) return 200;
   if (streamKey.endsWith(':result')) return 500;
   if (streamKey.endsWith(':control')) return 200;
@@ -925,6 +937,11 @@ export const consumerGroups = {
   server: 'server',
   /** server-side consumer group reading lifecycle events */
   lifecycle: 'server-lifecycle',
+  /** server-side consumer group reading background-task events.
+   *  Separate group (not just stream) because the consumer is a
+   *  different service (BackgroundTaskService) running its own
+   *  XREADGROUP loop. */
+  background: 'server-background',
   /** per-machine consumer group on the machine control stream */
   machine: (machineId: string) => `machine-${machineId}`,
   /** per-agent consumer group an agent supervisor uses on its own

@@ -4,8 +4,10 @@
 // `argus-bg` writes when it wraps a long-running command. Each new
 // line in any `*.jsonl` file is decoded and forwarded to the
 // supervisor, which republishes it as a BackgroundTask{Started,
-// Progress,Ended} lifecycle event so the dashboard can render the
-// per-project Progress tab.
+// Progress,Ended} event on the dedicated `agent:background` Redis
+// stream so the dashboard can render the per-project Progress tab
+// without contending with the much larger `agent:lifecycle` stream
+// (heartbeats, fs-changed, sidecar-update, ...).
 //
 // The watcher exists because once a wrapped command backgrounds
 // itself (`&` / `nohup`), its output no longer flows through the

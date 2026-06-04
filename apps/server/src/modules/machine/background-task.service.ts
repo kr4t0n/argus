@@ -1,10 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import type {
   BackgroundTaskDTO,
   BackgroundTaskEndedEvent,
+  BackgroundTaskEvent,
   BackgroundTaskProgressEvent,
   BackgroundTaskStartedEvent,
 } from '@argus/shared-types';
+import { consumerGroups, streamKeys } from '@argus/shared-types';
+import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 
 /**
@@ -15,12 +18,18 @@ import { StreamGateway } from '../gateway/stream.gateway';
  */
 const ENDED_RETENTION_MS = 5 * 60_000;
 
+/** Consumer name inside `consumerGroups.background`. Unique per-replica
+ *  when we eventually scale out; for now one server, one consumer. */
+const CONSUMER = 'server-1';
+
 /**
  * In-memory registry of every active-or-recently-ended background
- * task, keyed by (machineId, workingDir, taskId). Populated from the
- * three BackgroundTask* lifecycle events the sidecar forwards (which
- * in turn come from `argus-bg` JSONL files written to
- * `<workingDir>/.argus/progress/`).
+ * task, keyed by (machineId, workingDir, taskId). Populated by this
+ * service's own consumer loop on the dedicated
+ * `streamKeys.background` Redis stream — kept off `agent:lifecycle`
+ * so chatty tqdm bars can't trim heartbeats / fs-changed / etc. out
+ * of the shared stream via MAXLEN, and so the lifecycle consumer
+ * doesn't have to walk past every progress frame to find its work.
  *
  * Single source of truth for both the REST late-join endpoint
  * (`GET /machines/:id/background-tasks?workingDir=...`) and the live
@@ -28,7 +37,7 @@ const ENDED_RETENTION_MS = 5 * 60_000;
  * agent's disk are authoritative if you need history.
  */
 @Injectable()
-export class BackgroundTaskService {
+export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BackgroundTaskService.name);
 
   // machineId → workingDir → taskId → DTO
@@ -37,7 +46,85 @@ export class BackgroundTaskService {
   // task gets a new event before the timer fires.
   private readonly evictionTimers = new Map<string, NodeJS.Timeout>();
 
-  constructor(private readonly gateway: StreamGateway) {}
+  private running = false;
+  private loopPromise?: Promise<void>;
+
+  constructor(
+    private readonly redis: RedisService,
+    private readonly gateway: StreamGateway,
+  ) {}
+
+  async onModuleInit() {
+    await this.redis.ensureGroup(streamKeys.background, consumerGroups.background);
+    this.running = true;
+    this.loopPromise = this.consumeLoop();
+  }
+
+  async onModuleDestroy() {
+    this.running = false;
+    // Match MachineService's 6s grace window — the BLOCK timeout
+    // inside the loop is 5s, so this gives one full block-cycle to
+    // notice `this.running` flipped and exit cleanly.
+    await Promise.race([this.loopPromise, new Promise((r) => setTimeout(r, 6_000))]);
+  }
+
+  /**
+   * XREADGROUP loop on the dedicated background-task stream. Mirrors
+   * the shape of MachineService.consumeLoop — same batch size, same
+   * 5s BLOCK — but runs as its own coroutine so a heavy heartbeat
+   * sweep on the lifecycle consumer can't stall progress ingest, and
+   * vice versa.
+   */
+  private async consumeLoop() {
+    while (this.running) {
+      try {
+        const res = (await this.redis.read.xreadgroup(
+          'GROUP',
+          consumerGroups.background,
+          CONSUMER,
+          'COUNT',
+          50,
+          'BLOCK',
+          5_000,
+          'STREAMS',
+          streamKeys.background,
+          '>',
+        )) as Array<[string, Array<[string, string[]]>]> | null;
+
+        if (!res) continue;
+        for (const [, entries] of res) {
+          for (const [msgId, fields] of entries) {
+            try {
+              const data = parseData(fields);
+              if (data) this.handle(data as BackgroundTaskEvent);
+            } catch (err) {
+              this.logger.error(`failed to handle bg-task event: ${(err as Error).message}`);
+            }
+            await this.redis.cmd.xack(streamKeys.background, consumerGroups.background, msgId);
+          }
+        }
+      } catch (err) {
+        if (this.running) {
+          this.logger.error(`background-task loop error: ${(err as Error).message}`);
+          await new Promise((r) => setTimeout(r, 1_000));
+        }
+      }
+    }
+  }
+
+  private handle(ev: BackgroundTaskEvent) {
+    switch (ev.kind) {
+      case 'background-task-started':
+        this.handleStarted(ev);
+        break;
+      case 'background-task-progress':
+        this.handleProgress(ev);
+        break;
+      case 'background-task-ended':
+        this.handleEnded(ev);
+        break;
+    }
+  }
 
   handleStarted(ev: BackgroundTaskStartedEvent) {
     const dto: BackgroundTaskDTO = {
@@ -182,4 +269,21 @@ export class BackgroundTaskService {
 
 function evictionKey(machineId: string, workingDir: string, taskId: string): string {
   return `${machineId}\x00${workingDir}\x00${taskId}`;
+}
+
+/** Decode the JSON payload XADD'd by the sidecar's bus.Publish. Same
+ *  shape MachineService.parseData uses on the lifecycle stream:
+ *  fields is a flat `[k1, v1, k2, v2, ...]` array, the `data` slot
+ *  carries the JSON-encoded event. */
+function parseData(fields: string[]): unknown | null {
+  for (let i = 0; i < fields.length - 1; i += 2) {
+    if (fields[i] === 'data') {
+      try {
+        return JSON.parse(fields[i + 1]!);
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
 }

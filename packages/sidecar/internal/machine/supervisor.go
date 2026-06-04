@@ -470,7 +470,7 @@ func (s *supervisor) publishBackgroundTaskEvent(ctx context.Context, ev bgEvent)
 	now := time.Now().UnixMilli()
 	switch ev.Type {
 	case "start":
-		_ = s.bus.Publish(ctx, protocol.LifecycleStream(), protocol.BackgroundTaskStartedEvent{
+		_ = s.bus.Publish(ctx, protocol.BackgroundTaskStream(), protocol.BackgroundTaskStartedEvent{
 			Kind:       "background-task-started",
 			MachineID:  s.machine,
 			AgentID:    s.spec.AgentID,
@@ -483,7 +483,7 @@ func (s *supervisor) publishBackgroundTaskEvent(ctx context.Context, ev bgEvent)
 			TS:         now,
 		})
 	case "progress":
-		_ = s.bus.Publish(ctx, protocol.LifecycleStream(), protocol.BackgroundTaskProgressEvent{
+		_ = s.bus.Publish(ctx, protocol.BackgroundTaskStream(), protocol.BackgroundTaskProgressEvent{
 			Kind:       "background-task-progress",
 			MachineID:  s.machine,
 			AgentID:    s.spec.AgentID,
@@ -499,7 +499,7 @@ func (s *supervisor) publishBackgroundTaskEvent(ctx context.Context, ev bgEvent)
 			TS:         now,
 		})
 	case "end":
-		_ = s.bus.Publish(ctx, protocol.LifecycleStream(), protocol.BackgroundTaskEndedEvent{
+		_ = s.bus.Publish(ctx, protocol.BackgroundTaskStream(), protocol.BackgroundTaskEndedEvent{
 			Kind:       "background-task-ended",
 			MachineID:  s.machine,
 			AgentID:    s.spec.AgentID,

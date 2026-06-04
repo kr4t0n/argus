@@ -633,7 +633,16 @@ type SidecarHelloAck struct {
 }
 
 // Stream key helpers (Redis Streams — commands/lifecycle/results/control only).
-func LifecycleStream() string                      { return "agent:lifecycle" }
+func LifecycleStream() string { return "agent:lifecycle" }
+
+// BackgroundTaskStream carries `argus-bg`'s per-task JSONL events
+// (start / progress / ended) — high-volume relative to the other
+// lifecycle events that share `agent:lifecycle`. We split them off
+// onto a dedicated stream so a chatty tqdm bar can't trim heartbeats
+// / fs-changed / sidecar-update progress out of the shared stream via
+// the MAXLEN cap, and so the server's progress consumer doesn't have
+// to elbow past every other lifecycle event to find its work.
+func BackgroundTaskStream() string                 { return "agent:background" }
 func CommandStream(id string) string               { return "agent:" + id + ":cmd" }
 func ResultStream(id string) string                { return "agent:" + id + ":result" }
 func MachineControlStream(machineID string) string { return "machine:" + machineID + ":control" }
@@ -648,6 +657,12 @@ func StreamMaxLen(streamKey string) int64 {
 	switch {
 	case streamKey == LifecycleStream():
 		return 500
+	case streamKey == BackgroundTaskStream():
+		// Higher than lifecycle because a fast tqdm bar can emit
+		// 20+ events/sec — at 500 entries one busy task would trim
+		// itself out within a minute. 5000 buys ~4 min of headroom
+		// for a single chatty task or several quieter ones.
+		return 5000
 	case strings.HasSuffix(streamKey, ":cmd"):
 		return 200
 	case strings.HasSuffix(streamKey, ":result"):

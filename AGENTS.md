@@ -99,10 +99,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   short-circuits Postgres ownership checks on every keystroke.
 - `machine/background-task.{service,controller}.ts` — in-memory
   registry of every active-or-recently-ended background task,
-  populated from the three `BackgroundTask*` lifecycle events. Keyed
-  by `(machineId, workingDir, taskId)`; the workingDir is the
-  project identity, matching how notes scope. Each upsert fans out
-  as `background-task:updated` on the per-project Socket.IO room
+  populated by the service's own XREADGROUP loop on
+  `streamKeys.background` (the dedicated `agent:background` stream;
+  deliberately separate from `agent:lifecycle` because a fast tqdm
+  bar emits 20+ events/sec and would otherwise trim heartbeats /
+  fs-changed / sidecar-update progress out via MAXLEN). Keyed by
+  `(machineId, workingDir, taskId)` — workingDir is the project
+  identity, matching how notes scope. Each upsert fans out as
+  `background-task:updated` on the per-project Socket.IO room
   (`project:<machineId>:<workingDir>`); ended tasks linger for 5 min
   via `ENDED_RETENTION_MS` so a late-joining dashboard still sees
   the final state, then fire `background-task:removed` on eviction.
