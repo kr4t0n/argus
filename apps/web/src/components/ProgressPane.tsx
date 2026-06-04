@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CheckCircle2, Loader2, Terminal, XCircle } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertCircle, CheckCircle2, Loader2, Terminal, X, XCircle } from 'lucide-react';
 import type { BackgroundTaskDTO } from '@argus/shared-types';
 import { ApiError, api } from '../lib/api';
 import { joinProject, leaveProject, subscribeHandler } from '../lib/ws';
@@ -115,7 +115,12 @@ export function ProgressPane({
   return (
     <div className="space-y-3 pb-3">
       {ordered.map((t) => (
-        <TaskCard key={t.taskId} task={t} />
+        <TaskCard
+          key={t.taskId}
+          task={t}
+          machineId={machineId}
+          workingDir={workingDir}
+        />
       ))}
     </div>
   );
@@ -141,7 +146,15 @@ function EmptyState() {
   );
 }
 
-function TaskCard({ task }: { task: BackgroundTaskDTO }) {
+function TaskCard({
+  task,
+  machineId,
+  workingDir,
+}: {
+  task: BackgroundTaskDTO;
+  machineId: string;
+  workingDir: string;
+}) {
   const ended = task.endedAt != null;
   const done = task.status === 'done';
   const failed = task.status === 'failed';
@@ -154,6 +167,25 @@ function TaskCard({ task }: { task: BackgroundTaskDTO }) {
     !ended &&
     percent === undefined &&
     (task.total == null || task.total === 0);
+
+  // Dismiss is only exposed on ended cards. If we showed it on a
+  // running card, the next progress event would just re-upsert and
+  // the card would pop back in — confusing UX. Wait for end.
+  const [dismissing, setDismissing] = useState(false);
+  const [dismissError, setDismissError] = useState<string | null>(null);
+  const onDismiss = useCallback(async () => {
+    setDismissError(null);
+    setDismissing(true);
+    try {
+      await api.dismissBackgroundTask(machineId, workingDir, task.taskId);
+      // The card vanishes when the `background-task:removed` socket
+      // event arrives — handled by ProgressPane's subscribeHandler.
+      // No local state mutation needed here.
+    } catch (err) {
+      setDismissError(err instanceof ApiError ? err.message : 'failed to dismiss');
+      setDismissing(false);
+    }
+  }, [machineId, workingDir, task.taskId]);
 
   return (
     <div
@@ -183,6 +215,22 @@ function TaskCard({ task }: { task: BackgroundTaskDTO }) {
         >
           {relativeTime(new Date(task.startedAt).toISOString())}
         </span>
+        {ended && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            disabled={dismissing}
+            title="Dismiss"
+            aria-label="Dismiss task"
+            className="-mr-1 -mt-0.5 shrink-0 rounded p-0.5 text-fg-muted transition-colors hover:bg-surface-2/80 hover:text-fg-primary disabled:opacity-40"
+          >
+            {dismissing ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <X className="h-3 w-3" />
+            )}
+          </button>
+        )}
       </div>
 
       {(percent !== undefined || indeterminate) && (
@@ -230,6 +278,9 @@ function TaskCard({ task }: { task: BackgroundTaskDTO }) {
             ? `Done in ${formatDuration(task.endedAt! - task.startedAt)}`
             : `Failed${typeof task.exitCode === 'number' ? ` (exit ${task.exitCode})` : ''} after ${formatDuration(task.endedAt! - task.startedAt)}`}
         </div>
+      )}
+      {dismissError && (
+        <div className="mt-1 text-[10.5px] text-red-500 dark:text-red-400">{dismissError}</div>
       )}
     </div>
   );

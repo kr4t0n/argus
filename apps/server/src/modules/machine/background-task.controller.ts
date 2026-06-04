@@ -1,4 +1,14 @@
-import { BadRequestException, Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  NotFoundException,
+  Param,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import type { BackgroundTasksResponse } from '@argus/shared-types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { BackgroundTaskService } from './background-task.service';
@@ -29,5 +39,28 @@ export class BackgroundTaskController {
       throw new BadRequestException('workingDir is required');
     }
     return { tasks: this.tasks.listForProject(machineId, workingDir) };
+  }
+
+  /**
+   * Dismiss one background task — remove it from the in-memory
+   * registry and broadcast the removal so every subscribed dashboard
+   * drops the card. Effect is global, not per-user (matches how the
+   * old wall-clock eviction worked). Idempotent at the data layer
+   * but returns 404 for unknown taskIds so a stale double-click
+   * doesn't silently look successful.
+   */
+  @Delete(':machineId/background-tasks/:taskId')
+  @HttpCode(204)
+  dismiss(
+    @Param('machineId') machineId: string,
+    @Param('taskId') taskId: string,
+    @Query('workingDir') workingDir: string,
+  ): void {
+    if (!workingDir) {
+      throw new BadRequestException('workingDir is required');
+    }
+    if (!this.tasks.dismissTask(machineId, workingDir, taskId)) {
+      throw new NotFoundException('task not found');
+    }
   }
 }

@@ -98,21 +98,24 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the wire to survive JSON. A small in-memory cache keyed by terminalId
   short-circuits Postgres ownership checks on every keystroke.
 - `machine/background-task.{service,controller}.ts` — in-memory
-  registry of every active-or-recently-ended background task,
-  populated by the service's own XREADGROUP loop on
-  `streamKeys.background` (the dedicated `agent:background` stream;
-  deliberately separate from `agent:lifecycle` because a fast tqdm
-  bar emits 20+ events/sec and would otherwise trim heartbeats /
-  fs-changed / sidecar-update progress out via MAXLEN). Keyed by
-  `(machineId, workingDir, taskId)` — workingDir is the project
-  identity, matching how notes scope. Each upsert fans out as
-  `background-task:updated` on the per-project Socket.IO room
-  (`project:<machineId>:<workingDir>`); ended tasks linger for 5 min
-  via `ENDED_RETENTION_MS` so a late-joining dashboard still sees
-  the final state, then fire `background-task:removed` on eviction.
-  REST face `GET /machines/:id/background-tasks?workingDir=...`
-  hydrates a tab opening mid-run. No DB persistence — JSONL on the
-  agent's disk is authoritative if you need history.
+  registry of every active + ended background task, populated by the
+  service's own XREADGROUP loop on `streamKeys.background` (the
+  dedicated `agent:background` stream; deliberately separate from
+  `agent:lifecycle` because a fast tqdm bar emits 20+ events/sec and
+  would otherwise trim heartbeats / fs-changed / sidecar-update
+  progress out via MAXLEN). Keyed by `(machineId, workingDir,
+  taskId)` — workingDir is the project identity, matching how notes
+  scope. Each upsert fans out as `background-task:updated` on the
+  per-project Socket.IO room (`project:<machineId>:<workingDir>`).
+  Ended tasks **stay in memory forever** until a user explicitly
+  dismisses them — `DELETE /machines/:id/background-tasks/:taskId?
+  workingDir=...` removes from the map and broadcasts
+  `background-task:removed`. Effect is global (every dashboard
+  viewing the project sees the card disappear), matching how the
+  earlier wall-clock auto-eviction worked. `GET /machines/:id/
+  background-tasks?workingDir=...` hydrates a tab opening mid-run.
+  No DB persistence — JSONL on the agent's disk is authoritative if
+  you need history.
 - `sidecar-link/` — raw WebSocket server on path `/sidecar-link`
   attached to the same `http.Server` as NestJS (via `HttpAdapterHost`,
   `noServer` pattern). Owns one connection per sidecar, validates a
