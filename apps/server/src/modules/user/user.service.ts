@@ -410,7 +410,7 @@ export class UserService {
     const updated = await this.prisma.user
       .update({
         where: { id: userId },
-        data: { extensions: { notes: next.notes } },
+        data: { extensions: { notes: next.notes, progress: next.progress } },
         select: { extensions: true },
       })
       .catch((err) => {
@@ -428,7 +428,10 @@ export class UserService {
  *  set, defaulting every unknown/missing key to `false`. */
 function coerceExtensions(raw: unknown): UserExtensionsResponse {
   const map = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  return { notes: map.notes === true };
+  return {
+    notes: map.notes === true,
+    progress: map.progress === true,
+  };
 }
 
 type QuotaRowWithMachine = {

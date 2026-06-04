@@ -407,6 +407,89 @@ export interface GitChangedEvent {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Background task progress (sidecar → server)
+//
+// Commands wrapped by `argus-bg` (the sidecar's tqdm-aware shell
+// wrapper) write a JSONL event stream into
+// `<workingDir>/.argus/progress/<taskId>.jsonl` as they run. The
+// sidecar's per-agent progress watcher (parallel to fs / git watchers)
+// tails those files and forwards each line on `agent:lifecycle` as one
+// of the three events below.
+//
+// Scoped by (machineId, workingDir, taskId). `workingDir` — not
+// `agentId` — is the project key, because multiple agents in the same
+// project share one `.argus/progress/` directory and the dashboard's
+// Progress tab is per-project. `agentId` is included for attribution
+// (which agent supervisor's watcher observed the file).
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Fires once per task when `argus-bg` writes its "start" JSONL line.
+ * `cmd` is the wrapped argv after the `--` separator so the dashboard
+ * can render what is actually running.
+ */
+export interface BackgroundTaskStartedEvent {
+  kind: 'background-task-started';
+  machineId: string;
+  agentId: string;
+  workingDir: string;
+  taskId: string;
+  label?: string;
+  cmd?: string[];
+  pid?: number;
+  startedAt: number;
+  ts: number;
+}
+
+/**
+ * Emitted as `argus-bg` parses tqdm frames from the wrapped command's
+ * PTY. Throttled inside `argus-bg` (at most one per 500ms OR when
+ * integer percent ticks), so the server-side throttle stays coarse.
+ *
+ * `total === 0` means an unbounded progress bar (tqdm without a known
+ * total); the dashboard renders a spinner / indeterminate bar in that
+ * case rather than a filled percentage.
+ */
+export interface BackgroundTaskProgressEvent {
+  kind: 'background-task-progress';
+  machineId: string;
+  agentId: string;
+  workingDir: string;
+  taskId: string;
+  current: number;
+  total?: number;
+  percent: number;
+  etaSeconds?: number;
+  rate?: number;
+  unit?: string;
+  desc?: string;
+  ts: number;
+}
+
+/**
+ * Closes out a task. `status` is `'done'` on exit code 0 and `'failed'`
+ * otherwise (including SIGINT / SIGTERM forwarded to the child). The
+ * server retains the ended record for a few minutes so late-joining
+ * dashboards still see the final state.
+ */
+export interface BackgroundTaskEndedEvent {
+  kind: 'background-task-ended';
+  machineId: string;
+  agentId: string;
+  workingDir: string;
+  taskId: string;
+  exitCode: number;
+  status: 'done' | 'failed';
+  endedAt: number;
+  ts: number;
+}
+
+export type BackgroundTaskEvent =
+  | BackgroundTaskStartedEvent
+  | BackgroundTaskProgressEvent
+  | BackgroundTaskEndedEvent;
+
+// ─────────────────────────────────────────────────────────────────────
 // Remote sidecar update (server → sidecar)
 //
 // The dashboard exposes an "Update sidecar" action per machine and a
@@ -605,6 +688,9 @@ export type AnyLifecycleEvent =
   | FSChangedEvent
   | GitLogResponseEvent
   | GitChangedEvent
+  | BackgroundTaskStartedEvent
+  | BackgroundTaskProgressEvent
+  | BackgroundTaskEndedEvent
   | SidecarUpdateStartedEvent
   | SidecarUpdateDownloadedEvent
   | SidecarUpdateFailedEvent;

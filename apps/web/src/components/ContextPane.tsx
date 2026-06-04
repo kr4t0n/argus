@@ -6,6 +6,7 @@ import { StatusDot } from './ui/StatusDot';
 import { FileTree } from './FileTree';
 import { GitLogPanel } from './GitLogPanel';
 import { NotePane } from './NotePane';
+import { ProgressPane } from './ProgressPane';
 import { TerminalPane } from './TerminalPane';
 import { cn, relativeTime } from '../lib/utils';
 import { useSessionModel } from '../lib/usage';
@@ -21,14 +22,15 @@ type Props = {
   chunks: ResultChunkDTO[];
 };
 
-type TabKey = 'commits' | 'files' | 'terminal' | 'note';
+type TabKey = 'commits' | 'files' | 'terminal' | 'note' | 'progress';
 
 export function ContextPane({ agent, session, chunks }: Props) {
-  // Notes extension: when on, a "Note" tab joins the pane for a
-  // per-project scratchpad. It needs a project to attach to — i.e. a
-  // workingDir — so the tab only appears when the agent has one (same
-  // gate the Commits/Files tabs use).
+  // Notes / Progress extensions: when on, each adds a per-project tab
+  // to the pane. Both need a workingDir to attach to (the project key),
+  // so the tab only appears when the agent has one (same gate the
+  // Commits/Files tabs use).
   const notesEnabled = useUIStore((s) => s.notesExtensionEnabled);
+  const progressEnabled = useUIStore((s) => s.progressExtensionEnabled);
   // Model surfaces in the very first system / init progress chunk a
   // turn emits, so it appears almost immediately on session open.
   // Token usage (input/output/cache) lives in the header badge's
@@ -47,8 +49,11 @@ export function ContextPane({ agent, session, chunks }: Props) {
     if (notesEnabled && agent.workingDir) {
       t.push({ key: 'note', label: 'Note' });
     }
+    if (progressEnabled && agent.workingDir) {
+      t.push({ key: 'progress', label: 'Progress' });
+    }
     return t;
-  }, [agent, notesEnabled]);
+  }, [agent, notesEnabled, progressEnabled]);
 
   const [active, setActive] = useState<TabKey>('commits');
   useEffect(() => {
@@ -132,6 +137,13 @@ export function ContextPane({ agent, session, chunks }: Props) {
           {active === 'terminal' && <TerminalPane key={agent.id} agent={agent} />}
           {active === 'note' && agent.workingDir && (
             <NotePane key={agent.id} machineId={agent.machineId} workingDir={agent.workingDir} />
+          )}
+          {active === 'progress' && agent.workingDir && (
+            <ProgressPane
+              key={`${agent.machineId}:${agent.workingDir}`}
+              machineId={agent.machineId}
+              workingDir={agent.workingDir}
+            />
           )}
         </div>
       </div>

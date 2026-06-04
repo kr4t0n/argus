@@ -88,7 +88,11 @@ export default function App() {
     // Best-effort: on failure we keep the cached value.
     api
       .getMyExtensions()
-      .then((e) => useUIStore.getState().setNotesExtensionEnabled(e.notes))
+      .then((e) => {
+        const ui = useUIStore.getState();
+        ui.setNotesExtensionEnabled(e.notes);
+        ui.setProgressExtensionEnabled(e.progress);
+      })
       .catch(() => {});
     const socket = ensureSocket();
 

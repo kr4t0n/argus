@@ -97,6 +97,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   open terminals so the UI doesn't show zombies. Bytes are base64 over
   the wire to survive JSON. A small in-memory cache keyed by terminalId
   short-circuits Postgres ownership checks on every keystroke.
+- `machine/background-task.{service,controller}.ts` — in-memory
+  registry of every active-or-recently-ended background task,
+  populated from the three `BackgroundTask*` lifecycle events. Keyed
+  by `(machineId, workingDir, taskId)`; the workingDir is the
+  project identity, matching how notes scope. Each upsert fans out
+  as `background-task:updated` on the per-project Socket.IO room
+  (`project:<machineId>:<workingDir>`); ended tasks linger for 5 min
+  via `ENDED_RETENTION_MS` so a late-joining dashboard still sees
+  the final state, then fire `background-task:removed` on eviction.
+  REST face `GET /machines/:id/background-tasks?workingDir=...`
+  hydrates a tab opening mid-run. No DB persistence — JSONL on the
+  agent's disk is authoritative if you need history.
 - `sidecar-link/` — raw WebSocket server on path `/sidecar-link`
   attached to the same `http.Server` as NestJS (via `HttpAdapterHost`,
   `noServer` pattern). Owns one connection per sidecar, validates a
@@ -164,13 +176,28 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     `maxDepth` levels (reusing a single `listDirWith` core + one
     preloaded gitignore matcher) and returns a `path → entries` map
     so depth-N prefetch lands in one round trip. Both jail to the
-    agent's workingDir, always strip `.git`, and respect gitignore.
-    `fsWatcher` registers one fsnotify watch per non-ignored dir and
-    coalesces events into 250 ms-debounced fs-changed emits. `git.go`
-    reads `.git/HEAD` (and resolves the worktree-pointer file form)
-    without shelling out to `git` or pulling in a Go git lib — its
-    output is attached to every fs-list response so the dashboard's
-    branch badge refreshes for free on every tree refetch.
+    agent's workingDir, always strip `.git` AND `.argus/`, and
+    respect gitignore. `fsWatcher` registers one fsnotify watch per
+    non-ignored dir and coalesces events into 250 ms-debounced
+    fs-changed emits. `git.go` reads `.git/HEAD` (and resolves the
+    worktree-pointer file form) without shelling out to `git` or
+    pulling in a Go git lib — its output is attached to every
+    fs-list response so the dashboard's branch badge refreshes for
+    free on every tree refetch.
+  - `progresswatch.go` — tertiary fsnotify watcher rooted at
+    `<workingDir>/.argus/progress/`, picking up the JSONL stream
+    `argus-bg` writes when wrapping a long-running command. Each
+    decoded line becomes one of the three
+    `BackgroundTask{Started,Progress,Ended}Event` lifecycle frames,
+    forwarded on `agent:lifecycle` so the dashboard's per-project
+    Progress tab can render live status for detached background work
+    the agent's PTY would otherwise never see (anything backgrounded
+    with `&` / `nohup` flows only to the agent's log files, not to
+    the PTY the sidecar captures). `bgEvent` is the wire format on
+    disk; the supervisor decorates it with machineId / agentId /
+    workingDir before publishing. Soft-fails the same way fsw / gitw
+    do — a missing or read-only progress dir just means the tab
+    stays empty.
 - `bus/` — go-redis wrapper with `Publish`, `EnsureGroup`, `ReadMessage`, `Ack`.
 - `adapter/` — `Adapter` interface and process-level **registry**. Each
   adapter file calls `Register(type, &Plugin{Factory, DefaultBinary})`
@@ -195,6 +222,26 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `Settings` struct (shells, max-sessions) and an `AgentLookup`
   interface so it can validate `terminal:open` against the daemon's
   live agent registry (`Agent.supportsTerminal`, `Agent.workingDir`).
+  `buildShellEnv` augments the spawned shell's environment with two
+  hooks the Progress extension depends on: prepends the sidecar's own
+  bin directory to `PATH` (so `argus-bg` is reachable without an
+  absolute path) and exports `ARGUS_PROGRESS_DIR` pointing at the
+  agent's `<workingDir>/.argus/progress/`, which is also where the
+  per-agent `progressWatcher` is listening.
+- `cmd/argus-bg/` — sibling binary shipped alongside the sidecar.
+  Wraps any command (`argus-bg --label "training" -- python train.py`),
+  runs the child in its own PTY so tqdm keeps its interactive
+  rendering on, tees raw output to argus-bg's own stdout (so the user
+  still sees the bar) and optionally to `--tee <log-path>`, parses
+  tqdm frames off the byte stream and writes a structured JSONL
+  event stream (`start` / `progress` / `end`) into
+  `$ARGUS_PROGRESS_DIR/<task-id>.jsonl`. Throttled to one progress
+  event per 500 ms OR per integer-percent tick — whichever comes
+  first — so the file stays bounded under a chatty tqdm bar. Exits
+  with the child's exit code so shell pipelines behave.
+  The tqdm parser lives in `tqdm.go` with a table-driven test
+  (`tqdm_test.go`) covering vanilla, description-prefixed,
+  ANSI-coloured, and HH:MM:SS-eta variants.
 - `updater/` — self-update: reads the GitHub Releases API for
   `argus-sidecar-v*` tags, picks the matching `OS-arch` asset,
   verifies it against `SHASUMS256.txt`, and atomically `os.Rename`s

@@ -1,5 +1,6 @@
 import type {
   AgentDTO,
+  BackgroundTasksResponse,
   CommandDTO,
   CreateAgentRequest,
   CreateCommandRequest,
@@ -243,6 +244,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(ext),
     }),
+
+  /** Active + recently-ended background tasks for one project — hydrates
+   *  the Progress extension's panel on mount. The live socket
+   *  (`background-task:updated` / `:removed`, scoped to the
+   *  `subscribe:project` room) keeps it fresh afterwards. */
+  listBackgroundTasks: (machineId: string, workingDir: string) => {
+    const q = new URLSearchParams({ workingDir });
+    return http<BackgroundTasksResponse>(`/machines/${machineId}/background-tasks?${q.toString()}`);
+  },
 
   /** Recent commits for the agent's workingDir. The response also
    *  carries a fresh GitStatus so the panel header (branch /

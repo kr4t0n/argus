@@ -21,6 +21,7 @@ import {
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
+import { BackgroundTaskService } from './background-task.service';
 import { FSService } from './fs.service';
 import { SidecarUpdateService, stripSidecarPrefix } from './sidecar-update.service';
 
@@ -62,6 +63,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     private readonly gateway: StreamGateway,
     private readonly fs: FSService,
     private readonly sidecarUpdate: SidecarUpdateService,
+    private readonly backgroundTasks: BackgroundTaskService,
   ) {}
 
   async onModuleInit() {
@@ -608,6 +610,18 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         // SidecarUpdateService fans this out to the dashboard and
         // resolves the per-machine + bulk-loop promises.
         this.sidecarUpdate.handleUpdateEvent(ev);
+        break;
+      }
+      case 'background-task-started': {
+        this.backgroundTasks.handleStarted(ev);
+        break;
+      }
+      case 'background-task-progress': {
+        this.backgroundTasks.handleProgress(ev);
+        break;
+      }
+      case 'background-task-ended': {
+        this.backgroundTasks.handleEnded(ev);
         break;
       }
     }

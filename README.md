@@ -93,6 +93,18 @@ project (the `machineId` + working-directory pair every session in
 that directory shares). Both the enablement and the notes themselves
 are saved to your account, so they follow you across browsers and
 devices, and every session in the same working dir sees the same note.
+- **Per-project progress (opt-in extension)**: enable the **Progress**
+extension and the session right panel grows a **Progress** tab that
+lists live background tasks for the project. Wrap any long-running
+command in the agent's shell with `argus-bg --label "training" --
+python train.py &` and its tqdm-style progress bar surfaces in the
+panel in real time, even after you background it with `&` or `nohup`
+(detached processes no longer flow through the agent's PTY, so
+without the wrapper the dashboard would never see them). The wrapper
+binary ships alongside the sidecar and is auto-added to `PATH` on
+every shell the sidecar spawns; the JSONL event stream it writes
+into `<workingDir>/.argus/progress/` is tailed by a per-agent
+watcher and rebroadcast to subscribed dashboards.
 - **Redis Streams** for the bus: durable, replayable, no extra ops weight on
 top of the Redis you already run.
 
