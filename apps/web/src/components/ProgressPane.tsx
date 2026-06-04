@@ -163,10 +163,6 @@ function TaskCard({
     typeof task.percent === 'number'
       ? Math.max(0, Math.min(100, task.percent))
       : undefined;
-  const indeterminate =
-    !ended &&
-    percent === undefined &&
-    (task.total == null || task.total === 0);
 
   // Dismiss is only exposed on ended cards. If we showed it on a
   // running card, the next progress event would just re-upsert and
@@ -233,7 +229,12 @@ function TaskCard({
         )}
       </div>
 
-      {(percent !== undefined || indeterminate) && (
+      {/* Bar + metadata only render once we have a real percent reading.
+          Between "task started" and "first progress event" there's
+          nothing meaningful to show — and a script without tqdm never
+          emits one. The Terminal icon + label already signal "running",
+          so skipping the bar is more honest than pulsing a stand-in. */}
+      {percent !== undefined && (
         <div className="mt-2 space-y-1">
           <div className="h-1.5 overflow-hidden rounded-full bg-surface-2/80">
             <div
@@ -244,20 +245,15 @@ function TaskCard({
                 // a non-green running bar reads as "stalled" against
                 // the green track in the user's theme.
                 failed ? 'bg-red-500 dark:bg-red-400' : 'bg-emerald-500 dark:bg-emerald-400',
-                indeterminate && 'animate-pulse w-full',
               )}
-              style={
-                indeterminate
-                  ? undefined
-                  : { width: `${percent ?? (ended && done ? 100 : 0)}%` }
-              }
+              style={{ width: `${percent}%` }}
             />
           </div>
           <div className="flex items-center justify-between gap-2 font-mono tabular-nums text-[10.5px] text-fg-tertiary">
             <span>
               {task.current ?? 0}
               {task.total ? ` / ${task.total}` : ''}
-              {percent !== undefined ? ` · ${percent.toFixed(0)}%` : ''}
+              {` · ${percent.toFixed(0)}%`}
             </span>
             <span className="flex items-center gap-2">
               {task.rate ? (
