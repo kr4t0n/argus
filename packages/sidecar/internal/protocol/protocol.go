@@ -374,36 +374,47 @@ type BackgroundTaskStartedEvent struct {
 // one per 500ms OR when integer percent ticks), so the server-side
 // throttle can stay coarse. Total == 0 means an unbounded progress bar
 // (tqdm without a known total); UI should render a spinner.
+//
+// Label + Cmd are decorated by the sidecar's progressWatcher from the
+// cached `start` line for this taskId so every progress event is
+// self-describing. A server consumer-group's high-water-mark blocks
+// replay of past `start` events; without decoration, the dashboard
+// would render a "Running" card with no label or command for any task
+// that started before the server's consumer group existed.
 type BackgroundTaskProgressEvent struct {
-	Kind       string  `json:"kind"` // "background-task-progress"
-	MachineID  string  `json:"machineId"`
-	AgentID    string  `json:"agentId"`
-	WorkingDir string  `json:"workingDir"`
-	TaskID     string  `json:"taskId"`
-	Current    int64   `json:"current"`
-	Total      int64   `json:"total,omitempty"`
-	Percent    float64 `json:"percent"`
-	EtaSeconds float64 `json:"etaSeconds,omitempty"`
-	Rate       float64 `json:"rate,omitempty"`
-	Unit       string  `json:"unit,omitempty"`
-	Desc       string  `json:"desc,omitempty"`
-	TS         int64   `json:"ts"`
+	Kind       string   `json:"kind"` // "background-task-progress"
+	MachineID  string   `json:"machineId"`
+	AgentID    string   `json:"agentId"`
+	WorkingDir string   `json:"workingDir"`
+	TaskID     string   `json:"taskId"`
+	Label      string   `json:"label,omitempty"`
+	Cmd        []string `json:"cmd,omitempty"`
+	Current    int64    `json:"current"`
+	Total      int64    `json:"total,omitempty"`
+	Percent    float64  `json:"percent"`
+	EtaSeconds float64  `json:"etaSeconds,omitempty"`
+	Rate       float64  `json:"rate,omitempty"`
+	Unit       string   `json:"unit,omitempty"`
+	Desc       string   `json:"desc,omitempty"`
+	TS         int64    `json:"ts"`
 }
 
 // BackgroundTaskEndedEvent closes out a task. Status is "done" on
 // exitCode == 0 and "failed" otherwise (including SIGINT / SIGTERM
-// forwarded to the child). The server keeps the ended record around
-// briefly so late-joining dashboards can still see the final state.
+// forwarded to the child). Label + Cmd are decorated from the cached
+// `start` line for the same reason as on Progress; see that comment.
 type BackgroundTaskEndedEvent struct {
-	Kind       string `json:"kind"` // "background-task-ended"
-	MachineID  string `json:"machineId"`
-	AgentID    string `json:"agentId"`
-	WorkingDir string `json:"workingDir"`
-	TaskID     string `json:"taskId"`
-	ExitCode   int    `json:"exitCode"`
-	Status     string `json:"status"` // "done" | "failed"
-	EndedAt    int64  `json:"endedAt"`
-	TS         int64  `json:"ts"`
+	Kind       string   `json:"kind"` // "background-task-ended"
+	MachineID  string   `json:"machineId"`
+	AgentID    string   `json:"agentId"`
+	WorkingDir string   `json:"workingDir"`
+	TaskID     string   `json:"taskId"`
+	Label      string   `json:"label,omitempty"`
+	Cmd        []string `json:"cmd,omitempty"`
+	ExitCode   int      `json:"exitCode"`
+	Status     string   `json:"status"` // "done" | "failed"
+	EndedAt    int64    `json:"endedAt"`
+	TS         int64    `json:"ts"`
 }
 
 type FSListResponseEvent struct {

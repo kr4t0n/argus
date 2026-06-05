@@ -149,10 +149,12 @@ export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
   handleProgress(ev: BackgroundTaskProgressEvent) {
     if (this.isDismissed(ev.machineId, ev.workingDir, ev.taskId)) return;
     const existing = this.find(ev.machineId, ev.workingDir, ev.taskId);
-    // No `start` seen yet (sidecar restarted mid-task, or the start
-    // line was lost): synthesize a minimal record so the UI still
-    // gets a row. argus-bg always writes `start` first, so this is
-    // best-effort recovery rather than the common path.
+    // No `start` seen yet: most commonly because the consumer group
+    // didn't exist when the original `start` was XADD'd (server
+    // restart with a running task) — XREADGROUP `>` only delivers
+    // events past the group's high-water-mark, so the start is lost
+    // for good. The sidecar's progressWatcher decorates progress
+    // events with the cached label + cmd to keep the row useful.
     const next: BackgroundTaskDTO = existing
       ? { ...existing }
       : {
@@ -160,9 +162,16 @@ export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
           machineId: ev.machineId,
           workingDir: ev.workingDir,
           agentId: ev.agentId,
+          label: ev.label,
+          cmd: ev.cmd,
           startedAt: ev.ts,
           ts: ev.ts,
         };
+    // Refresh from the event in case the sidecar restarted and
+    // re-cached the start info — keeps a long-running existing card
+    // up to date even if we'd previously latched empty values.
+    if (ev.label) next.label = ev.label;
+    if (ev.cmd) next.cmd = ev.cmd;
     next.current = ev.current;
     next.total = ev.total;
     next.percent = ev.percent;
@@ -185,9 +194,13 @@ export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
           machineId: ev.machineId,
           workingDir: ev.workingDir,
           agentId: ev.agentId,
+          label: ev.label,
+          cmd: ev.cmd,
           startedAt: ev.ts,
           ts: ev.ts,
         };
+    if (ev.label) next.label = ev.label;
+    if (ev.cmd) next.cmd = ev.cmd;
     next.endedAt = ev.endedAt;
     next.exitCode = ev.exitCode;
     next.status = ev.status;

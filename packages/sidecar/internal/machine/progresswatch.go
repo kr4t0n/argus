@@ -74,6 +74,15 @@ type progressWatcher struct {
 	mu     sync.Mutex
 	tails  map[string]*fileTailer
 	closed bool
+
+	// Cached label + cmd per taskId, captured from the `start` line so
+	// we can decorate subsequent `progress` / `end` events. Without
+	// this, a task that started before the server's consumer group
+	// existed would deliver progress events with no metadata — the
+	// dashboard would render an unlabelled "Running" card. Cleared on
+	// `end` so the map stays bounded by active tasks.
+	startsMu sync.Mutex
+	starts   map[string]bgEvent
 }
 
 type fileTailer struct {
@@ -100,11 +109,12 @@ func newProgressWatcher(ctx context.Context, workingDir string, emit func(bgEven
 		return nil, err
 	}
 	w := &progressWatcher{
-		root:  root,
-		inner: inner,
-		emit:  emit,
-		log:   logger,
-		tails: make(map[string]*fileTailer),
+		root:   root,
+		inner:  inner,
+		emit:   emit,
+		log:    logger,
+		tails:  make(map[string]*fileTailer),
+		starts: make(map[string]bgEvent),
 	}
 	if err := inner.Add(root); err != nil {
 		_ = inner.Close()
@@ -263,5 +273,29 @@ func (w *progressWatcher) dispatch(line string) {
 	if ev.Type == "" || ev.ID == "" {
 		return
 	}
+
+	// Maintain the per-taskId start cache and decorate progress / end
+	// events with the original label + cmd so they survive a server
+	// consumer-group's high-water-mark cut-off and the dashboard always
+	// has metadata to render.
+	w.startsMu.Lock()
+	switch ev.Type {
+	case "start":
+		w.starts[ev.ID] = ev
+	case "progress", "end":
+		if cached, ok := w.starts[ev.ID]; ok {
+			if ev.Label == "" {
+				ev.Label = cached.Label
+			}
+			if len(ev.Cmd) == 0 {
+				ev.Cmd = cached.Cmd
+			}
+		}
+		if ev.Type == "end" {
+			delete(w.starts, ev.ID)
+		}
+	}
+	w.startsMu.Unlock()
+
 	w.emit(ev)
 }

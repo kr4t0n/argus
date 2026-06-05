@@ -449,6 +449,13 @@ export interface BackgroundTaskStartedEvent {
  * `total === 0` means an unbounded progress bar (tqdm without a known
  * total); the dashboard renders a spinner / indeterminate bar in that
  * case rather than a filled percentage.
+ *
+ * `label` + `cmd` are decorated by the sidecar's progressWatcher from
+ * the cached `start` line for this taskId so every progress event is
+ * self-describing. A consumer-group's high-water-mark blocks replay of
+ * past `start` events, which would otherwise cause cards for tasks
+ * already running at server-restart time to render with no
+ * label / command.
  */
 export interface BackgroundTaskProgressEvent {
   kind: 'background-task-progress';
@@ -456,6 +463,8 @@ export interface BackgroundTaskProgressEvent {
   agentId: string;
   workingDir: string;
   taskId: string;
+  label?: string;
+  cmd?: string[];
   current: number;
   total?: number;
   percent: number;
@@ -469,8 +478,11 @@ export interface BackgroundTaskProgressEvent {
 /**
  * Closes out a task. `status` is `'done'` on exit code 0 and `'failed'`
  * otherwise (including SIGINT / SIGTERM forwarded to the child). The
- * server retains the ended record for a few minutes so late-joining
- * dashboards still see the final state.
+ * server retains the ended record until a user explicitly dismisses
+ * it via the X button on the card.
+ *
+ * `label` + `cmd` are decorated from the cached `start` line for the
+ * same reason as on Progress; see that comment.
  */
 export interface BackgroundTaskEndedEvent {
   kind: 'background-task-ended';
@@ -478,6 +490,8 @@ export interface BackgroundTaskEndedEvent {
   agentId: string;
   workingDir: string;
   taskId: string;
+  label?: string;
+  cmd?: string[];
   exitCode: number;
   status: 'done' | 'failed';
   endedAt: number;
