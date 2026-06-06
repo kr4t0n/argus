@@ -47,6 +47,9 @@ class UpdateProjectNotesDto {
 class UpdateExtensionsDto {
   @IsBoolean()
   notes!: boolean;
+
+  @IsBoolean()
+  progress!: boolean;
 }
 
 /**
@@ -127,6 +130,9 @@ export class UserController {
     @Req() req: AuthedRequest,
     @Body() body: UpdateExtensionsDto,
   ): Promise<UserExtensionsResponse> {
-    return this.users.setExtensions(req.user.id, { notes: body.notes });
+    return this.users.setExtensions(req.user.id, {
+      notes: body.notes,
+      progress: body.progress,
+    });
   }
 }

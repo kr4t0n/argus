@@ -62,3 +62,8 @@ apps/server/prisma/migrations/dev/
 data/
 postgres-data/
 redis-data/
+
+# Per-project Argus state — argus-bg writes its JSONL progress files
+# here for the sidecar's progressWatcher to pick up. These are
+# device-local runtime artefacts and never belong in version control.
+.argus/

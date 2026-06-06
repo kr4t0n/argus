@@ -72,6 +72,13 @@ detect_arch() {
 OS=$(detect_os)
 ARCH=$(detect_arch)
 ASSET="${BIN_NAME}-${OS}-${ARCH}"
+# argus-bg is the per-shell wrapper that exposes a long-running
+# command's tqdm progress to the dashboard's Progress tab. It ships
+# alongside the sidecar; older releases predate it, so the install
+# pass below treats it as optional and gracefully skips the install
+# when the asset isn't in SHASUMS256.txt.
+BG_ASSET="argus-bg-${OS}-${ARCH}"
+BG_BIN_NAME="argus-bg"
 
 # ── Pick a downloader (curl > wget) ───────────────────────────────────
 if command -v curl >/dev/null 2>&1; then
@@ -228,28 +235,33 @@ asset_url() {
     [ -n "$_id" ] && printf 'https://api.github.com/repos/%s/releases/assets/%s\n' "$REPO" "$_id"
 }
 
-BIN_URL=$(asset_url "$ASSET")
 SUMS_URL=$(asset_url "SHASUMS256.txt")
-[ -n "$BIN_URL" ]  || die "release $TAG is missing asset $ASSET (built for an unsupported platform?)"
 [ -n "$SUMS_URL" ] || die "release $TAG is missing SHASUMS256.txt — refusing to install without checksum"
 
 info "downloading checksum manifest …"
 http_get_asset "$SUMS_URL" "$TMP_DIR/SHASUMS256.txt"
-EXPECTED=$(awk -v a="$ASSET" '$2==a {print $1}' "$TMP_DIR/SHASUMS256.txt")
-[ -n "$EXPECTED" ] || die "$ASSET not present in SHASUMS256.txt"
 
-info "downloading $ASSET …"
-http_get_asset "$BIN_URL" "$TMP_DIR/$ASSET"
-
-GOT=$(sha256 "$TMP_DIR/$ASSET")
-if [ "$EXPECTED" != "$GOT" ]; then
-    die "checksum mismatch — expected $EXPECTED, got $GOT"
-fi
-info "checksum verified (sha256 ${DIM}$GOT${RESET})"
+# ── Install one asset: download → verify → atomic mv ─────────────────
+# Refactored from the original single-binary path so we can install
+# argus-bg the same way without duplicating the SHA-256 dance.
+install_asset() {
+    _asset="$1"; _install_as="$2"
+    _url=$(asset_url "$_asset")
+    [ -n "$_url" ] || die "release $TAG is missing asset $_asset"
+    _expected=$(awk -v a="$_asset" '$2==a {print $1}' "$TMP_DIR/SHASUMS256.txt")
+    [ -n "$_expected" ] || die "$_asset not present in SHASUMS256.txt"
+    info "downloading $_asset …"
+    http_get_asset "$_url" "$TMP_DIR/$_asset"
+    _got=$(sha256 "$TMP_DIR/$_asset")
+    if [ "$_expected" != "$_got" ]; then
+        die "checksum mismatch for $_asset — expected $_expected, got $_got"
+    fi
+    info "checksum verified for $_install_as (sha256 ${DIM}$_got${RESET})"
+    chmod 0755 "$TMP_DIR/$_asset"
+    mv -f "$TMP_DIR/$_asset" "$INSTALL_DIR/$_install_as"
+}
 
 # ── Install ──────────────────────────────────────────────────────────
-chmod 0755 "$TMP_DIR/$ASSET"
-
 if [ ! -d "$INSTALL_DIR" ]; then
     mkdir -p "$INSTALL_DIR" 2>/dev/null \
         || die "could not create $INSTALL_DIR (run with elevated privileges or set ARGUS_INSTALL_DIR)"
@@ -259,19 +271,31 @@ if [ ! -w "$INSTALL_DIR" ]; then
     die "$INSTALL_DIR is not writable — re-run with sudo, or set ARGUS_INSTALL_DIR=\$HOME/.local/bin"
 fi
 
-# Atomic mv — works even if the previous binary is currently being
-# executed (POSIX rename keeps the running process's inode alive until
-# exit; new invocations get the new file).
-mv -f "$TMP_DIR/$ASSET" "$INSTALL_DIR/$BIN_NAME"
+install_asset "$ASSET" "$BIN_NAME"
+
+# Best-effort install of argus-bg. The Progress dashboard tab depends
+# on it being on PATH inside the sidecar's spawned shells — the
+# sidecar prepends its own bin dir to PATH so dropping argus-bg here
+# is sufficient. Older releases predate this binary; skip cleanly so
+# the rest of the install isn't broken for them.
+if awk -v a="$BG_ASSET" '$2==a {found=1} END{exit !found}' "$TMP_DIR/SHASUMS256.txt"; then
+    install_asset "$BG_ASSET" "$BG_BIN_NAME"
+    INSTALLED_BG=1
+else
+    warn "release $TAG does not ship $BG_ASSET — Progress tab will be empty until you upgrade"
+    INSTALLED_BG=0
+fi
 
 # ── Post-install: PATH check + version banner ─────────────────────────
 case ":$PATH:" in
     *":$INSTALL_DIR:"*)
         info "$BIN_NAME installed:"
         "$INSTALL_DIR/$BIN_NAME" version
+        [ "$INSTALLED_BG" = "1" ] && info "$BG_BIN_NAME installed at $INSTALL_DIR/$BG_BIN_NAME"
         ;;
     *)
         info "$BIN_NAME installed at $INSTALL_DIR/$BIN_NAME"
+        [ "$INSTALLED_BG" = "1" ] && info "$BG_BIN_NAME installed at $INSTALL_DIR/$BG_BIN_NAME"
         warn "$INSTALL_DIR is not on your PATH. Add this to your shell profile:"
         printf '\n    export PATH="%s:$PATH"\n\n' "$INSTALL_DIR" >&2
         printf '%sThen reload your shell, or invoke directly:%s %s/%s version\n' \

@@ -1,5 +1,6 @@
 import type {
   AgentDTO,
+  BackgroundTasksResponse,
   CommandDTO,
   CreateAgentRequest,
   CreateCommandRequest,
@@ -243,6 +244,24 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(ext),
     }),
+
+  /** Active + recently-ended background tasks for one project — hydrates
+   *  the Progress extension's panel on mount. The live socket
+   *  (`background-task:updated` / `:removed`, scoped to the
+   *  `subscribe:project` room) keeps it fresh afterwards. */
+  listBackgroundTasks: (machineId: string, workingDir: string) => {
+    const q = new URLSearchParams({ workingDir });
+    return http<BackgroundTasksResponse>(`/machines/${machineId}/background-tasks?${q.toString()}`);
+  },
+  /** Remove one background task from the server's in-memory registry
+   *  and broadcast the removal so every connected dashboard drops the
+   *  card. Effect is global, not per-user. */
+  dismissBackgroundTask: (machineId: string, workingDir: string, taskId: string) => {
+    const q = new URLSearchParams({ workingDir });
+    return http<void>(`/machines/${machineId}/background-tasks/${taskId}?${q.toString()}`, {
+      method: 'DELETE',
+    });
+  },
 
   /** Recent commits for the agent's workingDir. The response also
    *  carries a fresh GitStatus so the panel header (branch /
