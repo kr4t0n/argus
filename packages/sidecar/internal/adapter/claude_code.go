@@ -320,6 +320,24 @@ func mapClaudeLine(line string, state *fileEditState, workingDir string) []Chunk
 			// wants the feedback) and rely on the next chunk to imply
 			// completion.
 			return nil
+		case "thinking_tokens":
+			// Newer Claude Code emits this repeatedly while extended
+			// thinking is in progress: `estimated_tokens` is the running
+			// total of thinking tokens so far, `estimated_tokens_delta` the
+			// increment since the last event (fires roughly every ~150
+			// tokens). We forward it as a *content-less* progress chunk so
+			// it never renders as a junk "system" row, while the estimate
+			// rides in Meta for the UI to surface as a live "Thinking… N
+			// tokens" counter. The actual reasoning text arrives separately
+			// as `thinking` content blocks on assistant messages (below).
+			meta := map[string]any{"contentType": "thinking_tokens"}
+			if v, ok := jsonNumberToInt64(ev["estimated_tokens"]); ok {
+				meta["estimatedTokens"] = v
+			}
+			if v, ok := jsonNumberToInt64(ev["estimated_tokens_delta"]); ok {
+				meta["estimatedTokensDelta"] = v
+			}
+			return []Chunk{{Kind: protocol.KindProgress, Meta: meta}}
 		}
 		return []Chunk{{Kind: protocol.KindProgress, Content: t, Meta: ev}}
 
@@ -334,6 +352,30 @@ func mapClaudeLine(line string, state *fileEditState, workingDir string) []Chunk
 				if s, _ := item["text"].(string); s != "" {
 					out = append(out, Chunk{Kind: protocol.KindDelta, Delta: s})
 				}
+			case "thinking":
+				// Extended-thinking reasoning block. The text lives in the
+				// `thinking` field (not `text`); `signature` is dropped. We
+				// surface it as a progress chunk tagged contentType=thinking
+				// — NOT a delta — because post-tool deltas get concatenated
+				// into the visible final answer (see splitDeltas), and we
+				// must not let private reasoning leak into the reply.
+				if s, _ := item["thinking"].(string); s != "" {
+					meta := map[string]any{"contentType": "thinking"}
+					if parentToolUseID != "" {
+						meta["parentToolUseId"] = parentToolUseID
+					}
+					out = append(out, Chunk{Kind: protocol.KindProgress, Content: s, Meta: meta})
+				}
+			case "redacted_thinking":
+				// Encrypted reasoning the API won't expose in cleartext. We
+				// can't render it, but we still emit a placeholder so the UI
+				// shows that the model thought here rather than silently
+				// dropping the block.
+				meta := map[string]any{"contentType": "thinking", "redacted": true}
+				if parentToolUseID != "" {
+					meta["parentToolUseId"] = parentToolUseID
+				}
+				out = append(out, Chunk{Kind: protocol.KindProgress, Content: "[redacted thinking]", Meta: meta})
 			case "tool_use":
 				name, _ := item["name"].(string)
 				input, _ := item["input"].(map[string]any)

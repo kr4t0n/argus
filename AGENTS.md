@@ -503,6 +503,26 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   versions. The mappers (`mapClaudeLine`, `mapCodexLine`) are
   defensive — unknown events fall through as `progress` chunks rather than
   crashing.
+- **Extended thinking (Claude Code)**: newer `claude` emits two distinct
+  thinking signals, handled in `mapClaudeLine`:
+  1. `{"type":"system","subtype":"thinking_tokens","estimated_tokens":N,
+     "estimated_tokens_delta":D}` — fires repeatedly (~every 150 tokens)
+     while the model reasons. Mapped to a **content-less** `progress`
+     chunk with `meta.contentType="thinking_tokens"` +
+     `meta.estimatedTokens`/`estimatedTokensDelta`. Content-less so it
+     never renders as a junk row; the web (`ActivityPill`) reads the
+     running max from `meta` to show a live "🧠 N" counter in the capsule
+     while the turn is running. *Gotcha:* before this was handled, the
+     event fell through and surfaced as a literal "system" progress row.
+  2. `thinking` / `redacted_thinking` content blocks on `assistant`
+     messages (text in the `thinking` field, **not** `text`). Mapped to a
+     `progress` chunk with `meta.contentType="thinking"` (+ `redacted:true`
+     for the encrypted variant). Deliberately **not** a `delta` chunk:
+     post-tool deltas get concatenated into the visible final answer by
+     `splitDeltas`, so emitting reasoning as a delta would leak private
+     thinking into the reply. The web renders these as labelled "Thinking"
+     rows in the activity timeline. Cursor CLI (`mapCursorLine`) does not
+     yet mirror this.
 - **File-edit diffs**: every adapter (Codex, Claude Code, Cursor CLI)
   shares the snapshot-then-diff machinery in
   `packages/sidecar/internal/adapter/filediff.go`. The flow is uniform:
