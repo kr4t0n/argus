@@ -522,7 +522,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
      `splitDeltas`, so emitting reasoning as a delta would leak private
      thinking into the reply. The web renders these as labelled "Thinking"
      rows in the activity timeline. Cursor CLI (`mapCursorLine`) does not
-     yet mirror this.
+     yet mirror this. *Big gotcha (verified empirically against `claude`
+     2.1.167):* on **Opus 4.7/4.8** the API defaults to
+     `thinking.display: "omitted"`, so the `thinking` field arrives
+     **empty** with only a `signature` (the multi-turn/tool-use
+     verification token, not reasoning text). On **Opus 4.6 / Sonnet 4.6**
+     the default is `"summarized"` and the field is populated. Claude Code
+     inherits the model's default, exposes no CLI flag to override it, and
+     the sidecar only wraps the CLI — so it cannot force summarized
+     thinking. Net: the `thinking_tokens` counter works on every model,
+     but "Thinking" text rows only populate on models that return
+     summarized thinking (run the agent on 4.6/sonnet-4.6 to get them).
+     The empty block is expected, not a bug; the `if s != ""` guard
+     suppresses it so no blank rows render.
 - **File-edit diffs**: every adapter (Codex, Claude Code, Cursor CLI)
   shares the snapshot-then-diff machinery in
   `packages/sidecar/internal/adapter/filediff.go`. The flow is uniform:
