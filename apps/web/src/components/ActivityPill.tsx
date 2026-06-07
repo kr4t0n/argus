@@ -41,23 +41,6 @@ export function ActivityPill({ chunks, running, startedAt, endedAt, open, onTogg
   );
   const items: TimelineItem[] = useMemo(() => buildTimeline(chunks), [chunks]);
 
-  // Running estimate of extended-thinking tokens, surfaced live in the
-  // capsule. The claude-code sidecar emits a `thinking_tokens` progress
-  // chunk (contentType=thinking_tokens, content-less) every ~150 tokens
-  // while the model reasons; estimatedTokens is monotonic per turn, so we
-  // take the max rather than the last in case chunks arrive out of order.
-  const thinkingTokens = useMemo(() => {
-    let max = 0;
-    for (const c of chunks) {
-      if (c.kind !== 'progress') continue;
-      const meta = (c.meta ?? {}) as Record<string, unknown>;
-      if (meta.contentType !== 'thinking_tokens') continue;
-      const t = typeof meta.estimatedTokens === 'number' ? meta.estimatedTokens : 0;
-      if (t > max) max = t;
-    }
-    return max;
-  }, [chunks]);
-
   // Re-render on a 100 ms tick while the turn is live so the elapsed-time
   // readout advances smoothly instead of jumping whenever a chunk arrives.
   // Gated on `running` — once the turn finishes, `endedAt` freezes the
@@ -89,18 +72,10 @@ export function ActivityPill({ chunks, running, startedAt, endedAt, open, onTogg
       <Sep />
       <span className="flex items-center gap-1.5">
         {running ? (
-          <span className="flex items-center gap-2">
-            <span className="flex gap-1">
-              <Dot delay="0ms" />
-              <Dot delay="160ms" />
-              <Dot delay="320ms" />
-            </span>
-            {thinkingTokens > 0 && (
-              <span className="flex items-center gap-1 tabular-nums text-fg-tertiary">
-                <Brain className="h-3 w-3" />
-                {formatTokens(thinkingTokens)}
-              </span>
-            )}
+          <span className="flex gap-1">
+            <Dot delay="0ms" />
+            <Dot delay="160ms" />
+            <Dot delay="320ms" />
           </span>
         ) : (
           <span className="truncate max-w-[180px] font-mono text-fg-tertiary">
@@ -365,14 +340,6 @@ function summarizeTool(c: ResultChunkDTO): string {
   const fp = input.file_path ?? input.path ?? input.pattern ?? input.command;
   if (typeof fp === 'string' && fp) return `${tool} ${fp}`;
   return tool || (c.content ?? '');
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1000) {
-    const k = n / 1000;
-    return `${k >= 100 ? Math.round(k) : k.toFixed(1)}k`;
-  }
-  return String(n);
 }
 
 function formatElapsed(ms: number): string {
