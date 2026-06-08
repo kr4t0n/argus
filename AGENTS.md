@@ -503,6 +503,38 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   versions. The mappers (`mapClaudeLine`, `mapCodexLine`) are
   defensive — unknown events fall through as `progress` chunks rather than
   crashing.
+- **Extended thinking (Claude Code)**: newer `claude` emits two distinct
+  thinking signals, handled in `mapClaudeLine`:
+  1. `{"type":"system","subtype":"thinking_tokens","estimated_tokens":N,
+     "estimated_tokens_delta":D}` — fires repeatedly (~every 150 tokens)
+     while the model reasons. Mapped to a **content-less** `progress`
+     chunk with `meta.contentType="thinking_tokens"` +
+     `meta.estimatedTokens`/`estimatedTokensDelta`. Content-less so it
+     never renders as a junk row; the web (`ActivityPill`) reads the
+     running max from `meta` to show a live "🧠 N" counter in the capsule
+     while the turn is running. *Gotcha:* before this was handled, the
+     event fell through and surfaced as a literal "system" progress row.
+  2. `thinking` / `redacted_thinking` content blocks on `assistant`
+     messages (text in the `thinking` field, **not** `text`). Mapped to a
+     `progress` chunk with `meta.contentType="thinking"` (+ `redacted:true`
+     for the encrypted variant). Deliberately **not** a `delta` chunk:
+     post-tool deltas get concatenated into the visible final answer by
+     `splitDeltas`, so emitting reasoning as a delta would leak private
+     thinking into the reply. The web renders these as labelled "Thinking"
+     rows in the activity timeline. Cursor CLI (`mapCursorLine`) does not
+     yet mirror this. *Big gotcha (verified empirically against `claude`
+     2.1.167):* on **Opus 4.7/4.8** the API defaults to
+     `thinking.display: "omitted"`, so the `thinking` field arrives
+     **empty** with only a `signature` (the multi-turn/tool-use
+     verification token, not reasoning text). On **Opus 4.6 / Sonnet 4.6**
+     the default is `"summarized"` and the field is populated. Claude Code
+     inherits the model's default, exposes no CLI flag to override it, and
+     the sidecar only wraps the CLI — so it cannot force summarized
+     thinking. Net: the `thinking_tokens` counter works on every model,
+     but "Thinking" text rows only populate on models that return
+     summarized thinking (run the agent on 4.6/sonnet-4.6 to get them).
+     The empty block is expected, not a bug; the `if s != ""` guard
+     suppresses it so no blank rows render.
 - **File-edit diffs**: every adapter (Codex, Claude Code, Cursor CLI)
   shares the snapshot-then-diff machinery in
   `packages/sidecar/internal/adapter/filediff.go`. The flow is uniform:
