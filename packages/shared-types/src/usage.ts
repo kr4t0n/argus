@@ -207,6 +207,52 @@ export function parseUsage(
 }
 
 /**
+ * Parse the *live context size* from a `final`-kind chunk's `meta` — the
+ * prompt the model saw on its MOST RECENT single API call.
+ *
+ * Differs from `parseUsage` for **claude-code only**. Claude Code's
+ * stream-json `result` event reports `meta.usage` as the CUMULATIVE
+ * aggregate across every API round-trip the turn made — and a tool-use
+ * turn makes many, each re-reading the conversation from cache. Summing
+ * its fields therefore overcounts the context window by roughly the
+ * number of round-trips (a 6-call turn reads ~6× the real context,
+ * pinning the ring near 100%). The per-call breakdown is carried in
+ * `meta.usage.iterations`; its LAST element is the final API call, and
+ * its `input + cache_read + cache_write` equals the true live context.
+ * (Verified empirically: a 6-call turn reported top-level used ≈ 157k vs
+ * iterations[-1] used ≈ 26.6k — a 5.9× overcount.)
+ *
+ * For every other adapter — and for claude-code when `iterations` is
+ * absent (older CLI builds, or an error/cancelled turn) — this is exactly
+ * `parseUsage`. NOTE: `useSessionUsage` and the server-side aggregation
+ * deliberately keep using `parseUsage` (the aggregate): that IS the
+ * correct per-turn total for cost/usage. Only the context ring wants the
+ * single-call size, so only it calls this.
+ */
+export function parseContextUsage(
+  adapterType: AgentType,
+  meta: Record<string, unknown> | null | undefined,
+): TokenUsage | null {
+  if (adapterType === 'claude-code' && meta) {
+    const usage = meta.usage as Record<string, unknown> | undefined;
+    const iterations = usage?.iterations;
+    if (Array.isArray(iterations) && iterations.length > 0) {
+      const last = iterations[iterations.length - 1];
+      if (last && typeof last === 'object') {
+        // Each iteration carries the same claude-code field names as the
+        // top-level usage, so reuse the claude-code branch of parseUsage
+        // by handing it a synthetic `{ usage: last }` meta.
+        const perCall = parseUsage('claude-code', {
+          usage: last as Record<string, unknown>,
+        });
+        if (perCall) return perCall;
+      }
+    }
+  }
+  return parseUsage(adapterType, meta);
+}
+
+/**
  * Best-effort extraction of the model name from a chunk's `meta`.
  * Returns `null` when the meta has no recognizable model field.
  *

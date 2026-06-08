@@ -773,7 +773,20 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   The "current context used" numerator is the LATEST `final` chunk's
   `inputTokens + cacheReadTokens + cacheWriteTokens` — not a sum across
   turns — because each CLI re-sends the full history on `--resume`,
-  so the most recent prompt size IS the live context. When a new model
+  so the most recent prompt size IS the live context. **Gotcha:** for
+  claude-code the `result` event's top-level `usage` is the *cumulative
+  whole-turn aggregate* (summed over every API round-trip a tool-use turn
+  makes), which overcounts the live context by ~the round-trip count and
+  pins the ring near 100%. So the ring sources its numerator via
+  `parseContextUsage`, which for claude-code reads the final single call
+  from `usage.iterations[-1]`; `parseUsage` (used by `useSessionUsage` and
+  the server-side `/me/usage` aggregation) intentionally keeps the
+  cumulative aggregate, which is the correct per-turn cost/usage total.
+  codex (`turn.completed.usage`) and cursor-cli expose only a turn-level
+  total in `exec --json`, so their rings can still overcount on multi-call
+  turns — codex's per-call figure lives in the richer `app-server`
+  protocol (`thread/tokenUsage/updated` → `tokenUsage.last`), not adopted
+  here. When a new model
   family ships (Anthropic / OpenAI / Cursor announcement), bump the
   table as `chore(shared): update model context windows` — verify
   against the upstream announcement, not release-note rumors. Unknown

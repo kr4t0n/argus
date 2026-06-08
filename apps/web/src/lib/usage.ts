@@ -9,6 +9,7 @@ import {
   ZERO_USAGE,
   hasUsage,
   lookupContextWindow,
+  parseContextUsage,
   parseModel,
   parseUsage,
   sumUsage,
@@ -77,7 +78,10 @@ export interface SessionContext {
    *  conversation as the model just saw it. Sums input + cache-read +
    *  cache-write because all three are prompt-side under both Anthropic
    *  and Cursor's disjoint conventions; codex normalizes to the same
-   *  shape in `parseUsage`. */
+   *  shape in `parseUsage`. Sourced via `parseContextUsage`, which for
+   *  claude-code reads the final *single* API call (`usage.iterations[-1]`)
+   *  rather than the cumulative whole-turn aggregate that would otherwise
+   *  overcount a tool-use turn by ~its number of round-trips. */
   used: number;
   /** Total context window for the active model (e.g., 200_000). */
   window: number;
@@ -97,6 +101,14 @@ export interface SessionContext {
  * history on every turn (Claude Code `--resume`, Codex `resume`, Cursor
  * CLI `--resume`), so the most recent input-token count IS the live
  * context size from the model's perspective.
+ *
+ * Uses `parseContextUsage` (not `parseUsage`): for claude-code the final
+ * chunk's top-level `usage` is the cumulative whole-turn aggregate, which
+ * overcounts a tool-use turn by ~its number of API round-trips, so we read
+ * the final single call from `usage.iterations[-1]` instead. codex and
+ * cursor-cli still expose only a turn-level total in their final chunk —
+ * their rings can likewise overcount on multi-call turns until those
+ * adapters surface a per-call figure (tracked separately).
  *
  * Returns `null` when:
  *   - the agent type is unknown (no parser to pick),
@@ -129,7 +141,7 @@ export function useSessionContext(
     for (let i = chunks.length - 1; i >= 0; i--) {
       const c = chunks[i];
       if (c.kind !== 'final') continue;
-      const u = parseUsage(agentType, c.meta);
+      const u = parseContextUsage(agentType, c.meta);
       if (u) {
         latest = u;
         break;
