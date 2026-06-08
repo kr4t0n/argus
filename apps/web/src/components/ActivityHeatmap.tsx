@@ -46,6 +46,13 @@ const MONTH_LABEL_H = 14;
 // closer than this prevents text collisions.
 const MIN_LABEL_GAP_COLS = 3;
 
+// Floor for the svg area, matching ActivityLineChart's plot height
+// (its `height` 132 + `AXIS_H` 16). The heatmap's grid is usually a few
+// px shorter, so reserving this keeps the profile's Grid/Curve toggle
+// from reflowing the page. It still grows past this on very wide
+// viewports (min-height, not a cap).
+const CHART_AREA_MIN_H = 148;
+
 export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
   const grid = useMemo(() => buildGrid(days), [days]);
   const max = useMemo(() => days.reduce((m, d) => Math.max(m, d.count), 0), [days]);
@@ -114,7 +121,7 @@ export function ActivityHeatmap({ days, cell = 11, gap = 2 }: Props) {
           <span>more</span>
         </div>
       </div>
-      <div ref={wrapRef} className="relative w-full">
+      <div ref={wrapRef} className="relative w-full" style={{ minHeight: CHART_AREA_MIN_H }}>
         <svg
           width={width}
           height={height}

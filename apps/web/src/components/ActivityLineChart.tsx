@@ -104,7 +104,12 @@ export function ActivityLineChart({ days, height = 132 }: Props) {
         {total.toLocaleString()} command{total === 1 ? '' : 's'} in the last year
         {max > 0 && <span className="text-fg-muted"> · peak {max.toLocaleString()}/day</span>}
       </div>
-      <div ref={wrapRef} className="relative w-full">
+      {/* Reserve the plot height up front: the svg only renders once the
+          ResizeObserver has a width, so without this the wrap is 0px tall
+          on first paint and pops to `fullH` — which, combined with the
+          heatmap being a different height, made the profile's Grid/Curve
+          toggle reflow the page. */}
+      <div ref={wrapRef} className="relative w-full" style={{ minHeight: fullH }}>
         {width > 0 && (
           <svg
             width={width}
