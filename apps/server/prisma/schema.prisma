@@ -33,6 +33,7 @@ model User {
 
   sessions     Session[]
   projectNotes ProjectNote[]
+  attachments  Attachment[]
 }
 
 // A free-form note the user keeps for a "project" — the
@@ -220,12 +221,41 @@ model Command {
   // avoid scanning every final chunk's raw `meta` JSON.
   usage       Json?
 
-  session Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  agent   Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  chunks  ResultChunk[]
+  session     Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  agent       Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  chunks      ResultChunk[]
+  attachments Attachment[]
 
   @@index([sessionId, createdAt])
   @@index([agentId, createdAt])
+}
+
+// A file the user attached to a turn. Bytes live in S3/MinIO under
+// `s3Key`; this row is the metadata + ownership record. Uploaded ahead
+// of the turn via POST /attachments (so `commandId` is NULL until the
+// turn is actually sent), then linked to its Command at dispatch. The
+// sidecar pulls the bytes over HTTP, lands them under the agent's
+// `.argus/uploads/`, and references the path in the prompt.
+//
+// Deleting a Command cascades these rows away; the S3 object is removed
+// best-effort by the service on that path (orphan sweep is a follow-up).
+// `commandId IS NULL` rows are unlinked uploads (composer abandoned
+// before send) and are safe to prune by age.
+model Attachment {
+  id        String   @id @default(cuid())
+  userId    String
+  commandId String?
+  filename  String
+  mime      String
+  size      Int
+  s3Key     String
+  createdAt DateTime @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  command Command? @relation(fields: [commandId], references: [id], onDelete: Cascade)
+
+  @@index([commandId])
+  @@index([userId, createdAt])
 }
 
 model ResultChunk {
