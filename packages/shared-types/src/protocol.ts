@@ -728,6 +728,32 @@ export interface CloneSpec {
   turnIndex: number;
 }
 
+/**
+ * One file the user attached to a turn. Rides on Command so the sidecar
+ * can pull the bytes BEFORE invoking the CLI, write them under
+ * `<workingDir>/.argus/uploads/`, and reference the on-disk path in the
+ * prompt (and, for adapters with a native image flag, pass it directly).
+ *
+ * The bytes themselves never travel on the Redis command stream — only
+ * this reference does. The sidecar fetches the file over HTTP from the
+ * server (the server is the S3/MinIO gateway) at
+ * `GET {serverUrl}/attachments/{id}?t={token}`, building the URL from its
+ * own configured server URL so the server needn't know its public origin.
+ * `token` is a short-lived (~15 min) JWT scoped to this attachment id.
+ */
+export interface AttachmentRef {
+  id: string;
+  /** Original client filename, sanitized by the sidecar before it hits disk. */
+  filename: string;
+  /** MIME type sniffed/declared at upload — lets the sidecar branch
+   *  image/* attachments onto a CLI's native image flag (e.g. codex). */
+  mime: string;
+  /** Byte size, for logging / sanity bounds on the sidecar side. */
+  size: number;
+  /** Short-lived signed token appended to the pull URL. */
+  token: string;
+}
+
 /** Server → sidecar */
 export interface Command {
   id: string;
@@ -745,6 +771,9 @@ export interface Command {
   timeoutMs?: number;
   /** optional adapter-specific options (model, flags, etc.) */
   options?: Record<string, unknown>;
+  /** Files the user attached to this turn. Empty/absent for a plain
+   *  text turn. The sidecar pulls + lands each before running the CLI. */
+  attachments?: AttachmentRef[];
   /** Set when kind === 'clone-session'; ignored otherwise. */
   clone?: CloneSpec;
 }
