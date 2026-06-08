@@ -467,7 +467,7 @@ func (d *Daemon) handleSyncAgents(ctx context.Context, specs []protocol.AgentSpe
 // Persists the agent into the cache on success so a subsequent reboot
 // can respawn it without waiting for the server to push a sync.
 func (d *Daemon) spawnSupervisor(ctx context.Context, rec AgentRecord, publishAck bool) {
-	s, err := newSupervisor(ctx, d.cache.MachineID, d.bus, rec, d.log)
+	s, err := newSupervisor(ctx, d.cache.MachineID, d.cache.Server.URL, d.bus, rec, d.log)
 	if err != nil {
 		d.log.Printf("agent %s: spawn failed: %v", rec.AgentID, err)
 		if publishAck {

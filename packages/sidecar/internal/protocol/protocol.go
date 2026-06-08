@@ -89,8 +89,8 @@ type MachineHeartbeatEvent struct {
 // "remaining" — Anthropic returns it in this direction; the codex prober
 // flips ChatGPT's percent_left before publishing so the wire is uniform.
 type QuotaWindow struct {
-	Key                string `json:"key"`             // "five_hour" | "seven_day" | "weekly" | …
-	Label              string `json:"label"`           // "5-hour", "Weekly"
+	Key                string `json:"key"`   // "five_hour" | "seven_day" | "weekly" | …
+	Label              string `json:"label"` // "5-hour", "Weekly"
 	UtilizationPercent int    `json:"utilizationPercent"`
 	ResetsAt           string `json:"resetsAt,omitempty"` // ISO 8601 (RFC3339)
 }
@@ -507,17 +507,33 @@ type CloneSpec struct {
 	TurnIndex     int    `json:"turnIndex"`
 }
 
+// AttachmentRef mirrors the shared-types AttachmentRef: one file the user
+// attached to a turn. The supervisor pulls the bytes over HTTP from the
+// server, writes them under <workingDir>/.argus/uploads/, and records the
+// resulting path in LocalPath so adapters can reference it (in the prompt,
+// or via a native image flag). LocalPath is sidecar-internal and never
+// serialized back over the wire.
+type AttachmentRef struct {
+	ID        string `json:"id"`
+	Filename  string `json:"filename"`
+	Mime      string `json:"mime"`
+	Size      int64  `json:"size"`
+	Token     string `json:"token"`
+	LocalPath string `json:"-"`
+}
+
 type Command struct {
-	ID         string         `json:"id"`
-	AgentID    string         `json:"agentId"`
-	SessionID  string         `json:"sessionId"`
-	ExternalID string         `json:"externalId,omitempty"`
-	Kind       string         `json:"kind"` // "execute" | "cancel" | "clone-session"
-	Prompt     string         `json:"prompt,omitempty"`
-	Context    map[string]any `json:"context,omitempty"`
-	TimeoutMS  int            `json:"timeoutMs,omitempty"`
-	Options    map[string]any `json:"options,omitempty"`
-	Clone      *CloneSpec     `json:"clone,omitempty"`
+	ID          string          `json:"id"`
+	AgentID     string          `json:"agentId"`
+	SessionID   string          `json:"sessionId"`
+	ExternalID  string          `json:"externalId,omitempty"`
+	Kind        string          `json:"kind"` // "execute" | "cancel" | "clone-session"
+	Prompt      string          `json:"prompt,omitempty"`
+	Context     map[string]any  `json:"context,omitempty"`
+	TimeoutMS   int             `json:"timeoutMs,omitempty"`
+	Options     map[string]any  `json:"options,omitempty"`
+	Attachments []AttachmentRef `json:"attachments,omitempty"`
+	Clone       *CloneSpec      `json:"clone,omitempty"`
 }
 
 type ResultChunk struct {
