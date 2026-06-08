@@ -1,10 +1,10 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AlertCircle, Check, Copy, GitBranch, Loader2 } from 'lucide-react';
+import { AlertCircle, Check, Copy, FileText, GitBranch, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import type { CommandDTO, ResultChunkDTO } from '@argus/shared-types';
-import { api, ApiError } from '../lib/api';
+import type { AttachmentDTO, CommandDTO, ResultChunkDTO } from '@argus/shared-types';
+import { api, ApiError, apiUrl } from '../lib/api';
 import { useSessionStore } from '../stores/sessionStore';
 import { splitDeltas } from '../lib/deltaSplit';
 import { ActivityPanel, ActivityPill } from './ActivityPill';
@@ -347,7 +347,9 @@ const CommandBlock = memo(function CommandBlock({
         ref={bandRef}
         className={`sticky top-0 z-10 space-y-3 bg-surface-0 pb-3 ${isFirst ? 'pt-2' : 'pt-6'}`}
       >
-        {command.prompt && <UserMessage text={command.prompt} />}
+        {(command.prompt || command.attachments?.length) && (
+          <UserMessage text={command.prompt ?? ''} attachments={command.attachments} />
+        )}
         <ActivityPill
           chunks={chunks}
           running={running && !finalChunk && !errorChunk}
@@ -563,7 +565,7 @@ function AnswerBlock({
   );
 }
 
-function UserMessage({ text }: { text: string }) {
+function UserMessage({ text, attachments }: { text: string; attachments?: AttachmentDTO[] }) {
   const ref = useRef<HTMLDivElement>(null);
   const [showFade, setShowFade] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -596,43 +598,99 @@ function UserMessage({ text }: { text: string }) {
 
   return (
     <div className="group flex flex-col items-end">
+      {attachments && attachments.length > 0 && (
+        <div className="mb-1.5 flex max-w-[80%] flex-wrap justify-end gap-2">
+          {attachments.map((a) => (
+            <AttachmentBubble key={a.id} attachment={a} />
+          ))}
+        </div>
+      )}
       {/* Outer wrapper owns rounded-2xl + overflow-hidden so Safari's
           rubber-band overscroll can't paint past the corner. */}
-      <div className="max-w-[80%] overflow-hidden rounded-2xl bg-surface-1 dark:bg-surface-2/80">
-        <div
-          ref={ref}
-          onScroll={update}
-          className="max-h-24 overflow-y-auto no-scrollbar px-4 py-2 text-sm text-fg-primary whitespace-pre-wrap leading-relaxed"
-          style={
-            showFade
-              ? {
-                  maskImage:
-                    'linear-gradient(to bottom, black calc(100% - 24px), transparent 100%)',
-                  WebkitMaskImage:
-                    'linear-gradient(to bottom, black calc(100% - 24px), transparent 100%)',
-                }
-              : undefined
-          }
-        >
-          {text}
-        </div>
-      </div>
-      <div className="mt-1 flex items-center opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
-        <Tooltip content={copied ? 'Copied' : 'Copy message'}>
-          <button
-            type="button"
-            onClick={handleCopy}
-            aria-label="Copy user message"
-            className="inline-flex h-6 w-6 items-center justify-center rounded text-fg-muted transition-colors hover:bg-surface-2/60 hover:text-fg-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-fg-tertiary"
+      {text && (
+        <div className="max-w-[80%] overflow-hidden rounded-2xl bg-surface-1 dark:bg-surface-2/80">
+          <div
+            ref={ref}
+            onScroll={update}
+            className="max-h-24 overflow-y-auto no-scrollbar px-4 py-2 text-sm text-fg-primary whitespace-pre-wrap leading-relaxed"
+            style={
+              showFade
+                ? {
+                    maskImage:
+                      'linear-gradient(to bottom, black calc(100% - 24px), transparent 100%)',
+                    WebkitMaskImage:
+                      'linear-gradient(to bottom, black calc(100% - 24px), transparent 100%)',
+                  }
+                : undefined
+            }
           >
-            {copied ? (
-              <Check className="h-3 w-3 text-emerald-500/80" />
-            ) : (
-              <Copy className="h-3 w-3" />
-            )}
-          </button>
-        </Tooltip>
-      </div>
+            {text}
+          </div>
+        </div>
+      )}
+      {text && (
+        <div className="mt-1 flex items-center opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
+          <Tooltip content={copied ? 'Copied' : 'Copy message'}>
+            <button
+              type="button"
+              onClick={handleCopy}
+              aria-label="Copy user message"
+              className="inline-flex h-6 w-6 items-center justify-center rounded text-fg-muted transition-colors hover:bg-surface-2/60 hover:text-fg-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-fg-tertiary"
+            >
+              {copied ? (
+                <Check className="h-3 w-3 text-emerald-500/80" />
+              ) : (
+                <Copy className="h-3 w-3" />
+              )}
+            </button>
+          </Tooltip>
+        </div>
+      )}
     </div>
   );
+}
+
+/** One attached file on a user turn: an image renders as a clickable
+ *  thumbnail (opens full-size in a new tab), anything else as a download
+ *  chip. Both use the DTO's tokenized url, which authenticates via its
+ *  `?t=` param — no Authorization header needed for `<img>`/`<a>`. */
+function AttachmentBubble({ attachment }: { attachment: AttachmentDTO }) {
+  const href = apiUrl(attachment.url);
+  if (attachment.mime.startsWith('image/')) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        title={attachment.filename}
+        className="block overflow-hidden rounded-xl border border-default"
+      >
+        <img
+          src={href}
+          alt={attachment.filename}
+          loading="lazy"
+          className="h-28 w-28 object-cover"
+        />
+      </a>
+    );
+  }
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      title={attachment.filename}
+      className="flex items-center gap-2 rounded-xl border border-default bg-surface-1 px-3 py-2 text-xs text-fg-secondary transition-colors hover:bg-surface-2 dark:bg-surface-2/80"
+    >
+      <FileText className="h-4 w-4 shrink-0 text-fg-tertiary" />
+      <span className="max-w-[12rem] truncate">{attachment.filename}</span>
+      <span className="shrink-0 text-fg-muted">{formatBytes(attachment.size)}</span>
+    </a>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }

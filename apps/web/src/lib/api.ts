@@ -1,5 +1,6 @@
 import type {
   AgentDTO,
+  AttachmentDTO,
   BackgroundTasksResponse,
   CommandDTO,
   CreateAgentRequest,
@@ -29,6 +30,13 @@ import { getToken } from './auth';
 import { apiBaseUrl } from './host';
 
 const BASE = apiBaseUrl();
+
+/** Absolutize an API-base-relative path (e.g. an AttachmentDTO.url) so it
+ *  can be used directly in `<img src>` / download links. The tokenized
+ *  attachment urls authenticate via their `?t=` param, not a header. */
+export function apiUrl(path: string): string {
+  return `${BASE}${path}`;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -145,6 +153,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  /** Upload one file ahead of sending a turn; returns its metadata + a
+   *  tokenized url. The browser auto-sets the multipart Content-Type
+   *  because the body is FormData (see the http() helper). */
+  uploadAttachment: (file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return http<AttachmentDTO>('/attachments', { method: 'POST', body: fd });
+  },
   cancelCommand: (id: string) => http<CommandDTO>(`/commands/${id}/cancel`, { method: 'POST' }),
 
   // Terminals
