@@ -905,6 +905,34 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   type X" — the protocol/streams support it; the dashboard doesn't expose it
   yet.
 - Pre-commit hooks (ruff/eslint).
+- **Attachments — known debt** (the file/image feature is complete and
+  verified end-to-end for claude `-p`/stdin and codex `--image`; these are
+  the deferred edges):
+  - **S3 orphan sweep.** Deleting a Command cascades its `Attachment`
+    rows, but the MinIO/S3 objects are only best-effort removed on the
+    upload-failure path. Need a periodic sweep for (a) objects whose row
+    is gone and (b) unlinked uploads (`commandId IS NULL`) abandoned in
+    the composer before send.
+  - **Sidecar `.argus/uploads/` pruning.** Pulled files are kept for the
+    session (so `--resume` can re-reference them) but never deleted — in
+    practice keep-forever on the agent's disk. Add an age/size-bounded
+    prune (they're hidden + gitignored, so it's only disk usage).
+  - **`cursor-cli` image vision unverified.** claude (path-in-prompt) and
+    codex (`--image`) are confirmed against the real CLIs; cursor's
+    path-mention vision is documented-but-unproven (no cursor-agent on the
+    test box). Smoke-test before claiming cursor image support.
+  - **No server-side attachment tests.** The sidecar has unit tests
+    (pull / sanitize / preamble); the `attachment/` module (upload,
+    tokenized download, link-and-validate) has none.
+  - **New-session inline prompt drops attachments.** `POST /sessions`
+    with `body.prompt` calls `dispatch()` without `attachmentIds`
+    (`session.controller.ts`). The web never hits this with files (first
+    message goes through `/commands`), so it's latent — but forward the
+    ids there for completeness.
+  - **Server is in the byte path.** The sidecar pulls each file from the
+    server (S3 gateway) and the browser displays from it; presigned
+    direct-from-S3 is the scale path, gated on the bucket being reachable
+    from every agent host (see the two-leg gotcha).
 
 ## When you change something
 
