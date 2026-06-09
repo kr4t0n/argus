@@ -248,9 +248,9 @@ function AttachmentChip({
       {a.previewUrl ? (
         <button
           type="button"
-          onClick={() => setLightboxOpen(true)}
-          title={`View ${a.name}`}
-          aria-label={`View ${a.name}`}
+          onDoubleClick={() => setLightboxOpen(true)}
+          title={`Double-click to preview ${a.name}`}
+          aria-label={`Preview ${a.name}`}
           className="block cursor-zoom-in overflow-hidden rounded-lg border border-default focus:outline-none focus-visible:ring-2 focus-visible:ring-fg-tertiary"
         >
           <img src={a.previewUrl} alt={a.name} className="h-14 w-14 object-cover" />
