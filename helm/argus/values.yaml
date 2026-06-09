@@ -65,6 +65,37 @@ auth:
   sidecarLinkToken: ""
   existingSecret: ""
 
+# ─── Object store (file / image attachments) ─────────────────────────
+# Attachments are stored in an S3-compatible bucket. Like Postgres/Redis
+# the chart does NOT run one — point at managed S3 / Cloudflare R2 / an
+# in-cluster MinIO you deploy separately. Only the SERVER needs to reach
+# the bucket: the browser and the sidecars fetch attachments THROUGH the
+# server, never from S3 directly.
+#
+# Optional: leave `endpoint` empty and attachment uploads are simply not
+# configured (every other part of Argus runs normally). Set `endpoint`
+# to enable. The bucket must already exist — the chart does not create it.
+#
+# Credentials follow the same two-way pattern as the datastores: inline
+# `accessKey`/`secretKey` land in the generated Secret, OR set
+# `existingSecret` to one you manage with the two key names below.
+objectStore:
+  # S3-compatible endpoint — required to enable attachments. Examples:
+  #   MinIO  : http://minio.minio.svc:9000
+  #   R2     : https://<accountid>.r2.cloudflarestorage.com
+  #   AWS S3 : https://s3.us-east-1.amazonaws.com
+  endpoint: ""
+  bucket: "argus-attachments"
+  region: "us-east-1"
+  accessKey: ""                          # required unless existingSecret is set
+  secretKey: ""                          # required unless existingSecret is set
+  existingSecret: ""
+  existingSecretAccessKeyKey: "S3_ACCESS_KEY"
+  existingSecretSecretKeyKey: "S3_SECRET_KEY"
+  # Upload limits surfaced to the server.
+  maxFileBytes: 26214400                 # 25 MiB per file
+  maxFiles: 10                           # files per turn
+
 # ─── Server ──────────────────────────────────────────────────────────
 server:
   enabled: true
