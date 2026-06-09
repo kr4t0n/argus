@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowUp, Square, Paperclip, X, FileText, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from './ui/Button';
+import { ImageLightbox } from './ImageLightbox';
 import { cn } from '../lib/utils';
 import { api } from '../lib/api';
 
@@ -153,7 +154,7 @@ export function Composer({
         className={cn(
           'mx-auto max-w-3xl rounded-3xl bg-surface-1/60 transition-colors dark:bg-surface-2/60',
           'focus-within:bg-surface-1 dark:focus-within:bg-surface-2',
-          dragOver && 'ring-2 ring-accent ring-offset-0',
+          dragOver && 'ring-2 ring-primary ring-offset-0',
           disabled && 'opacity-50',
         )}
       >
@@ -241,28 +242,35 @@ function AttachmentChip({
   a: PendingAttachment;
   onRemove: (localId: string) => void;
 }) {
+  const [lightboxOpen, setLightboxOpen] = useState(false);
   return (
     <div className="group relative">
       {a.previewUrl ? (
-        <img
-          src={a.previewUrl}
-          alt={a.name}
-          className="h-14 w-14 rounded-lg border border-default object-cover"
-        />
+        <button
+          type="button"
+          onClick={() => setLightboxOpen(true)}
+          title={`View ${a.name}`}
+          aria-label={`View ${a.name}`}
+          className="block cursor-zoom-in overflow-hidden rounded-lg border border-default focus:outline-none focus-visible:ring-2 focus-visible:ring-fg-tertiary"
+        >
+          <img src={a.previewUrl} alt={a.name} className="h-14 w-14 object-cover" />
+        </button>
       ) : (
         <div className="flex h-14 w-36 items-center gap-2 rounded-lg border border-default bg-surface-1 px-2 dark:bg-surface-2">
           <FileText className="h-4 w-4 shrink-0 text-fg-tertiary" />
           <span className="truncate text-xs text-fg-secondary">{a.name}</span>
         </div>
       )}
+      {/* Status overlays are pointer-events-none so a click still reaches
+          the thumbnail button underneath (preview works mid-upload). */}
       {a.status === 'uploading' && (
-        <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/40">
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-black/40">
           <Loader2 className="h-4 w-4 animate-spin text-white" />
         </div>
       )}
       {a.status === 'error' && (
         <div
-          className="absolute inset-0 flex items-center justify-center rounded-lg bg-red-500/50"
+          className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-red-500/50"
           title="upload failed"
         >
           <AlertCircle className="h-4 w-4 text-white" />
@@ -272,10 +280,13 @@ function AttachmentChip({
         onClick={() => onRemove(a.localId)}
         title="Remove"
         aria-label={`Remove ${a.name}`}
-        className="absolute -right-1.5 -top-1.5 rounded-full bg-surface-3 p-0.5 text-fg-secondary opacity-0 shadow transition-opacity hover:text-fg-primary group-hover:opacity-100"
+        className="absolute -right-1.5 -top-1.5 rounded-full bg-surface-2 p-0.5 text-fg-secondary opacity-0 shadow transition-opacity hover:text-fg-primary group-hover:opacity-100"
       >
         <X className="h-3 w-3" />
       </button>
+      {lightboxOpen && a.previewUrl && (
+        <ImageLightbox src={a.previewUrl} alt={a.name} onClose={() => setLightboxOpen(false)} />
+      )}
     </div>
   );
 }
