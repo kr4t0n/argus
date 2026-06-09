@@ -608,6 +608,22 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   service only best-effort deletes the S3 object on the upload-failure
   path — a periodic orphan sweep (objects whose row is gone, and unlinked
   `commandId IS NULL` uploads abandoned before send) is a follow-up.
+- **Attachment viewing is unified with the file tree (frontend)**: a sent
+  attachment opens as a `FileViewer` **tab** on double-click — same
+  gesture and destination as the Files panel, not a floating modal.
+  `fileTabsStore.OpenFile` is a `file | attachment` union; `openAttachment`
+  keys tabs `att:<id>`. `FileViewer` renders both sources through the
+  shared `FileContentView` (text / markdown / HTML / image / binary);
+  attachments add a PDF-in-iframe path and fetch text-like files over HTTP
+  from the tokenized url (image / PDF render straight from the url).
+  Opening a tab swaps `StreamViewer` out, which used to snap the chat to
+  the bottom on close — `StreamViewer` now records `{top, atBottom}` per
+  session in a module-level `scrollMemory` **inside onScroll** (NOT at
+  unmount: a tearing-down node reports `scrollTop`/`clientHeight` as ~0,
+  which reads as "at bottom" and corrupts the saved position) and restores
+  it on remount. The composer's pre-send image chips keep a quick
+  `ImageLightbox` (floating zoom) — an unsent file has no session tab to
+  open into.
 - **Token-level UI re-render**: `StreamViewer` concatenates all `delta`s
   into a single string per command and re-renders that block on every chunk.
   This is fast enough up to a few hundred KB; if you hit perf issues,
