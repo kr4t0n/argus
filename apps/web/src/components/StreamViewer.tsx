@@ -17,6 +17,8 @@ import { copyTextToClipboard } from '../lib/clipboard';
 import { useFileTabsStore } from '../stores/fileTabsStore';
 
 type Props = {
+  /** Owning session — keys the remembered scroll position. */
+  sessionId: string;
   commands: CommandDTO[];
   chunks: ResultChunkDTO[];
   running: boolean;
@@ -33,6 +35,12 @@ type Props = {
 /** How close to the top (px) before we trigger a fetch of older history. */
 const LOAD_OLDER_THRESHOLD = 200;
 
+/** Per-session chat scroll position, remembered across unmounts so that
+ *  opening a file tab — which swaps StreamViewer out for FileViewer — and
+ *  closing it returns the user to where they were instead of snapping to
+ *  the bottom. Module-level + ephemeral: fine to lose on a full reload. */
+const scrollMemory = new Map<string, { top: number; atBottom: boolean }>();
+
 /**
  * Open-Agents-style chronological feed:
  *   • user prompt as a right-aligned dark pill
@@ -42,6 +50,7 @@ const LOAD_OLDER_THRESHOLD = 200;
  *   • errors surfaced inline.
  */
 export function StreamViewer({
+  sessionId,
   commands,
   chunks,
   running,
@@ -51,7 +60,25 @@ export function StreamViewer({
   onLoadOlder,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
-  const [stickBottom, setStickBottom] = useState(true);
+  const [stickBottom, setStickBottom] = useState<boolean>(
+    () => scrollMemory.get(sessionId)?.atBottom ?? true,
+  );
+
+  // Restore the chat's remembered scroll position on (re)mount — a file
+  // tab swaps this component out and back, and without this the chat would
+  // snap to the bottom (stickBottom defaults to true). The position is
+  // recorded continuously in onScroll rather than at unmount: reading the
+  // element during teardown is unreliable (the node is mid-detach and
+  // reports scrollTop/clientHeight as ~0, which looks like "at bottom").
+  // When the user was at the bottom we let the normal stick-to-bottom
+  // effect handle it; otherwise we pin scrollTop back to where they were.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const saved = scrollMemory.get(sessionId);
+    if (el && saved && !saved.atBottom) el.scrollTop = saved.top;
+    // mount-only restore
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Per-group stabilization: if a command's identity and chunk count are
   // both unchanged across renders, reuse the same group object (and its
@@ -151,6 +178,9 @@ export function StreamViewer({
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
     setStickBottom(nearBottom);
+    // Record continuously so the position survives this component's unmount
+    // (opening a file tab) — reading the element at unmount is unreliable.
+    scrollMemory.set(sessionId, { top: el.scrollTop, atBottom: nearBottom });
     maybeLoadOlder();
   }
 
@@ -348,7 +378,11 @@ const CommandBlock = memo(function CommandBlock({
         className={`sticky top-0 z-10 space-y-3 bg-surface-0 pb-3 ${isFirst ? 'pt-2' : 'pt-6'}`}
       >
         {(command.prompt || command.attachments?.length) && (
-          <UserMessage text={command.prompt ?? ''} attachments={command.attachments} />
+          <UserMessage
+            text={command.prompt ?? ''}
+            attachments={command.attachments}
+            agentId={command.agentId}
+          />
         )}
         <ActivityPill
           chunks={chunks}
@@ -565,7 +599,15 @@ function AnswerBlock({
   );
 }
 
-function UserMessage({ text, attachments }: { text: string; attachments?: AttachmentDTO[] }) {
+function UserMessage({
+  text,
+  attachments,
+  agentId,
+}: {
+  text: string;
+  attachments?: AttachmentDTO[];
+  agentId: string;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const [showFade, setShowFade] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -601,7 +643,7 @@ function UserMessage({ text, attachments }: { text: string; attachments?: Attach
       {attachments && attachments.length > 0 && (
         <div className="mb-1.5 flex max-w-[80%] flex-wrap justify-end gap-2">
           {attachments.map((a) => (
-            <AttachmentBubble key={a.id} attachment={a} />
+            <AttachmentBubble key={a.id} attachment={a} agentId={agentId} />
           ))}
         </div>
       )}
@@ -650,42 +692,49 @@ function UserMessage({ text, attachments }: { text: string; attachments?: Attach
   );
 }
 
-/** One attached file on a user turn: an image renders as a clickable
- *  thumbnail (opens full-size in a new tab), anything else as a download
- *  chip. Both use the DTO's tokenized url, which authenticates via its
- *  `?t=` param — no Authorization header needed for `<img>`/`<a>`. */
-function AttachmentBubble({ attachment }: { attachment: AttachmentDTO }) {
+/** One attached file on a user turn. Double-click opens it as a tab in the
+ *  main viewer — the same gesture and destination as the Files panel, so
+ *  the file-open UX is uniform across the app. Images render a thumbnail;
+ *  other files render a chip. The tokenized url authenticates via its
+ *  `?t=` param (no Authorization header needed for `<img>` / fetch). */
+function AttachmentBubble({ attachment, agentId }: { attachment: AttachmentDTO; agentId: string }) {
   const href = apiUrl(attachment.url);
+  const openAttachment = useFileTabsStore((s) => s.openAttachment);
+  const open = () =>
+    openAttachment({
+      agentId,
+      id: attachment.id,
+      url: href,
+      name: attachment.filename,
+      mime: attachment.mime,
+      size: attachment.size,
+    });
+
   if (attachment.mime.startsWith('image/')) {
     return (
-      <a
-        href={href}
-        target="_blank"
-        rel="noreferrer"
-        title={attachment.filename}
-        className="block overflow-hidden rounded-xl border border-default"
+      <button
+        type="button"
+        onDoubleClick={open}
+        title={`Double-click to open ${attachment.filename}`}
+        aria-label={`Open ${attachment.filename}`}
+        className="block cursor-pointer overflow-hidden rounded-xl border border-default transition hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-fg-tertiary"
       >
-        <img
-          src={href}
-          alt={attachment.filename}
-          loading="lazy"
-          className="h-28 w-28 object-cover"
-        />
-      </a>
+        <img src={href} alt={attachment.filename} loading="lazy" className="h-28 w-28 object-cover" />
+      </button>
     );
   }
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      title={attachment.filename}
-      className="flex items-center gap-2 rounded-xl border border-default bg-surface-1 px-3 py-2 text-xs text-fg-secondary transition-colors hover:bg-surface-2 dark:bg-surface-2/80"
+    <button
+      type="button"
+      onDoubleClick={open}
+      title={`Double-click to open ${attachment.filename}`}
+      aria-label={`Open ${attachment.filename}`}
+      className="flex cursor-pointer items-center gap-2 rounded-xl border border-default bg-surface-1 px-3 py-2 text-xs text-fg-secondary transition-colors hover:bg-surface-2 dark:bg-surface-2/80"
     >
       <FileText className="h-4 w-4 shrink-0 text-fg-tertiary" />
       <span className="max-w-[12rem] truncate">{attachment.filename}</span>
       <span className="shrink-0 text-fg-muted">{formatBytes(attachment.size)}</span>
-    </a>
+    </button>
   );
 }
 

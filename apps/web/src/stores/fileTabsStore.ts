@@ -17,13 +17,32 @@ import type { FSReadResult } from '@argus/shared-types';
  * as before this feature shipped.
  */
 
-export interface OpenFile {
+interface OpenFileBase {
   key: string;
+  /** Owning agent/session context — scopes the tab strip and lets
+   *  clearAgent drop tabs when navigating away. */
   agentId: string;
-  path: string;
-  /** Last path segment, used as the tab label. */
+  /** Tab label. */
   name: string;
 }
+
+/** A file from the agent's working directory, fetched via fs-read. */
+export interface OpenWorkingFile extends OpenFileBase {
+  kind: 'file';
+  path: string;
+}
+
+/** An uploaded attachment, fetched over HTTP from its tokenized url. Opens
+ *  in the same viewer as a working file (double-click → tab) so the
+ *  file-open UX is uniform across the file tree and the chat transcript. */
+export interface OpenAttachment extends OpenFileBase {
+  kind: 'attachment';
+  url: string;
+  mime: string;
+  size: number;
+}
+
+export type OpenFile = OpenWorkingFile | OpenAttachment;
 
 export type FileContentState =
   | { status: 'loading' }
@@ -37,6 +56,14 @@ interface FileTabsState {
   contents: Record<string, FileContentState>;
 
   openFile: (file: { agentId: string; path: string }) => void;
+  openAttachment: (att: {
+    agentId: string;
+    id: string;
+    url: string;
+    name: string;
+    mime: string;
+    size: number;
+  }) => void;
   closeFile: (key: string) => void;
   setActive: (key: string | null) => void;
   setContent: (key: string, state: FileContentState) => void;
@@ -46,6 +73,7 @@ interface FileTabsState {
 }
 
 export const fileKey = (agentId: string, path: string) => `${agentId}:${path}`;
+export const attachmentKey = (id: string) => `att:${id}`;
 
 const fileName = (path: string) => {
   const i = path.lastIndexOf('/');
@@ -65,7 +93,19 @@ export const useFileTabsStore = create<FileTabsState>((set, get) => ({
       return;
     }
     set((s) => ({
-      openFiles: [...s.openFiles, { key, agentId, path, name: fileName(path) }],
+      openFiles: [...s.openFiles, { kind: 'file', key, agentId, path, name: fileName(path) }],
+      activeKey: key,
+    }));
+  },
+
+  openAttachment({ agentId, id, url, name, mime, size }) {
+    const key = attachmentKey(id);
+    if (get().openFiles.some((f) => f.key === key)) {
+      set({ activeKey: key });
+      return;
+    }
+    set((s) => ({
+      openFiles: [...s.openFiles, { kind: 'attachment', key, agentId, name, url, mime, size }],
       activeKey: key,
     }));
   },

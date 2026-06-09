@@ -99,7 +99,7 @@ function FileTab({
             onClose();
           }
         }}
-        title={file.path}
+        title={file.kind === 'file' ? file.path : file.name}
         className={cn(
           'inline-flex items-center gap-1.5 py-2 pl-3 pr-7 text-xs',
           active ? 'text-fg-primary' : 'text-fg-tertiary hover:text-fg-secondary',

@@ -237,6 +237,7 @@ export function SessionPanel() {
             </Suspense>
           ) : (
             <StreamViewer
+              sessionId={entry.session.id}
               commands={entry.commands}
               chunks={entry.chunks}
               running={running}
