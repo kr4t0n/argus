@@ -243,8 +243,17 @@ func (s *supervisor) run(ctx context.Context) {
 		}
 
 		if cmd.Kind == "clone-session" {
-			s.handleCloneSession(ctx, cmd)
-			_ = s.bus.Ack(ctx, cmdStream, group, msgID)
+			// Dispatch off the loop like execute: handleCloneSession copies
+			// + rewrites the CLI's session JSONL synchronously, which would
+			// otherwise stall the next command until the fork finishes.
+			// Safe to run concurrently — the server gates prompting a forked
+			// session on the session-external-id event this publishes.
+			wg.Add(1)
+			go func(c protocol.Command, id string) {
+				defer wg.Done()
+				s.handleCloneSession(ctx, c)
+				_ = s.bus.Ack(ctx, cmdStream, group, id)
+			}(cmd, msgID)
 			continue
 		}
 
