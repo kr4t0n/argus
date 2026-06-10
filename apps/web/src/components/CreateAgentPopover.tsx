@@ -326,8 +326,15 @@ export function CreateAgentPopover({
           )}
         </Field>
 
+        {/* as="div": the picker embeds its own interactive controls
+            (listbox trigger, options, toggles). Inside a <label>,
+            WebKit forwards clicks on non-labelable descendants to the
+            label's first labelable element — the listbox trigger —
+            which re-toggles the dropdown on every option click. Blink
+            only forwards when propagation is intact, WebKit always;
+            a div sidesteps the quirk in every engine. */}
         {asSession && (
-          <Field label="model">
+          <Field label="model" as="div">
             <ModelPicker
               agentId={catalogAgentId}
               value={modelSelection}
@@ -403,11 +410,22 @@ export function CreateAgentPopover({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+  as: Tag = 'label',
+}: {
+  label: string;
+  children: React.ReactNode;
+  /** Use 'div' when the children embed interactive controls of their
+   *  own (e.g. the model picker's listbox) — see the call site note on
+   *  WebKit's label click-forwarding. */
+  as?: 'label' | 'div';
+}) {
   return (
-    <label className="block">
+    <Tag className="block">
       <span className="mb-1 block text-caps">{label}</span>
       {children}
-    </label>
+    </Tag>
   );
 }

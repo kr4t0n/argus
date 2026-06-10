@@ -120,14 +120,16 @@ export function Select({
         <div
           ref={panelRef}
           role="listbox"
-          // stopPropagation guards against <label> click forwarding:
-          // when this Select renders inside a <label> (the dialog's
-          // Field wrapper), a click on an option row — whose event
-          // target is the inner <span>, not the button — bubbles to
-          // the label, which re-dispatches a synthetic click to its
-          // first labelable descendant: our trigger button. That
-          // forwarded click toggled the panel right back open, so
-          // selecting an option appeared to never close the menu.
+          // Partial guard against <label> click forwarding: inside a
+          // <label>, an option-row click (target = inner <span>) gets
+          // re-dispatched by the label onto its first labelable
+          // descendant — our trigger — toggling the panel back open.
+          // stopPropagation blocks that in Blink only; WebKit runs
+          // label activation as the event's default action regardless
+          // of propagation. So the REAL rule is: never render this
+          // component inside a <label> (see CreateAgentPopover's
+          // Field as="div"). This handler stays as cheap extra cover
+          // for Blink if a label ever sneaks back in.
           onClick={(e) => e.stopPropagation()}
           className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-md border border-default bg-surface-0 py-1 shadow-lg"
         >
