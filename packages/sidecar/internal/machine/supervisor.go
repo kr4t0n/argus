@@ -164,14 +164,17 @@ func (s *supervisor) run(ctx context.Context) {
 		// the dashboard's view of the agent.
 	}
 
-	// Start heartbeats immediately, BEFORE the workingDir watcher setup
-	// and EnsureGroup below. Both can block run() for many seconds —
-	// newFSWatcher walks the tree and registers inotify watches
-	// *synchronously* (slow on a large workingDir), and EnsureGroup is a
-	// Redis round-trip — while the server's sweeper marks an agent stale
-	// after just 30s of no heartbeat (STALE_AFTER_MS). Heartbeats are
-	// what keep the agent alive; the watchers are best-effort and degrade
-	// gracefully, so they must not gate the heartbeat loop.
+	// The heartbeat loop and the command consume loop (below) are the
+	// agent's critical paths; neither may be gated behind slow, best-effort
+	// setup. newFSWatcher walks the workingDir and registers inotify
+	// watches *synchronously*, which on a large tree takes many seconds —
+	// long enough for the server's 30s sweeper (STALE_AFTER_MS) to mark a
+	// freshly-registered agent offline, and (the bug this fixes) to delay
+	// the consume loop so prompts just hang while the agent looks online.
+	//
+	// So: start heartbeats immediately, and bring the watchers up in the
+	// background. The watcher goroutine also owns closing them on shutdown,
+	// keeping s.fsw / s.gitw / s.progw touched from a single goroutine.
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -179,9 +182,23 @@ func (s *supervisor) run(ctx context.Context) {
 		s.heartbeatLoop(ctx)
 	}()
 
-	s.startFSWatcher(ctx)
-	s.startGitWatcher(ctx)
-	s.startProgressWatcher(ctx)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.startFSWatcher(ctx)
+		s.startGitWatcher(ctx)
+		s.startProgressWatcher(ctx)
+		<-ctx.Done()
+		if s.fsw != nil {
+			s.fsw.Close()
+		}
+		if s.gitw != nil {
+			s.gitw.Close()
+		}
+		if s.progw != nil {
+			s.progw.Close()
+		}
+	}()
 
 	cmdStream := protocol.CommandStream(s.spec.AgentID)
 	group := protocol.SidecarConsumerGroup(s.spec.AgentID)
@@ -239,15 +256,8 @@ func (s *supervisor) run(ctx context.Context) {
 		}(cmd, msgID)
 	}
 
-	if s.fsw != nil {
-		s.fsw.Close()
-	}
-	if s.gitw != nil {
-		s.gitw.Close()
-	}
-	if s.progw != nil {
-		s.progw.Close()
-	}
+	// Watchers are closed by their own goroutine on ctx.Done() (it owns
+	// those fields); wg.Wait() below blocks until that has happened.
 
 	// Best-effort deregister so the dashboard reflects the change
 	// before our last heartbeat would have lapsed (~5s).
