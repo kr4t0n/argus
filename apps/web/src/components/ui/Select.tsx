@@ -131,7 +131,10 @@ export function Select({
           // Field as="div"). This handler stays as cheap extra cover
           // for Blink if a label ever sneaks back in.
           onClick={(e) => e.stopPropagation()}
-          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-md border border-default bg-surface-0 py-1 shadow-lg"
+          // min-w-full w-max: the panel is at least as wide as the
+          // trigger but grows to fit option labels — narrow triggers
+          // (the effort select sharing a row) keep readable panels.
+          className="absolute left-0 top-full z-50 mt-1 max-h-64 w-max min-w-full max-w-72 overflow-y-auto rounded-md border border-default bg-surface-0 py-1 shadow-lg"
         >
           {options.map((o, i) => {
             const isSelected = o.value === value;

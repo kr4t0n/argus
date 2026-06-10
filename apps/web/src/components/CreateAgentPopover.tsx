@@ -67,7 +67,13 @@ type Props = {
   existingAgents?: AgentDTO[];
 };
 
-const POPOVER_WIDTH = 288; // 18rem (Tailwind w-72)
+// Sized so the model picker's model + effort/variant + facet chips
+// usually fit on one row. Keep in sync with CreateProjectPopover so
+// the two creation surfaces read as siblings. The rendered width is
+// additionally clamped to the viewport via maxWidth (placement math
+// may then overestimate on tiny screens, which only makes the
+// left-side fallback trigger early — harmless).
+const POPOVER_WIDTH = 340;
 const VIEWPORT_MARGIN = 8; // keep this far from the edge
 
 export function CreateAgentPopover({
@@ -230,6 +236,7 @@ export function CreateAgentPopover({
         top: pos?.top ?? -9999,
         left: pos?.left ?? -9999,
         width: POPOVER_WIDTH,
+        maxWidth: 'calc(100vw - 16px)',
         // Hide until we've measured so the user doesn't see a flash
         // of the popover at the (-9999, -9999) staging coords.
         visibility: pos ? 'visible' : 'hidden',

@@ -239,9 +239,93 @@ export function ModelPicker({ agentId, value, onChange }: Props) {
     { value: 'custom', label: 'custom…' },
   ];
 
+  // One wrap-tolerant row: model gets the most room, the secondary
+  // control (variant or effort) shares the line when it fits, facet
+  // chips and the vendor note ("NO ZDR") trail. flex-wrap is the
+  // safety valve — long model names (codex) push the secondary
+  // controls onto a second line instead of truncating everything.
   return (
     <div className="space-y-2">
-      <Select value={primaryValue} options={primaryOptions} onChange={onPrimaryChange} />
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Select
+          value={primaryValue}
+          options={primaryOptions}
+          onChange={onPrimaryChange}
+          className="min-w-[140px] flex-[2]"
+        />
+
+        {selected?.family && familyMembers.length > 0 && (
+          <Select
+            value={selected.id}
+            options={familyMembers.map((m) => ({
+              value: m.id,
+              label: m.variantLabel || m.displayName,
+              hint: m.isDefault ? 'CLI default' : undefined,
+            }))}
+            onChange={(id) => {
+              const entry = byId.get(id);
+              if (entry) emitEntry(entry);
+            }}
+            className="min-w-[110px] flex-1"
+          />
+        )}
+
+        {selected?.facets?.effort && (
+          <Select
+            value={value?.effort ?? ''}
+            options={[
+              {
+                value: '',
+                label: 'effort: default',
+                hint: EFFORT_LABEL[selected.facets.effort.default] ?? undefined,
+              },
+              ...selected.facets.effort.levels.map((l) => ({
+                value: l,
+                label: `effort: ${EFFORT_LABEL[l] ?? l}`,
+              })),
+            ]}
+            onChange={(v) => {
+              const next = { ...(value ?? {}) } as ModelSelection;
+              if (v) next.effort = v as EffortLevel;
+              else delete next.effort;
+              onChange(next);
+            }}
+            className="min-w-[110px] flex-1"
+            title="effort / thinking strength"
+          />
+        )}
+
+        {selected?.facets?.context && (
+          <FacetToggle
+            label="1M"
+            title="1M-token context window (may require plan upgrade or usage credits)"
+            active={value?.context === '1m'}
+            onToggle={(on) => {
+              const next = { ...(value ?? {}) } as ModelSelection;
+              if (on) next.context = '1m';
+              else delete next.context;
+              onChange(next);
+            }}
+          />
+        )}
+        {selected?.facets?.speed && (
+          <FacetToggle
+            label="fast"
+            title="priority / fast service tier"
+            active={value?.speed === 'fast'}
+            onToggle={(on) => {
+              const next = { ...(value ?? {}) } as ModelSelection;
+              if (on) next.speed = 'fast';
+              else delete next.speed;
+              onChange(next);
+            }}
+          />
+        )}
+
+        {selected?.description && (
+          <span className="min-w-0 text-meta">{selected.description}</span>
+        )}
+      </div>
 
       {isCustom && (
         <input
@@ -254,78 +338,6 @@ export function ModelPicker({ agentId, value, onChange }: Props) {
           className="w-full rounded-md bg-surface-2/40 px-3 py-2 font-mono text-xs text-fg-primary outline-none transition-colors placeholder:text-fg-muted focus:bg-surface-2"
         />
       )}
-
-      {selected?.family && familyMembers.length > 0 && (
-        <Select
-          value={selected.id}
-          options={familyMembers.map((m) => ({
-            value: m.id,
-            label: m.variantLabel || m.displayName,
-            hint: m.isDefault ? 'CLI default' : undefined,
-          }))}
-          onChange={(id) => {
-            const entry = byId.get(id);
-            if (entry) emitEntry(entry);
-          }}
-        />
-      )}
-
-      {selected?.facets && (
-        <div className="flex items-center gap-1.5">
-          {selected.facets.effort && (
-            <Select
-              value={value?.effort ?? ''}
-              options={[
-                {
-                  value: '',
-                  label: 'effort: default',
-                  hint: EFFORT_LABEL[selected.facets.effort.default] ?? undefined,
-                },
-                ...selected.facets.effort.levels.map((l) => ({
-                  value: l,
-                  label: `effort: ${EFFORT_LABEL[l] ?? l}`,
-                })),
-              ]}
-              onChange={(v) => {
-                const next = { ...(value ?? {}) } as ModelSelection;
-                if (v) next.effort = v as EffortLevel;
-                else delete next.effort;
-                onChange(next);
-              }}
-              className="flex-1"
-              title="effort / thinking strength"
-            />
-          )}
-          {selected.facets.context && (
-            <FacetToggle
-              label="1M"
-              title="1M-token context window (may require plan upgrade or usage credits)"
-              active={value?.context === '1m'}
-              onToggle={(on) => {
-                const next = { ...(value ?? {}) } as ModelSelection;
-                if (on) next.context = '1m';
-                else delete next.context;
-                onChange(next);
-              }}
-            />
-          )}
-          {selected.facets.speed && (
-            <FacetToggle
-              label="fast"
-              title="priority / fast service tier"
-              active={value?.speed === 'fast'}
-              onToggle={(on) => {
-                const next = { ...(value ?? {}) } as ModelSelection;
-                if (on) next.speed = 'fast';
-                else delete next.speed;
-                onChange(next);
-              }}
-            />
-          )}
-        </div>
-      )}
-
-      {selected?.description && <div className="text-meta">{selected.description}</div>}
     </div>
   );
 }
