@@ -145,12 +145,22 @@ export function CreateAgentPopover({
     const pop = popRef.current;
     const observer = pop ? new ResizeObserver(() => place()) : null;
     if (observer && pop) observer.observe(pop);
+    // Capture-phase so scrolls of any ancestor container reposition
+    // us — but scrolls INSIDE the popover (the model dropdown's
+    // option list) don't move the anchor, and repositioning on them
+    // re-renders the tree mid-scroll. Skip those.
+    function onScroll(e: Event) {
+      if (popRef.current && e.target instanceof Node && popRef.current.contains(e.target)) {
+        return;
+      }
+      place();
+    }
     window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
+    window.addEventListener('scroll', onScroll, true);
     return () => {
       observer?.disconnect();
       window.removeEventListener('resize', place);
-      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('scroll', onScroll, true);
     };
   }, [anchor]);
 

@@ -50,6 +50,12 @@ export function Select({
   }, [open]);
 
   // Open with the selected row highlighted and scrolled into view.
+  // Deliberately keyed on the open TRANSITION only: `options` is an
+  // inline array at every call site, so depending on it re-runs this
+  // on any parent re-render — and parents do re-render while the
+  // panel is open (the creation popover repositions on scroll events,
+  // session panels re-render on streamed chunks). Re-running mid-
+  // interaction yanked the user's scroll back to the selected row.
   useEffect(() => {
     if (!open) return;
     const idx = options.findIndex((o) => o.value === value);
@@ -59,7 +65,8 @@ export function Select({
         ?.querySelector('[data-selected="true"]')
         ?.scrollIntoView({ block: 'nearest' });
     });
-  }, [open, options, value]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   function onKeyDown(e: React.KeyboardEvent) {
     if (!open) {
