@@ -57,6 +57,21 @@ type Cloner interface {
 	CloneSession(ctx context.Context, srcExternalID string, turnIndex int) (string, error)
 }
 
+// ModelLister is an optional capability for adapters that can describe
+// which models their CLI can run. The supervisor calls this when a
+// `list-models` control request arrives; the result feeds the
+// dashboard's model picker.
+//
+// `source` is "static" (compiled-in table — claude-code, whose CLI has
+// no listing surface) or "cli" (parsed live output — codex `debug
+// models`, cursor-agent `models`). Implementations should bound their
+// own CLI exec with the passed ctx; the daemon already wraps requests
+// in a deadline. Entries describe — they never gate: a selection the
+// catalog doesn't contain still passes through to the CLI verbatim.
+type ModelLister interface {
+	ListModels(ctx context.Context) (models []protocol.ModelCatalogEntry, source string, err error)
+}
+
 type Factory func(cfg map[string]any) (Adapter, error)
 
 // Plugin bundles everything the registry needs to know about an adapter

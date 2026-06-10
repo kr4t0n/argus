@@ -215,6 +215,10 @@ model Session {
   title      String
   externalId String?
   status     String   @default("active") // active | idle | done | failed
+  // Session-default ModelSelection (shared-types) merged into every
+  // turn's Command.options at dispatch (per-turn override wins).
+  // NULL = "CLI default" — no model flags passed, pre-feature behavior.
+  modelSelection Json?
   archivedAt DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -244,6 +248,11 @@ model Command {
   // adapter that doesn't emit one). /me/usage SUMs this column to
   // avoid scanning every final chunk's raw `meta` JSON.
   usage       Json?
+  // The adapter options this turn was dispatched with (session default
+  // merged with any per-turn override) — primarily the ModelSelection
+  // keys. NULL for pre-feature rows and turns sent with no options.
+  // Recorded so history shows what each turn actually ran with.
+  options     Json?
 
   session     Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   agent       Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)

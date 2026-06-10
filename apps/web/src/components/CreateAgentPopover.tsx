@@ -2,11 +2,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, X } from 'lucide-react';
-import type { AgentDTO, AvailableAdapter, MachineDTO } from '@argus/shared-types';
+import type { AgentDTO, AvailableAdapter, MachineDTO, ModelSelection } from '@argus/shared-types';
 import { api, ApiError } from '../lib/api';
 import { useAgentStore } from '../stores/agentStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { agentTypeLabel, AgentTypeIcon } from './ui/AgentTypeIcon';
+import { ModelPicker } from './ModelPicker';
 import { cn } from '../lib/utils';
 
 /**
@@ -89,6 +90,18 @@ export function CreateAgentPopover({
   const [supportsTerminal, setSupportsTerminal] = useState(defaults?.supportsTerminal ?? false);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Per-adapter model choice, keyed by adapter type so flipping
+  // Claude Code → Codex → back doesn't lose the Claude selection.
+  // Session mode only; agent creation doesn't carry a model default.
+  const [modelByType, setModelByType] = useState<Record<string, ModelSelection | null>>({});
+  const modelSelection = modelByType[type] ?? null;
+  // The catalog needs an existing agent of the chosen type. For the
+  // project's first session on an adapter there is none yet (the agent
+  // is auto-vivified on submit) — the picker degrades to a free-text
+  // input in that case, by design.
+  const catalogAgentId = asSession
+    ? ((existingAgents ?? []).find((a) => a.type === type)?.id ?? null)
+    : null;
   const popRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -180,9 +193,12 @@ export function CreateAgentPopover({
           upsertAgent(created);
           agentId = created.id;
         }
+        // Empty custom input ({model: ''}) normalizes to "Default".
+        const selection = modelSelection?.model ? modelSelection : undefined;
         const { session } = await api.createSession({
           agentId,
           title: name.trim(),
+          modelSelection: selection,
         });
         upsertSession(session);
         nav(`/sessions/${session.id}`);
@@ -309,6 +325,16 @@ export function CreateAgentPopover({
             </>
           )}
         </Field>
+
+        {asSession && (
+          <Field label="model">
+            <ModelPicker
+              agentId={catalogAgentId}
+              value={modelSelection}
+              onChange={(v) => setModelByType((prev) => ({ ...prev, [type]: v }))}
+            />
+          </Field>
+        )}
 
         <Field label={asSession ? 'session name' : 'name'}>
           <input

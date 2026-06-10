@@ -716,6 +716,39 @@ func (s *supervisor) HandleGitLog(ctx context.Context, req protocol.GitLogReques
 	}
 }
 
+// HandleListModels answers a `list-models` control request with this
+// agent's model catalog. Same fan-in pattern as HandleGitLog. The
+// claude-code catalog is a compiled-in table (instant); codex / cursor
+// shell out to their CLIs, and cursor's `models` hits the vendor API,
+// so the exec gets its own deadline well under the server-side request
+// timeout — a wedged CLI must surface as a catalog error, not a server
+// timeout the dashboard can't tell apart from an offline machine.
+func (s *supervisor) HandleListModels(ctx context.Context, req protocol.ListModelsRequestCommand) {
+	resp := protocol.ModelCatalogResponseEvent{
+		Kind:      "model-catalog-response",
+		MachineID: s.machine,
+		AgentID:   s.spec.AgentID,
+		RequestID: req.RequestID,
+		TS:        time.Now().UnixMilli(),
+	}
+	if lister, ok := s.adapter.(adapter.ModelLister); ok {
+		execCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+		models, source, err := lister.ListModels(execCtx)
+		cancel()
+		if err != nil {
+			resp.Error = err.Error()
+		} else {
+			resp.Models = models
+			resp.Source = source
+		}
+	} else {
+		resp.Error = "adapter does not support model listing"
+	}
+	if err := s.bus.Publish(ctx, protocol.LifecycleStream(), resp); err != nil {
+		s.log.Printf("agent %s: model-catalog-response publish failed: %v", s.spec.AgentID, err)
+	}
+}
+
 func decodeCommand(payload map[string]any) (protocol.Command, error) {
 	b, err := json.Marshal(payload)
 	if err != nil {

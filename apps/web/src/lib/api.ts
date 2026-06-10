@@ -11,6 +11,8 @@ import type {
   GitLogResponse,
   LoginResponse,
   MachineDTO,
+  ModelCatalogResponse,
+  ModelSelection,
   OpenTerminalRequest,
   ProjectDTO,
   ProjectNotesResponse,
@@ -153,6 +155,17 @@ export const api = {
     http<CommandDTO>(`/sessions/${sessionId}/commands`, {
       method: 'POST',
       body: JSON.stringify(body),
+    }),
+  /** Model catalog for an agent's CLI — drives the model picker.
+   *  Server-cached per agent (~1h); `refresh` bypasses the cache. */
+  getModelCatalog: (agentId: string, opts?: { refresh?: boolean }) =>
+    http<ModelCatalogResponse>(`/agents/${agentId}/models${opts?.refresh ? '?refresh=1' : ''}`),
+  /** Replace the session-default model choice; null clears to "CLI
+   *  default". Applies to subsequent turns. */
+  setSessionModel: (id: string, modelSelection: ModelSelection | null) =>
+    http<SessionDTO>(`/sessions/${id}/model`, {
+      method: 'PATCH',
+      body: JSON.stringify({ modelSelection }),
     }),
   /** Upload one file ahead of sending a turn; returns its metadata + a
    *  tokenized url. The browser auto-sets the multipart Content-Type

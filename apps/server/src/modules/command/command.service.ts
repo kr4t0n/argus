@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Command as PCommand } from '@prisma/client';
+import { Prisma, type Command as PCommand } from '@prisma/client';
 import type { Command as WireCommand, CommandDTO } from '@argus/shared-types';
 import { streamKeys } from '@argus/shared-types';
 import { PrismaService } from '../../infra/prisma/prisma.service';
@@ -33,6 +33,7 @@ export class CommandService {
       kind: c.kind as CommandDTO['kind'],
       prompt: c.prompt,
       status: c.status as CommandDTO['status'],
+      options: (c.options as Record<string, unknown> | null) ?? undefined,
       createdAt: c.createdAt.toISOString(),
       completedAt: c.completedAt ? c.completedAt.toISOString() : null,
     };
@@ -53,6 +54,15 @@ export class CommandService {
       throw new BadRequestException('agent is offline');
     }
 
+    // Session-default ModelSelection merged under any per-turn options
+    // (per-turn wins key-by-key). Neither side is validated against the
+    // model catalog — values pass through to the CLI opaquely. The
+    // merged result is also snapshotted on the Command row so history
+    // can answer "which model ran this turn?".
+    const sessionDefaults = session.modelSelection as Record<string, unknown> | null;
+    const mergedOptions =
+      sessionDefaults || options ? { ...(sessionDefaults ?? {}), ...(options ?? {}) } : undefined;
+
     const cmd = await this.prisma.command.create({
       data: {
         sessionId,
@@ -60,6 +70,7 @@ export class CommandService {
         kind: 'execute',
         prompt,
         status: 'pending',
+        options: mergedOptions ? (mergedOptions as Prisma.InputJsonValue) : undefined,
       },
     });
 
@@ -75,7 +86,7 @@ export class CommandService {
       externalId: session.externalId ?? undefined,
       kind: 'execute',
       prompt,
-      options,
+      options: mergedOptions,
       attachments: refs.length ? refs : undefined,
     };
 

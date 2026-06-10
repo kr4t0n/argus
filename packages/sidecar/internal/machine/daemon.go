@@ -282,6 +282,13 @@ func (d *Daemon) dispatchControl(ctx context.Context, payload map[string]any) {
 			return
 		}
 		d.handleGitLog(ctx, ev)
+	case "list-models":
+		var ev protocol.ListModelsRequestCommand
+		if err := remarshal(payload, &ev); err != nil {
+			d.log.Printf("control: bad list-models: %v", err)
+			return
+		}
+		d.handleListModels(ctx, ev)
 	case "update-sidecar":
 		var ev protocol.UpdateSidecarCommand
 		if err := remarshal(payload, &ev); err != nil {
@@ -390,6 +397,35 @@ func (d *Daemon) handleGitLog(ctx context.Context, req protocol.GitLogRequestCom
 		d.fsSlots <- struct{}{}
 		defer func() { <-d.fsSlots }()
 		s.HandleGitLog(ctx, req)
+	}()
+}
+
+// handleListModels mirrors handleGitLog: route to the target
+// supervisor, synthetic error response when the agent is gone so the
+// server-side pending request resolves instead of timing out, actual
+// work dispatched async. Uses the shared fsSlots gate — catalog
+// fetches shell out to the wrapped CLI, and bounding them with the
+// other disk/exec-touching handlers keeps a dashboard that opens many
+// pickers at once from forking a herd of CLI processes.
+func (d *Daemon) handleListModels(ctx context.Context, req protocol.ListModelsRequestCommand) {
+	d.mu.Lock()
+	s, ok := d.supervisors[req.AgentID]
+	d.mu.Unlock()
+	if !ok {
+		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.ModelCatalogResponseEvent{
+			Kind:      "model-catalog-response",
+			MachineID: d.cache.MachineID,
+			AgentID:   req.AgentID,
+			RequestID: req.RequestID,
+			Error:     "agent not running on this machine",
+			TS:        time.Now().UnixMilli(),
+		})
+		return
+	}
+	go func() {
+		d.fsSlots <- struct{}{}
+		defer func() { <-d.fsSlots }()
+		s.HandleListModels(ctx, req)
 	}()
 }
 

@@ -56,7 +56,13 @@ Command ── emits ──▶ many ResultChunks (streamed)
   the underlying CLI's native conversation id (Claude Code `--resume`, Codex
   `resume`, Cursor CLI `--resume`) via `Session.externalId`. The server stores
   the `externalId` after the sidecar reports it on the first turn.
-- A **Command** is a single user turn within a session.
+  `Session.modelSelection` (nullable JSON) holds the session-default
+  `ModelSelection` (`{model, effort, context, speed}`); NULL means "CLI
+  default" — no model flags are passed, the pre-picker behavior.
+- A **Command** is a single user turn within a session. At dispatch the
+  session's `modelSelection` is merged under any per-turn `options`
+  (per-turn wins key-by-key) and the merged result is snapshotted on
+  `Command.options` so history can answer "which model ran this turn?".
 - A **ResultChunk** is one streamed fragment: `delta`, `tool`, `stdout`,
   `stderr`, `progress`, `final`, or `error`.
 
@@ -92,8 +98,21 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the shared `agentToDto` mapper. Lifecycle ingestion lives in
   `machine/`; this module is purely about the persisted Agent row.
 - `session/` — CRUD for sessions; resolves `externalId` so each subsequent
-  turn carries it back to the sidecar for `--resume`.
+  turn carries it back to the sidecar for `--resume`. Also owns the
+  session-default model choice: `POST /sessions` accepts
+  `modelSelection`, `PATCH /sessions/:id/model` replaces/clears it
+  (null = back to CLI default), both deliberately without deep
+  validation — selections pass through to the CLI opaquely.
 - `command/` — persists commands, `XADD`s to `agent:{id}:cmd`, handles cancel.
+  `dispatch` merges `Session.modelSelection` under per-turn `options`
+  and records the merged map on `Command.options`.
+- `machine/models.{service,controller}.ts` — `GET /agents/:id/models`,
+  the model-catalog RPC (same pending-promise pattern as `fs.service`:
+  publish `list-models` on `machine:{mid}:control`, resolve on the
+  `model-catalog-response` lifecycle event) plus a 1-hour per-agent
+  cache and in-flight request collapsing. `?refresh=1` bypasses the
+  cache. Catalog errors reject the request — the dashboard degrades to
+  a free-text model input.
 - `attachment/` — file/image attachments. `POST /attachments` (JWT-
   guarded, multer `FileInterceptor`) streams an upload into S3/MinIO
   (`@aws-sdk/client-s3`, `forcePathStyle` for MinIO) and records an
@@ -246,6 +265,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Built-in adapters that report `--version` implement the optional
   `Versioned` interface (see `util.ReadBinaryVersion`); the daemon
   prefers the auto-detected string over anything baked in.
+  - **Model selection** rides `Command.Options` as flat keys
+    (`model` / `effort` / `context` / `speed`, constants in
+    `protocol`); each `Execute` appends only the flags its CLI knows:
+    claude-code `--model x[1m] --effort l`, codex `--model x -c
+    model_reasoning_effort=l -c service_tier=fast`, cursor-cli
+    `--model <slug>` (the slug already encodes everything).
+  - **Model catalogs** come from the optional `ModelLister` capability
+    (`models_claude.go` static alias table, `models_codex.go` parses
+    `codex debug models` JSON, `models_cursor.go` parses
+    `cursor-agent models` lines and labels family/variant groups).
+    The supervisor's `HandleListModels` answers the `list-models`
+    control RPC with a 12 s exec deadline so a wedged CLI surfaces as
+    a catalog error, not a server-side timeout.
 - `sidecarlink/` — gorilla/websocket client that dials
   `ws://{server.url}/sidecar-link`, performs a `hello`/`hello-ack`
   handshake, and exposes `Publish(frame)` + `Inbound()`. Reconnects
@@ -867,6 +899,38 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   oscillators (no bundled asset) which can be silently blocked by
   autoplay policy on browsers that haven't seen a user gesture yet,
   but on a logged-in dashboard that's effectively never.
+- **Model catalogs describe; they never gate**: selections pass
+  through `Command.options` → adapter argv with NO validation against
+  the catalog — on the server, the sidecar, or anywhere else. This is
+  deliberate: it keeps stale catalogs harmless, makes the free-text
+  "custom…" model id a first-class path, and matches the entitlement
+  reality (Claude Code's `sonnet[1m]` is plan/credit-gated with no way
+  to pre-check; a bad choice must surface as a turn error). Resist
+  adding validation here when something "looks wrong" — degraded
+  pass-through is the designed behavior.
+- **Cursor slug parsing: at most ONE effort token, labeling only**:
+  `models_cursor.go` groups cursor's ~110 flat slugs into families by
+  stripping variant segments right-to-left (`fast`, `thinking`, and a
+  single effort token, with `extra-high` counting as one token across
+  two segments). The one-effort rule is load-bearing — `max` is an
+  effort suffix in `claude-fable-5-max` but part of the *model name*
+  in `gpt-5.1-codex-max-low`, and segment order flips between
+  generations (`claude-opus-4-8-thinking-high` vs
+  `claude-4.6-opus-high-thinking`). Crucially the parser only ever
+  produces LABELS (`family`/`variantLabel`); the dispatched value is
+  always the exact slug from the CLI's own list, so a parsing miss is
+  a cosmetic grouping bug, never a dispatch failure. Don't "improve"
+  it into slug recomposition.
+- **Claude Code's model catalog is a compiled-in table**: the CLI has
+  no list-models surface (no subcommand; the stream-json control
+  protocol rejects `supported_models` and friends — probed on 2.1.170),
+  so `models_claude.go` hardcodes the documented aliases + effort/1m
+  facets. Safe because aliases track the latest models and `--effort`
+  falls back gracefully, but the facet matrix should be re-checked
+  against https://code.claude.com/docs/en/model-config when models
+  launch. Codex's catalog command lives under `codex debug models` —
+  machine-readable JSON but nominally a debug surface; the parser is
+  defensive and any failure degrades to the free-text input.
 - **Context-window lookup is hand-maintained**: the donut on the
   session header's `UsageBadge` reads its denominator from
   `packages/shared-types/src/contextWindow.ts`, a hardcoded family →
