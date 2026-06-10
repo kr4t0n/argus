@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,6 +32,13 @@ type supervisor struct {
 	adapter adapter.Adapter
 	version string // detected CLI version, "" if detection failed
 	log     *log.Logger
+
+	// serverURL + httpClient let the supervisor pull a turn's attachments
+	// over HTTP from the server (the S3 gateway) before invoking the CLI.
+	// serverURL is the same base the sidecar link / quota use; empty means
+	// attachments are skipped (logged) rather than failing the turn.
+	serverURL  string
+	httpClient *http.Client
 
 	cmdCancel context.CancelFunc
 	doneCh    chan struct{}
@@ -77,6 +85,7 @@ const (
 func newSupervisor(
 	ctx context.Context,
 	machineID string,
+	serverURL string,
 	b *bus.Bus,
 	spec AgentRecord,
 	logger *log.Logger,
@@ -110,13 +119,15 @@ func newSupervisor(
 	}
 
 	return &supervisor{
-		spec:    spec,
-		machine: machineID,
-		bus:     b,
-		adapter: ad,
-		version: version,
-		log:     logger,
-		doneCh:  make(chan struct{}),
+		spec:       spec,
+		machine:    machineID,
+		bus:        b,
+		adapter:    ad,
+		version:    version,
+		log:        logger,
+		serverURL:  serverURL,
+		httpClient: &http.Client{Timeout: 2 * time.Minute},
+		doneCh:     make(chan struct{}),
 	}, nil
 }
 
@@ -344,6 +355,13 @@ func (s *supervisor) handleCommand(parent context.Context, cmd protocol.Command)
 	resultStream := protocol.ResultStream(s.spec.AgentID)
 	seq := 0
 	publishExternalIDOnce := false
+
+	// Pull + land any attached files BEFORE running the CLI. This sets
+	// each ref's LocalPath and appends a path-listing preamble to the
+	// prompt; adapters then reference the files (codex via --image, the
+	// rest via the prompt path). Fail-soft: a bad pull is skipped, not
+	// fatal to the turn.
+	s.materializeAttachments(cmdCtx, &cmd)
 
 	chunks, err := s.adapter.Execute(cmdCtx, cmd)
 	if err != nil {

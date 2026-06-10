@@ -6,6 +6,7 @@ import { streamKeys } from '@argus/shared-types';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
+import { AttachmentService } from '../attachment/attachment.service';
 
 @Injectable()
 export class SessionService {
@@ -13,7 +14,20 @@ export class SessionService {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly gateway: StreamGateway,
+    private readonly attachments: AttachmentService,
   ) {}
+
+  /** Decorate raw command rows with their linked attachments (one batch
+   *  query). Commands with no files are returned untouched so the wire
+   *  stays lean. Shared by the initial-load and scroll-up history paths. */
+  private async withAttachments<T extends { id: string }>(commands: T[]): Promise<T[]> {
+    const byCmd = await this.attachments.dtosByCommand(commands.map((c) => c.id));
+    if (byCmd.size === 0) return commands;
+    return commands.map((c) => {
+      const a = byCmd.get(c.id);
+      return a && a.length ? { ...c, attachments: a } : c;
+    });
+  }
 
   static toDto(s: PSession): SessionDTO {
     return {
@@ -333,7 +347,12 @@ export class SessionService {
           orderBy: [{ commandId: 'asc' }, { seq: 'asc' }],
         })
       : [];
-    return { session: SessionService.toDto(session), commands, chunks, hasMore };
+    return {
+      session: SessionService.toDto(session),
+      commands: await this.withAttachments(commands),
+      chunks,
+      hasMore,
+    };
   }
 
   /**
@@ -363,6 +382,6 @@ export class SessionService {
           orderBy: [{ commandId: 'asc' }, { seq: 'asc' }],
         })
       : [];
-    return { commands, chunks, hasMore };
+    return { commands: await this.withAttachments(commands), chunks, hasMore };
   }
 }

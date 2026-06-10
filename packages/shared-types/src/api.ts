@@ -105,6 +105,23 @@ export interface SessionDTO {
   updatedAt: string;
 }
 
+/**
+ * One file attached to a user turn, as surfaced to the dashboard. The
+ * bytes live in S3/MinIO; this is the metadata plus a ready-to-use,
+ * tokenized fetch URL. The server mints a fresh ~1h token each time it
+ * serializes the DTO, so `url` can be dropped straight into an
+ * `<img src>` or a download link without an Authorization header.
+ */
+export interface AttachmentDTO {
+  id: string;
+  filename: string;
+  mime: string;
+  size: number;
+  /** API-base-relative path incl. token: `/attachments/{id}?t={token}`. */
+  url: string;
+  createdAt: string;
+}
+
 export interface CommandDTO {
   id: string;
   sessionId: string;
@@ -114,6 +131,8 @@ export interface CommandDTO {
   status: CommandStatus;
   createdAt: string;
   completedAt: string | null;
+  /** Files the user attached to this turn; absent/empty for plain text. */
+  attachments?: AttachmentDTO[];
 }
 
 export interface ResultChunkDTO extends ResultChunk {}
@@ -126,6 +145,9 @@ export interface CreateSessionRequest {
 
 export interface CreateCommandRequest {
   prompt: string;
+  /** Ids of files previously uploaded via POST /attachments, to attach
+   *  to this turn. The server links them to the created command. */
+  attachmentIds?: string[];
   options?: Record<string, unknown>;
 }
 

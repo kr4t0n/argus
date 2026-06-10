@@ -84,6 +84,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `session/` — CRUD for sessions; resolves `externalId` so each subsequent
   turn carries it back to the sidecar for `--resume`.
 - `command/` — persists commands, `XADD`s to `agent:{id}:cmd`, handles cancel.
+- `attachment/` — file/image attachments. `POST /attachments` (JWT-
+  guarded, multer `FileInterceptor`) streams an upload into S3/MinIO
+  (`@aws-sdk/client-s3`, `forcePathStyle` for MinIO) and records an
+  `Attachment` row (unlinked: `commandId` NULL until the turn is sent).
+  `GET /attachments/:id?t=<token>` is **deliberately unguarded** —
+  the sidecar has no user JWT and `<img>` can't send an Authorization
+  header, so both authenticate with a short-lived JWT (`scope:
+  attachment-download`, `sub:` the attachment id) minted by the same
+  `JwtService`/`JWT_SECRET` and verified per-request; the bytes stream
+  from S3. `CommandService.dispatch` links uploaded ids to the new
+  command, mints **15-min pull tokens** for the wire `Command.attachments`,
+  and returns/loads **1-h display tokens** in `AttachmentDTO.url`
+  (`SessionService.withAttachments` batches them onto the transcript).
 - `result-ingestor/` — single XREADGROUP across **all** agent result streams
   (refreshed every 5s). Persists each chunk and **immediately** forwards to
   WS room `session:{sessionId}` (no batching — the typewriter UX needs it).
@@ -166,6 +179,17 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     chunks back on `agent:{id}:result`, heartbeats, and gracefully
     drains on destroy. There is no per-agent process — supervisors are
     goroutines inside the single daemon.
+  - `attachments.go` — `materializeAttachments` runs inside
+    `handleCommand` **before** `adapter.Execute`: for each
+    `cmd.Attachments` ref it HTTP-GETs `{serverURL}/attachments/{id}?
+    t={token}` (serverURL threaded in from `cache.Server.URL`), writes
+    the bytes under `<workingDir>/.argus/uploads/<id>-<name>` bounded by
+    the ref's declared size, records the absolute `LocalPath`, and
+    appends a uniform "attached files" path-listing preamble to the
+    prompt. Fail-soft per file (a bad pull is logged and skipped, not
+    fatal). `safeAttachmentFilename` jails the on-disk name (strips
+    path separators / control chars; id-prefixed for collision safety).
+    Working-dir-less agents fall back to a temp dir.
 - `quota/` — per-CLI plan-quota prober. Runs on a 5-minute tick inside
   the daemon, reads each tool's OAuth file
   (`~/.claude/.credentials.json`, `~/.codex/auth.json`) and calls the
@@ -551,6 +575,55 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   its file-modifying tools (see `isFileEditTool` in `claude_code.go`
   for the canonical list) and call the same two `fileEditState`
   methods — do **not** re-implement diffing per adapter.
+- **Attachments are two separate problems; S3 only solves one**. A file
+  attached to a turn has to (a) be *persisted* so the transcript
+  re-renders it, and (b) be *delivered* to the **sidecar host's disk** so
+  the CLI can read it — the CLI runs on the agent's machine, not the
+  server. S3/MinIO handles (a). For (b) the sidecar pulls each file over
+  **HTTP from the server** (the server is the S3 gateway), NOT directly
+  from MinIO — because Argus sidecars run on arbitrary remote hosts that
+  typically can't reach a cluster-internal bucket, but already reach the
+  server. The bytes **never ride Redis**: only `Command.attachments`
+  refs (id/filename/mime/size/token) travel the `agent:{id}:cmd` stream,
+  so the MAXLEN-trimming gotcha doesn't apply. If you ever want the
+  sidecar to pull presigned-direct from S3 (server out of the byte path),
+  gate it on the bucket being reachable from every agent host.
+- **Image vision is uniform-prompt-path + one per-adapter flag**. The
+  cross-adapter floor is the prompt preamble: every agentic CLI opens a
+  file whose path it's told, and — verified empirically against the real
+  CLIs — `claude -p` over stdin **and** `cursor-agent -p` attach a
+  path-mentioned image as *vision* (not just a text read). Codex is the
+  one exception: `codex exec` needs its native `--image <path>` flag for
+  vision (a bare path mention can be read as text), so `codex.go` emits
+  `--image` for every `image/*` attachment with a `LocalPath`. When
+  adding an adapter, you get file access + (claude-style) image vision
+  for free via the preamble; only wire a native image flag if that CLI
+  has one. (Claude's *Read tool* is unreliable for images — several
+  upstream issues — but we never depend on it; the path-in-prompt route
+  is the documented, working one.)
+- **Attachment lifecycle is keep-for-session; S3 orphans are a TODO**.
+  Files stay under `.argus/uploads/` and in S3 for the life of the
+  session so `--resume` turns can re-reference them. Deleting a command
+  (e.g. agent hard-delete cascade) removes the `Attachment` rows but the
+  service only best-effort deletes the S3 object on the upload-failure
+  path — a periodic orphan sweep (objects whose row is gone, and unlinked
+  `commandId IS NULL` uploads abandoned before send) is a follow-up.
+- **Attachment viewing is unified with the file tree (frontend)**: a sent
+  attachment opens as a `FileViewer` **tab** on double-click — same
+  gesture and destination as the Files panel, not a floating modal.
+  `fileTabsStore.OpenFile` is a `file | attachment` union; `openAttachment`
+  keys tabs `att:<id>`. `FileViewer` renders both sources through the
+  shared `FileContentView` (text / markdown / HTML / image / binary);
+  attachments add a PDF-in-iframe path and fetch text-like files over HTTP
+  from the tokenized url (image / PDF render straight from the url).
+  Opening a tab swaps `StreamViewer` out, which used to snap the chat to
+  the bottom on close — `StreamViewer` now records `{top, atBottom}` per
+  session in a module-level `scrollMemory` **inside onScroll** (NOT at
+  unmount: a tearing-down node reports `scrollTop`/`clientHeight` as ~0,
+  which reads as "at bottom" and corrupts the saved position) and restores
+  it on remount. The composer's pre-send image chips keep a quick
+  `ImageLightbox` (floating zoom) — an unsent file has no session tab to
+  open into.
 - **Token-level UI re-render**: `StreamViewer` concatenates all `delta`s
   into a single string per command and re-renders that block on every chunk.
   This is fast enough up to a few hundred KB; if you hit perf issues,
@@ -832,6 +905,34 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   type X" — the protocol/streams support it; the dashboard doesn't expose it
   yet.
 - Pre-commit hooks (ruff/eslint).
+- **Attachments — known debt** (the file/image feature is complete and
+  verified end-to-end for claude `-p`/stdin and codex `--image`; these are
+  the deferred edges):
+  - **S3 orphan sweep.** Deleting a Command cascades its `Attachment`
+    rows, but the MinIO/S3 objects are only best-effort removed on the
+    upload-failure path. Need a periodic sweep for (a) objects whose row
+    is gone and (b) unlinked uploads (`commandId IS NULL`) abandoned in
+    the composer before send.
+  - **Sidecar `.argus/uploads/` pruning.** Pulled files are kept for the
+    session (so `--resume` can re-reference them) but never deleted — in
+    practice keep-forever on the agent's disk. Add an age/size-bounded
+    prune (they're hidden + gitignored, so it's only disk usage).
+  - **`cursor-cli` image vision unverified.** claude (path-in-prompt) and
+    codex (`--image`) are confirmed against the real CLIs; cursor's
+    path-mention vision is documented-but-unproven (no cursor-agent on the
+    test box). Smoke-test before claiming cursor image support.
+  - **No server-side attachment tests.** The sidecar has unit tests
+    (pull / sanitize / preamble); the `attachment/` module (upload,
+    tokenized download, link-and-validate) has none.
+  - **New-session inline prompt drops attachments.** `POST /sessions`
+    with `body.prompt` calls `dispatch()` without `attachmentIds`
+    (`session.controller.ts`). The web never hits this with files (first
+    message goes through `/commands`), so it's latent — but forward the
+    ids there for completeness.
+  - **Server is in the byte path.** The sidecar pulls each file from the
+    server (S3 gateway) and the browser displays from it; presigned
+    direct-from-S3 is the scale path, gated on the bucket being reachable
+    from every agent host (see the two-leg gotcha).
 
 ## When you change something
 

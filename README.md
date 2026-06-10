@@ -77,6 +77,17 @@ via the sidecar's `fsnotify` watcher (250 ms-debounced). The header
 also shows the current git branch (or short SHA when detached) — the
 sidecar reads `.git/HEAD` on every listing so the badge flips as soon
 as the next refresh lands.
+- **File & image attachments**: drag-drop, paste, or pick files in the
+chat composer to send them along with a prompt. Images render inline on
+the turn and are passed to the agent as **vision** (Claude/Cursor read
+the on-disk path, Codex via its native `--image` flag); any other file
+type lands on the agent's machine so it can open it directly. Bytes are
+stored in an S3-compatible object store (the bundled MinIO, or any
+S3/R2/MinIO); the sidecar pulls each file over HTTP from the server —
+so the bucket only needs to be reachable from the server, never from
+remote agent hosts. Files land under `<workingDir>/.argus/uploads/`
+(hidden from the file tree) and stick around for the session so
+`--resume` turns can reference them again.
 - **Interactive terminal per agent (opt-in)**: tick the "attach
 interactive terminal" box when creating an agent and the dashboard's
 right panel grows a real PTY shell on that machine — full ANSI
@@ -140,12 +151,34 @@ argus/
 > Kubernetes? `helm repo add argus https://kr4t0n.github.io/argus/helm`
 > — full chart docs in [`helm/argus/README.md`](helm/argus/README.md).
 
-### 1. Bring up Postgres, Redis, server, and web
+### 1. Bring up Postgres, Redis, MinIO, server, and web
 
 ```bash
 cp .env.example .env
 docker compose -f deploy/docker-compose.yml up --build
 ```
+
+The dashboard is published on **`WEB_PORT`** (default `5173`). If you
+customise any value in `.env` (ports, secrets, S3 target), pass it
+explicitly — Compose's project directory defaults to `deploy/`, so it
+does **not** auto-read a repo-root `.env`:
+
+```bash
+# e.g. 5173/5432/9000 already taken on this host:
+WEB_PORT=5273 POSTGRES_PORT=55432 S3_PORT=59000 S3_CONSOLE_PORT=59001 \
+  docker compose --env-file .env -f deploy/docker-compose.yml up --build
+```
+
+The SPA always finds the API at `<hostname>:4000`, independent of
+`WEB_PORT`, so only `SERVER_PORT` matters for that wiring.
+
+The bundled **MinIO** (S3-compatible object store) backs file/image
+attachments; a one-shot `minio-init` service creates the bucket on first
+boot. To use a managed S3 / R2 / external MinIO instead, set the server's
+`S3_ENDPOINT` in the compose file (it's pinned to the in-network MinIO so
+a host-oriented `.env` value can't leak into the container) and drop the
+`minio` services; `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` stay
+env-overridable. Only the server needs to reach the bucket.
 
 The dashboard is at [http://localhost:5173](http://localhost:5173). Sign in with the seeded admin
 credentials (`admin@argus.local` / `changeme` by default — change them in
@@ -462,6 +495,12 @@ See `[.env.example](./.env.example)` for the full list. Highlights:
 | `ARGUS_WS_URL`         | Runtime URL the web app uses for Socket.IO; defaults to `ARGUS_API_URL` |
 | `VITE_API_URL`         | Build-time fallback baked into the web bundle (only used if you build your own image) |
 | `VITE_WS_URL`          | Build-time fallback for Socket.IO (only used if you build your own image) |
+| `S3_ENDPOINT`          | S3-compatible endpoint for attachment storage (bundled MinIO by default) |
+| `S3_BUCKET`            | Bucket attachments are stored in (`argus-attachments`)  |
+| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | Object-store credentials                     |
+| `S3_REGION`            | Region sent to the S3 client (`us-east-1`; ignored by MinIO) |
+| `ATTACHMENT_MAX_FILE_BYTES` | Per-file upload cap in bytes (default 25 MiB)      |
+| `ATTACHMENT_MAX_FILES` | Max attachments per turn (default 10)                   |
 
 
 ## Adding a custom CLI agent

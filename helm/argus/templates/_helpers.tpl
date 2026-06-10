@@ -117,5 +117,12 @@ message instead of silently rendering a half-broken Deployment.
 {{- fail "externalRedis.url is required (or set externalRedis.existingSecret pointing at a Secret with the REDIS_URL key)" -}}
 {{- end -}}
 {{- end -}}
+{{- if .Values.objectStore.endpoint -}}
+{{- if not .Values.objectStore.existingSecret -}}
+{{- if not .Values.objectStore.accessKey -}}
+{{- fail "objectStore.accessKey/secretKey are required when objectStore.endpoint is set (or set objectStore.existingSecret pointing at a Secret with the S3_ACCESS_KEY / S3_SECRET_KEY keys)" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}

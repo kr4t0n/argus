@@ -12,6 +12,7 @@ import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { SessionService } from '../session/session.service';
 import { StreamGateway } from '../gateway/stream.gateway';
+import { AttachmentService } from '../attachment/attachment.service';
 
 @Injectable()
 export class CommandService {
@@ -21,6 +22,7 @@ export class CommandService {
     @Inject(forwardRef(() => SessionService))
     private readonly sessions: SessionService,
     private readonly gateway: StreamGateway,
+    private readonly attachments: AttachmentService,
   ) {}
 
   static toDto(c: PCommand): CommandDTO {
@@ -41,6 +43,7 @@ export class CommandService {
     sessionId: string,
     prompt: string,
     options?: Record<string, unknown>,
+    attachmentIds?: string[],
   ): Promise<CommandDTO> {
     const session = await this.sessions.get(userId, sessionId);
 
@@ -60,6 +63,11 @@ export class CommandService {
       },
     });
 
+    // Link any uploaded files to this command and mint the short-lived
+    // pull tokens the sidecar uses to fetch them. Validates ownership;
+    // throws (rolling the command into a failed dispatch) on a bad id.
+    const refs = await this.attachments.linkAndBuildRefs(userId, attachmentIds, cmd.id);
+
     const wire: WireCommand = {
       id: cmd.id,
       agentId: cmd.agentId,
@@ -68,6 +76,7 @@ export class CommandService {
       kind: 'execute',
       prompt,
       options,
+      attachments: refs.length ? refs : undefined,
     };
 
     await this.redis.publish(streamKeys.command(agent.id), wire);
@@ -78,7 +87,10 @@ export class CommandService {
 
     await this.sessions.bumpUpdatedAt(sessionId);
 
-    const dto = CommandService.toDto(sent);
+    // Display DTOs (tokenized urls) so the just-sent turn renders its
+    // thumbnails immediately, both for the caller and the WS broadcast.
+    const attachments = refs.length ? await this.attachments.dtosForCommand(cmd.id) : undefined;
+    const dto: CommandDTO = { ...CommandService.toDto(sent), attachments };
     this.gateway.emitCommandCreated(dto);
     return dto;
   }

@@ -100,6 +100,39 @@ spec:
                   key: SIDECAR_LINK_TOKEN
                   optional: true
             {{- end }}
+            {{- if .Values.objectStore.endpoint }}
+            # Attachments: the bucket is reachable only from the server.
+            - name: S3_ENDPOINT
+              value: {{ .Values.objectStore.endpoint | quote }}
+            - name: S3_BUCKET
+              value: {{ .Values.objectStore.bucket | quote }}
+            - name: S3_REGION
+              value: {{ .Values.objectStore.region | quote }}
+            - name: ATTACHMENT_MAX_FILE_BYTES
+              value: {{ .Values.objectStore.maxFileBytes | quote }}
+            - name: ATTACHMENT_MAX_FILES
+              value: {{ .Values.objectStore.maxFiles | quote }}
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  {{- if .Values.objectStore.existingSecret }}
+                  name: {{ .Values.objectStore.existingSecret }}
+                  key: {{ .Values.objectStore.existingSecretAccessKeyKey }}
+                  {{- else }}
+                  name: {{ include "argus.secret.name" . }}
+                  key: S3_ACCESS_KEY
+                  {{- end }}
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  {{- if .Values.objectStore.existingSecret }}
+                  name: {{ .Values.objectStore.existingSecret }}
+                  key: {{ .Values.objectStore.existingSecretSecretKeyKey }}
+                  {{- else }}
+                  name: {{ include "argus.secret.name" . }}
+                  key: S3_SECRET_KEY
+                  {{- end }}
+            {{- end }}
             {{- with .Values.server.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

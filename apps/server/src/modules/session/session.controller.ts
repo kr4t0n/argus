@@ -11,7 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { IsBoolean, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SessionService } from './session.service';
@@ -79,6 +79,13 @@ class CreateCommandDto {
   @IsString()
   @MinLength(1)
   prompt!: string;
+
+  /** Ids of files previously uploaded via POST /attachments to attach
+   *  to this turn. Each must belong to the caller and be unlinked. */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  attachmentIds?: string[];
 
   @IsOptional()
   options?: Record<string, unknown>;
@@ -196,7 +203,7 @@ export class SessionController {
     @Param('id') id: string,
     @Body() body: CreateCommandDto,
   ) {
-    return this.commands.dispatch(req.user.id, id, body.prompt, body.options);
+    return this.commands.dispatch(req.user.id, id, body.prompt, body.options, body.attachmentIds);
   }
 
   @Post(':id/fork')

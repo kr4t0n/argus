@@ -10,10 +10,16 @@ type: application
 # Chart version is independent of the app it ships. Bump on chart
 # changes. Releasing a new chart version only requires bumping this
 # field — see helm-publish.yml.
-version: 0.1.16
+version: 0.2.0-rc.1
 # App version tracks the Docker image tags pulled by default. Bump in
 # lockstep with `version` whenever the chart starts requiring features
 # only present in newer images; otherwise it can lag.
+#
+# Stays at 0.1.16 for now: the new `objectStore` (attachments) wiring is
+# additive and backward-compatible — older server images simply ignore
+# the S3_* / ATTACHMENT_* env. To actually use attachments, point
+# `image.tag` (or this appVersion, once a release ships) at a server
+# image that includes the attachment module.
 appVersion: "0.1.16"
 
 home: https://github.com/kr4t0n/argus

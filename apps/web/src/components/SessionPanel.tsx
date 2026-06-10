@@ -168,9 +168,12 @@ export function SessionPanel() {
 
   if (!entry) return null;
 
-  async function onSend(prompt: string) {
+  async function onSend(prompt: string, attachmentIds: string[]) {
     if (!sessionId) return;
-    await api.sendCommand(sessionId, { prompt });
+    await api.sendCommand(sessionId, {
+      prompt,
+      attachmentIds: attachmentIds.length ? attachmentIds : undefined,
+    });
   }
 
   async function onCancel() {
@@ -234,6 +237,7 @@ export function SessionPanel() {
             </Suspense>
           ) : (
             <StreamViewer
+              sessionId={entry.session.id}
               commands={entry.commands}
               chunks={entry.chunks}
               running={running}
@@ -249,6 +253,7 @@ export function SessionPanel() {
             tab. File tabs are read-only previews. */}
         {!activeFile && (
           <Composer
+            key={sessionId}
             onSend={onSend}
             onCancel={onCancel}
             running={running}
