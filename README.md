@@ -46,6 +46,12 @@ utilization (latest turn, since each CLI re-sends full history on
 `--resume`). Hover for the full breakdown — input vs cache read vs
 cache write, USD cost, API time, and the matched model family.
 Donut hides when the model isn't in the window lookup table.
+- **Token-usage ledger with time windows**: the `/user` page's
+"Usage" subsection tallies input / output / cache-read / cache-write
+tokens, USD cost, and API time across every session you own. A
+segmented toggle switches between the trailing **7 days**, **30 days**,
+and **all time** (default 30 days) — the server returns all three
+windows in one response, so switching is instant with no refetch.
 - **Per-CLI plan-quota panel**: the `/user` page's "Quota" subsection
 shows how much of each subscription window you've burned (5-hour and
 weekly for Claude Code Pro/Max, ChatGPT Codex). Each sidecar reads the
@@ -71,6 +77,17 @@ via the sidecar's `fsnotify` watcher (250 ms-debounced). The header
 also shows the current git branch (or short SHA when detached) — the
 sidecar reads `.git/HEAD` on every listing so the badge flips as soon
 as the next refresh lands.
+- **File & image attachments**: drag-drop, paste, or pick files in the
+chat composer to send them along with a prompt. Images render inline on
+the turn and are passed to the agent as **vision** (Claude/Cursor read
+the on-disk path, Codex via its native `--image` flag); any other file
+type lands on the agent's machine so it can open it directly. Bytes are
+stored in an S3-compatible object store (the bundled MinIO, or any
+S3/R2/MinIO); the sidecar pulls each file over HTTP from the server —
+so the bucket only needs to be reachable from the server, never from
+remote agent hosts. Files land under `<workingDir>/.argus/uploads/`
+(hidden from the file tree) and stick around for the session so
+`--resume` turns can reference them again.
 - **Interactive terminal per agent (opt-in)**: tick the "attach
 interactive terminal" box when creating an agent and the dashboard's
 right panel grows a real PTY shell on that machine — full ANSI
@@ -80,6 +97,25 @@ WebSocket (not Redis) for sub-10 ms keystroke echo, usable for
 full-screen TUIs like `vim` and `htop`. Treat the opt-in as remote
 shell access: only enable on hosts where every dashboard user is
 trusted to that level.
+- **Per-project notes (opt-in extension)**: enable the **Notes**
+extension from `/user` → Extensions and the session right panel grows
+a **Note** tab beside Terminal — a free-form scratchpad scoped to the
+project (the `machineId` + working-directory pair every session in
+that directory shares). Both the enablement and the notes themselves
+are saved to your account, so they follow you across browsers and
+devices, and every session in the same working dir sees the same note.
+- **Per-project progress (opt-in extension)**: enable the **Progress**
+extension and the session right panel grows a **Progress** tab that
+lists live background tasks for the project. Wrap any long-running
+command in the agent's shell with `argus-bg --label "training" --
+python train.py &` and its tqdm-style progress bar surfaces in the
+panel in real time, even after you background it with `&` or `nohup`
+(detached processes no longer flow through the agent's PTY, so
+without the wrapper the dashboard would never see them). The wrapper
+binary ships alongside the sidecar and is auto-added to `PATH` on
+every shell the sidecar spawns; the JSONL event stream it writes
+into `<workingDir>/.argus/progress/` is tailed by a per-agent
+watcher and rebroadcast to subscribed dashboards.
 - **Redis Streams** for the bus: durable, replayable, no extra ops weight on
 top of the Redis you already run.
 
@@ -115,12 +151,34 @@ argus/
 > Kubernetes? `helm repo add argus https://kr4t0n.github.io/argus/helm`
 > — full chart docs in [`helm/argus/README.md`](helm/argus/README.md).
 
-### 1. Bring up Postgres, Redis, server, and web
+### 1. Bring up Postgres, Redis, MinIO, server, and web
 
 ```bash
 cp .env.example .env
 docker compose -f deploy/docker-compose.yml up --build
 ```
+
+The dashboard is published on **`WEB_PORT`** (default `5173`). If you
+customise any value in `.env` (ports, secrets, S3 target), pass it
+explicitly — Compose's project directory defaults to `deploy/`, so it
+does **not** auto-read a repo-root `.env`:
+
+```bash
+# e.g. 5173/5432/9000 already taken on this host:
+WEB_PORT=5273 POSTGRES_PORT=55432 S3_PORT=59000 S3_CONSOLE_PORT=59001 \
+  docker compose --env-file .env -f deploy/docker-compose.yml up --build
+```
+
+The SPA always finds the API at `<hostname>:4000`, independent of
+`WEB_PORT`, so only `SERVER_PORT` matters for that wiring.
+
+The bundled **MinIO** (S3-compatible object store) backs file/image
+attachments; a one-shot `minio-init` service creates the bucket on first
+boot. To use a managed S3 / R2 / external MinIO instead, set the server's
+`S3_ENDPOINT` in the compose file (it's pinned to the in-network MinIO so
+a host-oriented `.env` value can't leak into the container) and drop the
+`minio` services; `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` stay
+env-overridable. Only the server needs to reach the bucket.
 
 The dashboard is at [http://localhost:5173](http://localhost:5173). Sign in with the seeded admin
 credentials (`admin@argus.local` / `changeme` by default — change them in
@@ -272,6 +330,17 @@ On boot the daemon:
 Created agents are cached in `~/.config/argus/sidecar.json`, so a
 sidecar restart immediately re-spawns every supervisor without waiting
 for the server's reconcile broadcast.
+
+To remove a machine from the dashboard, open its panel and use the
+**delete** button next to "new agent" (works at any status). This is
+a **soft delete**: the machine and its agents disappear from the
+dashboard, but nothing is destroyed — every session, command, and
+result stays in the database and remains viewable in your session
+history. The removal is sticky: even if that machine's sidecar keeps
+running or restarts, the server ignores it and the machine will not
+reappear. There is no un-delete from the UI, so the confirmation is
+final; the sidecar process itself is left untouched (stop it with
+`argus-sidecar stop` on the host if you also want to retire it).
 
 To upgrade an installed sidecar in place to the latest published release
 for its OS/arch, run:
@@ -426,6 +495,12 @@ See `[.env.example](./.env.example)` for the full list. Highlights:
 | `ARGUS_WS_URL`         | Runtime URL the web app uses for Socket.IO; defaults to `ARGUS_API_URL` |
 | `VITE_API_URL`         | Build-time fallback baked into the web bundle (only used if you build your own image) |
 | `VITE_WS_URL`          | Build-time fallback for Socket.IO (only used if you build your own image) |
+| `S3_ENDPOINT`          | S3-compatible endpoint for attachment storage (bundled MinIO by default) |
+| `S3_BUCKET`            | Bucket attachments are stored in (`argus-attachments`)  |
+| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | Object-store credentials                     |
+| `S3_REGION`            | Region sent to the S3 client (`us-east-1`; ignored by MinIO) |
+| `ATTACHMENT_MAX_FILE_BYTES` | Per-file upload cap in bytes (default 25 MiB)      |
+| `ATTACHMENT_MAX_FILES` | Max attachments per turn (default 10)                   |
 
 
 ## Adding a custom CLI agent

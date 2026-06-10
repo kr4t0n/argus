@@ -81,7 +81,10 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
 
   async listMachines(includeArchived = false): Promise<MachineDTO[]> {
     const rows = await this.prisma.machine.findMany({
-      where: includeArchived ? {} : { archivedAt: null },
+      // Soft-deleted machines are gone for good — never surfaced, not
+      // even via `includeArchived` (that flag is about archive, which
+      // is a separate, reversible concept).
+      where: { deletedAt: null, ...(includeArchived ? {} : { archivedAt: null }) },
       orderBy: [{ status: 'asc' }, { name: 'asc' }],
       include: { _count: { select: { agents: true } } },
     });
@@ -93,7 +96,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
       where: { id },
       include: { _count: { select: { agents: true } } },
     });
-    if (!row) throw new NotFoundException('machine not found');
+    if (!row || row.deletedAt) throw new NotFoundException('machine not found');
     return MachineService.toDto(row, row._count.agents);
   }
 
@@ -111,9 +114,9 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
 
     const exists = await this.prisma.machine.findUnique({
       where: { id: machineId },
-      select: { id: true },
+      select: { id: true, deletedAt: true },
     });
-    if (!exists) throw new NotFoundException('machine not found');
+    if (!exists || exists.deletedAt) throw new NotFoundException('machine not found');
 
     const updated = await this.prisma.machine.update({
       where: { id: machineId },
@@ -144,7 +147,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
    */
   async createAgent(machineId: string, req: CreateAgentRequest): Promise<AgentDTO> {
     const machine = await this.prisma.machine.findUnique({ where: { id: machineId } });
-    if (!machine) throw new NotFoundException('machine not found');
+    if (!machine || machine.deletedAt) throw new NotFoundException('machine not found');
     if (machine.archivedAt) throw new BadRequestException('machine is archived');
 
     if (!req.name?.trim()) throw new BadRequestException('name is required');
@@ -232,6 +235,61 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Soft-delete a Machine: set the sticky `deletedAt` tombstone and
+   * archive its agents, then broadcast `machine:removed` so every
+   * dashboard drops it. NOTHING is destroyed — the agents are merely
+   * hidden via their own `archivedAt`, and the
+   * sessions/commands/chunks/terminals beneath them stay fully intact
+   * so conversation history survives and remains viewable through the
+   * normal (user-scoped) session UI.
+   *
+   * Safe at any status, so there's no online guard: the
+   * `machine-register` / `machine-heartbeat` handlers ignore any row
+   * whose `deletedAt` is set and never clear it, so a still-running or
+   * restarting sidecar can't resurrect the machine. Deleting a live
+   * machine just stops the server tracking it; the remote sidecar
+   * keeps running, untouched (we don't reach out to kill its agents).
+   *
+   * `Machine.name` is `@unique`; we suffix it on delete so a fresh
+   * install can reuse the human-facing name without colliding with
+   * the tombstone row. Terminal by design — no un-delete from the UI.
+   */
+  async removeMachine(id: string): Promise<void> {
+    const machine = await this.prisma.machine.findUnique({
+      where: { id },
+      select: { id: true, name: true, deletedAt: true },
+    });
+    // Already-deleted rows are invisible everywhere else, so treat a
+    // repeat delete as "not found" rather than leaking the tombstone.
+    if (!machine || machine.deletedAt) {
+      throw new NotFoundException('machine not found');
+    }
+
+    const now = new Date();
+    await this.prisma.$transaction([
+      this.prisma.machine.update({
+        where: { id },
+        data: {
+          deletedAt: now,
+          status: 'offline',
+          // Free the unique display name for a future fresh install.
+          name: `${machine.name} (deleted ${now.toISOString()})`,
+        },
+      }),
+      // Soft-hide the agents — reuses the existing archive filtering.
+      // Deliberately NOT a delete: every agent's sessions and history
+      // hang off these rows and must outlive the machine.
+      this.prisma.agent.updateMany({
+        where: { machineId: id, archivedAt: null },
+        data: { archivedAt: now },
+      }),
+    ]);
+
+    this.gateway.emitMachineRemoved(id);
+    this.logger.log(`machine ${id} (${machine.name}) soft-deleted`);
+  }
+
+  /**
    * Fan out a `sync-user-rules` control command to every online,
    * unarchived machine. Called when a user saves their rules text;
    * the sidecar writes the content to each installed CLI's
@@ -248,7 +306,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
    */
   async syncUserRulesAll(rules: string): Promise<void> {
     const machines = await this.prisma.machine.findMany({
-      where: { status: 'online', archivedAt: null },
+      where: { status: 'online', archivedAt: null, deletedAt: null },
       select: { id: true, name: true },
     });
     if (machines.length === 0) {
@@ -356,6 +414,21 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         // toast sees mismatched shapes against the prefix-stripped GH
         // latest tag.
         const sidecarVersion = stripSidecarPrefix(ev.sidecarVersion);
+        // Sticky soft-delete: a deleted machine stays deleted even if
+        // its sidecar is still alive and re-registering. Ignore the
+        // event entirely — no upsert (which would resurrect the row),
+        // no emit, no agent reconcile. The remote sidecar keeps running
+        // untouched; the server has simply forgotten it.
+        const tomb = await this.prisma.machine.findUnique({
+          where: { id: ev.machineId },
+          select: { deletedAt: true },
+        });
+        if (tomb?.deletedAt) {
+          this.logger.warn(
+            `ignoring machine-register from soft-deleted machine ${ev.machineId} (${ev.name})`,
+          );
+          break;
+        }
         const saved = await this.prisma.machine.upsert({
           where: { id: ev.machineId },
           create: {
@@ -399,15 +472,19 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         break;
       }
       case 'machine-heartbeat': {
-        const saved = await this.prisma.machine
-          .update({
-            where: { id: ev.machineId },
-            data: { status: 'online', lastSeenAt: new Date() },
-          })
-          .catch(() => null);
-        if (saved) this.gateway.emitMachineStatus(saved.id, 'online');
-        if (saved && ev.quotas?.length) {
-          await this.persistQuotas(saved.id, ev.quotas);
+        // `updateMany` (not `update`) so the `deletedAt: null` filter
+        // is part of the WHERE: a soft-deleted machine matches zero
+        // rows and the heartbeat is a no-op (no status flip on a
+        // tombstone, no resurrection), same as an unknown machineId.
+        const res = await this.prisma.machine.updateMany({
+          where: { id: ev.machineId, deletedAt: null },
+          data: { status: 'online', lastSeenAt: new Date() },
+        });
+        if (res.count > 0) {
+          this.gateway.emitMachineStatus(ev.machineId, 'online');
+          if (ev.quotas?.length) {
+            await this.persistQuotas(ev.machineId, ev.quotas);
+          }
         }
         break;
       }

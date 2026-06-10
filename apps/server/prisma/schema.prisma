@@ -23,8 +23,40 @@ model User {
   // follow-up). NULL = "no rules set" — distinct from "" so a future
   // "clear rules" gesture has a target.
   rules        String?   @db.Text
+  // Opt-in extensions the user has enabled, as a JSON map of
+  // extension-id → boolean (e.g. {"notes": true}). An account-level
+  // preference so toggling on one browser is reflected everywhere —
+  // unlike device-local UI state (theme, notification permission)
+  // which stays in the browser. JSON rather than a column-per-extension
+  // so adding an extension needs no migration. NULL = nothing enabled.
+  extensions   Json?
 
-  sessions Session[]
+  sessions     Session[]
+  projectNotes ProjectNote[]
+  attachments  Attachment[]
+}
+
+// A free-form note the user keeps for a "project" — the
+// (machineId, workingDir) pair every session in that directory
+// shares. Projects have no first-class row of their own (the sidebar
+// derives them from agents' workingDirs), so the note is keyed by the
+// triple directly. One note per (user, machine, workingDir): editing
+// from any session in that directory edits the same note. Unlike
+// User.rules these are personal scratch, never synced to sidecars.
+model ProjectNote {
+  id         String   @id @default(cuid())
+  userId     String
+  machineId  String
+  workingDir String
+  notes      String   @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, machineId, workingDir])
+  @@index([machineId])
 }
 
 // A Machine is a host running one argus-sidecar process. The sidecar
@@ -54,12 +86,25 @@ model Machine {
   lastSeenAt        DateTime
   registeredAt      DateTime @default(now())
   archivedAt        DateTime?
+  // Sticky soft-delete tombstone. Distinct from `archivedAt`, which
+  // the machine-register handler resets to null on every re-register
+  // (a live sidecar un-archives itself). `deletedAt` is never cleared
+  // by the lifecycle consumer: once set, register/heartbeat events
+  // from that sidecar are ignored, so a still-running or restarting
+  // sidecar can no longer resurrect the machine. A deleted machine is
+  // filtered out of every active query. NO child rows are removed —
+  // its agents are soft-hidden via their own `archivedAt`, and the
+  // sessions/commands/chunks/terminals underneath survive so history
+  // stays viewable through the normal session UI.
+  deletedAt         DateTime?
 
-  agents Agent[]
-  quotas MachineAgentQuota[]
+  agents       Agent[]
+  quotas       MachineAgentQuota[]
+  projectNotes ProjectNote[]
 
   @@index([status])
   @@index([archivedAt])
+  @@index([deletedAt])
 }
 
 // MachineAgentQuota stores the latest plan-quota snapshot one sidecar
@@ -176,12 +221,41 @@ model Command {
   // avoid scanning every final chunk's raw `meta` JSON.
   usage       Json?
 
-  session Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  agent   Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  chunks  ResultChunk[]
+  session     Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  agent       Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  chunks      ResultChunk[]
+  attachments Attachment[]
 
   @@index([sessionId, createdAt])
   @@index([agentId, createdAt])
+}
+
+// A file the user attached to a turn. Bytes live in S3/MinIO under
+// `s3Key`; this row is the metadata + ownership record. Uploaded ahead
+// of the turn via POST /attachments (so `commandId` is NULL until the
+// turn is actually sent), then linked to its Command at dispatch. The
+// sidecar pulls the bytes over HTTP, lands them under the agent's
+// `.argus/uploads/`, and references the path in the prompt.
+//
+// Deleting a Command cascades these rows away; the S3 object is removed
+// best-effort by the service on that path (orphan sweep is a follow-up).
+// `commandId IS NULL` rows are unlinked uploads (composer abandoned
+// before send) and are safe to prune by age.
+model Attachment {
+  id        String   @id @default(cuid())
+  userId    String
+  commandId String?
+  filename  String
+  mime      String
+  size      Int
+  s3Key     String
+  createdAt DateTime @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  command Command? @relation(fields: [commandId], references: [id], onDelete: Cascade)
+
+  @@index([commandId])
+  @@index([userId, createdAt])
 }
 
 model ResultChunk {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { Brain, ChevronDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ResultChunkDTO } from '@argus/shared-types';
@@ -137,6 +137,27 @@ export function ActivityPanel({ chunks }: { chunks: ResultChunkDTO[] }) {
             </div>
           );
         }
+        if (it.kind === 'thinking') {
+          // Extended-thinking reasoning block (claude-code `thinking`
+          // content). Distinguished from a plain 'thought' by a small
+          // "Thinking" caption + brain glyph, and rendered most subdued of
+          // all since it's private reasoning, not part of the answer.
+          return (
+            <div key={it.id} className="py-1.5 text-xs leading-relaxed">
+              <div className="mb-1 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-fg-tertiary/70">
+                <Brain className="h-3 w-3" />
+                Thinking
+              </div>
+              {it.redacted ? (
+                <span className="text-xs italic text-fg-tertiary/70">[redacted]</span>
+              ) : (
+                <div className="markdown max-w-none text-fg-tertiary/80">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{it.text}</ReactMarkdown>
+                </div>
+              )}
+            </div>
+          );
+        }
         return (
           <div key={it.chunk.id} className="text-xs text-fg-tertiary italic">
             {it.chunk.content ?? 'working…'}
@@ -151,7 +172,8 @@ type TimelineItem =
   | { kind: 'tool'; tool: ResultChunkDTO; result?: ResultChunkDTO }
   | { kind: 'output'; chunk: ResultChunkDTO }
   | { kind: 'progress'; chunk: ResultChunkDTO }
-  | { kind: 'thought'; id: string; text: string };
+  | { kind: 'thought'; id: string; text: string }
+  | { kind: 'thinking'; id: string; text: string; redacted: boolean };
 
 /**
  * Pair every `tool` chunk with its matching `stdout` / `stderr` result
@@ -239,6 +261,23 @@ function buildTimeline(chunks: ResultChunkDTO[]): TimelineItem[] {
     // narration is just duplicate noise in the parent timeline.
     if (c.kind === 'progress' && c.content) {
       const meta = (c.meta ?? {}) as Record<string, unknown>;
+      // Extended-thinking reasoning block from the claude-code sidecar
+      // (contentType=thinking). Render as its own labelled 'thinking' row
+      // rather than the generic progress fallback. Nested sub-agent
+      // thinking is scoped to its SubAgentWindow, so skip it here the same
+      // way nested tool/output chunks are. (The companion `thinking_tokens`
+      // chunk is content-less and never reaches this branch.)
+      if (meta.contentType === 'thinking') {
+        if (isNestedSubAgentChunk(c)) continue;
+        flushThought();
+        out.push({
+          kind: 'thinking',
+          id: `thinking:${c.id}`,
+          text: c.content,
+          redacted: meta.redacted === true,
+        });
+        continue;
+      }
       if (typeof meta.tool_use_id === 'string' && meta.tool_use_id) continue;
       flushThought();
       out.push({ kind: 'progress', chunk: c });

@@ -1,5 +1,6 @@
 import type {
   AgentDTO,
+  BackgroundTaskDTO,
   CommandDTO,
   MachineDTO,
   ResultChunkDTO,
@@ -23,6 +24,8 @@ export interface ClientToServerEvents {
   'unsubscribe:session': (sessionId: string) => void;
   'subscribe:terminal': (terminalId: string) => void;
   'unsubscribe:terminal': (terminalId: string) => void;
+  'subscribe:project': (body: { machineId: string; workingDir: string }) => void;
+  'unsubscribe:project': (body: { machineId: string; workingDir: string }) => void;
   'terminal:input': (msg: TerminalInputMessage) => void;
   'terminal:resize': (msg: TerminalResizeMessage) => void;
   'terminal:close': (terminalId: string) => void;
@@ -99,5 +102,19 @@ export interface ServerToClientEvents {
   'sidecar-update:batch-progress': (payload: {
     batchId: string;
     plan: SidecarUpdatePlanEntry[];
+  }) => void;
+  /** A background task (started via `argus-bg`) in a project room has
+   *  progressed — covers the start / progress / end phases uniformly
+   *  as "the row's latest state." Scoped to `project:<machineId>:
+   *  <workingDir>`; only sockets that subscribed via `subscribe:project`
+   *  for that pair receive it. */
+  'background-task:updated': (task: BackgroundTaskDTO) => void;
+  /** The server's retention window for an ended task elapsed and the
+   *  task has been dropped from in-memory state. The dashboard should
+   *  remove the row. */
+  'background-task:removed': (payload: {
+    machineId: string;
+    workingDir: string;
+    taskId: string;
   }) => void;
 }

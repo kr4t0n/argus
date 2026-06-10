@@ -1,12 +1,14 @@
 import { ReactNode, useCallback, useEffect, useState } from 'react';
 import { Check, Loader2, User } from 'lucide-react';
 import type {
+  ActivityDay,
   QuotaWindow,
   TokenUsage,
   UserActivityResponse,
   UserQuotaResponse,
   UserQuotaRow,
   UserUsageResponse,
+  WindowedUsage,
 } from '@argus/shared-types';
 import { USER_RULES_MAX_BYTES, hasUsage } from '@argus/shared-types';
 import { ApiError, api } from '../lib/api';
@@ -14,6 +16,7 @@ import { cn } from '../lib/utils';
 import { useAuthStore } from '../stores/authStore';
 import { useUIStore } from '../stores/uiStore';
 import { ActivityHeatmap } from '../components/ActivityHeatmap';
+import { ActivityLineChart } from '../components/ActivityLineChart';
 import { Button } from '../components/ui/Button';
 import { requestNotificationPermission } from '../lib/notifications';
 
@@ -107,6 +110,14 @@ export function UserPanel() {
                   Preferences
                 </a>
               </li>
+              <li>
+                <a
+                  href="#extensions"
+                  className="block text-sm text-fg-secondary transition-colors hover:text-fg-primary"
+                >
+                  Extensions
+                </a>
+              </li>
             </ul>
           </nav>
 
@@ -121,14 +132,14 @@ export function UserPanel() {
                     <Loader2 className="h-3.5 w-3.5 animate-spin" /> loading…
                   </div>
                 )}
-                {!activityError && activity && <ActivityHeatmap days={activity.days} />}
+                {!activityError && activity && <ActivityView days={activity.days} />}
               </Subsection>
               <Subsection title="Usage">
                 {usageError && (
                   <div className="text-sm text-red-500 dark:text-red-400">{usageError}</div>
                 )}
                 {!usageError && !usage && <UsageLedgerSkeleton />}
-                {!usageError && usage && <UsageLedger usage={usage.usage} />}
+                {!usageError && usage && <UsageSection usage={usage.usage} />}
               </Subsection>
               <Subsection title="Quota">
                 {quotaError && (
@@ -167,12 +178,82 @@ export function UserPanel() {
               </Row>
             </Group>
 
+            <Group id="extensions" title="Extensions">
+              <Row
+                title="Notes"
+                description="Adds a Note tab beside Terminal in each session's right panel — a free-form scratchpad scoped to the project (every session sharing the same working directory sees the same note). Notes are saved to your account, so they follow you across browsers and devices."
+                control={<NotesExtensionToggle />}
+              />
+              <Row
+                title="Progress"
+                description={
+                  <>
+                    Adds a Progress tab to the session right panel that lists live background tasks
+                    running in the project. Wrap any long-running command with{' '}
+                    <code className="font-mono text-[12px]">argus-bg -- &lt;command&gt;</code> and
+                    its tqdm-style progress shows up here in real time, even after you background it
+                    with <code className="font-mono text-[12px]">&amp;</code>.
+                  </>
+                }
+                control={<ProgressExtensionToggle />}
+              />
+            </Group>
+
             {/* Trailing room so the last Group can scroll up to the
                 top of the viewport when its anchor is clicked. */}
             <div aria-hidden className="h-[90vh]" />
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+type ActivityViewMode = 'grid' | 'line';
+
+const ACTIVITY_VIEWS: ReadonlyArray<{ id: ActivityViewMode; label: string }> = [
+  { id: 'grid', label: 'Grid' },
+  { id: 'line', label: 'Curve' },
+];
+
+/** Same activity payload, two readings: the GitHub-style heatmap grid
+ *  and a by-day commands curve. The toggle just swaps the view — no
+ *  refetch. Defaults to the grid to preserve the prior behavior. */
+function ActivityView({ days }: { days: ActivityDay[] }) {
+  const [view, setView] = useState<ActivityViewMode>('grid');
+  return (
+    <div className="flex flex-col gap-4">
+      <div
+        role="tablist"
+        aria-label="activity view"
+        className="inline-flex self-start rounded-md bg-surface-1 p-0.5"
+      >
+        {ACTIVITY_VIEWS.map((v) => {
+          const active = v.id === view;
+          return (
+            <button
+              key={v.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setView(v.id)}
+              className={cn(
+                'rounded-[5px] px-3 py-1 text-xs font-medium transition-colors',
+                active
+                  ? 'bg-surface-2 text-fg-primary'
+                  : 'text-fg-tertiary hover:text-fg-secondary',
+              )}
+            >
+              {v.label}
+            </button>
+          );
+        })}
+      </div>
+      {view === 'grid' ? (
+        <ActivityHeatmap days={days} />
+      ) : (
+        <ActivityLineChart days={days} />
+      )}
     </div>
   );
 }
@@ -272,6 +353,95 @@ function NotificationToggle() {
         {busy ? (
           <>
             <Loader2 className="h-3 w-3 animate-spin" /> requesting…
+          </>
+        ) : enabled ? (
+          'Disable'
+        ) : (
+          'Enable'
+        )}
+      </Button>
+      {error && (
+        <p className="max-w-xs text-right text-xs text-red-500 dark:text-red-400">{error}</p>
+      )}
+    </div>
+  );
+}
+
+function NotesExtensionToggle() {
+  const enabled = useUIStore((s) => s.notesExtensionEnabled);
+  const setEnabled = useUIStore((s) => s.setNotesExtensionEnabled);
+  const progressEnabled = useUIStore((s) => s.progressExtensionEnabled);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // The flag is account-level (synced across browsers), so persist it
+  // server-side. Flip the local cache optimistically for an instant
+  // response, then revert if the PUT fails. Each toggle PUTs the full
+  // known set — the server has no merge semantics, so we forward the
+  // other extension's current state alongside our change.
+  const onToggle = useCallback(async () => {
+    const next = !enabled;
+    setError(null);
+    setEnabled(next);
+    setBusy(true);
+    try {
+      await api.setMyExtensions({ notes: next, progress: progressEnabled });
+    } catch (err) {
+      setEnabled(!next);
+      setError(err instanceof ApiError ? err.message : 'failed to save');
+    } finally {
+      setBusy(false);
+    }
+  }, [enabled, setEnabled, progressEnabled]);
+
+  return (
+    <div className="flex flex-col items-end gap-2">
+      <Button onClick={onToggle} disabled={busy} size="sm" variant={enabled ? 'subtle' : 'default'}>
+        {busy ? (
+          <>
+            <Loader2 className="h-3 w-3 animate-spin" /> saving…
+          </>
+        ) : enabled ? (
+          'Disable'
+        ) : (
+          'Enable'
+        )}
+      </Button>
+      {error && (
+        <p className="max-w-xs text-right text-xs text-red-500 dark:text-red-400">{error}</p>
+      )}
+    </div>
+  );
+}
+
+function ProgressExtensionToggle() {
+  const enabled = useUIStore((s) => s.progressExtensionEnabled);
+  const setEnabled = useUIStore((s) => s.setProgressExtensionEnabled);
+  const notesEnabled = useUIStore((s) => s.notesExtensionEnabled);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const onToggle = useCallback(async () => {
+    const next = !enabled;
+    setError(null);
+    setEnabled(next);
+    setBusy(true);
+    try {
+      await api.setMyExtensions({ notes: notesEnabled, progress: next });
+    } catch (err) {
+      setEnabled(!next);
+      setError(err instanceof ApiError ? err.message : 'failed to save');
+    } finally {
+      setBusy(false);
+    }
+  }, [enabled, setEnabled, notesEnabled]);
+
+  return (
+    <div className="flex flex-col items-end gap-2">
+      <Button onClick={onToggle} disabled={busy} size="sm" variant={enabled ? 'subtle' : 'default'}>
+        {busy ? (
+          <>
+            <Loader2 className="h-3 w-3 animate-spin" /> saving…
           </>
         ) : enabled ? (
           'Disable'
@@ -393,11 +563,79 @@ function RulesEditor() {
   );
 }
 
-function UsageLedger({ usage }: { usage: TokenUsage }) {
+type UsageWindow = '7d' | '30d' | 'all';
+
+const USAGE_WINDOWS: ReadonlyArray<{ id: UsageWindow; label: string }> = [
+  { id: '7d', label: '7 days' },
+  { id: '30d', label: '30 days' },
+  { id: 'all', label: 'All time' },
+];
+
+/** One payload, three windows — the toggle just selects which slice of
+ *  `WindowedUsage` the ledger renders; no refetch. Defaults to 30 days
+ *  because that's the most actionable "what am I spending lately" view;
+ *  "All time" preserves the pre-windows behavior for anyone who wants
+ *  the lifetime headline. */
+function UsageSection({ usage }: { usage: WindowedUsage }) {
+  const [window, setWindow] = useState<UsageWindow>('30d');
+  const current =
+    window === '7d' ? usage.last7Days : window === '30d' ? usage.last30Days : usage.lifetime;
+  const emptyHint =
+    window === 'all'
+      ? 'No completed turns yet. Usage appears once an agent finishes a prompt.'
+      : `No usage in the last ${window === '7d' ? '7' : '30'} days.`;
+  return (
+    <div>
+      <div className="mb-6">
+        <UsageWindowToggle value={window} onChange={setWindow} />
+      </div>
+      <UsageLedger usage={current} emptyHint={emptyHint} />
+    </div>
+  );
+}
+
+function UsageWindowToggle({
+  value,
+  onChange,
+}: {
+  value: UsageWindow;
+  onChange: (w: UsageWindow) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="usage time window"
+      className="inline-flex rounded-md bg-surface-1 p-0.5"
+    >
+      {USAGE_WINDOWS.map((w) => {
+        const active = w.id === value;
+        return (
+          <button
+            key={w.id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(w.id)}
+            className={cn(
+              'rounded-[5px] px-3 py-1 text-xs font-medium transition-colors',
+              active
+                ? 'bg-surface-2 text-fg-primary'
+                : 'text-fg-tertiary hover:text-fg-secondary',
+            )}
+          >
+            {w.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function UsageLedger({ usage, emptyHint }: { usage: TokenUsage; emptyHint?: string }) {
   if (!hasUsage(usage)) {
     return (
       <div className="text-meta">
-        No completed turns yet. Usage appears once an agent finishes a prompt.
+        {emptyHint ?? 'No completed turns yet. Usage appears once an agent finishes a prompt.'}
       </div>
     );
   }

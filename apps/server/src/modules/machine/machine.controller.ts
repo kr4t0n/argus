@@ -111,6 +111,14 @@ export class MachineController {
     await this.service.destroyAgent(id, agentId);
   }
 
+  // Soft-delete a machine (sticky tombstone; history preserved).
+  // Safe at any status — see MachineService.removeMachine.
+  @Delete(':id')
+  @HttpCode(204)
+  async remove(@Param('id') id: string) {
+    await this.service.removeMachine(id);
+  }
+
   @Get(':id/sidecar/version')
   getSidecarVersion(@Param('id') id: string) {
     return this.sidecarUpdate.getVersionInfo(id);

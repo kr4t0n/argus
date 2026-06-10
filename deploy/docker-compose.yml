@@ -30,6 +30,38 @@ services:
       timeout: 3s
       retries: 10
 
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ['server', '/data', '--console-address', ':9001']
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-argus}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-argus-secret}
+    ports:
+      - '${S3_PORT:-9000}:9000'
+      - '${S3_CONSOLE_PORT:-9001}:9001'
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot: create the attachments bucket on first boot, then exit.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${S3_ACCESS_KEY:-argus} ${S3_SECRET_KEY:-argus-secret} &&
+      mc mb --ignore-existing local/${S3_BUCKET:-argus-attachments} &&
+      echo 'bucket ready';
+      "
+    restart: 'no'
+
   server:
     build:
       context: ..
@@ -40,6 +72,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-argus}:${POSTGRES_PASSWORD:-argus}@postgres:5432/${POSTGRES_DB:-argus}?schema=public
       REDIS_URL: redis://redis:6379
@@ -48,6 +82,19 @@ services:
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@argus.local}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme}
+      # Attachments (file/image upload). S3-compatible object store.
+      # S3_ENDPOINT is the in-network address of the bundled MinIO, fixed
+      # like DATABASE_URL / REDIS_URL above so a host-oriented value in
+      # .env (e.g. http://localhost:9000, used by `pnpm dev`) can't leak
+      # into the container and break it. To use an external bucket
+      # instead, change this and drop the minio / minio-init services.
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: ${S3_BUCKET:-argus-attachments}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-argus}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-argus-secret}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      ATTACHMENT_MAX_FILE_BYTES: ${ATTACHMENT_MAX_FILE_BYTES:-26214400}
+      ATTACHMENT_MAX_FILES: ${ATTACHMENT_MAX_FILES:-10}
     ports:
       - '${SERVER_PORT:-4000}:4000'
 
@@ -67,8 +114,9 @@ services:
       ARGUS_API_URL: ${ARGUS_API_URL:-}
       ARGUS_WS_URL: ${ARGUS_WS_URL:-}
     ports:
-      - '5173:80'
+      - '${WEB_PORT:-5173}:80'
 
 volumes:
   postgres-data:
   redis-data:
+  minio-data:

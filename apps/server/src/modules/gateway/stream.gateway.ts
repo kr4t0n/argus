@@ -12,6 +12,7 @@ import { JwtService } from '@nestjs/jwt';
 import { Server, Socket } from 'socket.io';
 import type {
   AgentDTO,
+  BackgroundTaskDTO,
   CommandDTO,
   MachineDTO,
   ResultChunkDTO,
@@ -87,6 +88,31 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('unsubscribe:terminal')
   unsubTerminal(@ConnectedSocket() c: Socket, @MessageBody() terminalId: string) {
     c.leave(`terminal:${terminalId}`);
+  }
+
+  /**
+   * Subscribe to project-scoped events (currently: background-task
+   * progress). A project is identified by its `(machineId, workingDir)`
+   * pair, the same key used by notes and the dashboard's per-project
+   * panes. workingDir is an arbitrary string (absolute path) — Socket.IO
+   * room names don't care, so we just concatenate.
+   */
+  @SubscribeMessage('subscribe:project')
+  subProject(
+    @ConnectedSocket() c: Socket,
+    @MessageBody() body: { machineId: string; workingDir: string },
+  ) {
+    if (!body?.machineId || !body?.workingDir) return;
+    c.join(projectRoom(body.machineId, body.workingDir));
+  }
+
+  @SubscribeMessage('unsubscribe:project')
+  unsubProject(
+    @ConnectedSocket() c: Socket,
+    @MessageBody() body: { machineId: string; workingDir: string },
+  ) {
+    if (!body?.machineId || !body?.workingDir) return;
+    c.leave(projectRoom(body.machineId, body.workingDir));
   }
 
   // ------- Broadcast helpers (called from other services) -------
@@ -234,4 +260,27 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
   emitSidecarUpdateBatchProgress(payload: { batchId: string; plan: SidecarUpdatePlanEntry[] }) {
     this.server.emit('sidecar-update:batch-progress', payload);
   }
+
+  // ------- Background task events (per-project room) -------
+  //
+  // One DTO per upsert — the dashboard treats start / progress / end
+  // events uniformly as "the row's latest state." When the server
+  // evicts an ended task after its retention window, it emits a
+  // separate `:removed` so the dashboard can drop it from the list.
+
+  emitBackgroundTaskUpdated(task: BackgroundTaskDTO) {
+    this.server
+      .to(projectRoom(task.machineId, task.workingDir))
+      .emit('background-task:updated', task);
+  }
+
+  emitBackgroundTaskRemoved(payload: { machineId: string; workingDir: string; taskId: string }) {
+    this.server
+      .to(projectRoom(payload.machineId, payload.workingDir))
+      .emit('background-task:removed', payload);
+  }
+}
+
+function projectRoom(machineId: string, workingDir: string): string {
+  return `project:${machineId}:${workingDir}`;
 }

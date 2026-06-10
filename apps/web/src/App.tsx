@@ -81,6 +81,19 @@ export default function App() {
     loadMachines().then(() => migrateLocalMachineIconsToServer());
     loadAgents();
     loadSessions();
+    // Extension flags are account-level (server source of truth) but
+    // cached in uiStore/localStorage so the UI reads them synchronously
+    // with no flash on reload. Reconcile the cache with the server on
+    // every load/login so toggling on another browser is reflected here.
+    // Best-effort: on failure we keep the cached value.
+    api
+      .getMyExtensions()
+      .then((e) => {
+        const ui = useUIStore.getState();
+        ui.setNotesExtensionEnabled(e.notes);
+        ui.setProgressExtensionEnabled(e.progress);
+      })
+      .catch(() => {});
     const socket = ensureSocket();
 
     const updateStore = useSidecarUpdateStore.getState();

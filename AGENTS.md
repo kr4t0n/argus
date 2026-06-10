@@ -74,9 +74,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `Machine` rows, replies with a `sync-agents` reconcile so the
   sidecar's cached agent set converges with the server's. Exposes
   REST (`GET /machines`, `POST /machines/:id/agents`,
-  `DELETE /machines/:id/agents/:agentId`) and emits `machine:upsert`
-  / `machine:status` / `machine:removed` / `agent:spawn-failed` over
-  WS. Also publishes `create-agent` / `destroy-agent` commands on
+  `DELETE /machines/:id/agents/:agentId`, `DELETE /machines/:id`) and
+  emits `machine:upsert` / `machine:status` / `machine:removed` /
+  `agent:spawn-failed` over WS. Also publishes `create-agent` / `destroy-agent` commands on
   `machine:{mid}:control`.
 - `agent-registry/` — `Agent` CRUD: list, get, archive/unarchive, plus
   the shared `agentToDto` mapper. Lifecycle ingestion lives in
@@ -84,6 +84,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `session/` — CRUD for sessions; resolves `externalId` so each subsequent
   turn carries it back to the sidecar for `--resume`.
 - `command/` — persists commands, `XADD`s to `agent:{id}:cmd`, handles cancel.
+- `attachment/` — file/image attachments. `POST /attachments` (JWT-
+  guarded, multer `FileInterceptor`) streams an upload into S3/MinIO
+  (`@aws-sdk/client-s3`, `forcePathStyle` for MinIO) and records an
+  `Attachment` row (unlinked: `commandId` NULL until the turn is sent).
+  `GET /attachments/:id?t=<token>` is **deliberately unguarded** —
+  the sidecar has no user JWT and `<img>` can't send an Authorization
+  header, so both authenticate with a short-lived JWT (`scope:
+  attachment-download`, `sub:` the attachment id) minted by the same
+  `JwtService`/`JWT_SECRET` and verified per-request; the bytes stream
+  from S3. `CommandService.dispatch` links uploaded ids to the new
+  command, mints **15-min pull tokens** for the wire `Command.attachments`,
+  and returns/loads **1-h display tokens** in `AttachmentDTO.url`
+  (`SessionService.withAttachments` batches them onto the transcript).
 - `result-ingestor/` — single XREADGROUP across **all** agent result streams
   (refreshed every 5s). Persists each chunk and **immediately** forwards to
   WS room `session:{sessionId}` (no batching — the typewriter UX needs it).
@@ -97,6 +110,25 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   open terminals so the UI doesn't show zombies. Bytes are base64 over
   the wire to survive JSON. A small in-memory cache keyed by terminalId
   short-circuits Postgres ownership checks on every keystroke.
+- `machine/background-task.{service,controller}.ts` — in-memory
+  registry of every active + ended background task, populated by the
+  service's own XREADGROUP loop on `streamKeys.background` (the
+  dedicated `agent:background` stream; deliberately separate from
+  `agent:lifecycle` because a fast tqdm bar emits 20+ events/sec and
+  would otherwise trim heartbeats / fs-changed / sidecar-update
+  progress out via MAXLEN). Keyed by `(machineId, workingDir,
+  taskId)` — workingDir is the project identity, matching how notes
+  scope. Each upsert fans out as `background-task:updated` on the
+  per-project Socket.IO room (`project:<machineId>:<workingDir>`).
+  Ended tasks **stay in memory forever** until a user explicitly
+  dismisses them — `DELETE /machines/:id/background-tasks/:taskId?
+  workingDir=...` removes from the map and broadcasts
+  `background-task:removed`. Effect is global (every dashboard
+  viewing the project sees the card disappear), matching how the
+  earlier wall-clock auto-eviction worked. `GET /machines/:id/
+  background-tasks?workingDir=...` hydrates a tab opening mid-run.
+  No DB persistence — JSONL on the agent's disk is authoritative if
+  you need history.
 - `sidecar-link/` — raw WebSocket server on path `/sidecar-link`
   attached to the same `http.Server` as NestJS (via `HttpAdapterHost`,
   `noServer` pattern). Owns one connection per sidecar, validates a
@@ -147,6 +179,17 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     chunks back on `agent:{id}:result`, heartbeats, and gracefully
     drains on destroy. There is no per-agent process — supervisors are
     goroutines inside the single daemon.
+  - `attachments.go` — `materializeAttachments` runs inside
+    `handleCommand` **before** `adapter.Execute`: for each
+    `cmd.Attachments` ref it HTTP-GETs `{serverURL}/attachments/{id}?
+    t={token}` (serverURL threaded in from `cache.Server.URL`), writes
+    the bytes under `<workingDir>/.argus/uploads/<id>-<name>` bounded by
+    the ref's declared size, records the absolute `LocalPath`, and
+    appends a uniform "attached files" path-listing preamble to the
+    prompt. Fail-soft per file (a bad pull is logged and skipped, not
+    fatal). `safeAttachmentFilename` jails the on-disk name (strips
+    path separators / control chars; id-prefixed for collision safety).
+    Working-dir-less agents fall back to a temp dir.
 - `quota/` — per-CLI plan-quota prober. Runs on a 5-minute tick inside
   the daemon, reads each tool's OAuth file
   (`~/.claude/.credentials.json`, `~/.codex/auth.json`) and calls the
@@ -164,13 +207,28 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     `maxDepth` levels (reusing a single `listDirWith` core + one
     preloaded gitignore matcher) and returns a `path → entries` map
     so depth-N prefetch lands in one round trip. Both jail to the
-    agent's workingDir, always strip `.git`, and respect gitignore.
-    `fsWatcher` registers one fsnotify watch per non-ignored dir and
-    coalesces events into 250 ms-debounced fs-changed emits. `git.go`
-    reads `.git/HEAD` (and resolves the worktree-pointer file form)
-    without shelling out to `git` or pulling in a Go git lib — its
-    output is attached to every fs-list response so the dashboard's
-    branch badge refreshes for free on every tree refetch.
+    agent's workingDir, always strip `.git` AND `.argus/`, and
+    respect gitignore. `fsWatcher` registers one fsnotify watch per
+    non-ignored dir and coalesces events into 250 ms-debounced
+    fs-changed emits. `git.go` reads `.git/HEAD` (and resolves the
+    worktree-pointer file form) without shelling out to `git` or
+    pulling in a Go git lib — its output is attached to every
+    fs-list response so the dashboard's branch badge refreshes for
+    free on every tree refetch.
+  - `progresswatch.go` — tertiary fsnotify watcher rooted at
+    `<workingDir>/.argus/progress/`, picking up the JSONL stream
+    `argus-bg` writes when wrapping a long-running command. Each
+    decoded line becomes one of the three
+    `BackgroundTask{Started,Progress,Ended}Event` lifecycle frames,
+    forwarded on `agent:lifecycle` so the dashboard's per-project
+    Progress tab can render live status for detached background work
+    the agent's PTY would otherwise never see (anything backgrounded
+    with `&` / `nohup` flows only to the agent's log files, not to
+    the PTY the sidecar captures). `bgEvent` is the wire format on
+    disk; the supervisor decorates it with machineId / agentId /
+    workingDir before publishing. Soft-fails the same way fsw / gitw
+    do — a missing or read-only progress dir just means the tab
+    stays empty.
 - `bus/` — go-redis wrapper with `Publish`, `EnsureGroup`, `ReadMessage`, `Ack`.
 - `adapter/` — `Adapter` interface and process-level **registry**. Each
   adapter file calls `Register(type, &Plugin{Factory, DefaultBinary})`
@@ -195,6 +253,26 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `Settings` struct (shells, max-sessions) and an `AgentLookup`
   interface so it can validate `terminal:open` against the daemon's
   live agent registry (`Agent.supportsTerminal`, `Agent.workingDir`).
+  `buildShellEnv` augments the spawned shell's environment with two
+  hooks the Progress extension depends on: prepends the sidecar's own
+  bin directory to `PATH` (so `argus-bg` is reachable without an
+  absolute path) and exports `ARGUS_PROGRESS_DIR` pointing at the
+  agent's `<workingDir>/.argus/progress/`, which is also where the
+  per-agent `progressWatcher` is listening.
+- `cmd/argus-bg/` — sibling binary shipped alongside the sidecar.
+  Wraps any command (`argus-bg --label "training" -- python train.py`),
+  runs the child in its own PTY so tqdm keeps its interactive
+  rendering on, tees raw output to argus-bg's own stdout (so the user
+  still sees the bar) and optionally to `--tee <log-path>`, parses
+  tqdm frames off the byte stream and writes a structured JSONL
+  event stream (`start` / `progress` / `end`) into
+  `$ARGUS_PROGRESS_DIR/<task-id>.jsonl`. Throttled to one progress
+  event per 500 ms OR per integer-percent tick — whichever comes
+  first — so the file stays bounded under a chatty tqdm bar. Exits
+  with the child's exit code so shell pipelines behave.
+  The tqdm parser lives in `tqdm.go` with a table-driven test
+  (`tqdm_test.go`) covering vanilla, description-prefixed,
+  ANSI-coloured, and HH:MM:SS-eta variants.
 - `updater/` — self-update: reads the GitHub Releases API for
   `argus-sidecar-v*` tags, picks the matching `OS-arch` asset,
   verifies it against `SHASUMS256.txt`, and atomically `os.Rename`s
@@ -224,14 +302,29 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   detects ```` ```html ```` fenced blocks and renders them through the
   shared `HtmlPreview` component, defaulting to the rendered view with
   a Source toggle. `HtmlPreview` has two sandbox postures keyed off its
-  `autoHeight` prop: `FileViewer` (`.html` files) uses the strict
-  `sandbox=""` and is sized by its container; the chat code-block path
-  passes `autoHeight` so the iframe grows to its content's
-  `scrollHeight` (measured on load + a `ResizeObserver`), which
-  requires `sandbox="allow-same-origin"`. Neither path enables
-  `allow-scripts` — no JavaScript in the previewed document ever runs,
-  so granting same-origin for measurement is safe. Color-scheme
-  injection follows the dashboard theme in both modes.
+  `autoHeight` prop. `FileViewer` (`.html` files) uses the strict
+  `sandbox=""`: opaque origin, no scripts, sized by its container —
+  remote-tree file content stays fully inert. The chat code-block path
+  passes `autoHeight` and uses `sandbox="allow-scripts"`, so model-
+  generated pages can run JS (Chart.js and other CDN-loaded libraries
+  work). It deliberately does NOT add `allow-same-origin`: the frame is
+  a unique opaque origin, so its scripts can't reach the dashboard's
+  window, cookies, `localStorage`, or APIs. `allow-scripts` +
+  `allow-same-origin` from our own origin is the one combination that
+  escapes the sandbox into the user's session — we never grant it.
+  Because an opaque origin blocks the parent from reading
+  `contentDocument`, auto-height is no longer measured from outside:
+  an injected bootstrap script postMessages its own `scrollHeight` and
+  the parent (validating `event.source` identity — `event.origin` is
+  `"null"`) grows the frame. Color-scheme injection follows the
+  dashboard theme in both modes. Gotchas: (1) chat-path scripts can
+  still reach the network — that's how CDN libs load, but it also means
+  they could beacon out; accepted because the opaque frame holds no
+  session or privileged data, and a no-network CSP is intentionally not
+  injected since it would block those same libs. (2) While a final
+  answer streams, `srcDoc` changes per token and the iframe reloads, so
+  the bootstrap and any chart code re-run on each partial — noisy but
+  isolated and harmless; it settles when the block completes.
 - `components/TodoWindow.tsx` — per-turn task tracker rendered inside the
   sticky band right under `<ActivityPill>`. Sources its rows from the
   *latest* `TodoWrite`-style tool chunk in the command's chunks
@@ -246,31 +339,98 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Claude Code's lowercase form, and the component falls back to the same
   normalisation on the off chance an older sidecar is in front. See the
   AGENTS.md note on stream-json drift.
-- `components/Sidebar.tsx` — project-first tree: top level groups
-  agents by `(workingDir, machineId)` — same path on different
+- `components/Sidebar.tsx` — flat project → session tree. Top level
+  groups agents by `(workingDir, machineId)` — same path on different
   machines lives on different physical filesystems, so they get
-  separate rows. Each project row shows a folder icon + the
-  workingDir basename + a small machine glyph (same affordance the
-  agent row used to carry); agents without a `workingDir` fall into
-  a per-machine `no project` bucket. A project expands directly into
-  its agents, each agent expands into its sessions — there is no
-  intermediate machine row in the tree (the machine identity is
-  conveyed by the glyph on the project line). The grouping is pure
-  derivation over the global `agentStore.order` — no schema change.
-  Expansion state lives in `uiStore.expanded` keyed by
-  `proj:<machineId>::<workingDir>` for projects and the raw agent id
-  for agents (default open at both levels). The `+ new session`,
-  archive, and eye actions still hover-reveal on the agent row over
-  a surface-1 plate with a left-side gradient mask. The bottom
-  `MachineList` is unchanged and remains the canonical entry point
-  for creating an agent on a machine that has no agents yet (and
-  therefore wouldn't appear in the project tree above).
+  separate rows. Each project row shows a folder icon + label +
+  small machine glyph; sessions whose agent has no `workingDir`
+  fall into a per-machine `no project` bucket. **A project expands
+  directly into its sessions** — there is no agent row in the tree.
+  Each `SessionRow` leads with the agent type icon
+  (`AgentTypeIcon` driven by `agents[s.agentId]?.type`), so the
+  user can tell a claude session from a codex one without the agent
+  layer being visible. **Creation hierarchy** mirrors the tree: the
+  bottom `MachineList`'s hover `+` opens `CreateProjectPopover`
+  (name + workingDir + terminal default — no adapter), which writes
+  a placeholder into `useProjectStore`; the project row's hover `+`
+  opens `CreateAgentPopover` in `asSession` mode, which collects
+  adapter + session name only, then **auto-vivifies** the agent —
+  reuses an `existingAgents` entry of the chosen type within the
+  project if there is one, otherwise creates a new agent with an
+  auto-generated `${type}-${randomHex}` name in the background,
+  then creates a session titled with the user's input and navigates
+  to it. The agent layer is implementation detail in the sidebar:
+  multiple sessions of the same type in one project share a single
+  supervisor process. Projects are derived in two passes by
+  `groupProjects()`: first from `agentStore.order` (so any agent's
+  workingDir surfaces a row even with no placeholder), then
+  overlaid with `useProjectStore` placeholders (which take over the
+  row's label and let empty projects render before their first
+  agent). Same `(machineId, workingDir)` key on both sides, so a
+  placeholder and its later agents collapse into one row.
+  Placeholders are client-only and persisted under `argus.projects`
+  — promote to a server entity when the flow stabilises. Archiving
+  a project from its hover action cascades client-side: every
+  non-archived session under every non-archived agent is archived
+  via REST (skipping items already archived individually), then
+  the agents themselves, then the placeholder's `archivedAt` is set
+  together with a snapshot of the IDs the cascade actually flipped
+  (`archivedAgentIds` + `archivedSessionIds`). Restore consults the
+  snapshot and only un-archives those IDs — so a session the user
+  archived individually BEFORE the project archive stays archived
+  after restore. `Promise.allSettled` is used on the archive path
+  so per-item failures don't poison the snapshot; the restore path
+  uses per-item `.catch` so a since-destroyed row 404s without
+  blocking the rest. The store auto-creates a placeholder for a
+  purely agent-derived row so the project keeps a stable identity
+  to restore from. Legacy placeholders archived before the
+  snapshot existed (both snapshot fields `undefined`) fall back to
+  a broad restore that un-archives everything currently archived
+  in the project — accept the bluntness for backward compatibility.
+  The `showArchivedAgents` toggle reveals archived placeholders as
+  well as archived agents. Per-project show-archived state (the
+  eye toggle, which moved from the agent row to the project row in
+  the flatten) lives in `uiStore.showArchived` keyed by
+  `project.key` — old agent-id-keyed entries from before the
+  flatten survive as harmless orphans. Expansion state lives in
+  `uiStore.expanded` keyed by `proj:<machineId>::<workingDir>`
+  (default open; the project popover force-opens its new row on
+  submit in case it was previously toggled closed). The synthetic
+  `no project` bucket hides the project-row `+` since it has no
+  path to anchor an agent against — agents without a workingDir
+  still get created through `MachinePanel`'s free-form popover,
+  which keeps using `CreateAgentPopover` directly in its default
+  (agent-mode) form. Each project row's folder icon is itself a
+  picker (`ProjectIcon`/`ProjectIconGlyph`) — clicking opens a
+  6×5 letter grid plus a `reset to folder` action; the picked
+  A-Z glyph persists to `LocalProject.iconKey` and renders in
+  place of the default Folder in both the main sidebar and the
+  rail. No auto-default from the project name — picking is what
+  binds the letter to the project in the user's memory. Rename
+  is the pencil action in the project row's hover stack and
+  commits via `useProjectStore.add()` on the existing key
+  (creates a placeholder for purely agent-derived rows).
+- `lib/projects.ts` — shared `groupProjects()` derivation +
+  `ProjectGroup` type consumed by both `Sidebar` and
+  `SidebarRail`. Pure function over `(agentOrder, agents,
+  localProjects, localOrder)`; callers pre-filter the orders for
+  whatever archived-visibility posture they want.
+- `components/SidebarRail.tsx` — collapsed-mode rail (48px wide).
+  Renders one tile per project using the same `groupProjects()`
+  derivation as the main sidebar, with `ProjectIconGlyph` for the
+  glyph. Click jumps to the project's most-recent non-archived
+  session across any of its agents. Archived projects/agents and
+  the synthetic `no project` bucket are hidden — the rail is for
+  active-state navigation, not history. Machine strip + logout at
+  the bottom unchanged.
 - `components/ContextPane.tsx` — right-pane companion to a session. Header
   shows agent identity + working dir + model. A collapsible `Details`
   block surfaces agent + session metadata (machine, status, version,
   working dir, registered, last seen, session title, external id,
   updated, model). The bottom region is tabbed: **Commits** (`GitLogPanel`),
-  **Files** (`FileTree`), **Terminal** (`<TerminalPane>`).
+  **Files** (`FileTree`), **Terminal** (`<TerminalPane>`), and — only when
+  the Notes extension is on (`uiStore.notesExtensionEnabled`) and the agent
+  has a `workingDir` — **Note** (`<NotePane>`).
 - `components/MachinePanel.tsx` — `/machines/:id` route. Header with
   machine glyph + name + status dot + sidecar-update / new-agent buttons.
   Below the header: 2:3 grid with Host KV + Supports adapters on the
@@ -278,16 +438,39 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   name [verb] [workingDir]` with a hover-only destroy action.
 - `pages/UserPanel.tsx` — `/user` route, settings-page layout. Sticky
   account band at the top (email + role); below it a left section nav
-  (Stats / Preferences) and a scroll column with Activity (heatmap),
-  Usage (lifetime token ledger), Quota (per-CLI plan windows pulled
+  (Stats / Preferences) and a scroll column with Activity (a `Grid` /
+  `Curve` segmented toggle over one `/me/activity` payload — `Grid` is
+  the GitHub-style `ActivityHeatmap`, `Curve` is `ActivityLineChart`, a
+  by-day commands line; pure client-side view swap, defaults to Grid),
+  Usage (token ledger with a rolling 7-day / 30-day / all-time
+  segmented toggle — one `/me/usage` payload carries all three, the
+  toggle is pure client-side slicing, defaults to 30 days), Quota
+  (per-CLI plan windows pulled
   from each sidecar's heartbeat — see `packages/sidecar/internal/quota`
-  and the `/me/quota` endpoint), and Preferences (notifications, user
-  rules editor). Capped at `max-w-6xl`.
+  and the `/me/quota` endpoint), Preferences (notifications, user
+  rules editor), and Extensions (opt-in features; currently just
+  **Notes**). The on/off flag is an account-level preference persisted
+  server-side via `GET`/`PUT /me/extensions` (a JSON map on `User`, so
+  new extensions need no migration); `uiStore.notesExtensionEnabled` is
+  a localStorage cache for synchronous, flash-free reads, reconciled
+  against the server on bootstrap (`App.tsx`). Capped at `max-w-6xl`.
 - `components/TerminalPane.tsx` — xterm.js bound to one agent. Owns the
   WebSocket plumbing, a debounced ResizeObserver for fit, base64 encoding
   on input, and a duplicate-seq guard on output. Renders inside the
   **Terminal** tab of `ContextPane` so we don't pay the xterm cost until
   the user clicks the tab.
+- `components/NotePane.tsx` — free-form per-project scratchpad in the
+  **Note** tab of `ContextPane`. A "project" has no DB row of its own
+  (the sidebar derives projects from agents' `workingDir`s), so the note
+  is keyed by the `(userId, machineId, workingDir)` triple in the
+  `ProjectNote` table and reached via `GET`/`PUT /me/project-notes`
+  (machineId + workingDir as query params). Two sessions in the same
+  working dir edit the same note. Debounced autosave (~700 ms) rather
+  than a Save button; byte-capped at `PROJECT_NOTES_MAX_BYTES`. Both the
+  extension on/off flag and the note *content* are server-persisted per
+  user (see `/me/extensions` and `/me/project-notes`), so they survive
+  browser switches. Unlike `User.rules`, notes are personal scratch and
+  are never fanned out to sidecars.
 
 ## Conventions
 
@@ -344,6 +527,38 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   versions. The mappers (`mapClaudeLine`, `mapCodexLine`) are
   defensive — unknown events fall through as `progress` chunks rather than
   crashing.
+- **Extended thinking (Claude Code)**: newer `claude` emits two distinct
+  thinking signals, handled in `mapClaudeLine`:
+  1. `{"type":"system","subtype":"thinking_tokens","estimated_tokens":N,
+     "estimated_tokens_delta":D}` — fires repeatedly (~every 150 tokens)
+     while the model reasons. Mapped to a **content-less** `progress`
+     chunk with `meta.contentType="thinking_tokens"` +
+     `meta.estimatedTokens`/`estimatedTokensDelta`. Content-less so it
+     never renders as a junk row; the web (`ActivityPill`) reads the
+     running max from `meta` to show a live "🧠 N" counter in the capsule
+     while the turn is running. *Gotcha:* before this was handled, the
+     event fell through and surfaced as a literal "system" progress row.
+  2. `thinking` / `redacted_thinking` content blocks on `assistant`
+     messages (text in the `thinking` field, **not** `text`). Mapped to a
+     `progress` chunk with `meta.contentType="thinking"` (+ `redacted:true`
+     for the encrypted variant). Deliberately **not** a `delta` chunk:
+     post-tool deltas get concatenated into the visible final answer by
+     `splitDeltas`, so emitting reasoning as a delta would leak private
+     thinking into the reply. The web renders these as labelled "Thinking"
+     rows in the activity timeline. Cursor CLI (`mapCursorLine`) does not
+     yet mirror this. *Big gotcha (verified empirically against `claude`
+     2.1.167):* on **Opus 4.7/4.8** the API defaults to
+     `thinking.display: "omitted"`, so the `thinking` field arrives
+     **empty** with only a `signature` (the multi-turn/tool-use
+     verification token, not reasoning text). On **Opus 4.6 / Sonnet 4.6**
+     the default is `"summarized"` and the field is populated. Claude Code
+     inherits the model's default, exposes no CLI flag to override it, and
+     the sidecar only wraps the CLI — so it cannot force summarized
+     thinking. Net: the `thinking_tokens` counter works on every model,
+     but "Thinking" text rows only populate on models that return
+     summarized thinking (run the agent on 4.6/sonnet-4.6 to get them).
+     The empty block is expected, not a bug; the `if s != ""` guard
+     suppresses it so no blank rows render.
 - **File-edit diffs**: every adapter (Codex, Claude Code, Cursor CLI)
   shares the snapshot-then-diff machinery in
   `packages/sidecar/internal/adapter/filediff.go`. The flow is uniform:
@@ -360,6 +575,55 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   its file-modifying tools (see `isFileEditTool` in `claude_code.go`
   for the canonical list) and call the same two `fileEditState`
   methods — do **not** re-implement diffing per adapter.
+- **Attachments are two separate problems; S3 only solves one**. A file
+  attached to a turn has to (a) be *persisted* so the transcript
+  re-renders it, and (b) be *delivered* to the **sidecar host's disk** so
+  the CLI can read it — the CLI runs on the agent's machine, not the
+  server. S3/MinIO handles (a). For (b) the sidecar pulls each file over
+  **HTTP from the server** (the server is the S3 gateway), NOT directly
+  from MinIO — because Argus sidecars run on arbitrary remote hosts that
+  typically can't reach a cluster-internal bucket, but already reach the
+  server. The bytes **never ride Redis**: only `Command.attachments`
+  refs (id/filename/mime/size/token) travel the `agent:{id}:cmd` stream,
+  so the MAXLEN-trimming gotcha doesn't apply. If you ever want the
+  sidecar to pull presigned-direct from S3 (server out of the byte path),
+  gate it on the bucket being reachable from every agent host.
+- **Image vision is uniform-prompt-path + one per-adapter flag**. The
+  cross-adapter floor is the prompt preamble: every agentic CLI opens a
+  file whose path it's told, and — verified empirically against the real
+  CLIs — `claude -p` over stdin **and** `cursor-agent -p` attach a
+  path-mentioned image as *vision* (not just a text read). Codex is the
+  one exception: `codex exec` needs its native `--image <path>` flag for
+  vision (a bare path mention can be read as text), so `codex.go` emits
+  `--image` for every `image/*` attachment with a `LocalPath`. When
+  adding an adapter, you get file access + (claude-style) image vision
+  for free via the preamble; only wire a native image flag if that CLI
+  has one. (Claude's *Read tool* is unreliable for images — several
+  upstream issues — but we never depend on it; the path-in-prompt route
+  is the documented, working one.)
+- **Attachment lifecycle is keep-for-session; S3 orphans are a TODO**.
+  Files stay under `.argus/uploads/` and in S3 for the life of the
+  session so `--resume` turns can re-reference them. Deleting a command
+  (e.g. agent hard-delete cascade) removes the `Attachment` rows but the
+  service only best-effort deletes the S3 object on the upload-failure
+  path — a periodic orphan sweep (objects whose row is gone, and unlinked
+  `commandId IS NULL` uploads abandoned before send) is a follow-up.
+- **Attachment viewing is unified with the file tree (frontend)**: a sent
+  attachment opens as a `FileViewer` **tab** on double-click — same
+  gesture and destination as the Files panel, not a floating modal.
+  `fileTabsStore.OpenFile` is a `file | attachment` union; `openAttachment`
+  keys tabs `att:<id>`. `FileViewer` renders both sources through the
+  shared `FileContentView` (text / markdown / HTML / image / binary);
+  attachments add a PDF-in-iframe path and fetch text-like files over HTTP
+  from the tokenized url (image / PDF render straight from the url).
+  Opening a tab swaps `StreamViewer` out, which used to snap the chat to
+  the bottom on close — `StreamViewer` now records `{top, atBottom}` per
+  session in a module-level `scrollMemory` **inside onScroll** (NOT at
+  unmount: a tearing-down node reports `scrollTop`/`clientHeight` as ~0,
+  which reads as "at bottom" and corrupts the saved position) and restores
+  it on remount. The composer's pre-send image chips keep a quick
+  `ImageLightbox` (floating zoom) — an unsent file has no session tab to
+  open into.
 - **Token-level UI re-render**: `StreamViewer` concatenates all `delta`s
   into a single string per command and re-renders that block on every chunk.
   This is fast enough up to a few hundred KB; if you hit perf issues,
@@ -373,7 +637,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   support soft-archive via an `archivedAt DateTime?` column —
   `POST /agents/:id/archive` / `POST /sessions/:id/archive` hide rows
   from default lists without losing history. Pass
-  `?includeArchived=true` to bring them back.
+  `?includeArchived=true` to bring them back. *Projects* don't exist
+  server-side yet; archive on a project row in the sidebar is a
+  client-side cascade that walks the project's sessions and agents
+  and POSTs `/archive` on each, then sets `archivedAt` on the
+  `useProjectStore` placeholder (creating one if the row was purely
+  agent-derived). Restore reverses the order. There is no project
+  hard-destroy.
   *Hard-destroy* an agent via `DELETE /machines/:mid/agents/:agentId`:
   the server publishes a `destroy-agent` command, the sidecar tears
   the supervisor down and drops the cache entry, and the row is
@@ -381,9 +651,27 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Session/Command/Result). This is the supported way to delete an
   agent — the sidebar's per-agent "trash" hits this. There is no
   separate destroy for sessions; archive and re-create instead.
-  Machine rows are not user-deletable: stale machines are reaped by
-  the periodic sweeper after a grace window and their agents
-  destroyed alongside.
+  Machines are **soft-deleted**, not destroyed: `DELETE /machines/:id`
+  sets the sticky `Machine.deletedAt` tombstone, flips status offline,
+  archives the machine's agents (sets their `archivedAt`), suffixes
+  the `@unique` `name` (so a fresh install can reuse the human name),
+  and emits `machine:removed`. **No rows are deleted** — the agents'
+  sessions/commands/chunks/terminals survive untouched and stay
+  viewable through the user-scoped session list; only the *active*
+  surfaces (machine list, sidebar) hide them. Safe at any status, so
+  there's no online guard. `deletedAt` differs from `archivedAt`
+  precisely because the `machine-register` handler resets `archivedAt`
+  to null on every re-register: the lifecycle consumer instead
+  *ignores* any event (`machine-register` skips the upsert;
+  `machine-heartbeat` is an `updateMany` filtered on `deletedAt: null`)
+  from a tombstoned machine and never clears `deletedAt`, so a
+  still-running or restarting sidecar can no longer resurrect it. The
+  delete is terminal — there is no un-delete endpoint or UI. The
+  periodic sweeper only flips stale machines/agents to `offline` — it
+  never reaps rows. Known quirk: a deleted machine's sidecar keeps
+  running and its supervisors' per-*agent* register/heartbeat events
+  still update those (already-archived, hidden) Agent rows; harmless,
+  since they're filtered from every active view.
 - **Terminal == remote shell access**: ticking "attach interactive
   terminal" when creating an agent lets *any* dashboard user spawn
   shells on that host as the sidecar daemon's UID. Treat this as equivalent to handing out SSH; only
@@ -558,7 +846,20 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   The "current context used" numerator is the LATEST `final` chunk's
   `inputTokens + cacheReadTokens + cacheWriteTokens` — not a sum across
   turns — because each CLI re-sends the full history on `--resume`,
-  so the most recent prompt size IS the live context. When a new model
+  so the most recent prompt size IS the live context. **Gotcha:** for
+  claude-code the `result` event's top-level `usage` is the *cumulative
+  whole-turn aggregate* (summed over every API round-trip a tool-use turn
+  makes), which overcounts the live context by ~the round-trip count and
+  pins the ring near 100%. So the ring sources its numerator via
+  `parseContextUsage`, which for claude-code reads the final single call
+  from `usage.iterations[-1]`; `parseUsage` (used by `useSessionUsage` and
+  the server-side `/me/usage` aggregation) intentionally keeps the
+  cumulative aggregate, which is the correct per-turn cost/usage total.
+  codex (`turn.completed.usage`) and cursor-cli expose only a turn-level
+  total in `exec --json`, so their rings can still overcount on multi-call
+  turns — codex's per-call figure lives in the richer `app-server`
+  protocol (`thread/tokenUsage/updated` → `tokenUsage.last`), not adopted
+  here. When a new model
   family ships (Anthropic / OpenAI / Cursor announcement), bump the
   table as `chore(shared): update model context windows` — verify
   against the upstream announcement, not release-note rumors. Unknown
@@ -568,7 +869,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   calls `parseUsage` once when each turn finalizes and stores the
   normalized `TokenUsage` JSON on the Command row. `/me/usage` SUMs
   that column in Postgres instead of re-parsing every `final` chunk's
-  raw `meta`, which is what made the panel slow for heavy users.
+  raw `meta`, which is what made the panel slow for heavy users. It
+  emits all three windows (7-day / 30-day / lifetime) from a single
+  scan via conditional aggregation — the rolling buckets are
+  `SUM(...) FILTER (WHERE c."createdAt" >= NOW() - INTERVAL 'N days')`,
+  now-anchored not calendar-aligned, reusing the
+  `@@index([sessionId, createdAt])` the activity grid already leans on.
+  The optional `costUsd` / `durationApiMs` undefined-vs-zero contract
+  is enforced *per window* (a `*_rows` COUNT scoped to the same
+  filter), so a recent codex-only stretch never shows a spurious
+  "$0.00" even when the lifetime total has a real cost.
   Pre-denormalization rows are populated by SQL migration
   `6_backfill_command_usage`, which mirrors `parseUsage`'s adapter
   switch one-for-one — if you change `parseUsage`'s output shape,
@@ -595,6 +905,34 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   type X" — the protocol/streams support it; the dashboard doesn't expose it
   yet.
 - Pre-commit hooks (ruff/eslint).
+- **Attachments — known debt** (the file/image feature is complete and
+  verified end-to-end for claude `-p`/stdin and codex `--image`; these are
+  the deferred edges):
+  - **S3 orphan sweep.** Deleting a Command cascades its `Attachment`
+    rows, but the MinIO/S3 objects are only best-effort removed on the
+    upload-failure path. Need a periodic sweep for (a) objects whose row
+    is gone and (b) unlinked uploads (`commandId IS NULL`) abandoned in
+    the composer before send.
+  - **Sidecar `.argus/uploads/` pruning.** Pulled files are kept for the
+    session (so `--resume` can re-reference them) but never deleted — in
+    practice keep-forever on the agent's disk. Add an age/size-bounded
+    prune (they're hidden + gitignored, so it's only disk usage).
+  - **`cursor-cli` image vision unverified.** claude (path-in-prompt) and
+    codex (`--image`) are confirmed against the real CLIs; cursor's
+    path-mention vision is documented-but-unproven (no cursor-agent on the
+    test box). Smoke-test before claiming cursor image support.
+  - **No server-side attachment tests.** The sidecar has unit tests
+    (pull / sanitize / preamble); the `attachment/` module (upload,
+    tokenized download, link-and-validate) has none.
+  - **New-session inline prompt drops attachments.** `POST /sessions`
+    with `body.prompt` calls `dispatch()` without `attachmentIds`
+    (`session.controller.ts`). The web never hits this with files (first
+    message goes through `/commands`), so it's latent — but forward the
+    ids there for completeness.
+  - **Server is in the byte path.** The sidecar pulls each file from the
+    server (S3 gateway) and the browser displays from it; presigned
+    direct-from-S3 is the scale path, gated on the bucket being reachable
+    from every agent host (see the two-leg gotcha).
 
 ## When you change something
 

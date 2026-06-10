@@ -97,7 +97,11 @@ func (a *CursorCLIAdapter) Execute(
 		args = append(args, "-m", model)
 	}
 	args = append(args, a.extraArgs...)
-	args = append(args, cmd.Prompt)
+	// "--" is the POSIX end-of-options marker: without it, a prompt that
+	// starts with "-" or "--" (e.g. user types "--help" or a CLI-style
+	// snippet) would be parsed as a flag by cursor-agent's arg parser
+	// and either error out or invoke a side-effect like printing help.
+	args = append(args, "--", cmd.Prompt)
 
 	// cursor-agent's stream-json schema diverged from Claude's: it emits
 	// top-level `tool_call` events with a typed `*ToolCall` payload (and

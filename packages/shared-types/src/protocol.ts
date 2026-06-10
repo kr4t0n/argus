@@ -407,6 +407,103 @@ export interface GitChangedEvent {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Background task progress (sidecar → server)
+//
+// Commands wrapped by `argus-bg` (the sidecar's tqdm-aware shell
+// wrapper) write a JSONL event stream into
+// `<workingDir>/.argus/progress/<taskId>.jsonl` as they run. The
+// sidecar's per-agent progress watcher (parallel to fs / git watchers)
+// tails those files and forwards each line on `agent:lifecycle` as one
+// of the three events below.
+//
+// Scoped by (machineId, workingDir, taskId). `workingDir` — not
+// `agentId` — is the project key, because multiple agents in the same
+// project share one `.argus/progress/` directory and the dashboard's
+// Progress tab is per-project. `agentId` is included for attribution
+// (which agent supervisor's watcher observed the file).
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Fires once per task when `argus-bg` writes its "start" JSONL line.
+ * `cmd` is the wrapped argv after the `--` separator so the dashboard
+ * can render what is actually running.
+ */
+export interface BackgroundTaskStartedEvent {
+  kind: 'background-task-started';
+  machineId: string;
+  agentId: string;
+  workingDir: string;
+  taskId: string;
+  label?: string;
+  cmd?: string[];
+  pid?: number;
+  startedAt: number;
+  ts: number;
+}
+
+/**
+ * Emitted as `argus-bg` parses tqdm frames from the wrapped command's
+ * PTY. Throttled inside `argus-bg` (at most one per 500ms OR when
+ * integer percent ticks), so the server-side throttle stays coarse.
+ *
+ * `total === 0` means an unbounded progress bar (tqdm without a known
+ * total); the dashboard renders a spinner / indeterminate bar in that
+ * case rather than a filled percentage.
+ *
+ * `label` + `cmd` are decorated by the sidecar's progressWatcher from
+ * the cached `start` line for this taskId so every progress event is
+ * self-describing. A consumer-group's high-water-mark blocks replay of
+ * past `start` events, which would otherwise cause cards for tasks
+ * already running at server-restart time to render with no
+ * label / command.
+ */
+export interface BackgroundTaskProgressEvent {
+  kind: 'background-task-progress';
+  machineId: string;
+  agentId: string;
+  workingDir: string;
+  taskId: string;
+  label?: string;
+  cmd?: string[];
+  current: number;
+  total?: number;
+  percent: number;
+  etaSeconds?: number;
+  rate?: number;
+  unit?: string;
+  desc?: string;
+  ts: number;
+}
+
+/**
+ * Closes out a task. `status` is `'done'` on exit code 0 and `'failed'`
+ * otherwise (including SIGINT / SIGTERM forwarded to the child). The
+ * server retains the ended record until a user explicitly dismisses
+ * it via the X button on the card.
+ *
+ * `label` + `cmd` are decorated from the cached `start` line for the
+ * same reason as on Progress; see that comment.
+ */
+export interface BackgroundTaskEndedEvent {
+  kind: 'background-task-ended';
+  machineId: string;
+  agentId: string;
+  workingDir: string;
+  taskId: string;
+  label?: string;
+  cmd?: string[];
+  exitCode: number;
+  status: 'done' | 'failed';
+  endedAt: number;
+  ts: number;
+}
+
+export type BackgroundTaskEvent =
+  | BackgroundTaskStartedEvent
+  | BackgroundTaskProgressEvent
+  | BackgroundTaskEndedEvent;
+
+// ─────────────────────────────────────────────────────────────────────
 // Remote sidecar update (server → sidecar)
 //
 // The dashboard exposes an "Update sidecar" action per machine and a
@@ -590,7 +687,13 @@ export interface AgentDestroyedEvent {
 export type MachineLifecycleAck = AgentSpawnedEvent | AgentSpawnFailedEvent | AgentDestroyedEvent;
 
 /** Anything the server expects on `agent:lifecycle`. Ordering matters:
- *  more specific kinds first so TS narrows correctly. */
+ *  more specific kinds first so TS narrows correctly.
+ *
+ *  `BackgroundTask{Started,Progress,Ended}Event` deliberately are NOT
+ *  in this union — they ride a dedicated `agent:background` stream
+ *  (see streamKeys.background) so chatty progress frames can't trim
+ *  the shared lifecycle stream via MAXLEN. They're consumed by
+ *  BackgroundTaskService.consumeLoop, not MachineService.handle. */
 export type AnyLifecycleEvent =
   | RegisterEvent
   | HeartbeatEvent
@@ -625,6 +728,32 @@ export interface CloneSpec {
   turnIndex: number;
 }
 
+/**
+ * One file the user attached to a turn. Rides on Command so the sidecar
+ * can pull the bytes BEFORE invoking the CLI, write them under
+ * `<workingDir>/.argus/uploads/`, and reference the on-disk path in the
+ * prompt (and, for adapters with a native image flag, pass it directly).
+ *
+ * The bytes themselves never travel on the Redis command stream — only
+ * this reference does. The sidecar fetches the file over HTTP from the
+ * server (the server is the S3/MinIO gateway) at
+ * `GET {serverUrl}/attachments/{id}?t={token}`, building the URL from its
+ * own configured server URL so the server needn't know its public origin.
+ * `token` is a short-lived (~15 min) JWT scoped to this attachment id.
+ */
+export interface AttachmentRef {
+  id: string;
+  /** Original client filename, sanitized by the sidecar before it hits disk. */
+  filename: string;
+  /** MIME type sniffed/declared at upload — lets the sidecar branch
+   *  image/* attachments onto a CLI's native image flag (e.g. codex). */
+  mime: string;
+  /** Byte size, for logging / sanity bounds on the sidecar side. */
+  size: number;
+  /** Short-lived signed token appended to the pull URL. */
+  token: string;
+}
+
 /** Server → sidecar */
 export interface Command {
   id: string;
@@ -642,6 +771,9 @@ export interface Command {
   timeoutMs?: number;
   /** optional adapter-specific options (model, flags, etc.) */
   options?: Record<string, unknown>;
+  /** Files the user attached to this turn. Empty/absent for a plain
+   *  text turn. The sidecar pulls + lands each before running the CLI. */
+  attachments?: AttachmentRef[];
   /** Set when kind === 'clone-session'; ignored otherwise. */
   clone?: CloneSpec;
 }
@@ -812,6 +944,12 @@ export const streamKeys = {
    *  server's single sweep loop can preserve causal ordering between
    *  machine-register and agent-register. */
   lifecycle: 'agent:lifecycle',
+  /** Background-task progress events from `argus-bg` (start / progress /
+   *  ended). Split off from `lifecycle` because a fast tqdm bar emits
+   *  20+ events/sec — at 500 MAXLEN those bursts would silently trim
+   *  heartbeats / fs-changed / sidecar-update events. Higher MAXLEN +
+   *  its own consumer keep both planes fast. */
+  background: 'agent:background',
   command: (agentId: string) => `agent:${agentId}:cmd`,
   result: (agentId: string) => `agent:${agentId}:result`,
   /** Per-machine control plane: server publishes Create/Destroy/Sync
@@ -828,6 +966,9 @@ export const streamKeys = {
  *  `packages/sidecar/internal/protocol/protocol.go::StreamMaxLen`. */
 export const streamMaxLen = (streamKey: string): number => {
   if (streamKey === streamKeys.lifecycle) return 500;
+  // See the streamKeys.background comment for why this is much larger
+  // than lifecycle: a single chatty tqdm bar would otherwise self-trim.
+  if (streamKey === streamKeys.background) return 5000;
   if (streamKey.endsWith(':cmd')) return 200;
   if (streamKey.endsWith(':result')) return 500;
   if (streamKey.endsWith(':control')) return 200;
@@ -839,6 +980,11 @@ export const consumerGroups = {
   server: 'server',
   /** server-side consumer group reading lifecycle events */
   lifecycle: 'server-lifecycle',
+  /** server-side consumer group reading background-task events.
+   *  Separate group (not just stream) because the consumer is a
+   *  different service (BackgroundTaskService) running its own
+   *  XREADGROUP loop. */
+  background: 'server-background',
   /** per-machine consumer group on the machine control stream */
   machine: (machineId: string) => `machine-${machineId}`,
   /** per-agent consumer group an agent supervisor uses on its own

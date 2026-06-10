@@ -135,6 +135,46 @@ to keep the connection strings out of the same Secret as the auth
 material). Override `existingSecretKey` if your Secret uses a different
 key name.
 
+## Attachments (object store)
+
+File/image attachments are stored in an **S3-compatible bucket**. As with
+Postgres/Redis, the chart does **not** run one — point at managed S3,
+Cloudflare R2, or an in-cluster MinIO you deploy separately. Only the
+**server** needs to reach the bucket: the browser and the sidecars fetch
+attachments *through* the server, never from S3 directly, so the bucket
+can stay private to the cluster.
+
+Attachments are **off by default** — leave `objectStore.endpoint` empty
+and the rest of Argus runs normally. To enable, set the endpoint + a
+bucket that already exists (the chart does not create it) + credentials:
+
+```yaml
+objectStore:
+  endpoint: http://minio.minio.svc:9000   # or https://<acct>.r2.cloudflarestorage.com
+  bucket: argus-attachments
+  region: us-east-1
+  accessKey: "<key>"     # inline → generated Secret
+  secretKey: "<secret>"
+```
+
+Or keep the credentials in a Secret you manage:
+
+```yaml
+objectStore:
+  endpoint: https://s3.us-east-1.amazonaws.com
+  existingSecret: my-s3-creds            # keys: S3_ACCESS_KEY, S3_SECRET_KEY
+  # existingSecretAccessKeyKey / existingSecretSecretKeyKey to rename them
+```
+
+Notes:
+- The server uses path-style addressing (`forcePathStyle`), which suits
+  MinIO/R2 and AWS regional endpoints; use a bucket name without dots.
+- Attachments require a **server image that includes the attachment
+  module**. Until a release ships it, set `server.image.tag` (or
+  `image.tag`) to such a build; older images ignore the `S3_*` env.
+- Upload caps: `objectStore.maxFileBytes` (default 25 MiB) and
+  `objectStore.maxFiles` per turn (default 10).
+
 ## Wiring the SPA to the API
 
 The web image renders runtime configuration into `/config.js` at
@@ -279,6 +319,10 @@ The most important knobs:
 | `auth.adminEmail`         | `admin@argus.local`         | bootstrap admin user email                      |
 | `auth.adminPassword`      | `""` (required)             | bootstrap admin password                        |
 | `auth.sidecarLinkToken`   | `""`                        | shared secret for sidecar terminal link         |
+| `objectStore.endpoint`    | `""` (off)                  | S3-compatible endpoint; set to enable attachments |
+| `objectStore.bucket`      | `argus-attachments`         | bucket attachments are stored in (must exist)   |
+| `objectStore.accessKey`   | `""`                        | S3 access key (or use `objectStore.existingSecret`) |
+| `objectStore.secretKey`   | `""`                        | S3 secret key                                   |
 | `server.replicaCount`     | `1`                         | NestJS replicas (Socket.IO is sticky-friendly)  |
 | `server.image.repository` | `kr4t0n/argus-server`       |                                                 |
 | `web.replicaCount`        | `1`                         | nginx replicas serving the SPA bundle           |

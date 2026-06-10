@@ -89,8 +89,8 @@ type MachineHeartbeatEvent struct {
 // "remaining" — Anthropic returns it in this direction; the codex prober
 // flips ChatGPT's percent_left before publishing so the wire is uniform.
 type QuotaWindow struct {
-	Key                string `json:"key"`             // "five_hour" | "seven_day" | "weekly" | …
-	Label              string `json:"label"`           // "5-hour", "Weekly"
+	Key                string `json:"key"`   // "five_hour" | "seven_day" | "weekly" | …
+	Label              string `json:"label"` // "5-hour", "Weekly"
 	UtilizationPercent int    `json:"utilizationPercent"`
 	ResetsAt           string `json:"resetsAt,omitempty"` // ISO 8601 (RFC3339)
 }
@@ -338,6 +338,85 @@ type GitChangedEvent struct {
 	TS        int64  `json:"ts"`
 }
 
+// ─────────── Background task progress (sidecar → server) ───────────
+//
+// Commands wrapped by `argus-bg` (the sidecar's tqdm-aware shell
+// wrapper) write a JSONL event stream into
+// <workingDir>/.argus/progress/<taskId>.jsonl as they run. The sidecar's
+// per-agent progress watcher tails those files (parallel to the fs and
+// git watchers) and forwards each line on the lifecycle stream as one
+// of the three events below.
+//
+// Scoped by (machineId, workingDir, taskId). WorkingDir — not agentId —
+// is the project key, because multiple agents in the same project share
+// one .argus/progress/ directory and the dashboard's Progress tab is
+// per-project. AgentID is included for attribution / debugging only
+// (which agent supervisor observed the file).
+
+// BackgroundTaskStartedEvent fires once per task when argus-bg writes
+// its "start" JSONL line. Cmd is the wrapped argv (after the `--`
+// separator) so the UI can show what's running.
+type BackgroundTaskStartedEvent struct {
+	Kind       string   `json:"kind"` // "background-task-started"
+	MachineID  string   `json:"machineId"`
+	AgentID    string   `json:"agentId"`
+	WorkingDir string   `json:"workingDir"`
+	TaskID     string   `json:"taskId"`
+	Label      string   `json:"label,omitempty"`
+	Cmd        []string `json:"cmd,omitempty"`
+	PID        int      `json:"pid,omitempty"`
+	StartedAt  int64    `json:"startedAt"`
+	TS         int64    `json:"ts"`
+}
+
+// BackgroundTaskProgressEvent is emitted as argus-bg parses tqdm frames
+// from the wrapped command's PTY. Throttled in argus-bg itself (at most
+// one per 500ms OR when integer percent ticks), so the server-side
+// throttle can stay coarse. Total == 0 means an unbounded progress bar
+// (tqdm without a known total); UI should render a spinner.
+//
+// Label + Cmd are decorated by the sidecar's progressWatcher from the
+// cached `start` line for this taskId so every progress event is
+// self-describing. A server consumer-group's high-water-mark blocks
+// replay of past `start` events; without decoration, the dashboard
+// would render a "Running" card with no label or command for any task
+// that started before the server's consumer group existed.
+type BackgroundTaskProgressEvent struct {
+	Kind       string   `json:"kind"` // "background-task-progress"
+	MachineID  string   `json:"machineId"`
+	AgentID    string   `json:"agentId"`
+	WorkingDir string   `json:"workingDir"`
+	TaskID     string   `json:"taskId"`
+	Label      string   `json:"label,omitempty"`
+	Cmd        []string `json:"cmd,omitempty"`
+	Current    int64    `json:"current"`
+	Total      int64    `json:"total,omitempty"`
+	Percent    float64  `json:"percent"`
+	EtaSeconds float64  `json:"etaSeconds,omitempty"`
+	Rate       float64  `json:"rate,omitempty"`
+	Unit       string   `json:"unit,omitempty"`
+	Desc       string   `json:"desc,omitempty"`
+	TS         int64    `json:"ts"`
+}
+
+// BackgroundTaskEndedEvent closes out a task. Status is "done" on
+// exitCode == 0 and "failed" otherwise (including SIGINT / SIGTERM
+// forwarded to the child). Label + Cmd are decorated from the cached
+// `start` line for the same reason as on Progress; see that comment.
+type BackgroundTaskEndedEvent struct {
+	Kind       string   `json:"kind"` // "background-task-ended"
+	MachineID  string   `json:"machineId"`
+	AgentID    string   `json:"agentId"`
+	WorkingDir string   `json:"workingDir"`
+	TaskID     string   `json:"taskId"`
+	Label      string   `json:"label,omitempty"`
+	Cmd        []string `json:"cmd,omitempty"`
+	ExitCode   int      `json:"exitCode"`
+	Status     string   `json:"status"` // "done" | "failed"
+	EndedAt    int64    `json:"endedAt"`
+	TS         int64    `json:"ts"`
+}
+
 type FSListResponseEvent struct {
 	Kind      string    `json:"kind"` // "fs-list-response"
 	MachineID string    `json:"machineId"`
@@ -428,17 +507,33 @@ type CloneSpec struct {
 	TurnIndex     int    `json:"turnIndex"`
 }
 
+// AttachmentRef mirrors the shared-types AttachmentRef: one file the user
+// attached to a turn. The supervisor pulls the bytes over HTTP from the
+// server, writes them under <workingDir>/.argus/uploads/, and records the
+// resulting path in LocalPath so adapters can reference it (in the prompt,
+// or via a native image flag). LocalPath is sidecar-internal and never
+// serialized back over the wire.
+type AttachmentRef struct {
+	ID        string `json:"id"`
+	Filename  string `json:"filename"`
+	Mime      string `json:"mime"`
+	Size      int64  `json:"size"`
+	Token     string `json:"token"`
+	LocalPath string `json:"-"`
+}
+
 type Command struct {
-	ID         string         `json:"id"`
-	AgentID    string         `json:"agentId"`
-	SessionID  string         `json:"sessionId"`
-	ExternalID string         `json:"externalId,omitempty"`
-	Kind       string         `json:"kind"` // "execute" | "cancel" | "clone-session"
-	Prompt     string         `json:"prompt,omitempty"`
-	Context    map[string]any `json:"context,omitempty"`
-	TimeoutMS  int            `json:"timeoutMs,omitempty"`
-	Options    map[string]any `json:"options,omitempty"`
-	Clone      *CloneSpec     `json:"clone,omitempty"`
+	ID          string          `json:"id"`
+	AgentID     string          `json:"agentId"`
+	SessionID   string          `json:"sessionId"`
+	ExternalID  string          `json:"externalId,omitempty"`
+	Kind        string          `json:"kind"` // "execute" | "cancel" | "clone-session"
+	Prompt      string          `json:"prompt,omitempty"`
+	Context     map[string]any  `json:"context,omitempty"`
+	TimeoutMS   int             `json:"timeoutMs,omitempty"`
+	Options     map[string]any  `json:"options,omitempty"`
+	Attachments []AttachmentRef `json:"attachments,omitempty"`
+	Clone       *CloneSpec      `json:"clone,omitempty"`
 }
 
 type ResultChunk struct {
@@ -565,7 +660,16 @@ type SidecarHelloAck struct {
 }
 
 // Stream key helpers (Redis Streams — commands/lifecycle/results/control only).
-func LifecycleStream() string                      { return "agent:lifecycle" }
+func LifecycleStream() string { return "agent:lifecycle" }
+
+// BackgroundTaskStream carries `argus-bg`'s per-task JSONL events
+// (start / progress / ended) — high-volume relative to the other
+// lifecycle events that share `agent:lifecycle`. We split them off
+// onto a dedicated stream so a chatty tqdm bar can't trim heartbeats
+// / fs-changed / sidecar-update progress out of the shared stream via
+// the MAXLEN cap, and so the server's progress consumer doesn't have
+// to elbow past every other lifecycle event to find its work.
+func BackgroundTaskStream() string                 { return "agent:background" }
 func CommandStream(id string) string               { return "agent:" + id + ":cmd" }
 func ResultStream(id string) string                { return "agent:" + id + ":result" }
 func MachineControlStream(machineID string) string { return "machine:" + machineID + ":control" }
@@ -580,6 +684,12 @@ func StreamMaxLen(streamKey string) int64 {
 	switch {
 	case streamKey == LifecycleStream():
 		return 500
+	case streamKey == BackgroundTaskStream():
+		// Higher than lifecycle because a fast tqdm bar can emit
+		// 20+ events/sec — at 500 entries one busy task would trim
+		// itself out within a minute. 5000 buys ~4 min of headroom
+		// for a single chatty task or several quieter ones.
+		return 5000
 	case strings.HasSuffix(streamKey, ":cmd"):
 		return 200
 	case strings.HasSuffix(streamKey, ":result"):

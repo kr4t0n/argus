@@ -105,6 +105,23 @@ export interface SessionDTO {
   updatedAt: string;
 }
 
+/**
+ * One file attached to a user turn, as surfaced to the dashboard. The
+ * bytes live in S3/MinIO; this is the metadata plus a ready-to-use,
+ * tokenized fetch URL. The server mints a fresh ~1h token each time it
+ * serializes the DTO, so `url` can be dropped straight into an
+ * `<img src>` or a download link without an Authorization header.
+ */
+export interface AttachmentDTO {
+  id: string;
+  filename: string;
+  mime: string;
+  size: number;
+  /** API-base-relative path incl. token: `/attachments/{id}?t={token}`. */
+  url: string;
+  createdAt: string;
+}
+
 export interface CommandDTO {
   id: string;
   sessionId: string;
@@ -114,6 +131,8 @@ export interface CommandDTO {
   status: CommandStatus;
   createdAt: string;
   completedAt: string | null;
+  /** Files the user attached to this turn; absent/empty for plain text. */
+  attachments?: AttachmentDTO[];
 }
 
 export interface ResultChunkDTO extends ResultChunk {}
@@ -126,6 +145,9 @@ export interface CreateSessionRequest {
 
 export interface CreateCommandRequest {
   prompt: string;
+  /** Ids of files previously uploaded via POST /attachments, to attach
+   *  to this turn. The server links them to the created command. */
+  attachmentIds?: string[];
   options?: Record<string, unknown>;
 }
 
@@ -306,13 +328,28 @@ export interface UserActivityResponse {
   days: ActivityDay[];
 }
 
-/** REST response for `GET /me/usage`. Lifetime totals across every
- *  session the user owns, parsed per-adapter on the server using
- *  the same `parseUsage` the dashboard's per-session UsageBadge
- *  uses — so the totals never disagree with what the user sees
- *  while looking at any single session. */
+/** Token totals bucketed by a rolling time window. `lifetime` is
+ *  every command the user owns; `last30Days` / `last7Days` are the
+ *  same SUM scoped to `Command.createdAt >= now() - interval`. The
+ *  windows are rolling (now-anchored, not calendar-aligned) and each
+ *  carries the optional-field contract independently — a window with
+ *  no cost-bearing turns omits `costUsd` even when `lifetime` has one,
+ *  so recent codex-only activity never sprouts a spurious "$0.00". */
+export interface WindowedUsage {
+  last7Days: TokenUsage;
+  last30Days: TokenUsage;
+  lifetime: TokenUsage;
+}
+
+/** REST response for `GET /me/usage`. Totals across every session the
+ *  user owns, parsed per-adapter on the server using the same
+ *  `parseUsage` the dashboard's per-session UsageBadge uses — so the
+ *  totals never disagree with what the user sees while looking at any
+ *  single session. Bucketed into rolling 7-/30-day windows plus the
+ *  all-time lifetime total; the panel toggles between them client-side
+ *  off this single payload. */
 export interface UserUsageResponse {
-  usage: TokenUsage;
+  usage: WindowedUsage;
 }
 
 /**
@@ -368,3 +405,85 @@ export interface UpdateUserRulesRequest {
  *  typical AGENTS.md / CLAUDE.md / .cursorrules file (a few KB at
  *  most) while staying well under any realistic Postgres TEXT limit. */
 export const USER_RULES_MAX_BYTES = 32_768;
+
+/** REST response for `GET /me/project-notes?machineId=…&workingDir=…`.
+ *  `notes` is a free-form scratchpad the user keeps for a project — a
+ *  project being the `(machineId, workingDir)` pair every session in
+ *  that directory shares. Empty string means "no notes yet"; the
+ *  response always carries a string so the client never has to
+ *  disambiguate null vs unset. */
+export interface ProjectNotesResponse {
+  notes: string;
+}
+
+/** Request body for `PUT /me/project-notes`. The project the note
+ *  belongs to is identified by the `machineId` / `workingDir` query
+ *  params; the body carries only the text. Server enforces an upper
+ *  bound (PROJECT_NOTES_MAX_BYTES). */
+export interface UpdateProjectNotesRequest {
+  notes: string;
+}
+
+/** Hard cap for stored project-notes text. Mirrors USER_RULES_MAX_BYTES
+ *  — notes are a freeform scratchpad, 32 KB is plenty while staying
+ *  well under any realistic Postgres TEXT limit. */
+export const PROJECT_NOTES_MAX_BYTES = 32_768;
+
+/** REST response for `GET /me/extensions`. Which opt-in extensions the
+ *  user has enabled — an account-level preference (synced across
+ *  browsers/devices), distinct from device-local UI state like theme.
+ *  One boolean per extension; absent extensions read as `false`. As
+ *  extensions are added this gains fields. Stored server-side as a
+ *  JSON map so new extensions need no migration. */
+export interface UserExtensionsResponse {
+  /** Notes extension — adds a per-project Note tab to the session pane. */
+  notes: boolean;
+  /** Progress extension — adds a per-project Progress tab that lists
+   *  live background tasks reported by `argus-bg` running in the
+   *  agent's shell. */
+  progress: boolean;
+}
+
+/** Request body for `PUT /me/extensions`. The client sends the full
+ *  set of known extension flags; the server replaces its stored map. */
+export interface UpdateUserExtensionsRequest {
+  notes: boolean;
+  progress: boolean;
+}
+
+/** REST response for `GET /machines/:machineId/background-tasks`. One
+ *  row per active-or-recently-ended background task in the given
+ *  project, keyed by taskId. `endedAt` set ⇒ task has finished and the
+ *  server is keeping it briefly so late-joining dashboards still see
+ *  the final state. */
+export interface BackgroundTaskDTO {
+  taskId: string;
+  machineId: string;
+  workingDir: string;
+  agentId: string;
+  label?: string;
+  cmd?: string[];
+  /** Latest progress reading, if any. Omitted when the task started
+   *  but hasn't yet emitted a progress frame (tqdm hasn't fired its
+   *  first update). */
+  current?: number;
+  total?: number;
+  percent?: number;
+  etaSeconds?: number;
+  rate?: number;
+  unit?: string;
+  desc?: string;
+  /** ms epoch — when the task's `start` event was observed. */
+  startedAt: number;
+  /** Latest event timestamp (start OR most recent progress OR end). */
+  ts: number;
+  /** Set only after the task ends. */
+  endedAt?: number;
+  exitCode?: number;
+  status?: 'done' | 'failed';
+}
+
+/** REST response for `GET /machines/:machineId/background-tasks`. */
+export interface BackgroundTasksResponse {
+  tasks: BackgroundTaskDTO[];
+}

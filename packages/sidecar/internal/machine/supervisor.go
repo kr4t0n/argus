@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,6 +33,13 @@ type supervisor struct {
 	version string // detected CLI version, "" if detection failed
 	log     *log.Logger
 
+	// serverURL + httpClient let the supervisor pull a turn's attachments
+	// over HTTP from the server (the S3 gateway) before invoking the CLI.
+	// serverURL is the same base the sidecar link / quota use; empty means
+	// attachments are skipped (logged) rather than failing the turn.
+	serverURL  string
+	httpClient *http.Client
+
 	cmdCancel context.CancelFunc
 	doneCh    chan struct{}
 
@@ -52,6 +60,14 @@ type supervisor struct {
 	// Same fail-soft semantics as fsw — nil here just means the
 	// panel falls back to mount-fetch + manual-refresh.
 	gitw *gitWatcher
+
+	// Per-agent progress watcher (.argus/progress/<id>.jsonl). Picks
+	// up structured progress events written by argus-bg from the
+	// shell and republishes them as BackgroundTask* lifecycle events
+	// so the dashboard's per-project Progress tab can render live
+	// status for detached background work. Same fail-soft semantics
+	// as fsw / gitw — nil here means the tab stays empty.
+	progw *progressWatcher
 }
 
 const (
@@ -69,6 +85,7 @@ const (
 func newSupervisor(
 	ctx context.Context,
 	machineID string,
+	serverURL string,
 	b *bus.Bus,
 	spec AgentRecord,
 	logger *log.Logger,
@@ -102,13 +119,15 @@ func newSupervisor(
 	}
 
 	return &supervisor{
-		spec:    spec,
-		machine: machineID,
-		bus:     b,
-		adapter: ad,
-		version: version,
-		log:     logger,
-		doneCh:  make(chan struct{}),
+		spec:       spec,
+		machine:    machineID,
+		bus:        b,
+		adapter:    ad,
+		version:    version,
+		log:        logger,
+		serverURL:  serverURL,
+		httpClient: &http.Client{Timeout: 2 * time.Minute},
+		doneCh:     make(chan struct{}),
 	}, nil
 }
 
@@ -147,6 +166,7 @@ func (s *supervisor) run(ctx context.Context) {
 
 	s.startFSWatcher(ctx)
 	s.startGitWatcher(ctx)
+	s.startProgressWatcher(ctx)
 
 	cmdStream := protocol.CommandStream(s.spec.AgentID)
 	group := protocol.SidecarConsumerGroup(s.spec.AgentID)
@@ -216,6 +236,9 @@ func (s *supervisor) run(ctx context.Context) {
 	}
 	if s.gitw != nil {
 		s.gitw.Close()
+	}
+	if s.progw != nil {
+		s.progw.Close()
 	}
 
 	// Best-effort deregister so the dashboard reflects the change
@@ -333,6 +356,13 @@ func (s *supervisor) handleCommand(parent context.Context, cmd protocol.Command)
 	seq := 0
 	publishExternalIDOnce := false
 
+	// Pull + land any attached files BEFORE running the CLI. This sets
+	// each ref's LocalPath and appends a path-listing preamble to the
+	// prompt; adapters then reference the files (codex via --image, the
+	// rest via the prompt path). Fail-soft: a bad pull is skipped, not
+	// fatal to the turn.
+	s.materializeAttachments(cmdCtx, &cmd)
+
 	chunks, err := s.adapter.Execute(cmdCtx, cmd)
 	if err != nil {
 		seq++
@@ -426,6 +456,83 @@ func (s *supervisor) startGitWatcher(ctx context.Context) {
 		return
 	}
 	s.gitw = w
+}
+
+// startProgressWatcher brings up the per-agent argus-bg JSONL tailer
+// so background-task progress lands on the lifecycle stream. The
+// callback maps each decoded bgEvent to its BackgroundTask* protocol
+// shape, attaching machineId / agentId / workingDir from the
+// supervisor's spec. Failures (missing workingDir, MkdirAll denied,
+// fsnotify out of inotify watches) downgrade silently — the rest of
+// the agent keeps running.
+func (s *supervisor) startProgressWatcher(ctx context.Context) {
+	if s.spec.WorkingDir == "" {
+		return
+	}
+	w, err := newProgressWatcher(ctx, s.spec.WorkingDir, func(ev bgEvent) {
+		s.publishBackgroundTaskEvent(ctx, ev)
+	}, s.log)
+	if err != nil {
+		s.log.Printf("agent %s: progress watcher disabled: %v", s.spec.AgentID, err)
+		return
+	}
+	s.progw = w
+}
+
+// publishBackgroundTaskEvent turns one bgEvent (the JSONL wire format
+// argus-bg writes) into the matching protocol event and publishes it
+// on the lifecycle stream. Unknown event types are dropped silently
+// — newer argus-bg versions might emit kinds this supervisor doesn't
+// recognize, and we don't want one stray line to surface as noise.
+func (s *supervisor) publishBackgroundTaskEvent(ctx context.Context, ev bgEvent) {
+	now := time.Now().UnixMilli()
+	switch ev.Type {
+	case "start":
+		_ = s.bus.Publish(ctx, protocol.BackgroundTaskStream(), protocol.BackgroundTaskStartedEvent{
+			Kind:       "background-task-started",
+			MachineID:  s.machine,
+			AgentID:    s.spec.AgentID,
+			WorkingDir: s.spec.WorkingDir,
+			TaskID:     ev.ID,
+			Label:      ev.Label,
+			Cmd:        ev.Cmd,
+			PID:        ev.PID,
+			StartedAt:  ev.StartedAt,
+			TS:         now,
+		})
+	case "progress":
+		_ = s.bus.Publish(ctx, protocol.BackgroundTaskStream(), protocol.BackgroundTaskProgressEvent{
+			Kind:       "background-task-progress",
+			MachineID:  s.machine,
+			AgentID:    s.spec.AgentID,
+			WorkingDir: s.spec.WorkingDir,
+			TaskID:     ev.ID,
+			Label:      ev.Label,
+			Cmd:        ev.Cmd,
+			Current:    ev.Current,
+			Total:      ev.Total,
+			Percent:    ev.Percent,
+			EtaSeconds: ev.EtaSeconds,
+			Rate:       ev.Rate,
+			Unit:       ev.Unit,
+			Desc:       ev.Desc,
+			TS:         now,
+		})
+	case "end":
+		_ = s.bus.Publish(ctx, protocol.BackgroundTaskStream(), protocol.BackgroundTaskEndedEvent{
+			Kind:       "background-task-ended",
+			MachineID:  s.machine,
+			AgentID:    s.spec.AgentID,
+			WorkingDir: s.spec.WorkingDir,
+			TaskID:     ev.ID,
+			Label:      ev.Label,
+			Cmd:        ev.Cmd,
+			ExitCode:   ev.ExitCode,
+			Status:     ev.Status,
+			EndedAt:    ev.EndedAt,
+			TS:         now,
+		})
+	}
 }
 
 // HandleFSList executes a list-directory request for this agent and

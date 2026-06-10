@@ -1,49 +1,84 @@
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { LogOut, PanelLeftOpen } from 'lucide-react';
 import { MachineIconGlyph } from './MachineIcon';
+import { ProjectIconGlyph } from './ProjectIcon';
 import { useAgentStore } from '../stores/agentStore';
 import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
 import { useAuthStore } from '../stores/authStore';
+import { useProjectStore } from '../stores/projectStore';
+import { groupProjects } from '../lib/projects';
 import { cn } from '../lib/utils';
 import { StatusDot } from './ui/StatusDot';
-import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
 
 /**
  * Thin (48px) rail shown in place of the full sidebar when the user
- * collapses it. Renders one icon per non-archived agent (jumps to its
- * most-recent session on click) and one per machine. Keeps the expand
- * button + logout reachable so the user never loses the escape hatch.
+ * collapses it. Mirrors the main sidebar's project-first model: one
+ * tile per project (folder or user-picked letter glyph), click jumps
+ * to the project's most-recent non-archived session across any of
+ * its agents. The machine strip below remains the canonical surface
+ * for navigating directly to a host.
+ *
+ * Always hides archived projects + archived agents — the rail is for
+ * "what am I working on now," not for unearthing history. The
+ * synthetic "no project" bucket is also hidden: it has no path
+ * identity, so a rail tile would be ambiguous and the user can't
+ * make agents-without-workingDir anyway from the main sidebar.
  */
 export function SidebarRail() {
   const { sessionId, machineId } = useParams();
-  const nav = useNavigate();
   const agents = useAgentStore((s) => s.agents);
-  const order = useAgentStore((s) => s.order);
+  const agentOrder = useAgentStore((s) => s.order);
   const sessions = useSessionStore((s) => s.sessions);
   const machines = useMachineStore((s) => s.machines);
   const machineOrder = useMachineStore((s) => s.order);
+  const localProjects = useProjectStore((s) => s.projects);
+  const localProjectOrder = useProjectStore((s) => s.order);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const logout = useAuthStore((s) => s.logout);
   const user = useAuthStore((s) => s.user);
 
-  const activeAgentId = sessionId ? sessions[sessionId]?.agentId : undefined;
+  // Rail is "active state" only — no archive visibility toggle.
+  const visibleAgentOrder = agentOrder.filter((id) => !agents[id]?.archivedAt);
+  const visibleLocalOrder = localProjectOrder.filter(
+    (k) => !localProjects[k]?.archivedAt,
+  );
+  const projects = groupProjects(
+    visibleAgentOrder,
+    agents,
+    localProjects,
+    visibleLocalOrder,
+  ).filter((p) => !!p.fullPath);
 
-  // Pick the most-recent non-archived session per agent so an icon
-  // click drops the user straight into the conversation they'd expect.
-  const recentSessionByAgent = new Map<string, string>();
+  // Most-recent non-archived session per project — same "land where
+  // they'd expect" intent the old per-agent rail had, lifted one
+  // level up. Walking all sessions is O(n) and N is small in
+  // practice; not worth memoizing.
+  const recentSessionByProject = new Map<string, string>();
   for (const s of Object.values(sessions)) {
     if (s.archivedAt) continue;
-    const existing = recentSessionByAgent.get(s.agentId);
-    if (!existing || s.updatedAt > sessions[existing].updatedAt) {
-      recentSessionByAgent.set(s.agentId, s.id);
+    const a = agents[s.agentId];
+    if (!a || a.archivedAt) continue;
+    const wd = (a.workingDir ?? '').trim();
+    if (!wd) continue;
+    const key = `${a.machineId}::${wd}`;
+    const existing = recentSessionByProject.get(key);
+    if (!existing || s.updatedAt > (sessions[existing]?.updatedAt ?? '')) {
+      recentSessionByProject.set(key, s.id);
     }
   }
 
-  const visibleAgents = order
-    .map((id) => agents[id])
-    .filter((a): a is NonNullable<typeof a> => !!a && !a.archivedAt);
+  // Highlight the project containing the currently-viewed session
+  // (if any). Resolved through agent → workingDir + machineId to
+  // match the project's key shape.
+  let activeProjectKey: string | undefined;
+  if (sessionId) {
+    const s = sessions[sessionId];
+    const a = s ? agents[s.agentId] : undefined;
+    const wd = (a?.workingDir ?? '').trim();
+    if (a && wd) activeProjectKey = `${a.machineId}::${wd}`;
+  }
 
   return (
     <aside className="flex h-full w-full flex-col items-stretch border-r border-default bg-surface-0">
@@ -58,35 +93,34 @@ export function SidebarRail() {
       </div>
 
       <div className="flex flex-1 flex-col items-center gap-1 overflow-y-auto py-2">
-        {visibleAgents.map((a) => {
-          const sid = recentSessionByAgent.get(a.id);
-          const active = a.id === activeAgentId;
+        {projects.map((p) => {
+          const recentId = recentSessionByProject.get(p.key);
+          const active = p.key === activeProjectKey;
+          const machine = machines[p.machineId];
+          const tooltipParts = [p.label];
+          if (p.fullPath) tooltipParts.push(p.fullPath);
+          if (machine) tooltipParts.push(machine.name);
           const content = (
             <div
-              title={`${a.name} · ${agentTypeLabel(a.type)}`}
+              title={tooltipParts.join(' · ')}
               className={cn(
                 'relative flex h-9 w-9 items-center justify-center rounded-md transition-colors',
-                active ? 'bg-surface-2' : 'hover:bg-surface-1',
-                !sid && 'opacity-50 cursor-not-allowed',
+                active ? 'bg-surface-2 text-fg-primary' : 'text-fg-secondary hover:bg-surface-1',
+                !recentId && 'opacity-50 cursor-not-allowed',
               )}
             >
-              <AgentTypeIcon type={a.type} size={18} />
-              <span className="absolute -bottom-0.5 -right-0.5">
-                <StatusDot status={a.status} />
-              </span>
+              <ProjectIconGlyph
+                iconKey={p.local?.iconKey}
+                className="h-5 w-5 text-sm"
+              />
             </div>
           );
-          return sid ? (
-            <Link key={a.id} to={`/sessions/${sid}`}>
+          return recentId ? (
+            <Link key={p.key} to={`/sessions/${recentId}`}>
               {content}
             </Link>
           ) : (
-            <div
-              key={a.id}
-              role="button"
-              onClick={() => nav(`/`)}
-              aria-disabled
-            >
+            <div key={p.key} role="button" aria-disabled>
               {content}
             </div>
           );

@@ -1,15 +1,17 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type {
   AgentType,
+  ProjectNotesResponse,
   QuotaWindow,
   TokenUsage,
   UserActivityResponse,
+  UserExtensionsResponse,
   UserQuotaResponse,
   UserQuotaRow,
   UserRulesResponse,
   UserUsageResponse,
 } from '@argus/shared-types';
-import { USER_RULES_MAX_BYTES } from '@argus/shared-types';
+import { PROJECT_NOTES_MAX_BYTES, USER_RULES_MAX_BYTES } from '@argus/shared-types';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { MachineService } from '../machine/machine.service';
 
@@ -73,18 +75,27 @@ export class UserService {
   }
 
   /**
-   * Aggregate token usage across every session the user owns.
+   * Aggregate token usage across every session the user owns, bucketed
+   * into rolling 7-/30-day windows plus the all-time lifetime total.
    *
    * Reads the denormalized `Command.usage` JSONB written by the
    * result-ingestor when each turn finalizes — `parseUsage` runs once
-   * at write time, the read path SUMs four numerics in Postgres.
+   * at write time, the read path SUMs numerics in Postgres.
+   *
+   * One scan, three windows: lifetime is the unfiltered SUM; the
+   * rolling buckets are the same SUM wrapped in a FILTER on
+   * `Command.createdAt` (the column already carried by
+   * `@@index([sessionId, createdAt])`, matching how `activity()`
+   * windows). Conditional aggregation keeps it a single round trip
+   * instead of three near-identical scans. Windows are now-anchored,
+   * not calendar-aligned — "last 7 days" is the trailing 7×24h.
    *
    * The SUMs are over `(c.usage->>'<field>')::numeric` casts, which
    * skip NULL rows automatically. `costUsd` and `durationApiMs` are
-   * optional in the stored shape; we only attach them to the response
-   * if at least one row carried them — matches `sumUsage`'s
-   * undefined-vs-zero semantics so codex-only users don't see a
-   * spurious "$0.00" cost line.
+   * optional in the stored shape; per window we only attach them if at
+   * least one row *in that window* carried them — matches `sumUsage`'s
+   * undefined-vs-zero semantics so a recent codex-only stretch doesn't
+   * show a spurious "$0.00" even when the lifetime total has a cost.
    *
    * If commands predating the denormalization haven't been backfilled
    * yet (`Command.usage IS NULL` on completed rows), they're silently
@@ -92,40 +103,115 @@ export class UserService {
    */
   async usage(userId: string): Promise<UserUsageResponse> {
     type Row = {
-      input_tokens: string | null;
-      output_tokens: string | null;
-      cache_read_tokens: string | null;
-      cache_write_tokens: string | null;
-      cost_usd: string | null;
-      api_ms: string | null;
-      cost_rows: bigint;
-      api_ms_rows: bigint;
+      all_input: string | null;
+      all_output: string | null;
+      all_cread: string | null;
+      all_cwrite: string | null;
+      all_cost: string | null;
+      all_apims: string | null;
+      all_cost_rows: bigint;
+      all_apims_rows: bigint;
+      d30_input: string | null;
+      d30_output: string | null;
+      d30_cread: string | null;
+      d30_cwrite: string | null;
+      d30_cost: string | null;
+      d30_apims: string | null;
+      d30_cost_rows: bigint;
+      d30_apims_rows: bigint;
+      d7_input: string | null;
+      d7_output: string | null;
+      d7_cread: string | null;
+      d7_cwrite: string | null;
+      d7_cost: string | null;
+      d7_apims: string | null;
+      d7_cost_rows: bigint;
+      d7_apims_rows: bigint;
     };
     const rows = await this.prisma.$queryRaw<Row[]>`
       SELECT
-        SUM((c.usage->>'inputTokens')::numeric)        AS input_tokens,
-        SUM((c.usage->>'outputTokens')::numeric)       AS output_tokens,
-        SUM((c.usage->>'cacheReadTokens')::numeric)    AS cache_read_tokens,
-        SUM((c.usage->>'cacheWriteTokens')::numeric)   AS cache_write_tokens,
-        SUM((c.usage->>'costUsd')::numeric)            AS cost_usd,
-        SUM((c.usage->>'durationApiMs')::numeric)      AS api_ms,
-        COUNT(*) FILTER (WHERE c.usage ? 'costUsd')        AS cost_rows,
-        COUNT(*) FILTER (WHERE c.usage ? 'durationApiMs')  AS api_ms_rows
+        SUM((c.usage->>'inputTokens')::numeric)        AS all_input,
+        SUM((c.usage->>'outputTokens')::numeric)       AS all_output,
+        SUM((c.usage->>'cacheReadTokens')::numeric)    AS all_cread,
+        SUM((c.usage->>'cacheWriteTokens')::numeric)   AS all_cwrite,
+        SUM((c.usage->>'costUsd')::numeric)            AS all_cost,
+        SUM((c.usage->>'durationApiMs')::numeric)      AS all_apims,
+        COUNT(*) FILTER (WHERE c.usage ? 'costUsd')        AS all_cost_rows,
+        COUNT(*) FILTER (WHERE c.usage ? 'durationApiMs')  AS all_apims_rows,
+
+        SUM((c.usage->>'inputTokens')::numeric)
+          FILTER (WHERE c."createdAt" >= NOW() - INTERVAL '30 days')   AS d30_input,
+        SUM((c.usage->>'outputTokens')::numeric)
+          FILTER (WHERE c."createdAt" >= NOW() - INTERVAL '30 days')   AS d30_output,
+        SUM((c.usage->>'cacheReadTokens')::numeric)
+          FILTER (WHERE c."createdAt" >= NOW() - INTERVAL '30 days')   AS d30_cread,
+        SUM((c.usage->>'cacheWriteTokens')::numeric)
+          FILTER (WHERE c."createdAt" >= NOW() - INTERVAL '30 days')   AS d30_cwrite,
+        SUM((c.usage->>'costUsd')::numeric)
+          FILTER (WHERE c."createdAt" >= NOW() - INTERVAL '30 days')   AS d30_cost,
+        SUM((c.usage->>'durationApiMs')::numeric)
+          FILTER (WHERE c."createdAt" >= NOW() - INTERVAL '30 days')   AS d30_apims,
+        COUNT(*) FILTER (WHERE c.usage ? 'costUsd'
+          AND c."createdAt" >= NOW() - INTERVAL '30 days')             AS d30_cost_rows,
+        COUNT(*) FILTER (WHERE c.usage ? 'durationApiMs'
+          AND c."createdAt" >= NOW() - INTERVAL '30 days')             AS d30_apims_rows,
+
+        SUM((c.usage->>'inputTokens')::numeric)
+          FILTER (WHERE c."createdAt" >= NOW() - INTERVAL '7 days')    AS d7_input,
+        SUM((c.usage->>'outputTokens')::numeric)
+          FILTER (WHERE c."createdAt" >= NOW() - INTERVAL '7 days')    AS d7_output,
+        SUM((c.usage->>'cacheReadTokens')::numeric)
+          FILTER (WHERE c."createdAt" >= NOW() - INTERVAL '7 days')    AS d7_cread,
+        SUM((c.usage->>'cacheWriteTokens')::numeric)
+          FILTER (WHERE c."createdAt" >= NOW() - INTERVAL '7 days')    AS d7_cwrite,
+        SUM((c.usage->>'costUsd')::numeric)
+          FILTER (WHERE c."createdAt" >= NOW() - INTERVAL '7 days')    AS d7_cost,
+        SUM((c.usage->>'durationApiMs')::numeric)
+          FILTER (WHERE c."createdAt" >= NOW() - INTERVAL '7 days')    AS d7_apims,
+        COUNT(*) FILTER (WHERE c.usage ? 'costUsd'
+          AND c."createdAt" >= NOW() - INTERVAL '7 days')              AS d7_cost_rows,
+        COUNT(*) FILTER (WHERE c.usage ? 'durationApiMs'
+          AND c."createdAt" >= NOW() - INTERVAL '7 days')              AS d7_apims_rows
       FROM   "Command"  c
       JOIN   "Session"  s ON s.id = c."sessionId"
       WHERE  s."userId" = ${userId}
         AND  c.usage IS NOT NULL
     `;
     const r = rows[0];
-    const total: TokenUsage = {
-      inputTokens: numOrZero(r?.input_tokens),
-      outputTokens: numOrZero(r?.output_tokens),
-      cacheReadTokens: numOrZero(r?.cache_read_tokens),
-      cacheWriteTokens: numOrZero(r?.cache_write_tokens),
+    return {
+      usage: {
+        lifetime: windowUsage(
+          r?.all_input,
+          r?.all_output,
+          r?.all_cread,
+          r?.all_cwrite,
+          r?.all_cost,
+          r?.all_apims,
+          r?.all_cost_rows,
+          r?.all_apims_rows,
+        ),
+        last30Days: windowUsage(
+          r?.d30_input,
+          r?.d30_output,
+          r?.d30_cread,
+          r?.d30_cwrite,
+          r?.d30_cost,
+          r?.d30_apims,
+          r?.d30_cost_rows,
+          r?.d30_apims_rows,
+        ),
+        last7Days: windowUsage(
+          r?.d7_input,
+          r?.d7_output,
+          r?.d7_cread,
+          r?.d7_cwrite,
+          r?.d7_cost,
+          r?.d7_apims,
+          r?.d7_cost_rows,
+          r?.d7_apims_rows,
+        ),
+      },
     };
-    if (r && r.cost_rows > 0n) total.costUsd = numOrZero(r.cost_usd);
-    if (r && r.api_ms_rows > 0n) total.durationApiMs = numOrZero(r.api_ms);
-    return { usage: total };
   }
 
   /**
@@ -240,6 +326,112 @@ export class UserService {
 
     return { rules: synced };
   }
+
+  /**
+   * Free-form notes the user keeps for a project — the
+   * `(machineId, workingDir)` pair every session in that directory
+   * shares. Missing row → empty string so the client doesn't have to
+   * disambiguate "never written" from "explicitly cleared." Unlike
+   * rules these are personal scratch and are never synced to sidecars.
+   */
+  async getProjectNotes(
+    userId: string,
+    machineId: string,
+    workingDir: string,
+  ): Promise<ProjectNotesResponse> {
+    const row = await this.prisma.projectNote.findUnique({
+      where: { userId_machineId_workingDir: { userId, machineId, workingDir } },
+      select: { notes: true },
+    });
+    return { notes: row?.notes ?? '' };
+  }
+
+  /**
+   * Persist project notes. Hard-caps at PROJECT_NOTES_MAX_BYTES via
+   * TextEncoder so multi-byte characters count correctly. An empty
+   * string deletes the row — there's no "no notes" sentinel to keep,
+   * and a missing row already reads back as "". Otherwise upserts so
+   * the first save creates the row and later saves overwrite it.
+   */
+  async setProjectNotes(
+    userId: string,
+    machineId: string,
+    workingDir: string,
+    notes: string,
+  ): Promise<ProjectNotesResponse> {
+    const bytes = new TextEncoder().encode(notes).byteLength;
+    if (bytes > PROJECT_NOTES_MAX_BYTES) {
+      throw new BadRequestException(
+        `notes too large: ${bytes} bytes > ${PROJECT_NOTES_MAX_BYTES} byte limit`,
+      );
+    }
+
+    const key = { userId_machineId_workingDir: { userId, machineId, workingDir } };
+    if (notes.length === 0) {
+      // deleteMany (not delete) so clearing a never-saved note is a
+      // no-op rather than a P2025 throw.
+      await this.prisma.projectNote.deleteMany({ where: { userId, machineId, workingDir } });
+      return { notes: '' };
+    }
+
+    const row = await this.prisma.projectNote.upsert({
+      where: key,
+      create: { userId, machineId, workingDir, notes },
+      update: { notes },
+      select: { notes: true },
+    });
+    return { notes: row.notes };
+  }
+
+  /**
+   * Which opt-in extensions the user has enabled. An account-level
+   * preference (synced across browsers), stored as a JSON map so new
+   * extensions don't need a migration. Any missing/non-boolean key
+   * reads as `false`, so a never-set or partial blob is safe.
+   */
+  async getExtensions(userId: string): Promise<UserExtensionsResponse> {
+    const row = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { extensions: true },
+    });
+    if (!row) throw new NotFoundException('user not found');
+    return coerceExtensions(row.extensions);
+  }
+
+  /**
+   * Replace the user's stored extension flags with the given set. The
+   * client always sends the full known set, so a straight overwrite
+   * keeps DB and client in agreement without read-modify-write races.
+   */
+  async setExtensions(
+    userId: string,
+    next: UserExtensionsResponse,
+  ): Promise<UserExtensionsResponse> {
+    const updated = await this.prisma.user
+      .update({
+        where: { id: userId },
+        data: { extensions: { notes: next.notes, progress: next.progress } },
+        select: { extensions: true },
+      })
+      .catch((err) => {
+        if ((err as { code?: string }).code === 'P2025') {
+          throw new NotFoundException('user not found');
+        }
+        throw err;
+      });
+    return coerceExtensions(updated.extensions);
+  }
+}
+
+/** Normalize the stored `User.extensions` JSON (which may be null, a
+ *  partial object, or — defensively — any JSON) into the typed flag
+ *  set, defaulting every unknown/missing key to `false`. */
+function coerceExtensions(raw: unknown): UserExtensionsResponse {
+  const map = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  return {
+    notes: map.notes === true,
+    progress: map.progress === true,
+  };
 }
 
 type QuotaRowWithMachine = {
@@ -271,6 +463,34 @@ function numOrZero(v: string | null | undefined): number {
   if (v == null) return 0;
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Assemble one window's `TokenUsage` from its raw SUM/COUNT columns.
+ * `costUsd` / `durationApiMs` are attached only when this window had
+ * at least one row carrying them (`*_rows > 0`), keeping the
+ * undefined-vs-zero contract per window — `undefined` rows arrive when
+ * the aggregate matched nothing (empty user / empty window).
+ */
+function windowUsage(
+  input: string | null | undefined,
+  output: string | null | undefined,
+  cacheRead: string | null | undefined,
+  cacheWrite: string | null | undefined,
+  cost: string | null | undefined,
+  apiMs: string | null | undefined,
+  costRows: bigint | undefined,
+  apiMsRows: bigint | undefined,
+): TokenUsage {
+  const usage: TokenUsage = {
+    inputTokens: numOrZero(input),
+    outputTokens: numOrZero(output),
+    cacheReadTokens: numOrZero(cacheRead),
+    cacheWriteTokens: numOrZero(cacheWrite),
+  };
+  if ((costRows ?? 0n) > 0n) usage.costUsd = numOrZero(cost);
+  if ((apiMsRows ?? 0n) > 0n) usage.durationApiMs = numOrZero(apiMs);
+  return usage;
 }
 
 function startOfUtcDay(d: Date): Date {

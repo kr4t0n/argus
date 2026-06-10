@@ -65,11 +65,16 @@ jobs:
 
       - name: Cross-compile ${{ matrix.target }}
         working-directory: packages/sidecar
+        # The Makefile target builds BOTH binaries (argus-sidecar +
+        # argus-bg) into bin/, so a single make invocation per matrix
+        # row covers everything that needs to ship for this platform.
         run: make ${{ matrix.target }} VERSION=${{ steps.ver.outputs.value }}
 
-      - name: Generate SHA-256 checksum
+      - name: Generate SHA-256 checksums
         working-directory: packages/sidecar/bin
-        run: sha256sum argus-sidecar-${{ matrix.target }} > argus-sidecar-${{ matrix.target }}.sha256
+        run: |
+          sha256sum argus-sidecar-${{ matrix.target }} > argus-sidecar-${{ matrix.target }}.sha256
+          sha256sum argus-bg-${{ matrix.target }}      > argus-bg-${{ matrix.target }}.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -78,6 +83,8 @@ jobs:
           path: |
             packages/sidecar/bin/argus-sidecar-${{ matrix.target }}
             packages/sidecar/bin/argus-sidecar-${{ matrix.target }}.sha256
+            packages/sidecar/bin/argus-bg-${{ matrix.target }}
+            packages/sidecar/bin/argus-bg-${{ matrix.target }}.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -150,5 +157,9 @@ jobs:
             dist/argus-sidecar-linux-arm64
             dist/argus-sidecar-darwin-amd64
             dist/argus-sidecar-darwin-arm64
+            dist/argus-bg-linux-amd64
+            dist/argus-bg-linux-arm64
+            dist/argus-bg-darwin-amd64
+            dist/argus-bg-darwin-arm64
             dist/SHASUMS256.txt
             dist/install.sh

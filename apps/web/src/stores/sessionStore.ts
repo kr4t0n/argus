@@ -172,7 +172,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const e = get().entries[c.sessionId];
     if (!e) return;
     const idx = e.commands.findIndex((x) => x.id === c.id);
-    const commands = idx >= 0 ? e.commands.map((x) => (x.id === c.id ? c : x)) : [...e.commands, c];
+    // Preserve attachments across hot-path updates: cancel/finalize emit a
+    // CommandDTO without `attachments`, while the creation and load paths
+    // are the source of truth for them. Without this merge, a status flip
+    // would wipe a turn's thumbnails.
+    const existing = idx >= 0 ? e.commands[idx] : undefined;
+    const merged =
+      existing && !c.attachments?.length && existing.attachments?.length
+        ? { ...c, attachments: existing.attachments }
+        : c;
+    const commands =
+      idx >= 0 ? e.commands.map((x) => (x.id === c.id ? merged : x)) : [...e.commands, merged];
     set({
       entries: { ...get().entries, [c.sessionId]: { ...e, commands } },
     });
