@@ -419,7 +419,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Renders one tile per project using the same `groupProjects()`
   derivation as the main sidebar, with `ProjectIconGlyph` for the
   glyph. Click jumps to the project's most-recent non-archived
-  session across any of its agents. Archived projects/agents and
+  session across any of its agents; hovering a tile for ~500ms
+  opens a session flyout (portaled to `<body>` to escape the
+  rail's `overflow-y-auto`, same trick as `CreateAgentPopover`)
+  listing the project's non-archived sessions so any session is
+  one click away without re-expanding the sidebar. A 200ms close
+  grace lets the pointer cross the tile→panel gap; the flyout
+  header replaces the tile's old native `title` tooltip (they'd
+  race each other on hover). Archived projects/agents and
   the synthetic `no project` bucket are hidden — the rail is for
   active-state navigation, not history. Machine strip + logout at
   the bottom unchanged.
