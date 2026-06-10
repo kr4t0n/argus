@@ -7,6 +7,7 @@ import type {
   ModelSelection,
 } from '@argus/shared-types';
 import { api } from '../lib/api';
+import { Select, type SelectOption } from './ui/Select';
 import { cn } from '../lib/utils';
 
 /**
@@ -101,9 +102,6 @@ const EFFORT_LABEL: Record<string, string> = {
   xhigh: 'extra high',
   max: 'max',
 };
-
-const selectCls =
-  'w-full appearance-none rounded-md bg-surface-2/40 px-3 py-2 text-xs text-fg-primary outline-none transition-colors focus:bg-surface-2';
 
 type Props = {
   /** Agent whose catalog to load. Null = unknown (e.g. session-create
@@ -230,27 +228,20 @@ export function ModelPicker({ agentId, value, onChange }: Props) {
 
   const familyMembers = selected?.family ? (families.get(selected.family) ?? []) : [];
 
+  const primaryOptions: SelectOption[] = [
+    { value: '', label: 'Default', hint: 'CLI decides' },
+    ...flat.map((m) => ({
+      value: `m:${m.id}`,
+      label: m.displayName,
+      hint: m.isDefault ? 'CLI default' : undefined,
+    })),
+    ...[...families.keys()].map((f) => ({ value: `f:${f}`, label: f })),
+    { value: 'custom', label: 'custom…' },
+  ];
+
   return (
     <div className="space-y-2">
-      <select
-        value={primaryValue}
-        onChange={(e) => onPrimaryChange(e.target.value)}
-        className={selectCls}
-      >
-        <option value="">Default (CLI decides)</option>
-        {flat.map((m) => (
-          <option key={m.id} value={`m:${m.id}`}>
-            {m.displayName}
-            {m.isDefault ? ' (CLI default)' : ''}
-          </option>
-        ))}
-        {[...families.keys()].map((f) => (
-          <option key={f} value={`f:${f}`}>
-            {f}
-          </option>
-        ))}
-        <option value="custom">custom…</option>
-      </select>
+      <Select value={primaryValue} options={primaryOptions} onChange={onPrimaryChange} />
 
       {isCustom && (
         <input
@@ -265,46 +256,45 @@ export function ModelPicker({ agentId, value, onChange }: Props) {
       )}
 
       {selected?.family && familyMembers.length > 0 && (
-        <select
+        <Select
           value={selected.id}
-          onChange={(e) => {
-            const entry = byId.get(e.target.value);
+          options={familyMembers.map((m) => ({
+            value: m.id,
+            label: m.variantLabel || m.displayName,
+            hint: m.isDefault ? 'CLI default' : undefined,
+          }))}
+          onChange={(id) => {
+            const entry = byId.get(id);
             if (entry) emitEntry(entry);
           }}
-          className={selectCls}
-        >
-          {familyMembers.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.variantLabel || m.displayName}
-              {m.isDefault ? ' (CLI default)' : ''}
-            </option>
-          ))}
-        </select>
+        />
       )}
 
       {selected?.facets && (
         <div className="flex items-center gap-1.5">
           {selected.facets.effort && (
-            <select
+            <Select
               value={value?.effort ?? ''}
-              onChange={(e) => {
+              options={[
+                {
+                  value: '',
+                  label: 'effort: default',
+                  hint: EFFORT_LABEL[selected.facets.effort.default] ?? undefined,
+                },
+                ...selected.facets.effort.levels.map((l) => ({
+                  value: l,
+                  label: `effort: ${EFFORT_LABEL[l] ?? l}`,
+                })),
+              ]}
+              onChange={(v) => {
                 const next = { ...(value ?? {}) } as ModelSelection;
-                if (e.target.value) next.effort = e.target.value as EffortLevel;
+                if (v) next.effort = v as EffortLevel;
                 else delete next.effort;
                 onChange(next);
               }}
-              className={cn(selectCls, 'flex-1')}
+              className="flex-1"
               title="effort / thinking strength"
-            >
-              <option value="">
-                effort: default ({EFFORT_LABEL[selected.facets.effort.default] ?? '—'})
-              </option>
-              {selected.facets.effort.levels.map((l) => (
-                <option key={l} value={l}>
-                  effort: {EFFORT_LABEL[l] ?? l}
-                </option>
-              ))}
-            </select>
+            />
           )}
           {selected.facets.context && (
             <FacetToggle
