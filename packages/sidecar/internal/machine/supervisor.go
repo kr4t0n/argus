@@ -164,6 +164,21 @@ func (s *supervisor) run(ctx context.Context) {
 		// the dashboard's view of the agent.
 	}
 
+	// Start heartbeats immediately, BEFORE the workingDir watcher setup
+	// and EnsureGroup below. Both can block run() for many seconds —
+	// newFSWatcher walks the tree and registers inotify watches
+	// *synchronously* (slow on a large workingDir), and EnsureGroup is a
+	// Redis round-trip — while the server's sweeper marks an agent stale
+	// after just 30s of no heartbeat (STALE_AFTER_MS). Heartbeats are
+	// what keep the agent alive; the watchers are best-effort and degrade
+	// gracefully, so they must not gate the heartbeat loop.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.heartbeatLoop(ctx)
+	}()
+
 	s.startFSWatcher(ctx)
 	s.startGitWatcher(ctx)
 	s.startProgressWatcher(ctx)
@@ -173,13 +188,6 @@ func (s *supervisor) run(ctx context.Context) {
 	if err := s.bus.EnsureGroup(ctx, cmdStream, group); err != nil {
 		s.log.Printf("agent %s: ensure group: %v", s.spec.AgentID, err)
 	}
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		s.heartbeatLoop(ctx)
-	}()
 
 	consumer := "c-" + uuid.NewString()[:8]
 	s.log.Printf("agent %s ready (type=%s)", s.spec.AgentID, s.spec.Type)
