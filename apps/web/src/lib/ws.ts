@@ -5,6 +5,7 @@ import type {
   ClientToServerEvents,
   CommandDTO,
   MachineDTO,
+  ProjectDTO,
   ResultChunkDTO,
   ServerToClientEvents,
   SessionDTO,
@@ -26,6 +27,7 @@ type Handler = {
   onMachineUpsert?: (m: MachineDTO) => void;
   onMachineStatus?: (p: { id: string; status: MachineDTO['status'] }) => void;
   onMachineRemoved?: (p: { id: string }) => void;
+  onProjectUpsert?: (p: ProjectDTO) => void;
   onAgentUpsert?: (a: AgentDTO) => void;
   onAgentStatus?: (p: { id: string; status: AgentDTO['status'] }) => void;
   onAgentRemoved?: (p: { id: string }) => void;
@@ -95,6 +97,7 @@ export function ensureSocket(): WSSocket {
   socket.on('machine:upsert', (m) => handlers.forEach((h) => h.onMachineUpsert?.(m)));
   socket.on('machine:status', (p) => handlers.forEach((h) => h.onMachineStatus?.(p)));
   socket.on('machine:removed', (p) => handlers.forEach((h) => h.onMachineRemoved?.(p)));
+  socket.on('project:upsert', (p) => handlers.forEach((h) => h.onProjectUpsert?.(p)));
   socket.on('agent:upsert', (a) => handlers.forEach((h) => h.onAgentUpsert?.(a)));
   socket.on('agent:status', (p) => handlers.forEach((h) => h.onAgentStatus?.(p)));
   socket.on('agent:removed', (p) => handlers.forEach((h) => h.onAgentRemoved?.(p)));

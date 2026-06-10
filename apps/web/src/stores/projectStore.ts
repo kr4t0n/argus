@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { ProjectDTO } from '@argus/shared-types';
 
 /**
  * Client-only project placeholder. A project is a named `(machineId,
@@ -10,9 +11,12 @@ import { persist } from 'zustand/middleware';
  * eventually land in the same `(machineId, workingDir)`, they merge
  * into the placeholder's row.
  *
- * Why client-only: no Machine→Project server entity yet. Persisted via
- * zustand under `argus.projects` so the placeholder survives reloads.
- * Promote to a Prisma table when the next step lands.
+ * Why client-only: no full Machine→Project server entity yet — only
+ * per-project metadata that must roam across browsers has been
+ * promoted (icons; see `serverIcons` + the server's Project row).
+ * Placeholders themselves are persisted via zustand under
+ * `argus.projects` so they survive reloads. Promote the rest to the
+ * Prisma table when the next step lands.
  */
 export interface LocalProject {
   id: string;
@@ -40,11 +44,11 @@ export interface LocalProject {
   archivedAgentIds?: string[];
   archivedSessionIds?: string[];
   /**
-   * User-picked single-character glyph (A-Z) shown in place of the
-   * default Folder icon in the sidebar and rail. No default — until
-   * the user explicitly picks, the row uses Folder so the picked
-   * letter is a deliberate visual memory aid rather than an
-   * auto-derived hint.
+   * @deprecated Legacy location of the user-picked glyph. Icons now
+   * live server-side (Project row, synced via `serverIcons` below) so
+   * they roam across browsers. Kept only as the source for the one-
+   * shot boot migration (`migrateLocalProjectIconsToServer`) and as a
+   * render fallback until it runs; never written anymore.
    */
   iconKey?: string;
 }
@@ -61,6 +65,14 @@ export interface ArchiveSnapshot {
 interface ProjectState {
   projects: Record<string, LocalProject>;
   order: string[];
+  /**
+   * Server-synced project icons, keyed by `projectKey`. Source of
+   * truth is the Project row server-side (PATCH /projects/icon);
+   * hydrated from GET /projects at boot, kept warm by `project:upsert`
+   * WS events, and persisted with the rest of the store so glyphs
+   * render instantly on reload (the boot fetch then reconciles).
+   */
+  serverIcons: Record<string, string>;
   add(
     input: Omit<
       LocalProject,
@@ -69,12 +81,19 @@ interface ProjectState {
       archivedAt?: string | null;
       archivedAgentIds?: string[];
       archivedSessionIds?: string[];
-      /** A-Z letter, or `null` to clear back to the default folder. */
-      iconKey?: string | null;
     },
   ): LocalProject;
   setArchived(key: string, archived: boolean, snapshot?: ArchiveSnapshot): void;
   remove(key: string): void;
+  /** Replace the whole icon map from a GET /projects response —
+   *  replacement (not merge) is what propagates remote resets. */
+  setServerIcons(rows: ProjectDTO[]): void;
+  /** Apply one project's icon — from a `project:upsert` event or an
+   *  optimistic local pick. `iconKey: null` removes the entry. */
+  upsertServerIcon(p: Pick<ProjectDTO, 'machineId' | 'workingDir' | 'iconKey'>): void;
+  /** Strip deprecated `LocalProject.iconKey` copies once they've been
+   *  pushed server-side (or written through the new path). */
+  clearLegacyIcons(keys: string[]): void;
 }
 
 export const useProjectStore = create<ProjectState>()(
@@ -82,6 +101,7 @@ export const useProjectStore = create<ProjectState>()(
     (set, get) => ({
       projects: {},
       order: [],
+      serverIcons: {},
       add(input) {
         const key = projectKey(input.machineId, input.workingDir);
         const existing = get().projects[key];
@@ -101,11 +121,6 @@ export const useProjectStore = create<ProjectState>()(
             ...(input.archivedSessionIds !== undefined
               ? { archivedSessionIds: input.archivedSessionIds }
               : {}),
-            // Same posture for iconKey — `null` from caller clears back
-            // to default (Folder), `undefined` leaves existing alone.
-            ...(input.iconKey !== undefined
-              ? { iconKey: input.iconKey === null ? undefined : input.iconKey }
-              : {}),
           };
           set({ projects: { ...get().projects, [key]: merged } });
           return merged;
@@ -123,7 +138,6 @@ export const useProjectStore = create<ProjectState>()(
           archivedAt: input.archivedAt ?? null,
           archivedAgentIds: input.archivedAgentIds,
           archivedSessionIds: input.archivedSessionIds,
-          iconKey: input.iconKey ?? undefined,
         };
         set({
           projects: { ...get().projects, [key]: created },
@@ -156,7 +170,42 @@ export const useProjectStore = create<ProjectState>()(
           order: get().order.filter((k) => k !== key),
         });
       },
+      setServerIcons(rows) {
+        const serverIcons: Record<string, string> = {};
+        for (const r of rows) {
+          if (r.iconKey) serverIcons[projectKey(r.machineId, r.workingDir)] = r.iconKey;
+        }
+        set({ serverIcons });
+      },
+      upsertServerIcon(p) {
+        const key = projectKey(p.machineId, p.workingDir);
+        const serverIcons = { ...get().serverIcons };
+        if (p.iconKey) serverIcons[key] = p.iconKey;
+        else delete serverIcons[key];
+        set({ serverIcons });
+      },
+      clearLegacyIcons(keys) {
+        const projects = { ...get().projects };
+        let touched = false;
+        for (const key of keys) {
+          const existing = projects[key];
+          if (!existing || existing.iconKey === undefined) continue;
+          projects[key] = { ...existing, iconKey: undefined };
+          touched = true;
+        }
+        if (touched) set({ projects });
+      },
     }),
     { name: 'argus.projects' },
   ),
 );
+
+/**
+ * Resolved icon glyph for a project row: the server-synced value
+ * first, the deprecated local-placeholder copy as a fallback until
+ * the one-shot boot migration pushes it up. Undefined = no pick →
+ * callers render the default folder.
+ */
+export function useProjectIconKey(key: string): string | undefined {
+  return useProjectStore((s) => s.serverIcons[key] ?? s.projects[key]?.iconKey);
+}

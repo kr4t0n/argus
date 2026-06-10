@@ -12,6 +12,8 @@ import { useUIStore } from './stores/uiStore';
 import { ensureSocket, resetSocket, subscribeHandler } from './lib/ws';
 import { api } from './lib/api';
 import { migrateLocalMachineIconsToServer } from './lib/migrateMachineIcons';
+import { migrateLocalProjectIconsToServer } from './lib/migrateProjectIcons';
+import { useProjectStore } from './stores/projectStore';
 import {
   activeSessionIdFromPath,
   playDoneSound,
@@ -75,10 +77,19 @@ export default function App() {
   useEffect(() => {
     if (!token) return;
     // Kick off loads first, then run the one-shot localStorage →
-    // server migration for machine icons once the machines list has
-    // landed (the migration needs to know which machineIds are still
-    // valid to avoid 404-spamming for destroyed hosts).
-    loadMachines().then(() => migrateLocalMachineIconsToServer());
+    // server migrations once their inputs have landed. Machine icons
+    // need the machines list (to avoid 404-spamming for destroyed
+    // hosts); project icons additionally need the server icon map so
+    // a pick already made on another browser wins over the local copy.
+    const machinesReady = loadMachines();
+    machinesReady.then(() => migrateLocalMachineIconsToServer()).catch(() => {});
+    const projectIconsReady = api
+      .listProjects()
+      .then((rows) => useProjectStore.getState().setServerIcons(rows))
+      .catch(() => {});
+    Promise.all([machinesReady, projectIconsReady])
+      .then(() => migrateLocalProjectIconsToServer())
+      .catch(() => {});
     loadAgents();
     loadSessions();
     // Extension flags are account-level (server source of truth) but
@@ -102,6 +113,7 @@ export default function App() {
       onMachineUpsert: upsertMachine,
       onMachineStatus: (p) => setMachineStatus(p.id, p.status),
       onMachineRemoved: (p) => removeMachine(p.id),
+      onProjectUpsert: (p) => useProjectStore.getState().upsertServerIcon(p),
       onAgentUpsert: upsertAgent,
       onAgentStatus: (p) => {
         // Prefetch trigger: when an agent transitions busy → not-busy,
@@ -198,8 +210,16 @@ export default function App() {
       onSidecarUpdateBatchProgress: (p) =>
         useSidecarUpdateStore.getState().updateBatch(p.batchId, p.plan),
       onConnect: async () => {
-        // re-sync machines/agents/sessions + backfill active sessions.
-        await Promise.all([loadMachines(), loadAgents(), loadSessions()]).catch(() => {});
+        // re-sync machines/agents/sessions/project icons + backfill
+        // active sessions.
+        await Promise.all([
+          loadMachines(),
+          loadAgents(),
+          loadSessions(),
+          api
+            .listProjects()
+            .then((rows) => useProjectStore.getState().setServerIcons(rows)),
+        ]).catch(() => {});
         const entriesSnap = useSessionStore.getState().entries;
         for (const [id, e] of Object.entries(entriesSnap)) {
           try {

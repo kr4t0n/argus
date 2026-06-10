@@ -10,7 +10,7 @@ import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
 import { useAuthStore } from '../stores/authStore';
-import { useProjectStore } from '../stores/projectStore';
+import { useProjectStore, useProjectIconKey } from '../stores/projectStore';
 import { groupProjects, type ProjectGroup } from '../lib/projects';
 import { cn, relativeTime } from '../lib/utils';
 import { StatusDot } from './ui/StatusDot';
@@ -191,6 +191,7 @@ function RailProjectTile({
   agents: Record<string, AgentDTO>;
 }) {
   const tileRef = useRef<HTMLDivElement>(null);
+  const iconKey = useProjectIconKey(project.key);
   const [flyoutOpen, setFlyoutOpen] = useState(false);
   const openTimer = useRef<number | undefined>(undefined);
   const closeTimer = useRef<number | undefined>(undefined);
@@ -240,7 +241,7 @@ function RailProjectTile({
       )}
     >
       <ProjectIconGlyph
-        iconKey={project.local?.iconKey}
+        iconKey={iconKey}
         className="h-5 w-5 text-sm"
       />
     </div>

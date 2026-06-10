@@ -59,6 +59,29 @@ model ProjectNote {
   @@index([machineId])
 }
 
+// Server-side metadata for a "project" — the (machineId, workingDir)
+// pair every session in that directory shares. Projects still have no
+// first-class lifecycle (the sidebar derives rows from agents'
+// workingDirs plus client-local placeholders); this row exists for
+// metadata that must roam across browsers. Today that's just the
+// user-picked icon glyph (a single A-Z letter), workspace-shared like
+// Machine.iconKey — metadata, not preference. Reset keeps the row with
+// iconKey NULL: the (machineId, workingDir) identity is the natural
+// anchor if placeholders are ever promoted server-side.
+model Project {
+  id         String   @id @default(cuid())
+  machineId  String
+  workingDir String
+  iconKey    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+
+  @@unique([machineId, workingDir])
+  @@index([machineId])
+}
+
 // A Machine is a host running one argus-sidecar process. The sidecar
 // self-registers on boot via MachineRegisterEvent; the dashboard then
 // creates Agent rows as children of this machine and the server pushes
@@ -101,6 +124,7 @@ model Machine {
   agents       Agent[]
   quotas       MachineAgentQuota[]
   projectNotes ProjectNote[]
+  projects     Project[]
 
   @@index([status])
   @@index([archivedAt])

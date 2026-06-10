@@ -60,6 +60,23 @@ export interface MachineDTO {
   iconKey: string | null;
 }
 
+/**
+ * Server-side metadata for a "project" — the (machineId, workingDir)
+ * pair the sidebar groups sessions under. Projects still have no
+ * first-class lifecycle (the sidebar derives rows from agents'
+ * workingDirs plus client-local placeholders); this row exists for
+ * metadata that must roam across browsers. Today that's just the
+ * user-picked icon glyph, workspace-shared like Machine.iconKey.
+ */
+export interface ProjectDTO {
+  id: string;
+  machineId: string;
+  workingDir: string;
+  /** User-picked glyph (a single A-Z letter today). Null = use the
+   *  frontend's default folder icon. Set via PATCH /projects/icon. */
+  iconKey: string | null;
+}
+
 export interface AgentDTO {
   id: string;
   /** User-friendly label, unique within a machine. */

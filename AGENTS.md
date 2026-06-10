@@ -78,6 +78,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   emits `machine:upsert` / `machine:status` / `machine:removed` /
   `agent:spawn-failed` over WS. Also publishes `create-agent` / `destroy-agent` commands on
   `machine:{mid}:control`.
+- `project/` — server-side metadata for "projects" (the
+  `(machineId, workingDir)` pair the sidebar groups sessions
+  under). Projects still have no first-class lifecycle — the
+  `Project` table exists for metadata that must roam across
+  browsers, today just the user-picked icon glyph (workspace-
+  shared like `Machine.iconKey`). `GET /projects` hydrates the
+  dashboard's icon map; `PATCH /projects/icon` upserts by
+  `(machineId, workingDir)` (404s for deleted machines, keeps the
+  row with `iconKey` NULL on reset) and broadcasts the DTO via
+  the global `project:upsert` WS event.
 - `agent-registry/` — `Agent` CRUD: list, get, archive/unarchive, plus
   the shared `agentToDto` mapper. Lifecycle ingestion lives in
   `machine/`; this module is purely about the persisted Agent row.
@@ -403,13 +413,24 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   (agent-mode) form. Each project row's folder icon is itself a
   picker (`ProjectIcon`/`ProjectIconGlyph`) — clicking opens a
   6×5 letter grid plus a `reset to folder` action; the picked
-  A-Z glyph persists to `LocalProject.iconKey` and renders in
-  place of the default Folder in both the main sidebar and the
-  rail. No auto-default from the project name — picking is what
-  binds the letter to the project in the user's memory. Rename
-  is the pencil action in the project row's hover stack and
-  commits via `useProjectStore.add()` on the existing key
-  (creates a placeholder for purely agent-derived rows).
+  A-Z glyph persists to the server's `Project` row (PATCH
+  /projects/icon via the `project/` module, workspace-shared like
+  `Machine.iconKey`) and renders in place of the default Folder
+  in both the main sidebar and the rail. The dashboard hydrates
+  `useProjectStore.serverIcons` from `GET /projects` at boot
+  (and on WS reconnect), keeps it warm via `project:upsert`
+  events, and persists it with the store so glyphs render
+  instantly on reload; the picker updates the map optimistically
+  and rolls back on API failure. `LocalProject.iconKey` is the
+  deprecated pre-sync location — `migrateLocalProjectIconsToServer`
+  (one-shot, mirrors `migrateMachineIcons.ts`) pushes leftovers up
+  on boot once machines + server icons have hydrated, then strips
+  the local copies so a stale letter can't shadow a reset made
+  from another browser. No auto-default from the project name —
+  picking is what binds the letter to the project in the user's
+  memory. Rename is the pencil action in the project row's hover
+  stack and commits via `useProjectStore.add()` on the existing
+  key (creates a placeholder for purely agent-derived rows).
 - `lib/projects.ts` — shared `groupProjects()` derivation +
   `ProjectGroup` type consumed by both `Sidebar` and
   `SidebarRail`. Pure function over `(agentOrder, agents,

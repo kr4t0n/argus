@@ -15,6 +15,7 @@ import type {
   BackgroundTaskDTO,
   CommandDTO,
   MachineDTO,
+  ProjectDTO,
   ResultChunkDTO,
   SessionDTO,
   SidecarUpdatePlanEntry,
@@ -143,6 +144,12 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   emitMachineRemoved(id: string) {
     this.server.emit('machine:removed', { id });
+  }
+
+  // Global like machine:upsert — project icons are workspace-shared
+  // sidebar furniture, not scoped to a project room subscription.
+  emitProjectUpsert(project: ProjectDTO) {
+    this.server.emit('project:upsert', project);
   }
 
   emitSessionCreated(session: SessionDTO) {

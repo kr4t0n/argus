@@ -5,6 +5,7 @@ import { RedisModule } from './infra/redis/redis.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AgentRegistryModule } from './modules/agent-registry/agent-registry.module';
 import { MachineModule } from './modules/machine/machine.module';
+import { ProjectModule } from './modules/project/project.module';
 import { SessionModule } from './modules/session/session.module';
 import { CommandModule } from './modules/command/command.module';
 import { ResultIngestorModule } from './modules/result-ingestor/result-ingestor.module';
@@ -27,6 +28,7 @@ import { AttachmentModule } from './modules/attachment/attachment.module';
     RedisModule,
     AuthModule,
     MachineModule,
+    ProjectModule,
     AgentRegistryModule,
     SessionModule,
     CommandModule,

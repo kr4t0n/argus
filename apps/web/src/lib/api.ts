@@ -12,6 +12,7 @@ import type {
   LoginResponse,
   MachineDTO,
   OpenTerminalRequest,
+  ProjectDTO,
   ProjectNotesResponse,
   ResultChunkDTO,
   SessionDTO,
@@ -182,6 +183,21 @@ export const api = {
   updateAllSidecars: () =>
     http<SidecarUpdateBatchAccepted>(`/machines/sidecar/update-all`, {
       method: 'POST',
+    }),
+
+  // Server-side project metadata (today: the user-picked icon glyph),
+  // keyed by (machineId, workingDir). One fetch hydrates the icon map
+  // for every project across the fleet.
+  listProjects: () => http<ProjectDTO[]>(`/projects`),
+
+  // Per-project icon, same contract as setMachineIcon below: pass
+  // `null` to reset, server emits project:upsert on success so every
+  // connected dashboard converges; call sites update the store
+  // optimistically to avoid the round-trip blink.
+  setProjectIcon: (machineId: string, workingDir: string, iconKey: string | null) =>
+    http<ProjectDTO>(`/projects/icon`, {
+      method: 'PATCH',
+      body: JSON.stringify({ machineId, workingDir, iconKey }),
     }),
 
   // Per-machine icon. Pass `null` to reset to the frontend default.

@@ -413,8 +413,6 @@ function ProjectRow({
               projectKey={project.key}
               machineId={project.machineId}
               workingDir={project.fullPath}
-              label={project.label}
-              agentIds={project.agentIds}
               open={open}
               className="text-fg-tertiary"
             />
@@ -457,8 +455,6 @@ function ProjectRow({
               projectKey={project.key}
               machineId={project.machineId}
               workingDir={project.fullPath}
-              label={project.label}
-              agentIds={project.agentIds}
               open={open}
               className="text-fg-tertiary"
             />
