@@ -38,8 +38,9 @@ type Props = {
 };
 
 // Matches CreateAgentPopover so the two creation surfaces read as
-// siblings (the agent/session one grew to fit the model picker row).
-const POPOVER_WIDTH = 340;
+// siblings (the agent/session one grew to fit the model picker and
+// adapter rows).
+const POPOVER_WIDTH = 352;
 const VIEWPORT_MARGIN = 8;
 
 export function CreateProjectPopover({ machine, anchor, onClose }: Props) {

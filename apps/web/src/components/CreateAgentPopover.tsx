@@ -67,13 +67,14 @@ type Props = {
   existingAgents?: AgentDTO[];
 };
 
-// Sized so the model picker's model + effort/variant + facet chips
-// usually fit on one row. Keep in sync with CreateProjectPopover so
-// the two creation surfaces read as siblings. The rendered width is
-// additionally clamped to the viewport via maxWidth (placement math
-// may then overestimate on tiny screens, which only makes the
-// left-side fallback trigger early — harmless).
-const POPOVER_WIDTH = 340;
+// Sized so (a) the model picker's model + effort/variant + facet
+// chips and (b) the three built-in adapter chips each fit on one row.
+// Keep in sync with CreateProjectPopover so the two creation surfaces
+// read as siblings. The rendered width is additionally clamped to the
+// viewport via maxWidth (placement math may then overestimate on tiny
+// screens, which only makes the left-side fallback trigger early —
+// harmless).
+const POPOVER_WIDTH = 352;
 const VIEWPORT_MARGIN = 8; // keep this far from the edge
 
 export function CreateAgentPopover({
@@ -293,7 +294,11 @@ export function CreateAgentPopover({
         <Field label="adapter">
           {adapters.length > 0 ? (
             <>
-              <div className="flex flex-wrap gap-1.5">
+              {/* gap-1/px-2 (vs the usual 1.5/2.5) so the three
+                  built-in adapters stay on one row at POPOVER_WIDTH;
+                  wrap remains the fallback for machines reporting
+                  more (custom) adapters. */}
+              <div className="flex flex-wrap gap-1">
                 {adapters.map((a) => {
                   const selected = a.type === type;
                   return (
@@ -307,7 +312,7 @@ export function CreateAgentPopover({
                           : agentTypeLabel(a.type)
                       }
                       className={cn(
-                        'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors',
+                        'inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors',
                         selected
                           ? 'bg-surface-2 text-fg-primary'
                           : 'bg-transparent text-fg-tertiary hover:bg-surface-2/60 hover:text-fg-primary',

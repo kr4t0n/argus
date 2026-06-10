@@ -102,7 +102,7 @@ export function SessionModelChip({
         <ChevronDown className="h-3 w-3 shrink-0" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-1.5 w-72 rounded-lg border border-default bg-surface-0 p-3 shadow-2xl">
+        <div className="absolute right-0 top-full z-50 mt-1.5 w-[352px] max-w-[calc(100vw-16px)] rounded-lg border border-default bg-surface-0 p-3 shadow-2xl">
           <div className="mb-2 text-caps">session model</div>
           <ModelPicker agentId={agentId ?? null} value={draft} onChange={setDraft} />
         </div>
