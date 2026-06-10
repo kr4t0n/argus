@@ -120,6 +120,15 @@ export function Select({
         <div
           ref={panelRef}
           role="listbox"
+          // stopPropagation guards against <label> click forwarding:
+          // when this Select renders inside a <label> (the dialog's
+          // Field wrapper), a click on an option row — whose event
+          // target is the inner <span>, not the button — bubbles to
+          // the label, which re-dispatches a synthetic click to its
+          // first labelable descendant: our trigger button. That
+          // forwarded click toggled the panel right back open, so
+          // selecting an option appeared to never close the menu.
+          onClick={(e) => e.stopPropagation()}
           className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-md border border-default bg-surface-0 py-1 shadow-lg"
         >
           {options.map((o, i) => {
