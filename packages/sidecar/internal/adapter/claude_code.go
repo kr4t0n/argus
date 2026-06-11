@@ -92,7 +92,9 @@ func (a *ClaudeCodeAdapter) Execute(
 	//   --dangerously-skip-permissions |     accept all tool calls w/o prompts
 	//     --permission-mode <mode>           (mutually exclusive override)
 	//   --resume <id>                        resume prior session by id
-	//   --model <name>                       per-command model override
+	//   --model <name>[1m]                   per-command model override;
+	//                                        [1m] selects the 1M context window
+	//   --effort <level>                     thinking strength (low…max)
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
@@ -107,8 +109,21 @@ func (a *ClaudeCodeAdapter) Execute(
 	if cmd.ExternalID != "" {
 		args = append(args, "--resume", cmd.ExternalID)
 	}
-	if model, ok := cmd.Options["model"].(string); ok && model != "" {
+	if model, ok := cmd.Options[protocol.OptionModel].(string); ok && model != "" {
+		// context="1m" maps to claude's `[1m]` model-string suffix
+		// (works on aliases and full names). Don't double-append when
+		// the caller already passed a suffixed name via free text.
+		if ctxOpt, _ := cmd.Options[protocol.OptionContext].(string); ctxOpt == "1m" &&
+			!strings.HasSuffix(model, "[1m]") {
+			model += "[1m]"
+		}
 		args = append(args, "--model", model)
+	}
+	if effort, ok := cmd.Options[protocol.OptionEffort].(string); ok && effort != "" {
+		// Claude Code degrades gracefully (an unsupported level falls
+		// back to the highest supported one at or below), so we pass
+		// the value through without validating against the model.
+		args = append(args, "--effort", effort)
 	}
 	args = append(args, a.extraArgs...)
 

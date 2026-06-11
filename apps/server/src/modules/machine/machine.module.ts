@@ -7,14 +7,16 @@ import { FSController } from './fs.controller';
 import { FSService } from './fs.service';
 import { GitController } from './git.controller';
 import { MachineController } from './machine.controller';
+import { ModelsController } from './models.controller';
+import { ModelsService } from './models.service';
 import { MachineService } from './machine.service';
 import { SidecarUpdateService } from './sidecar-update.service';
 
 @Global()
 @Module({
   imports: [AuthModule, GatewayModule],
-  providers: [MachineService, FSService, SidecarUpdateService, BackgroundTaskService],
-  controllers: [MachineController, FSController, GitController, BackgroundTaskController],
-  exports: [MachineService, FSService, SidecarUpdateService, BackgroundTaskService],
+  providers: [MachineService, FSService, ModelsService, SidecarUpdateService, BackgroundTaskService],
+  controllers: [MachineController, FSController, GitController, ModelsController, BackgroundTaskController],
+  exports: [MachineService, FSService, ModelsService, SidecarUpdateService, BackgroundTaskService],
 })
 export class MachineModule {}

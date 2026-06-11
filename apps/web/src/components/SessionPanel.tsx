@@ -12,6 +12,7 @@ import { Button } from './ui/Button';
 import { ResizeHandle } from './ui/ResizeHandle';
 import { StreamViewer } from './StreamViewer';
 import { Composer } from './Composer';
+import { SessionModelChip } from './SessionModelChip';
 import { ContextPane } from './ContextPane';
 import { FileTabStrip } from './FileTabStrip';
 import { UsageBadge } from './UsageBadge';
@@ -205,6 +206,7 @@ export function SessionPanel() {
             {elapsed && <span className="text-xs text-fg-tertiary">· {elapsed}</span>}
           </div>
           <div className="ml-auto flex items-center gap-2">
+            <SessionModelChip session={entry.session} agentId={agent?.id} />
             <UsageBadge chunks={entry.chunks} agentType={agent?.type} />
             <Button
               size="icon"

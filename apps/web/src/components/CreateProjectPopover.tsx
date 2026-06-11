@@ -37,7 +37,10 @@ type Props = {
   onClose: () => void;
 };
 
-const POPOVER_WIDTH = 288;
+// Matches CreateAgentPopover so the two creation surfaces read as
+// siblings (the agent/session one grew to fit the model picker and
+// adapter rows).
+const POPOVER_WIDTH = 352;
 const VIEWPORT_MARGIN = 8;
 
 export function CreateProjectPopover({ machine, anchor, onClose }: Props) {
@@ -190,6 +193,7 @@ export function CreateProjectPopover({ machine, anchor, onClose }: Props) {
         top: pos?.top ?? -9999,
         left: pos?.left ?? -9999,
         width: POPOVER_WIDTH,
+        maxWidth: 'calc(100vw - 16px)',
         visibility: pos ? 'visible' : 'hidden',
       }}
       role="dialog"

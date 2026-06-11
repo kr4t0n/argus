@@ -1,8 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import type { Session as PSession } from '@prisma/client';
-import type { Command as WireCommand, SessionDTO } from '@argus/shared-types';
+import type { Command as WireCommand, ModelSelection, SessionDTO } from '@argus/shared-types';
 import { streamKeys } from '@argus/shared-types';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
@@ -37,6 +38,7 @@ export class SessionService {
       title: s.title,
       externalId: s.externalId,
       status: s.status as SessionDTO['status'],
+      modelSelection: (s.modelSelection as ModelSelection | null) ?? null,
       archivedAt: s.archivedAt ? s.archivedAt.toISOString() : null,
       createdAt: s.createdAt.toISOString(),
       updatedAt: s.updatedAt.toISOString(),
@@ -65,7 +67,7 @@ export class SessionService {
     return s;
   }
 
-  async create(userId: string, agentId: string, title?: string) {
+  async create(userId: string, agentId: string, title?: string, modelSelection?: ModelSelection) {
     const agent = await this.prisma.agent.findUnique({ where: { id: agentId } });
     if (!agent) throw new BadRequestException('unknown agent');
     const s = await this.prisma.session.create({
@@ -80,10 +82,30 @@ export class SessionService {
         // exactly when something is actually running. Forks already
         // use the same initial value (see `fork`).
         status: 'idle',
+        modelSelection: modelSelection ? (modelSelection as Prisma.InputJsonValue) : undefined,
       },
     });
     const dto = SessionService.toDto(s);
     this.gateway.emitSessionCreated(dto);
+    return dto;
+  }
+
+  /**
+   * Replace the session-default model choice. `null` clears back to
+   * "CLI default". Applies to subsequent turns only — in-flight
+   * commands already carry their merged options.
+   */
+  async setModelSelection(userId: string, id: string, selection: ModelSelection | null) {
+    await this.get(userId, id);
+    const s = await this.prisma.session.update({
+      where: { id },
+      data: {
+        modelSelection:
+          selection === null ? Prisma.DbNull : (selection as Prisma.InputJsonValue),
+      },
+    });
+    const dto = SessionService.toDto(s);
+    this.gateway.emitSessionUpdated(dto);
     return dto;
   }
 

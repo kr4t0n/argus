@@ -85,7 +85,10 @@ func (a *CursorCLIAdapter) Execute(
 	//   --force                       skip confirmation screens
 	//   --yolo                        accept every tool call w/o prompting
 	//   --resume <id>                 resume prior session
-	//   -m / --model <name>           per-command model override
+	//   --model <slug>                per-command model override. The slug
+	//                                 already encodes effort / thinking /
+	//                                 fast / context — cursor has no
+	//                                 separate flags for those dimensions.
 	args := []string{"-p", "--output-format", "stream-json", "--force"}
 	if a.yolo {
 		args = append(args, "--yolo")
@@ -93,8 +96,8 @@ func (a *CursorCLIAdapter) Execute(
 	if cmd.ExternalID != "" {
 		args = append(args, "--resume", cmd.ExternalID)
 	}
-	if model, ok := cmd.Options["model"].(string); ok && model != "" {
-		args = append(args, "-m", model)
+	if model, ok := cmd.Options[protocol.OptionModel].(string); ok && model != "" {
+		args = append(args, "--model", model)
 	}
 	args = append(args, a.extraArgs...)
 	// "--" is the POSIX end-of-options marker: without it, a prompt that
