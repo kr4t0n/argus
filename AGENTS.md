@@ -106,13 +106,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `command/` — persists commands, `XADD`s to `agent:{id}:cmd`, handles cancel.
   `dispatch` merges `Session.modelSelection` under per-turn `options`
   and records the merged map on `Command.options`.
-- `machine/models.{service,controller}.ts` — `GET /agents/:id/models`,
-  the model-catalog RPC (same pending-promise pattern as `fs.service`:
-  publish `list-models` on `machine:{mid}:control`, resolve on the
-  `model-catalog-response` lifecycle event) plus a 1-hour per-agent
-  cache and in-flight request collapsing. `?refresh=1` bypasses the
-  cache. Catalog errors reject the request — the dashboard degrades to
-  a free-text model input.
+- `machine/models.{service,controller}.ts` — `GET /agents/:id/models`.
+  Reads are DB-first: the sidecar pushes each agent's catalog at
+  supervisor spawn (unsolicited `model-catalog-response`, empty
+  `requestId`) and it's persisted on `Agent.modelCatalog`/`At`, so the
+  endpoint is a Postgres read — warm across server restarts and for
+  every browser. Stored catalogs older than 6h are served as-is while
+  a background revalidate runs (stale-while-revalidate; reads never
+  block on freshness). The live RPC (same pending-promise pattern as
+  `fs.service`) runs only for `?refresh=1` (the picker's manual
+  refresh — the one synchronous path), the cold no-stored-catalog
+  case, and the background revalidate; all of them re-persist.
+  In-flight live fetches are collapsed per agent.
 - `attachment/` — file/image attachments. `POST /attachments` (JWT-
   guarded, multer `FileInterceptor`) streams an upload into S3/MinIO
   (`@aws-sdk/client-s3`, `forcePathStyle` for MinIO) and records an
@@ -275,9 +280,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     (`models_claude.go` static alias table, `models_codex.go` parses
     `codex debug models` JSON, `models_cursor.go` parses
     `cursor-agent models` lines and labels family/variant groups).
-    The supervisor's `HandleListModels` answers the `list-models`
-    control RPC with a 12 s exec deadline so a wedged CLI surfaces as
-    a catalog error, not a server-side timeout.
+    Two paths: the daemon fires `PushModelCatalog` after every
+    supervisor spawn (unsolicited push, empty `requestId`, 30 s exec
+    budget, errors logged-not-published so a boot hiccup can't clobber
+    the server's stored copy), and `HandleListModels` answers the
+    on-demand `list-models` RPC with a 12 s deadline so a wedged CLI
+    surfaces as a catalog error, not a server-side timeout. Both run
+    under `cliSlots` (4) — a dedicated subprocess gate, deliberately
+    NOT `fsSlots`, so tree walks and CLI probes can't queue behind
+    each other.
 - `sidecarlink/` — gorilla/websocket client that dials
   `ws://{server.url}/sidecar-link`, performs a `hello`/`hello-ack`
   handshake, and exposes `Publish(frame)` + `Inbound()`. Reconnects
@@ -913,16 +924,20 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   oscillators (no bundled asset) which can be silently blocked by
   autoplay policy on browsers that haven't seen a user gesture yet,
   but on a logged-in dashboard that's effectively never.
-- **Custom dropdowns must not render inside `<label>`** (`ui/Select`):
-  a `<label>` re-dispatches clicks on non-labelable descendants (a
-  `<span>` inside an option row) to its first labelable descendant —
-  the listbox trigger `<button>` — so selecting an option instantly
-  re-toggled the panel open. Engine-dependent, which made it look like
-  a Safari bug: Blink skips forwarding when propagation is stopped
-  (the panel's `stopPropagation` "fixed" Chrome), WebKit runs label
-  activation as the click's default action and forwards regardless.
-  Structural fix: the dialog's `Field` takes `as="div"` for children
-  that embed their own interactive controls. Keep it that way.
+- **Interactive controls must not render inside `<label>`** (`ui/Select`,
+  adapter chips): a `<label>` implicitly associates with its FIRST
+  labelable descendant, then (1) re-dispatches clicks on non-labelable
+  areas to it — selecting a dropdown option re-toggled the panel open;
+  clicking empty space next to the adapter chips selected the first
+  chip — and (2) propagates `:hover` styling to it, so hovering blank
+  field space lit up the first chip as if selected. The click half is
+  engine-dependent, which made it look like a Safari bug: Blink skips
+  forwarding when propagation is stopped (the panel's
+  `stopPropagation` "fixed" Chrome), WebKit runs label activation as
+  the click's default action and forwards regardless. Structural fix:
+  the dialog's `Field` takes `as="div"` for any children that embed
+  their own interactive controls (model picker, adapter chips). Keep
+  it that way.
 - **Model catalogs describe; they never gate**: selections pass
   through `Command.options` → adapter argv with NO validation against
   the catalog — on the server, the sidecar, or anywhere else. This is

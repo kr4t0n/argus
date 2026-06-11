@@ -5,6 +5,7 @@ import { AgentTypeIcon } from './ui/AgentTypeIcon';
 import { StatusDot } from './ui/StatusDot';
 import { FileTree } from './FileTree';
 import { GitLogPanel } from './GitLogPanel';
+import { SessionModelChip } from './SessionModelChip';
 import { NotePane } from './NotePane';
 import { ProgressPane } from './ProgressPane';
 import { TerminalPane } from './TerminalPane';
@@ -80,6 +81,11 @@ export function ContextPane({ agent, session, chunks }: Props) {
             </div>
             <div className="truncate text-[11px] text-fg-tertiary">{agent.machineName}</div>
           </div>
+          {/* Session-default model picker. Lives on the agent row (the
+              pane's identity line) rather than the chat header — the
+              `model` line below shows what the last turn actually ran
+              on, while this chip sets what the NEXT turn will use. */}
+          {session && <SessionModelChip session={session} agentId={agent.id} />}
         </header>
 
         {(agent.workingDir || model) && (

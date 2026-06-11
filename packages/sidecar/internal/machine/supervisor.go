@@ -749,6 +749,43 @@ func (s *supervisor) HandleListModels(ctx context.Context, req protocol.ListMode
 	}
 }
 
+// PushModelCatalog publishes an UNSOLICITED model-catalog event
+// (RequestID == "") so the server's stored catalog is warm before any
+// picker opens. Called by the daemon after every supervisor spawn —
+// boot replay, create-agent, and sync-agents alike — under the
+// cliSlots gate. Best-effort: probe failures are logged, never
+// published, so a boot-time CLI hiccup can't clobber a previously
+// stored good catalog server-side.
+//
+// The exec deadline is more generous than HandleListModels' 12s: no
+// user is waiting, and a slow vendor endpoint at boot is exactly the
+// case where we'd rather wait than give up and leave the store cold.
+func (s *supervisor) PushModelCatalog(ctx context.Context) {
+	lister, ok := s.adapter.(adapter.ModelLister)
+	if !ok {
+		return
+	}
+	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	models, source, err := lister.ListModels(execCtx)
+	cancel()
+	if err != nil {
+		s.log.Printf("agent %s: model catalog probe failed: %v", s.spec.AgentID, err)
+		return
+	}
+	ev := protocol.ModelCatalogResponseEvent{
+		Kind:      "model-catalog-response",
+		MachineID: s.machine,
+		AgentID:   s.spec.AgentID,
+		RequestID: "", // unsolicited push
+		Source:    source,
+		Models:    models,
+		TS:        time.Now().UnixMilli(),
+	}
+	if err := s.bus.Publish(ctx, protocol.LifecycleStream(), ev); err != nil {
+		s.log.Printf("agent %s: model-catalog push publish failed: %v", s.spec.AgentID, err)
+	}
+}
+
 func decodeCommand(payload map[string]any) (protocol.Command, error) {
 	b, err := json.Marshal(payload)
 	if err != nil {
