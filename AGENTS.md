@@ -924,16 +924,20 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   oscillators (no bundled asset) which can be silently blocked by
   autoplay policy on browsers that haven't seen a user gesture yet,
   but on a logged-in dashboard that's effectively never.
-- **Custom dropdowns must not render inside `<label>`** (`ui/Select`):
-  a `<label>` re-dispatches clicks on non-labelable descendants (a
-  `<span>` inside an option row) to its first labelable descendant —
-  the listbox trigger `<button>` — so selecting an option instantly
-  re-toggled the panel open. Engine-dependent, which made it look like
-  a Safari bug: Blink skips forwarding when propagation is stopped
-  (the panel's `stopPropagation` "fixed" Chrome), WebKit runs label
-  activation as the click's default action and forwards regardless.
-  Structural fix: the dialog's `Field` takes `as="div"` for children
-  that embed their own interactive controls. Keep it that way.
+- **Interactive controls must not render inside `<label>`** (`ui/Select`,
+  adapter chips): a `<label>` implicitly associates with its FIRST
+  labelable descendant, then (1) re-dispatches clicks on non-labelable
+  areas to it — selecting a dropdown option re-toggled the panel open;
+  clicking empty space next to the adapter chips selected the first
+  chip — and (2) propagates `:hover` styling to it, so hovering blank
+  field space lit up the first chip as if selected. The click half is
+  engine-dependent, which made it look like a Safari bug: Blink skips
+  forwarding when propagation is stopped (the panel's
+  `stopPropagation` "fixed" Chrome), WebKit runs label activation as
+  the click's default action and forwards regardless. Structural fix:
+  the dialog's `Field` takes `as="div"` for any children that embed
+  their own interactive controls (model picker, adapter chips). Keep
+  it that way.
 - **Model catalogs describe; they never gate**: selections pass
   through `Command.options` → adapter argv with NO validation against
   the catalog — on the server, the sidecar, or anywhere else. This is

@@ -291,7 +291,12 @@ export function CreateAgentPopover({
       )}
 
       <form onSubmit={submit} className="space-y-4">
-        <Field label="adapter">
+        {/* as="div" for the same reason as the model field below: a
+            <label> implicitly associates with its FIRST labelable
+            descendant (the first adapter chip), so hovering anywhere
+            in the field lit up that chip's hover style and clicking
+            empty space selected it. */}
+        <Field label="adapter" as="div">
           {adapters.length > 0 ? (
             <>
               {/* gap-1/px-2 (vs the usual 1.5/2.5) so the three
