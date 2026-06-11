@@ -12,7 +12,7 @@ import (
 // visible content so it never renders as a junk row.
 func TestMapClaudeThinkingTokens(t *testing.T) {
 	line := `{"type":"system","subtype":"thinking_tokens","uuid":"u1","session_id":"s1","estimated_tokens":13800,"estimated_tokens_delta":150}`
-	chunks := mapClaudeLine(line, nil, "")
+	chunks := mapClaudeLine(line, nil, nil, "")
 
 	if len(chunks) != 1 {
 		t.Fatalf("want 1 chunk, got %d: %+v", len(chunks), chunks)
@@ -42,7 +42,7 @@ func TestMapClaudeAPIRetry(t *testing.T) {
 	line := `{"type":"system","subtype":"api_retry","uuid":"u1","session_id":"s1",` +
 		`"error":"server_error","error_status":502,"attempt":1,"max_retries":10,` +
 		`"retry_delay_ms":560.59}`
-	chunks := mapClaudeLine(line, nil, "")
+	chunks := mapClaudeLine(line, nil, nil, "")
 
 	if len(chunks) != 1 {
 		t.Fatalf("want 1 chunk, got %d: %+v", len(chunks), chunks)
@@ -65,7 +65,7 @@ func TestMapClaudeAPIRetry(t *testing.T) {
 // new event shape appeared and is worth handling explicitly.
 func TestMapClaudeUnknownSystemSubtype(t *testing.T) {
 	line := `{"type":"system","subtype":"some_future_event","session_id":"s1"}`
-	chunks := mapClaudeLine(line, nil, "")
+	chunks := mapClaudeLine(line, nil, nil, "")
 
 	if len(chunks) != 1 {
 		t.Fatalf("want 1 chunk, got %d: %+v", len(chunks), chunks)
@@ -87,7 +87,7 @@ func TestMapClaudeThinkingBlock(t *testing.T) {
 		`{"type":"thinking","thinking":"Let me reason about this.","signature":"sig"},` +
 		`{"type":"text","text":"Here is the answer."}` +
 		`]}}`
-	chunks := mapClaudeLine(line, nil, "")
+	chunks := mapClaudeLine(line, nil, nil, "")
 
 	if len(chunks) != 2 {
 		t.Fatalf("want 2 chunks, got %d: %+v", len(chunks), chunks)
@@ -119,7 +119,7 @@ func TestMapClaudeRedactedThinking(t *testing.T) {
 	line := `{"type":"assistant","message":{"content":[` +
 		`{"type":"redacted_thinking","data":"encrypted-blob"}` +
 		`]}}`
-	chunks := mapClaudeLine(line, nil, "")
+	chunks := mapClaudeLine(line, nil, nil, "")
 
 	if len(chunks) != 1 {
 		t.Fatalf("want 1 chunk, got %d: %+v", len(chunks), chunks)
@@ -140,7 +140,7 @@ func TestMapClaudeSubAgentThinkingCarriesParent(t *testing.T) {
 	line := `{"type":"assistant","parent_tool_use_id":"tool-42","message":{"content":[` +
 		`{"type":"thinking","thinking":"nested reasoning"}` +
 		`]}}`
-	chunks := mapClaudeLine(line, nil, "")
+	chunks := mapClaudeLine(line, nil, nil, "")
 
 	if len(chunks) != 1 {
 		t.Fatalf("want 1 chunk, got %d: %+v", len(chunks), chunks)

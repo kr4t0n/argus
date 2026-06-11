@@ -390,8 +390,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   cursor-agent ships todos with `TODO_STATUS_*` enum values and a
   `updateTodosToolCall` key; the sidecar mapper normalises both into
   Claude Code's lowercase form, and the component falls back to the same
-  normalisation on the off chance an older sidecar is in front. See the
-  AGENTS.md note on stream-json drift.
+  normalisation on the off chance an older sidecar is in front. Claude
+  Code ≥ 2.1.x replaced `TodoWrite` with incremental `TaskCreate`/
+  `TaskUpdate`/`TaskList` tools; the sidecar reconstructs the list and
+  emits synthesized `TodoWrite` snapshot chunks, so this component needs
+  no awareness of them (see the "Task tools" gotcha). See the AGENTS.md
+  note on stream-json drift.
 - `components/Sidebar.tsx` — flat project → session tree. Top level
   groups agents by `(workingDir, machineId)` — same path on different
   machines lives on different physical filesystems, so they get
@@ -644,6 +648,33 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
      summarized thinking (run the agent on 4.6/sonnet-4.6 to get them).
      The empty block is expected, not a bug; the `if s != ""` guard
      suppresses it so no blank rows render.
+- **Task tools (Claude Code ≥ 2.1.x)**: newer `claude` plans with
+  `TaskCreate`/`TaskUpdate`/`TaskList` instead of `TodoWrite`. Unlike
+  `TodoWrite` — where every call carried the FULL todos array in its
+  input — these are **incremental**: `TaskCreate` input is one task's
+  `{subject, description, activeForm?}` and the assigned id appears
+  *only in the result text* (`"Task #7 created successfully: …"`);
+  `TaskUpdate` is `{taskId, status?, subject?, …}` with statuses
+  `pending|in_progress|completed|deleted` (deleted = permanent removal);
+  `TaskList` results are plain text lines `#1 [in_progress] Subject`
+  with optional `(owner)` / `[blocked by #N]` suffixes, or
+  `"No tasks found"`. `taskListState`
+  (`packages/sidecar/internal/adapter/claude_tasks.go`) replays this
+  traffic — stash the tool_use, apply at the matching *successful*
+  tool_result — and the mapper follows each task result with a
+  **synthesized full-list TodoWrite chunk**
+  (`meta.tool="TodoWrite"`, `meta.synthesized=true`,
+  `meta.id=<tool_use_id>+":todos"`) so `TodoWindow` renders both
+  generations of the tool through one code path. Subjects learned from
+  tool *inputs* are authoritative; subjects parsed from `TaskList`
+  output are best-effort (the owner suffix is not strippable without
+  ambiguity) and never overwrite them. A `TaskList` resync also heals
+  the post-`--resume` case where tasks predate the sidecar run; until
+  then an update to an unknown id renders a `Task #<id>` placeholder.
+  The raw `TaskCreate`/`TaskUpdate`/`TaskList`/`TaskGet` pills are
+  hidden from the activity timeline (`isDedicatedPanelTool` in
+  `ActivityPill.tsx`) since the synthesized snapshot already drives the
+  panel. All shapes verified empirically against `claude` 2.1.170.
 - **File-edit diffs**: every adapter (Codex, Claude Code, Cursor CLI)
   shares the snapshot-then-diff machinery in
   `packages/sidecar/internal/adapter/filediff.go`. The flow is uniform:
