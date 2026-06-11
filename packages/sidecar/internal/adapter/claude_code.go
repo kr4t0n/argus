@@ -92,7 +92,9 @@ func (a *ClaudeCodeAdapter) Execute(
 	//   --dangerously-skip-permissions |     accept all tool calls w/o prompts
 	//     --permission-mode <mode>           (mutually exclusive override)
 	//   --resume <id>                        resume prior session by id
-	//   --model <name>                       per-command model override
+	//   --model <name>[1m]                   per-command model override;
+	//                                        [1m] selects the 1M context window
+	//   --effort <level>                     thinking strength (low…max)
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
@@ -107,15 +109,30 @@ func (a *ClaudeCodeAdapter) Execute(
 	if cmd.ExternalID != "" {
 		args = append(args, "--resume", cmd.ExternalID)
 	}
-	if model, ok := cmd.Options["model"].(string); ok && model != "" {
+	if model, ok := cmd.Options[protocol.OptionModel].(string); ok && model != "" {
+		// context="1m" maps to claude's `[1m]` model-string suffix
+		// (works on aliases and full names). Don't double-append when
+		// the caller already passed a suffixed name via free text.
+		if ctxOpt, _ := cmd.Options[protocol.OptionContext].(string); ctxOpt == "1m" &&
+			!strings.HasSuffix(model, "[1m]") {
+			model += "[1m]"
+		}
 		args = append(args, "--model", model)
+	}
+	if effort, ok := cmd.Options[protocol.OptionEffort].(string); ok && effort != "" {
+		// Claude Code degrades gracefully (an unsupported level falls
+		// back to the highest supported one at or below), so we pass
+		// the value through without validating against the model.
+		args = append(args, "--effort", effort)
 	}
 	args = append(args, a.extraArgs...)
 
 	// Per-run state so mapClaudeLine can snapshot file contents at tool_use
-	// time and emit a unified diff at the matching tool_result. Scoped to
-	// this Execute() so we never leak across runs.
+	// time and emit a unified diff at the matching tool_result, plus the
+	// task-list reconstruction for TaskCreate/TaskUpdate/TaskList. Scoped
+	// to this Execute() so we never leak across runs.
 	state := newFileEditState()
+	tasks := newTaskListState()
 
 	spec := StreamSpec{
 		Binary:     a.binary,
@@ -124,7 +141,7 @@ func (a *ClaudeCodeAdapter) Execute(
 		Dir:        a.workingDir,
 		StderrKind: protocol.KindStderr,
 		Mapper: func(line string) []Chunk {
-			return mapClaudeLine(line, state, a.workingDir)
+			return mapClaudeLine(line, state, tasks, a.workingDir)
 		},
 	}
 
@@ -274,8 +291,11 @@ func claudeIsUserTextTurn(line map[string]any) bool {
 // Cursor CLI, which intentionally mirrors it). The `state` and `workingDir`
 // args let us snapshot file contents at tool_use time and emit a unified
 // diff at the matching tool_result for file-modifying tools (Write/Edit/
-// MultiEdit/Delete). Pass `state=nil` to disable diffing.
-func mapClaudeLine(line string, state *fileEditState, workingDir string) []Chunk {
+// MultiEdit/Delete). `tasks` accumulates TaskCreate/TaskUpdate/TaskList
+// traffic so task tool results additionally emit a synthesized TodoWrite
+// snapshot chunk (see claude_tasks.go). Pass `state=nil` / `tasks=nil` to
+// disable either behaviour.
+func mapClaudeLine(line string, state *fileEditState, tasks *taskListState, workingDir string) []Chunk {
 	ev := TryParseJSON(line)
 	if ev == nil {
 		return []Chunk{{Kind: protocol.KindDelta, Delta: line}}
@@ -320,6 +340,17 @@ func mapClaudeLine(line string, state *fileEditState, workingDir string) []Chunk
 			// wants the feedback) and rely on the next chunk to imply
 			// completion.
 			return nil
+		case "api_retry":
+			// Emitted when an API call fails with a retryable error (e.g.
+			// a 502) and Claude Code is about to back off and retry; can
+			// fire several times per turn (attempt/max_retries/error_status/
+			// retry_delay_ms ride in the event). Forwarded content-less so
+			// it never renders as a junk "system" row, with the full event
+			// in Meta should a UI want to surface retry status. Unknown
+			// subtypes intentionally keep falling through to the visible
+			// generic chunk below — that junk row is how we notice new
+			// event shapes worth handling.
+			return []Chunk{{Kind: protocol.KindProgress, Meta: ev}}
 		case "thinking_tokens":
 			// Newer Claude Code emits this repeatedly while extended
 			// thinking is in progress: `estimated_tokens` is the running
@@ -388,6 +419,11 @@ func mapClaudeLine(line string, state *fileEditState, workingDir string) []Chunk
 					state.RememberBefore(toolID, resolveFilePath(workingDir, path))
 				}
 
+				// Task-list tools are applied at result time (TaskCreate's
+				// assigned id only appears in the result text), so just
+				// stash the call here.
+				tasks.RememberCall(toolID, name, input)
+
 				meta := map[string]any{"tool": name, "input": input, "id": toolID}
 				if parentToolUseID != "" {
 					meta["parentToolUseId"] = parentToolUseID
@@ -439,6 +475,30 @@ func mapClaudeLine(line string, state *fileEditState, workingDir string) []Chunk
 					Content: body,
 					Meta:    meta,
 				})
+
+				// Completed task tool (TaskCreate/TaskUpdate/TaskList):
+				// apply the stashed call and follow the result with a
+				// synthesized full-list TodoWrite chunk so the dashboard's
+				// TodoWindow renders the new Task* tools exactly like the
+				// old single-call TodoWrite shape. ":todos" keeps the id
+				// distinct from the real tool_use id so the timeline still
+				// pairs the real chunk with this result.
+				if todos, ok := tasks.ApplyResult(toolUseID, body, isErr); ok {
+					todoMeta := map[string]any{
+						"tool":        "TodoWrite",
+						"input":       map[string]any{"todos": todos},
+						"id":          toolUseID + ":todos",
+						"synthesized": true,
+					}
+					if parentToolUseID != "" {
+						todoMeta["parentToolUseId"] = parentToolUseID
+					}
+					out = append(out, Chunk{
+						Kind:    protocol.KindTool,
+						Content: fmt.Sprintf("TodoWrite %d items", len(todos)),
+						Meta:    todoMeta,
+					})
+				}
 			}
 		}
 		return out

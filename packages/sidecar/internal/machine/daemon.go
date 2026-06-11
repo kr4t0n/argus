@@ -31,6 +31,15 @@ const (
 	// Goroutines that don't get a slot just queue at the channel
 	// send — no requests are dropped.
 	fsConcurrencyLimit = 16
+	// cliConcurrencyLimit caps concurrent wrapped-CLI subprocess
+	// spawns (model-catalog probes). Deliberately separate from
+	// fsSlots: that gate is sized for millisecond disk walks, this
+	// one for second-scale subprocesses that may hit vendor APIs
+	// (cursor-agent models). Keeping them apart means a tree refresh
+	// can't delay a catalog probe and vice versa. 4 covers the
+	// realistic worst case — a boot-time push for every agent on the
+	// machine plus a manual refresh — without herding processes.
+	cliConcurrencyLimit = 4
 )
 
 // Daemon is the long-lived per-machine process. It owns a single bus
@@ -78,6 +87,11 @@ type Daemon struct {
 	// expansions serialized past the server's 5 s fs-list timeout.
 	// Send blocks when full so excess requests queue rather than drop.
 	fsSlots chan struct{}
+
+	// Bounded-concurrency gate for wrapped-CLI subprocess spawns
+	// (model-catalog probes). See cliConcurrencyLimit for why this is
+	// not fsSlots.
+	cliSlots chan struct{}
 }
 
 // New builds a Daemon from a loaded cache and version string. Does NOT
@@ -93,6 +107,7 @@ func New(cachePath string, cache *Cache, sidecarVersion string, logger *log.Logg
 		hostname:       hn,
 		update:         &UpdateState{},
 		fsSlots:        make(chan struct{}, fsConcurrencyLimit),
+		cliSlots:       make(chan struct{}, cliConcurrencyLimit),
 	}
 }
 
@@ -282,6 +297,13 @@ func (d *Daemon) dispatchControl(ctx context.Context, payload map[string]any) {
 			return
 		}
 		d.handleGitLog(ctx, ev)
+	case "list-models":
+		var ev protocol.ListModelsRequestCommand
+		if err := remarshal(payload, &ev); err != nil {
+			d.log.Printf("control: bad list-models: %v", err)
+			return
+		}
+		d.handleListModels(ctx, ev)
 	case "update-sidecar":
 		var ev protocol.UpdateSidecarCommand
 		if err := remarshal(payload, &ev); err != nil {
@@ -393,6 +415,33 @@ func (d *Daemon) handleGitLog(ctx context.Context, req protocol.GitLogRequestCom
 	}()
 }
 
+// handleListModels mirrors handleGitLog: route to the target
+// supervisor, synthetic error response when the agent is gone so the
+// server-side pending request resolves instead of timing out, actual
+// work dispatched async. Gated by cliSlots (not fsSlots) so catalog
+// probes and tree walks can't queue behind each other.
+func (d *Daemon) handleListModels(ctx context.Context, req protocol.ListModelsRequestCommand) {
+	d.mu.Lock()
+	s, ok := d.supervisors[req.AgentID]
+	d.mu.Unlock()
+	if !ok {
+		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.ModelCatalogResponseEvent{
+			Kind:      "model-catalog-response",
+			MachineID: d.cache.MachineID,
+			AgentID:   req.AgentID,
+			RequestID: req.RequestID,
+			Error:     "agent not running on this machine",
+			TS:        time.Now().UnixMilli(),
+		})
+		return
+	}
+	go func() {
+		d.cliSlots <- struct{}{}
+		defer func() { <-d.cliSlots }()
+		s.HandleListModels(ctx, req)
+	}()
+}
+
 func (d *Daemon) handleCreateAgent(ctx context.Context, spec protocol.AgentSpec) {
 	rec := agentSpecToRecord(spec)
 	d.mu.Lock()
@@ -484,6 +533,15 @@ func (d *Daemon) spawnSupervisor(ctx context.Context, rec AgentRecord, publishAc
 	if publishAck {
 		d.publishSpawned(ctx, rec.AgentID)
 	}
+	// Warm the server's stored model catalog so a picker opening later
+	// never waits on a live CLI exec. Best-effort and fully off the
+	// spawn path; cliSlots keeps a many-agent boot replay from herding
+	// subprocesses.
+	go func() {
+		d.cliSlots <- struct{}{}
+		defer func() { <-d.cliSlots }()
+		s.PushModelCatalog(ctx)
+	}()
 	// Newly-spawned agents may have opted into terminal access; bring
 	// the sidecar↔server link up if this is the first such agent on
 	// the machine. Idempotent — safe to call from every spawn path

@@ -2,11 +2,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, X } from 'lucide-react';
-import type { AgentDTO, AvailableAdapter, MachineDTO } from '@argus/shared-types';
+import type { AgentDTO, AvailableAdapter, MachineDTO, ModelSelection } from '@argus/shared-types';
 import { api, ApiError } from '../lib/api';
 import { useAgentStore } from '../stores/agentStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { agentTypeLabel, AgentTypeIcon } from './ui/AgentTypeIcon';
+import { ModelPicker } from './ModelPicker';
 import { cn } from '../lib/utils';
 
 /**
@@ -66,7 +67,14 @@ type Props = {
   existingAgents?: AgentDTO[];
 };
 
-const POPOVER_WIDTH = 288; // 18rem (Tailwind w-72)
+// Sized so (a) the model picker's model + effort/variant + facet
+// chips and (b) the three built-in adapter chips each fit on one row.
+// Keep in sync with CreateProjectPopover so the two creation surfaces
+// read as siblings. The rendered width is additionally clamped to the
+// viewport via maxWidth (placement math may then overestimate on tiny
+// screens, which only makes the left-side fallback trigger early —
+// harmless).
+const POPOVER_WIDTH = 352;
 const VIEWPORT_MARGIN = 8; // keep this far from the edge
 
 export function CreateAgentPopover({
@@ -89,6 +97,18 @@ export function CreateAgentPopover({
   const [supportsTerminal, setSupportsTerminal] = useState(defaults?.supportsTerminal ?? false);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Per-adapter model choice, keyed by adapter type so flipping
+  // Claude Code → Codex → back doesn't lose the Claude selection.
+  // Session mode only; agent creation doesn't carry a model default.
+  const [modelByType, setModelByType] = useState<Record<string, ModelSelection | null>>({});
+  const modelSelection = modelByType[type] ?? null;
+  // The catalog needs an existing agent of the chosen type. For the
+  // project's first session on an adapter there is none yet (the agent
+  // is auto-vivified on submit) — the picker degrades to a free-text
+  // input in that case, by design.
+  const catalogAgentId = asSession
+    ? ((existingAgents ?? []).find((a) => a.type === type)?.id ?? null)
+    : null;
   const popRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -126,12 +146,22 @@ export function CreateAgentPopover({
     const pop = popRef.current;
     const observer = pop ? new ResizeObserver(() => place()) : null;
     if (observer && pop) observer.observe(pop);
+    // Capture-phase so scrolls of any ancestor container reposition
+    // us — but scrolls INSIDE the popover (the model dropdown's
+    // option list) don't move the anchor, and repositioning on them
+    // re-renders the tree mid-scroll. Skip those.
+    function onScroll(e: Event) {
+      if (popRef.current && e.target instanceof Node && popRef.current.contains(e.target)) {
+        return;
+      }
+      place();
+    }
     window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
+    window.addEventListener('scroll', onScroll, true);
     return () => {
       observer?.disconnect();
       window.removeEventListener('resize', place);
-      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('scroll', onScroll, true);
     };
   }, [anchor]);
 
@@ -180,9 +210,12 @@ export function CreateAgentPopover({
           upsertAgent(created);
           agentId = created.id;
         }
+        // Empty custom input ({model: ''}) normalizes to "Default".
+        const selection = modelSelection?.model ? modelSelection : undefined;
         const { session } = await api.createSession({
           agentId,
           title: name.trim(),
+          modelSelection: selection,
         });
         upsertSession(session);
         nav(`/sessions/${session.id}`);
@@ -214,6 +247,7 @@ export function CreateAgentPopover({
         top: pos?.top ?? -9999,
         left: pos?.left ?? -9999,
         width: POPOVER_WIDTH,
+        maxWidth: 'calc(100vw - 16px)',
         // Hide until we've measured so the user doesn't see a flash
         // of the popover at the (-9999, -9999) staging coords.
         visibility: pos ? 'visible' : 'hidden',
@@ -257,10 +291,19 @@ export function CreateAgentPopover({
       )}
 
       <form onSubmit={submit} className="space-y-4">
-        <Field label="adapter">
+        {/* as="div" for the same reason as the model field below: a
+            <label> implicitly associates with its FIRST labelable
+            descendant (the first adapter chip), so hovering anywhere
+            in the field lit up that chip's hover style and clicking
+            empty space selected it. */}
+        <Field label="adapter" as="div">
           {adapters.length > 0 ? (
             <>
-              <div className="flex flex-wrap gap-1.5">
+              {/* gap-1/px-2 (vs the usual 1.5/2.5) so the three
+                  built-in adapters stay on one row at POPOVER_WIDTH;
+                  wrap remains the fallback for machines reporting
+                  more (custom) adapters. */}
+              <div className="flex flex-wrap gap-1">
                 {adapters.map((a) => {
                   const selected = a.type === type;
                   return (
@@ -274,7 +317,7 @@ export function CreateAgentPopover({
                           : agentTypeLabel(a.type)
                       }
                       className={cn(
-                        'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors',
+                        'inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors',
                         selected
                           ? 'bg-surface-2 text-fg-primary'
                           : 'bg-transparent text-fg-tertiary hover:bg-surface-2/60 hover:text-fg-primary',
@@ -309,6 +352,23 @@ export function CreateAgentPopover({
             </>
           )}
         </Field>
+
+        {/* as="div": the picker embeds its own interactive controls
+            (listbox trigger, options, toggles). Inside a <label>,
+            WebKit forwards clicks on non-labelable descendants to the
+            label's first labelable element — the listbox trigger —
+            which re-toggles the dropdown on every option click. Blink
+            only forwards when propagation is intact, WebKit always;
+            a div sidesteps the quirk in every engine. */}
+        {asSession && (
+          <Field label="model" as="div">
+            <ModelPicker
+              agentId={catalogAgentId}
+              value={modelSelection}
+              onChange={(v) => setModelByType((prev) => ({ ...prev, [type]: v }))}
+            />
+          </Field>
+        )}
 
         <Field label={asSession ? 'session name' : 'name'}>
           <input
@@ -377,11 +437,22 @@ export function CreateAgentPopover({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+  as: Tag = 'label',
+}: {
+  label: string;
+  children: React.ReactNode;
+  /** Use 'div' when the children embed interactive controls of their
+   *  own (e.g. the model picker's listbox) — see the call site note on
+   *  WebKit's label click-forwarding. */
+  as?: 'label' | 'div';
+}) {
   return (
-    <label className="block">
+    <Tag className="block">
       <span className="mb-1 block text-caps">{label}</span>
       {children}
-    </label>
+    </Tag>
   );
 }

@@ -164,22 +164,47 @@ func (s *supervisor) run(ctx context.Context) {
 		// the dashboard's view of the agent.
 	}
 
-	s.startFSWatcher(ctx)
-	s.startGitWatcher(ctx)
-	s.startProgressWatcher(ctx)
-
-	cmdStream := protocol.CommandStream(s.spec.AgentID)
-	group := protocol.SidecarConsumerGroup(s.spec.AgentID)
-	if err := s.bus.EnsureGroup(ctx, cmdStream, group); err != nil {
-		s.log.Printf("agent %s: ensure group: %v", s.spec.AgentID, err)
-	}
-
+	// The heartbeat loop and the command consume loop (below) are the
+	// agent's critical paths; neither may be gated behind slow, best-effort
+	// setup. newFSWatcher walks the workingDir and registers inotify
+	// watches *synchronously*, which on a large tree takes many seconds —
+	// long enough for the server's 30s sweeper (STALE_AFTER_MS) to mark a
+	// freshly-registered agent offline, and (the bug this fixes) to delay
+	// the consume loop so prompts just hang while the agent looks online.
+	//
+	// So: start heartbeats immediately, and bring the watchers up in the
+	// background. The watcher goroutine also owns closing them on shutdown,
+	// keeping s.fsw / s.gitw / s.progw touched from a single goroutine.
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		s.heartbeatLoop(ctx)
 	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.startFSWatcher(ctx)
+		s.startGitWatcher(ctx)
+		s.startProgressWatcher(ctx)
+		<-ctx.Done()
+		if s.fsw != nil {
+			s.fsw.Close()
+		}
+		if s.gitw != nil {
+			s.gitw.Close()
+		}
+		if s.progw != nil {
+			s.progw.Close()
+		}
+	}()
+
+	cmdStream := protocol.CommandStream(s.spec.AgentID)
+	group := protocol.SidecarConsumerGroup(s.spec.AgentID)
+	if err := s.bus.EnsureGroup(ctx, cmdStream, group); err != nil {
+		s.log.Printf("agent %s: ensure group: %v", s.spec.AgentID, err)
+	}
 
 	consumer := "c-" + uuid.NewString()[:8]
 	s.log.Printf("agent %s ready (type=%s)", s.spec.AgentID, s.spec.Type)
@@ -218,8 +243,17 @@ func (s *supervisor) run(ctx context.Context) {
 		}
 
 		if cmd.Kind == "clone-session" {
-			s.handleCloneSession(ctx, cmd)
-			_ = s.bus.Ack(ctx, cmdStream, group, msgID)
+			// Dispatch off the loop like execute: handleCloneSession copies
+			// + rewrites the CLI's session JSONL synchronously, which would
+			// otherwise stall the next command until the fork finishes.
+			// Safe to run concurrently — the server gates prompting a forked
+			// session on the session-external-id event this publishes.
+			wg.Add(1)
+			go func(c protocol.Command, id string) {
+				defer wg.Done()
+				s.handleCloneSession(ctx, c)
+				_ = s.bus.Ack(ctx, cmdStream, group, id)
+			}(cmd, msgID)
 			continue
 		}
 
@@ -231,15 +265,8 @@ func (s *supervisor) run(ctx context.Context) {
 		}(cmd, msgID)
 	}
 
-	if s.fsw != nil {
-		s.fsw.Close()
-	}
-	if s.gitw != nil {
-		s.gitw.Close()
-	}
-	if s.progw != nil {
-		s.progw.Close()
-	}
+	// Watchers are closed by their own goroutine on ctx.Done() (it owns
+	// those fields); wg.Wait() below blocks until that has happened.
 
 	// Best-effort deregister so the dashboard reflects the change
 	// before our last heartbeat would have lapsed (~5s).
@@ -686,6 +713,76 @@ func (s *supervisor) HandleGitLog(ctx context.Context, req protocol.GitLogReques
 	}
 	if err := s.bus.Publish(ctx, protocol.LifecycleStream(), resp); err != nil {
 		s.log.Printf("agent %s: git-log-response publish failed: %v", s.spec.AgentID, err)
+	}
+}
+
+// HandleListModels answers a `list-models` control request with this
+// agent's model catalog. Same fan-in pattern as HandleGitLog. The
+// claude-code catalog is a compiled-in table (instant); codex / cursor
+// shell out to their CLIs, and cursor's `models` hits the vendor API,
+// so the exec gets its own deadline well under the server-side request
+// timeout — a wedged CLI must surface as a catalog error, not a server
+// timeout the dashboard can't tell apart from an offline machine.
+func (s *supervisor) HandleListModels(ctx context.Context, req protocol.ListModelsRequestCommand) {
+	resp := protocol.ModelCatalogResponseEvent{
+		Kind:      "model-catalog-response",
+		MachineID: s.machine,
+		AgentID:   s.spec.AgentID,
+		RequestID: req.RequestID,
+		TS:        time.Now().UnixMilli(),
+	}
+	if lister, ok := s.adapter.(adapter.ModelLister); ok {
+		execCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+		models, source, err := lister.ListModels(execCtx)
+		cancel()
+		if err != nil {
+			resp.Error = err.Error()
+		} else {
+			resp.Models = models
+			resp.Source = source
+		}
+	} else {
+		resp.Error = "adapter does not support model listing"
+	}
+	if err := s.bus.Publish(ctx, protocol.LifecycleStream(), resp); err != nil {
+		s.log.Printf("agent %s: model-catalog-response publish failed: %v", s.spec.AgentID, err)
+	}
+}
+
+// PushModelCatalog publishes an UNSOLICITED model-catalog event
+// (RequestID == "") so the server's stored catalog is warm before any
+// picker opens. Called by the daemon after every supervisor spawn —
+// boot replay, create-agent, and sync-agents alike — under the
+// cliSlots gate. Best-effort: probe failures are logged, never
+// published, so a boot-time CLI hiccup can't clobber a previously
+// stored good catalog server-side.
+//
+// The exec deadline is more generous than HandleListModels' 12s: no
+// user is waiting, and a slow vendor endpoint at boot is exactly the
+// case where we'd rather wait than give up and leave the store cold.
+func (s *supervisor) PushModelCatalog(ctx context.Context) {
+	lister, ok := s.adapter.(adapter.ModelLister)
+	if !ok {
+		return
+	}
+	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	models, source, err := lister.ListModels(execCtx)
+	cancel()
+	if err != nil {
+		s.log.Printf("agent %s: model catalog probe failed: %v", s.spec.AgentID, err)
+		return
+	}
+	ev := protocol.ModelCatalogResponseEvent{
+		Kind:      "model-catalog-response",
+		MachineID: s.machine,
+		AgentID:   s.spec.AgentID,
+		RequestID: "", // unsolicited push
+		Source:    source,
+		Models:    models,
+		TS:        time.Now().UnixMilli(),
+	}
+	if err := s.bus.Publish(ctx, protocol.LifecycleStream(), ev); err != nil {
+		s.log.Printf("agent %s: model-catalog push publish failed: %v", s.spec.AgentID, err)
 	}
 }
 

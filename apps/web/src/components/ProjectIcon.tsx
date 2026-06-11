@@ -1,18 +1,18 @@
 import { useLayoutEffect, useRef, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Folder, FolderOpen, RotateCcw } from 'lucide-react';
-import type { AgentDTO } from '@argus/shared-types';
-import { useProjectStore } from '../stores/projectStore';
-import { useAgentStore } from '../stores/agentStore';
+import { useProjectStore, useProjectIconKey } from '../stores/projectStore';
+import { api } from '../lib/api';
 import { cn } from '../lib/utils';
 
 /**
  * Per-project icon. Default is `Folder` (or `FolderOpen` when the
  * project row is expanded — see `open` prop on the picker variant).
  * The user can override that default via the picker, choosing a single
- * A-Z letter that then renders in place of the folder. Stored on the
- * `LocalProject.iconKey` field; persisted to localStorage with the
- * rest of the placeholder.
+ * A-Z letter that then renders in place of the folder. The pick lives
+ * on the server's Project row (keyed by machineId + workingDir) and is
+ * broadcast via `project:upsert`, so — like machine icons — the same
+ * glyph shows up in every browser and for every teammate.
  *
  * Why letters: a project with no icon defaults to the same Folder
  * glyph as every other project, which makes them visually identical
@@ -27,8 +27,8 @@ const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
 /**
  * Read-only glyph — used wherever we just need to *show* the project's
- * current icon (e.g. the collapsed rail tile). No picker, no
- * placeholder-creation side effects.
+ * current icon (e.g. the collapsed rail tile). No picker, no side
+ * effects.
  */
 export function ProjectIconGlyph({
   iconKey,
@@ -65,12 +65,6 @@ type ProjectIconProps = {
   projectKey: string;
   machineId: string;
   workingDir: string | null;
-  /** Falls back to the placeholder name first, then this label. */
-  label: string;
-  /** Agent ids in this project — used to derive a `supportsTerminal`
-   *  fallback when no placeholder exists yet (so the picker can
-   *  create a placeholder without losing terminal info). */
-  agentIds: string[];
   /** Controls the default Folder open/closed variant. */
   open?: boolean;
   className?: string;
@@ -81,31 +75,23 @@ type ProjectIconProps = {
  * project row where the user has the room to interact. The picker is
  * portaled out of the row so the sidebar's overflow doesn't clip it.
  *
- * Picking a letter calls `useProjectStore.add()` which merges by
- * `(machineId, workingDir)` — so this works on both placeholder-
- * backed and purely agent-derived rows. For the latter, the merge
- * auto-creates a placeholder using `supportsTerminal` derived from
- * the first agent's value. Only the iconKey is overwritten; other
- * placeholder fields stay intact.
+ * Picking writes straight to the server (PATCH /projects/icon) with an
+ * optimistic store update — no placeholder is created or touched, the
+ * icon is project metadata, not placeholder state.
  */
 export function ProjectIcon({
   projectKey,
   machineId,
   workingDir,
-  label,
-  agentIds,
   open,
   className,
 }: ProjectIconProps) {
-  const project = useProjectStore((s) => s.projects[projectKey]);
-  const iconKey = project?.iconKey;
+  const iconKey = useProjectIconKey(projectKey);
   const [pickerOpen, setPickerOpen] = useState(false);
   const anchorRef = useRef<HTMLButtonElement>(null);
 
-  // The picker writes through useProjectStore.add(). It needs
-  // machineId/workingDir/name/supportsTerminal to be safe across the
-  // create-or-merge cases — we resolve those here so the picker
-  // component can be a thin UI shell.
+  // The synthetic "no project" bucket has no path → no project
+  // identity to hang an icon on.
   const canPick = !!workingDir;
 
   return (
@@ -145,8 +131,6 @@ export function ProjectIcon({
           projectKey={projectKey}
           machineId={machineId}
           workingDir={workingDir}
-          label={label}
-          agentIds={agentIds}
           selected={iconKey}
           anchor={anchorRef}
           onClose={() => setPickerOpen(false)}
@@ -163,8 +147,6 @@ function ProjectIconPicker({
   projectKey,
   machineId,
   workingDir,
-  label,
-  agentIds,
   selected,
   anchor,
   onClose,
@@ -172,35 +154,33 @@ function ProjectIconPicker({
   projectKey: string;
   machineId: string;
   workingDir: string;
-  label: string;
-  agentIds: string[];
   selected: string | undefined;
   anchor: React.RefObject<HTMLElement | null>;
   onClose: () => void;
 }) {
-  const addProject = useProjectStore((s) => s.add);
-  const project = useProjectStore((s) => s.projects[projectKey]);
-  const agents = useAgentStore((s) => s.agents);
   const popRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
+  // Optimistically reflect the pick in the synced icon map, then
+  // persist server-side. The server emits project:upsert on success
+  // which redundantly converges the same value (and updates every
+  // other dashboard); on failure we roll back. Mirrors
+  // MachineIconPicker.applyIcon. `null` = reset to default folder.
   function applyIcon(next: string | null) {
-    // `null` from the reset button means "clear back to default
-    // (Folder)"; a letter string means "set to this glyph". Same
-    // (machineId, workingDir) key as everywhere else, so this
-    // merges into the existing placeholder or creates one for a
-    // purely agent-derived row. supportsTerminal is preserved from
-    // the placeholder, with the first agent's value as a fallback —
-    // same chain the rename and archive flows use.
-    const firstAgent: AgentDTO | undefined = agents[agentIds[0]];
-    addProject({
-      machineId,
-      name: project?.name || label,
-      workingDir,
-      supportsTerminal: project?.supportsTerminal ?? firstAgent?.supportsTerminal ?? false,
-      iconKey: next,
-    });
     onClose();
+    const store = useProjectStore.getState();
+    const previous = store.serverIcons[projectKey] ?? store.projects[projectKey]?.iconKey ?? null;
+    if (previous === next) return;
+    store.upsertServerIcon({ machineId, workingDir, iconKey: next });
+    // A leftover legacy local copy must die with this pick — otherwise
+    // a reset (null) would fall back to the stale local letter.
+    if (store.projects[projectKey]?.iconKey) store.clearLegacyIcons([projectKey]);
+    api.setProjectIcon(machineId, workingDir, next).catch((err) => {
+      useProjectStore
+        .getState()
+        .upsertServerIcon({ machineId, workingDir, iconKey: previous });
+      console.warn('failed to set project icon', err);
+    });
   }
 
   useLayoutEffect(() => {

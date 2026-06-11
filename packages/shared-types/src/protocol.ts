@@ -548,6 +548,130 @@ export interface SyncUserRulesCommand {
   ts: number;
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Model selection & catalog
+//
+// A `ModelSelection` rides Command.options (flat keys: model / effort /
+// context / speed) — there is no new dispatch plumbing. Each adapter
+// reads the keys it understands and appends the CLI-specific flags:
+//
+//   claude-code  --model <m>[1m]  --effort <level>
+//   codex        --model <m>  -c model_reasoning_effort=<level>
+//                             -c service_tier=fast
+//   cursor-cli   --model <slug>          (everything is in the slug)
+//
+// The catalog travels the other way: the dashboard asks "what can this
+// agent run?" via a `list-models` control request and the sidecar
+// answers with a ModelCatalogResponseEvent. Selections are NEVER
+// validated against the catalog server-side — the catalog constrains
+// the picker UI, and raw values pass through opaquely so stale
+// catalogs and free-text "advanced" model ids keep working.
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Thinking-strength vocabulary, superset across CLIs. Catalog entries
+ * declare the subset their model supports; adapters pass the value
+ * through verbatim (no cross-CLI mapping — `minimal` is codex-only,
+ * `max` is claude-only, etc.).
+ */
+export const EFFORT_LEVELS = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+
+/**
+ * One model choice for a session or single turn. All fields optional —
+ * an empty selection means "CLI default", byte-for-byte the behavior
+ * before this feature existed. Carried inside Command.options, persisted
+ * on Session.modelSelection as the session default.
+ */
+export interface ModelSelection {
+  /** Adapter-namespaced id: claude alias/full name, codex slug, or
+   *  cursor full slug. Free text is allowed (advanced escape hatch). */
+  model?: string;
+  /** Only meaningful when the catalog entry declares the effort facet. */
+  effort?: EffortLevel;
+  /** '1m' appends the `[1m]` suffix (claude-code only today). */
+  context?: '1m';
+  /** 'fast' selects the priority/fast service tier (codex only today). */
+  speed?: 'fast';
+}
+
+/** Facets a catalog entry supports. Absent facet = control not shown. */
+export interface ModelCatalogFacets {
+  effort?: { levels: EffortLevel[]; default: EffortLevel };
+  /** Present when the same model can run at more than one window. */
+  context?: { options: Array<'default' | '1m'> };
+  speed?: { options: Array<'standard' | 'fast'> };
+}
+
+export interface ModelCatalogEntry {
+  /** Value to put in ModelSelection.model when this entry is chosen. */
+  id: string;
+  displayName: string;
+  /** Carries vendor notes worth surfacing, e.g. "NO ZDR". */
+  description?: string;
+  /** Display metadata (tokens), where known. Informational only. */
+  contextWindow?: number;
+  /** The CLI's own default when no model flag is passed. */
+  isDefault?: boolean;
+  /**
+   * Grouping label for adapters whose catalog is a flat variant matrix
+   * (cursor-cli). Entries sharing a family render as one model with a
+   * second-level variant picker. Parsing produces ONLY this label — the
+   * dispatched value is always the exact `id`, never a recomposed slug.
+   */
+  family?: string;
+  /** Short variant label within the family, e.g. "Thinking · xhigh · fast". */
+  variantLabel?: string;
+  facets?: ModelCatalogFacets;
+}
+
+/**
+ * Server → sidecar: ask for the model catalog of one agent's CLI. Same
+ * control-plane RPC shape as fs-list / git-log: request rides the
+ * per-machine control stream, response comes back on the lifecycle
+ * stream keyed by requestId.
+ */
+export interface ListModelsRequestCommand {
+  kind: 'list-models';
+  requestId: string;
+  agentId: string;
+  ts: number;
+}
+
+/**
+ * Sidecar's reply — or unsolicited push. `source` says how the catalog
+ * was produced: 'static' (claude-code's compiled-in table) or 'cli'
+ * (codex `debug models`, cursor `models`). On failure (CLI errored,
+ * not logged in, parse failure) `error` is set and `models` omitted —
+ * the dashboard degrades to a free-text model input.
+ *
+ * `requestId === ''` marks an UNSOLICITED push: the sidecar publishes
+ * the catalog after every supervisor spawn/register so the server's
+ * stored copy is warm before any picker opens. The server persists
+ * push payloads on the Agent row and skips the pending-request map.
+ * Error pushes are not published (a boot-time CLI hiccup shouldn't
+ * clobber a previously stored good catalog).
+ */
+export interface ModelCatalogResponseEvent {
+  kind: 'model-catalog-response';
+  machineId: string;
+  agentId: string;
+  /** Correlates to a ListModelsRequestCommand; '' = unsolicited push. */
+  requestId: string;
+  source?: 'static' | 'cli';
+  models?: ModelCatalogEntry[];
+  error?: string;
+  ts: number;
+}
+
 export type MachineControlCommand =
   | CreateAgentCommand
   | DestroyAgentCommand
@@ -555,6 +679,7 @@ export type MachineControlCommand =
   | FSListRequestCommand
   | FSReadRequestCommand
   | GitLogRequestCommand
+  | ListModelsRequestCommand
   | UpdateSidecarCommand
   | SyncUserRulesCommand;
 
@@ -708,6 +833,7 @@ export type AnyLifecycleEvent =
   | FSChangedEvent
   | GitLogResponseEvent
   | GitChangedEvent
+  | ModelCatalogResponseEvent
   | SidecarUpdateStartedEvent
   | SidecarUpdateDownloadedEvent
   | SidecarUpdateFailedEvent;

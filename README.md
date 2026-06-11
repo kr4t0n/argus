@@ -40,6 +40,18 @@ native `--resume` ids so you can pick up where you left off.
 the dashboard's "create agent" dropdown is filtered to whatever's
 actually installed on that machine. New adapters are ~30 lines + an
 `init()` register call.
+- **Per-session model picker**: the new-session dialog and a session-
+header chip let you pick the model, thinking effort, 1M context
+window (Claude Code), and fast service tier (Codex) per session —
+each turn is dispatched with the right CLI flags (`--model`/
+`--effort`, `-c model_reasoning_effort=`, Cursor slug). Model lists
+come from each CLI itself (`codex debug models`, `cursor-agent
+models`, a curated alias table for Claude Code), are pushed by the
+sidecar at agent startup and stored server-side (refreshed in the
+background after 6h; a refresh button probes the CLI on demand), and
+never gate dispatch — a free-text "custom…" model id always works.
+Leaving everything on "Default" passes no flags at all, exactly the
+pre-picker behavior.
 - **Token & context badge**: every session header shows cumulative
 ↑/↓ token usage and a colored donut for live context-window
 utilization (latest turn, since each CLI re-sends full history on

@@ -22,6 +22,7 @@ import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 import { FSService } from './fs.service';
+import { ModelsService } from './models.service';
 import { SidecarUpdateService, stripSidecarPrefix } from './sidecar-update.service';
 
 const CONSUMER = 'server-1';
@@ -61,6 +62,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     private readonly redis: RedisService,
     private readonly gateway: StreamGateway,
     private readonly fs: FSService,
+    private readonly models: ModelsService,
     private readonly sidecarUpdate: SidecarUpdateService,
   ) {}
 
@@ -592,6 +594,12 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         // Same fan-in as fs-list-response — keyed by requestId in the
         // shared pending map.
         this.fs.handleGitLogResponse(ev);
+        break;
+      }
+      case 'model-catalog-response': {
+        // Same fan-in pattern — ModelsService resolves the pending
+        // GET /agents/:id/models call (and populates its TTL cache).
+        this.models.handleCatalogResponse(ev);
         break;
       }
       case 'git-changed': {

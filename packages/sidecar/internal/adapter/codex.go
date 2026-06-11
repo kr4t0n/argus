@@ -97,6 +97,8 @@ func (a *CodexAdapter) Execute(
 	//   --skip-git-repo-check            allow non-git working dirs
 	//   --full-auto | --sandbox <mode>   no TTY approval prompts
 	//   -m / --model                     per-command model override
+	//   -c model_reasoning_effort=<l>    thinking strength (minimal…xhigh)
+	//   -c service_tier=fast             priority/fast service tier
 	flags := []string{"exec", "--json"}
 	if a.skipGitRepoCheck {
 		flags = append(flags, "--skip-git-repo-check")
@@ -107,8 +109,17 @@ func (a *CodexAdapter) Execute(
 	case a.fullAuto:
 		flags = append(flags, "--full-auto")
 	}
-	if model, ok := cmd.Options["model"].(string); ok && model != "" {
+	if model, ok := cmd.Options[protocol.OptionModel].(string); ok && model != "" {
 		flags = append(flags, "--model", model)
+	}
+	if effort, ok := cmd.Options[protocol.OptionEffort].(string); ok && effort != "" {
+		// `-c key=value` is one argv element; exec.Command passes it
+		// unescaped so no shell-quoting concerns. The value parses as a
+		// bare TOML string on the codex side.
+		flags = append(flags, "-c", "model_reasoning_effort="+effort)
+	}
+	if speed, _ := cmd.Options[protocol.OptionSpeed].(string); speed == "fast" {
+		flags = append(flags, "-c", "service_tier=fast")
 	}
 	// Attach image files via codex's native image-input flag so the model
 	// sees them as vision. Non-image attachments are left to the prompt-

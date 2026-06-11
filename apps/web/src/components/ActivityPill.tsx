@@ -316,7 +316,14 @@ function isDedicatedPanelTool(c: ResultChunkDTO): boolean {
     name === 'todowrite' ||
     name === 'todo' ||
     name === 'task' ||
-    name === 'updatetodos'
+    name === 'updatetodos' ||
+    // Claude Code ≥ 2.1.x incremental task tools. The sidecar follows each
+    // result with a synthesized TodoWrite snapshot that drives TodoWindow,
+    // so the raw calls would only duplicate it in the timeline.
+    name === 'taskcreate' ||
+    name === 'taskupdate' ||
+    name === 'tasklist' ||
+    name === 'taskget'
   );
 }
 

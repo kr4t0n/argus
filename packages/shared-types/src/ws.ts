@@ -3,6 +3,7 @@ import type {
   BackgroundTaskDTO,
   CommandDTO,
   MachineDTO,
+  ProjectDTO,
   ResultChunkDTO,
   SessionDTO,
   SidecarUpdatePlanEntry,
@@ -36,6 +37,10 @@ export interface ServerToClientEvents {
   'machine:upsert': (machine: MachineDTO) => void;
   'machine:status': (payload: { id: string; status: MachineDTO['status'] }) => void;
   'machine:removed': (payload: { id: string }) => void;
+  /** Project metadata changed (today: the user-picked icon glyph).
+   *  Broadcast to every dashboard, like machine:upsert — project
+   *  icons are workspace-shared, not per-user. */
+  'project:upsert': (project: ProjectDTO) => void;
   'agent:upsert': (agent: AgentDTO) => void;
   'agent:status': (payload: { id: string; status: AgentDTO['status'] }) => void;
   'agent:removed': (payload: { id: string }) => void;

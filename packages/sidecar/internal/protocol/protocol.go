@@ -326,6 +326,86 @@ type GitLogResponseEvent struct {
 	TS        int64       `json:"ts"`
 }
 
+// ─────────── Model selection & catalog ───────────
+//
+// A model selection rides Command.Options as flat keys (model / effort /
+// context / speed); adapters read the keys they understand and append
+// CLI-specific flags. The catalog RPC mirrors fs-list / git-log:
+// ListModelsRequestCommand on the machine control stream in,
+// ModelCatalogResponseEvent on the lifecycle stream out. Mirror of the
+// "Model selection & catalog" section in
+// packages/shared-types/src/protocol.ts — keep in sync.
+
+// Option keys adapters read from Command.Options.
+const (
+	OptionModel   = "model"
+	OptionEffort  = "effort"  // "none"|"minimal"|"low"|"medium"|"high"|"xhigh"|"max"
+	OptionContext = "context" // "1m"
+	OptionSpeed   = "speed"   // "fast"
+)
+
+type ModelEffortFacet struct {
+	Levels  []string `json:"levels"`
+	Default string   `json:"default"`
+}
+
+type ModelContextFacet struct {
+	Options []string `json:"options"` // "default" | "1m"
+}
+
+type ModelSpeedFacet struct {
+	Options []string `json:"options"` // "standard" | "fast"
+}
+
+// ModelCatalogFacets declares which selection dimensions an entry
+// supports. Absent facet = the picker doesn't render that control.
+type ModelCatalogFacets struct {
+	Effort  *ModelEffortFacet  `json:"effort,omitempty"`
+	Context *ModelContextFacet `json:"context,omitempty"`
+	Speed   *ModelSpeedFacet   `json:"speed,omitempty"`
+}
+
+// ModelCatalogEntry is one selectable model. Family/VariantLabel group
+// flat variant matrices (cursor-cli) for two-level display; the
+// dispatched value is always the exact ID, never a recomposed slug.
+type ModelCatalogEntry struct {
+	ID            string              `json:"id"`
+	DisplayName   string              `json:"displayName"`
+	Description   string              `json:"description,omitempty"`
+	ContextWindow int64               `json:"contextWindow,omitempty"`
+	IsDefault     bool                `json:"isDefault,omitempty"`
+	Family        string              `json:"family,omitempty"`
+	VariantLabel  string              `json:"variantLabel,omitempty"`
+	Facets        *ModelCatalogFacets `json:"facets,omitempty"`
+}
+
+type ListModelsRequestCommand struct {
+	Kind      string `json:"kind"` // "list-models"
+	RequestID string `json:"requestId"`
+	AgentID   string `json:"agentId"`
+	TS        int64  `json:"ts"`
+}
+
+// ModelCatalogResponseEvent is the sidecar's reply — or unsolicited
+// push. Source is "static" (compiled-in table) or "cli" (parsed live
+// CLI output). On failure Error is set and Models nil — the dashboard
+// degrades to a free-text model input rather than blocking the picker.
+//
+// RequestID == "" marks an UNSOLICITED push: published after every
+// supervisor spawn/register so the server's stored catalog is warm
+// before any picker opens. Error pushes are not published — a
+// boot-time CLI hiccup must not clobber a stored good catalog.
+type ModelCatalogResponseEvent struct {
+	Kind      string              `json:"kind"` // "model-catalog-response"
+	MachineID string              `json:"machineId"`
+	AgentID   string              `json:"agentId"`
+	RequestID string              `json:"requestId"` // "" = unsolicited push
+	Source    string              `json:"source,omitempty"`
+	Models    []ModelCatalogEntry `json:"models,omitempty"`
+	Error     string              `json:"error,omitempty"`
+	TS        int64               `json:"ts"`
+}
+
 // GitChangedEvent is the unsolicited push from the sidecar's per-agent
 // secondary fsnotify watcher when the repo's HEAD or a ref under
 // refs/heads/ moved (commit, checkout, reset, etc). The dashboard's

@@ -1,5 +1,8 @@
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router-dom';
 import { LogOut, PanelLeftOpen } from 'lucide-react';
+import type { AgentDTO, MachineDTO, SessionDTO } from '@argus/shared-types';
 import { MachineIconGlyph } from './MachineIcon';
 import { ProjectIconGlyph } from './ProjectIcon';
 import { useAgentStore } from '../stores/agentStore';
@@ -7,18 +10,30 @@ import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
 import { useAuthStore } from '../stores/authStore';
-import { useProjectStore } from '../stores/projectStore';
-import { groupProjects } from '../lib/projects';
-import { cn } from '../lib/utils';
+import { useProjectStore, useProjectIconKey } from '../stores/projectStore';
+import { groupProjects, type ProjectGroup } from '../lib/projects';
+import { cn, relativeTime } from '../lib/utils';
 import { StatusDot } from './ui/StatusDot';
+import { AgentTypeIcon } from './ui/AgentTypeIcon';
+
+/** Hover dwell before a tile's session flyout opens. Long enough that
+ *  mouse travel across the rail doesn't flash panels, short enough to
+ *  beat the ~1s native-title tooltip it replaces. */
+const FLYOUT_OPEN_DELAY_MS = 500;
+/** Grace period for crossing the gap between tile and flyout — the
+ *  panel survives the pointer briefly leaving both. */
+const FLYOUT_CLOSE_DELAY_MS = 200;
+const VIEWPORT_MARGIN = 8;
 
 /**
  * Thin (48px) rail shown in place of the full sidebar when the user
  * collapses it. Mirrors the main sidebar's project-first model: one
  * tile per project (folder or user-picked letter glyph), click jumps
  * to the project's most-recent non-archived session across any of
- * its agents. The machine strip below remains the canonical surface
- * for navigating directly to a host.
+ * its agents. Hovering a tile for a beat opens a session flyout so a
+ * specific session is reachable without re-expanding the sidebar.
+ * The machine strip below remains the canonical surface for
+ * navigating directly to a host.
  *
  * Always hides archived projects + archived agents — the rail is for
  * "what am I working on now," not for unearthing history. The
@@ -51,11 +66,11 @@ export function SidebarRail() {
     visibleLocalOrder,
   ).filter((p) => !!p.fullPath);
 
-  // Most-recent non-archived session per project — same "land where
-  // they'd expect" intent the old per-agent rail had, lifted one
-  // level up. Walking all sessions is O(n) and N is small in
-  // practice; not worth memoizing.
-  const recentSessionByProject = new Map<string, string>();
+  // Non-archived sessions per project, most-recent first. [0] is the
+  // tile's click target ("land where they'd expect"); the full list
+  // feeds the hover flyout. Walking all sessions is O(n) and N is
+  // small in practice; not worth memoizing.
+  const sessionsByProject = new Map<string, SessionDTO[]>();
   for (const s of Object.values(sessions)) {
     if (s.archivedAt) continue;
     const a = agents[s.agentId];
@@ -63,10 +78,12 @@ export function SidebarRail() {
     const wd = (a.workingDir ?? '').trim();
     if (!wd) continue;
     const key = `${a.machineId}::${wd}`;
-    const existing = recentSessionByProject.get(key);
-    if (!existing || s.updatedAt > (sessions[existing]?.updatedAt ?? '')) {
-      recentSessionByProject.set(key, s.id);
-    }
+    const list = sessionsByProject.get(key);
+    if (list) list.push(s);
+    else sessionsByProject.set(key, [s]);
+  }
+  for (const list of sessionsByProject.values()) {
+    list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   // Highlight the project containing the currently-viewed session
@@ -93,38 +110,17 @@ export function SidebarRail() {
       </div>
 
       <div className="flex flex-1 flex-col items-center gap-1 overflow-y-auto py-2">
-        {projects.map((p) => {
-          const recentId = recentSessionByProject.get(p.key);
-          const active = p.key === activeProjectKey;
-          const machine = machines[p.machineId];
-          const tooltipParts = [p.label];
-          if (p.fullPath) tooltipParts.push(p.fullPath);
-          if (machine) tooltipParts.push(machine.name);
-          const content = (
-            <div
-              title={tooltipParts.join(' · ')}
-              className={cn(
-                'relative flex h-9 w-9 items-center justify-center rounded-md transition-colors',
-                active ? 'bg-surface-2 text-fg-primary' : 'text-fg-secondary hover:bg-surface-1',
-                !recentId && 'opacity-50 cursor-not-allowed',
-              )}
-            >
-              <ProjectIconGlyph
-                iconKey={p.local?.iconKey}
-                className="h-5 w-5 text-sm"
-              />
-            </div>
-          );
-          return recentId ? (
-            <Link key={p.key} to={`/sessions/${recentId}`}>
-              {content}
-            </Link>
-          ) : (
-            <div key={p.key} role="button" aria-disabled>
-              {content}
-            </div>
-          );
-        })}
+        {projects.map((p) => (
+          <RailProjectTile
+            key={p.key}
+            project={p}
+            sessions={sessionsByProject.get(p.key) ?? []}
+            active={p.key === activeProjectKey}
+            activeSessionId={sessionId}
+            machine={machines[p.machineId]}
+            agents={agents}
+          />
+        ))}
       </div>
 
       {machineOrder.length > 0 && (
@@ -165,5 +161,260 @@ export function SidebarRail() {
         </button>
       </div>
     </aside>
+  );
+}
+
+/**
+ * One project tile + its hover-dwell session flyout. Click keeps the
+ * rail's original contract (jump to most-recent session); hovering
+ * for FLYOUT_OPEN_DELAY_MS floats the project's session list beside
+ * the rail so any session is one click away while collapsed.
+ *
+ * The tile's old native `title` tooltip is gone — the flyout header
+ * carries the same label/path/machine info, and the two would race
+ * each other on hover otherwise.
+ */
+function RailProjectTile({
+  project,
+  sessions,
+  active,
+  activeSessionId,
+  machine,
+  agents,
+}: {
+  project: ProjectGroup;
+  /** Non-archived sessions, most-recent first. */
+  sessions: SessionDTO[];
+  active: boolean;
+  activeSessionId: string | undefined;
+  machine: MachineDTO | undefined;
+  agents: Record<string, AgentDTO>;
+}) {
+  const tileRef = useRef<HTMLDivElement>(null);
+  const iconKey = useProjectIconKey(project.key);
+  const [flyoutOpen, setFlyoutOpen] = useState(false);
+  const openTimer = useRef<number | undefined>(undefined);
+  const closeTimer = useRef<number | undefined>(undefined);
+
+  useEffect(
+    () => () => {
+      window.clearTimeout(openTimer.current);
+      window.clearTimeout(closeTimer.current);
+    },
+    [],
+  );
+
+  // Shared by tile and flyout: entering either cancels a pending
+  // close, leaving either schedules one. The close grace exceeds the
+  // pointer's travel time across the tile→panel gap, so the flyout
+  // doesn't blink while crossing.
+  function pointerEnter() {
+    window.clearTimeout(closeTimer.current);
+    if (flyoutOpen) return;
+    window.clearTimeout(openTimer.current);
+    openTimer.current = window.setTimeout(
+      () => setFlyoutOpen(true),
+      FLYOUT_OPEN_DELAY_MS,
+    );
+  }
+  function pointerLeave() {
+    window.clearTimeout(openTimer.current);
+    window.clearTimeout(closeTimer.current);
+    closeTimer.current = window.setTimeout(
+      () => setFlyoutOpen(false),
+      FLYOUT_CLOSE_DELAY_MS,
+    );
+  }
+  function close() {
+    window.clearTimeout(openTimer.current);
+    window.clearTimeout(closeTimer.current);
+    setFlyoutOpen(false);
+  }
+
+  const recentId = sessions[0]?.id;
+  const content = (
+    <div
+      className={cn(
+        'relative flex h-9 w-9 items-center justify-center rounded-md transition-colors',
+        active ? 'bg-surface-2 text-fg-primary' : 'text-fg-secondary hover:bg-surface-1',
+        !recentId && 'opacity-50 cursor-not-allowed',
+      )}
+    >
+      <ProjectIconGlyph
+        iconKey={iconKey}
+        className="h-5 w-5 text-sm"
+      />
+    </div>
+  );
+
+  return (
+    <div ref={tileRef} onMouseEnter={pointerEnter} onMouseLeave={pointerLeave}>
+      {recentId ? (
+        <Link to={`/sessions/${recentId}`} onClick={close}>
+          {content}
+        </Link>
+      ) : (
+        <div role="button" aria-disabled>
+          {content}
+        </div>
+      )}
+      {flyoutOpen && (
+        <RailSessionFlyout
+          project={project}
+          sessions={sessions}
+          machine={machine}
+          agents={agents}
+          activeSessionId={activeSessionId}
+          anchor={tileRef}
+          onPointerEnter={pointerEnter}
+          onPointerLeave={pointerLeave}
+          onClose={close}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The floating session list itself. Portaled to <body> so it escapes
+ * the rail's `overflow-y-auto` project strip (same trick as
+ * CreateAgentPopover): floats to the right of the anchor tile, top-
+ * aligned, with the bottom edge clamped to the viewport. The rail is
+ * pinned to the left edge so there's no "flip to the other side"
+ * fallback to worry about.
+ */
+function RailSessionFlyout({
+  project,
+  sessions,
+  machine,
+  agents,
+  activeSessionId,
+  anchor,
+  onPointerEnter,
+  onPointerLeave,
+  onClose,
+}: {
+  project: ProjectGroup;
+  sessions: SessionDTO[];
+  machine: MachineDTO | undefined;
+  agents: Record<string, AgentDTO>;
+  activeSessionId: string | undefined;
+  anchor: React.RefObject<HTMLDivElement | null>;
+  onPointerEnter: () => void;
+  onPointerLeave: () => void;
+  onClose: () => void;
+}) {
+  const popRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  // Mirror CreateAgentPopover's placement loop: position before first
+  // paint, then follow resizes/scrolls (the project strip scrolls
+  // independently) and the panel's own size changes.
+  useLayoutEffect(() => {
+    function place() {
+      const a = anchor.current;
+      const pop = popRef.current;
+      if (!a) return;
+      const rect = a.getBoundingClientRect();
+      const popH = pop?.offsetHeight ?? 0;
+      const left = rect.right + 8;
+      let top = rect.top;
+      if (popH && top + popH + VIEWPORT_MARGIN > window.innerHeight) {
+        top = Math.max(VIEWPORT_MARGIN, window.innerHeight - popH - VIEWPORT_MARGIN);
+      }
+      setPos({ top, left });
+    }
+    place();
+    const pop = popRef.current;
+    const observer = pop ? new ResizeObserver(() => place()) : null;
+    if (observer && pop) observer.observe(pop);
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [anchor]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      ref={popRef}
+      style={{ position: 'fixed', top: pos?.top ?? 0, left: pos?.left ?? 0 }}
+      onMouseEnter={onPointerEnter}
+      onMouseLeave={onPointerLeave}
+      className="z-40 w-64 overflow-hidden rounded-md border border-default bg-surface-0 shadow-lg"
+    >
+      <div className="border-b border-default px-3 py-2">
+        <div className="flex items-center gap-1.5">
+          <span className="min-w-0 truncate text-sm font-medium text-fg-primary">
+            {project.label}
+          </span>
+          <MachineIconGlyph
+            machineId={project.machineId}
+            className="h-3 w-3 shrink-0 text-fg-muted"
+          />
+        </div>
+        <div className="truncate text-meta text-fg-muted">
+          {[project.fullPath, machine?.name].filter(Boolean).join(' · ')}
+        </div>
+      </div>
+      <div className="max-h-80 overflow-y-auto p-1">
+        {sessions.map((s) => {
+          const agentType = agents[s.agentId]?.type;
+          // Same status-dot language as the full sidebar's SessionRow:
+          // amber running, red failed, emerald done-but-unseen.
+          return (
+            <Link
+              key={s.id}
+              to={`/sessions/${s.id}`}
+              onClick={onClose}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md px-2 py-1 text-sm leading-5 transition-colors hover:bg-surface-1',
+                activeSessionId === s.id && 'bg-surface-1 text-fg-primary',
+              )}
+            >
+              {agentType && <AgentTypeIcon type={agentType} />}
+              {s.status === 'active' && (
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
+              )}
+              {s.status === 'failed' && (
+                <span className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />
+              )}
+              {s.status === 'done' && (
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
+              )}
+              <span
+                className={cn(
+                  'min-w-0 flex-1 truncate',
+                  s.status === 'done'
+                    ? 'font-semibold text-fg-primary'
+                    : 'text-fg-secondary',
+                )}
+              >
+                {s.title}
+              </span>
+              <span className="shrink-0 text-meta text-fg-muted">
+                {relativeTime(s.updatedAt)}
+              </span>
+            </Link>
+          );
+        })}
+        {sessions.length === 0 && (
+          <div className="px-2 py-1.5 text-meta italic text-fg-muted">
+            no sessions
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
   );
 }

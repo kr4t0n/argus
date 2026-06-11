@@ -56,7 +56,13 @@ Command ── emits ──▶ many ResultChunks (streamed)
   the underlying CLI's native conversation id (Claude Code `--resume`, Codex
   `resume`, Cursor CLI `--resume`) via `Session.externalId`. The server stores
   the `externalId` after the sidecar reports it on the first turn.
-- A **Command** is a single user turn within a session.
+  `Session.modelSelection` (nullable JSON) holds the session-default
+  `ModelSelection` (`{model, effort, context, speed}`); NULL means "CLI
+  default" — no model flags are passed, the pre-picker behavior.
+- A **Command** is a single user turn within a session. At dispatch the
+  session's `modelSelection` is merged under any per-turn `options`
+  (per-turn wins key-by-key) and the merged result is snapshotted on
+  `Command.options` so history can answer "which model ran this turn?".
 - A **ResultChunk** is one streamed fragment: `delta`, `tool`, `stdout`,
   `stderr`, `progress`, `final`, or `error`.
 
@@ -78,12 +84,40 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   emits `machine:upsert` / `machine:status` / `machine:removed` /
   `agent:spawn-failed` over WS. Also publishes `create-agent` / `destroy-agent` commands on
   `machine:{mid}:control`.
+- `project/` — server-side metadata for "projects" (the
+  `(machineId, workingDir)` pair the sidebar groups sessions
+  under). Projects still have no first-class lifecycle — the
+  `Project` table exists for metadata that must roam across
+  browsers, today just the user-picked icon glyph (workspace-
+  shared like `Machine.iconKey`). `GET /projects` hydrates the
+  dashboard's icon map; `PATCH /projects/icon` upserts by
+  `(machineId, workingDir)` (404s for deleted machines, keeps the
+  row with `iconKey` NULL on reset) and broadcasts the DTO via
+  the global `project:upsert` WS event.
 - `agent-registry/` — `Agent` CRUD: list, get, archive/unarchive, plus
   the shared `agentToDto` mapper. Lifecycle ingestion lives in
   `machine/`; this module is purely about the persisted Agent row.
 - `session/` — CRUD for sessions; resolves `externalId` so each subsequent
-  turn carries it back to the sidecar for `--resume`.
+  turn carries it back to the sidecar for `--resume`. Also owns the
+  session-default model choice: `POST /sessions` accepts
+  `modelSelection`, `PATCH /sessions/:id/model` replaces/clears it
+  (null = back to CLI default), both deliberately without deep
+  validation — selections pass through to the CLI opaquely.
 - `command/` — persists commands, `XADD`s to `agent:{id}:cmd`, handles cancel.
+  `dispatch` merges `Session.modelSelection` under per-turn `options`
+  and records the merged map on `Command.options`.
+- `machine/models.{service,controller}.ts` — `GET /agents/:id/models`.
+  Reads are DB-first: the sidecar pushes each agent's catalog at
+  supervisor spawn (unsolicited `model-catalog-response`, empty
+  `requestId`) and it's persisted on `Agent.modelCatalog`/`At`, so the
+  endpoint is a Postgres read — warm across server restarts and for
+  every browser. Stored catalogs older than 6h are served as-is while
+  a background revalidate runs (stale-while-revalidate; reads never
+  block on freshness). The live RPC (same pending-promise pattern as
+  `fs.service`) runs only for `?refresh=1` (the picker's manual
+  refresh — the one synchronous path), the cold no-stored-catalog
+  case, and the background revalidate; all of them re-persist.
+  In-flight live fetches are collapsed per agent.
 - `attachment/` — file/image attachments. `POST /attachments` (JWT-
   guarded, multer `FileInterceptor`) streams an upload into S3/MinIO
   (`@aws-sdk/client-s3`, `forcePathStyle` for MinIO) and records an
@@ -236,6 +270,25 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Built-in adapters that report `--version` implement the optional
   `Versioned` interface (see `util.ReadBinaryVersion`); the daemon
   prefers the auto-detected string over anything baked in.
+  - **Model selection** rides `Command.Options` as flat keys
+    (`model` / `effort` / `context` / `speed`, constants in
+    `protocol`); each `Execute` appends only the flags its CLI knows:
+    claude-code `--model x[1m] --effort l`, codex `--model x -c
+    model_reasoning_effort=l -c service_tier=fast`, cursor-cli
+    `--model <slug>` (the slug already encodes everything).
+  - **Model catalogs** come from the optional `ModelLister` capability
+    (`models_claude.go` static alias table, `models_codex.go` parses
+    `codex debug models` JSON, `models_cursor.go` parses
+    `cursor-agent models` lines and labels family/variant groups).
+    Two paths: the daemon fires `PushModelCatalog` after every
+    supervisor spawn (unsolicited push, empty `requestId`, 30 s exec
+    budget, errors logged-not-published so a boot hiccup can't clobber
+    the server's stored copy), and `HandleListModels` answers the
+    on-demand `list-models` RPC with a 12 s deadline so a wedged CLI
+    surfaces as a catalog error, not a server-side timeout. Both run
+    under `cliSlots` (4) — a dedicated subprocess gate, deliberately
+    NOT `fsSlots`, so tree walks and CLI probes can't queue behind
+    each other.
 - `sidecarlink/` — gorilla/websocket client that dials
   `ws://{server.url}/sidecar-link`, performs a `hello`/`hello-ack`
   handshake, and exposes `Publish(frame)` + `Inbound()`. Reconnects
@@ -337,8 +390,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   cursor-agent ships todos with `TODO_STATUS_*` enum values and a
   `updateTodosToolCall` key; the sidecar mapper normalises both into
   Claude Code's lowercase form, and the component falls back to the same
-  normalisation on the off chance an older sidecar is in front. See the
-  AGENTS.md note on stream-json drift.
+  normalisation on the off chance an older sidecar is in front. Claude
+  Code ≥ 2.1.x replaced `TodoWrite` with incremental `TaskCreate`/
+  `TaskUpdate`/`TaskList` tools; the sidecar reconstructs the list and
+  emits synthesized `TodoWrite` snapshot chunks, so this component needs
+  no awareness of them (see the "Task tools" gotcha). See the AGENTS.md
+  note on stream-json drift.
 - `components/Sidebar.tsx` — flat project → session tree. Top level
   groups agents by `(workingDir, machineId)` — same path on different
   machines lives on different physical filesystems, so they get
@@ -403,13 +460,24 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   (agent-mode) form. Each project row's folder icon is itself a
   picker (`ProjectIcon`/`ProjectIconGlyph`) — clicking opens a
   6×5 letter grid plus a `reset to folder` action; the picked
-  A-Z glyph persists to `LocalProject.iconKey` and renders in
-  place of the default Folder in both the main sidebar and the
-  rail. No auto-default from the project name — picking is what
-  binds the letter to the project in the user's memory. Rename
-  is the pencil action in the project row's hover stack and
-  commits via `useProjectStore.add()` on the existing key
-  (creates a placeholder for purely agent-derived rows).
+  A-Z glyph persists to the server's `Project` row (PATCH
+  /projects/icon via the `project/` module, workspace-shared like
+  `Machine.iconKey`) and renders in place of the default Folder
+  in both the main sidebar and the rail. The dashboard hydrates
+  `useProjectStore.serverIcons` from `GET /projects` at boot
+  (and on WS reconnect), keeps it warm via `project:upsert`
+  events, and persists it with the store so glyphs render
+  instantly on reload; the picker updates the map optimistically
+  and rolls back on API failure. `LocalProject.iconKey` is the
+  deprecated pre-sync location — `migrateLocalProjectIconsToServer`
+  (one-shot, mirrors `migrateMachineIcons.ts`) pushes leftovers up
+  on boot once machines + server icons have hydrated, then strips
+  the local copies so a stale letter can't shadow a reset made
+  from another browser. No auto-default from the project name —
+  picking is what binds the letter to the project in the user's
+  memory. Rename is the pencil action in the project row's hover
+  stack and commits via `useProjectStore.add()` on the existing
+  key (creates a placeholder for purely agent-derived rows).
 - `lib/projects.ts` — shared `groupProjects()` derivation +
   `ProjectGroup` type consumed by both `Sidebar` and
   `SidebarRail`. Pure function over `(agentOrder, agents,
@@ -419,7 +487,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Renders one tile per project using the same `groupProjects()`
   derivation as the main sidebar, with `ProjectIconGlyph` for the
   glyph. Click jumps to the project's most-recent non-archived
-  session across any of its agents. Archived projects/agents and
+  session across any of its agents; hovering a tile for ~500ms
+  opens a session flyout (portaled to `<body>` to escape the
+  rail's `overflow-y-auto`, same trick as `CreateAgentPopover`)
+  listing the project's non-archived sessions so any session is
+  one click away without re-expanding the sidebar. A 200ms close
+  grace lets the pointer cross the tile→panel gap; the flyout
+  header replaces the tile's old native `title` tooltip (they'd
+  race each other on hover). Archived projects/agents and
   the synthetic `no project` bucket are hidden — the rail is for
   active-state navigation, not history. Machine strip + logout at
   the bottom unchanged.
@@ -526,7 +601,21 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - **stream-json drift**: each CLI's NDJSON event shape changes between
   versions. The mappers (`mapClaudeLine`, `mapCodexLine`) are
   defensive — unknown events fall through as `progress` chunks rather than
-  crashing.
+  crashing. For `system` events, the unknown-subtype fallback is
+  **deliberately visible** (Content `"system"` → italic row in the
+  activity timeline): that junk row is the observability breadcrumb that
+  tells us a new subtype appeared and needs explicit handling. Don't
+  "fix" it by making the fallback content-less — special-case known-noisy
+  subtypes individually instead (as done for `thinking_tokens`,
+  `task_notification`, and `api_retry`).
+- **`api_retry` (Claude Code)**: `{"type":"system","subtype":"api_retry",
+  "error_status":502,"attempt":N,"max_retries":10,"retry_delay_ms":…}`
+  fires when an API call fails retryably and the CLI is backing off; it
+  can fire several times per turn during API incidents. Mapped to a
+  **content-less** `progress` chunk (full event in `meta`) so it doesn't
+  render as a junk "system" row. No UI affordance yet — a future
+  improvement could read `meta` to show "retrying N/10" while the turn
+  stalls in backoff.
 - **Extended thinking (Claude Code)**: newer `claude` emits two distinct
   thinking signals, handled in `mapClaudeLine`:
   1. `{"type":"system","subtype":"thinking_tokens","estimated_tokens":N,
@@ -559,6 +648,33 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
      summarized thinking (run the agent on 4.6/sonnet-4.6 to get them).
      The empty block is expected, not a bug; the `if s != ""` guard
      suppresses it so no blank rows render.
+- **Task tools (Claude Code ≥ 2.1.x)**: newer `claude` plans with
+  `TaskCreate`/`TaskUpdate`/`TaskList` instead of `TodoWrite`. Unlike
+  `TodoWrite` — where every call carried the FULL todos array in its
+  input — these are **incremental**: `TaskCreate` input is one task's
+  `{subject, description, activeForm?}` and the assigned id appears
+  *only in the result text* (`"Task #7 created successfully: …"`);
+  `TaskUpdate` is `{taskId, status?, subject?, …}` with statuses
+  `pending|in_progress|completed|deleted` (deleted = permanent removal);
+  `TaskList` results are plain text lines `#1 [in_progress] Subject`
+  with optional `(owner)` / `[blocked by #N]` suffixes, or
+  `"No tasks found"`. `taskListState`
+  (`packages/sidecar/internal/adapter/claude_tasks.go`) replays this
+  traffic — stash the tool_use, apply at the matching *successful*
+  tool_result — and the mapper follows each task result with a
+  **synthesized full-list TodoWrite chunk**
+  (`meta.tool="TodoWrite"`, `meta.synthesized=true`,
+  `meta.id=<tool_use_id>+":todos"`) so `TodoWindow` renders both
+  generations of the tool through one code path. Subjects learned from
+  tool *inputs* are authoritative; subjects parsed from `TaskList`
+  output are best-effort (the owner suffix is not strippable without
+  ambiguity) and never overwrite them. A `TaskList` resync also heals
+  the post-`--resume` case where tasks predate the sidecar run; until
+  then an update to an unknown id renders a `Task #<id>` placeholder.
+  The raw `TaskCreate`/`TaskUpdate`/`TaskList`/`TaskGet` pills are
+  hidden from the activity timeline (`isDedicatedPanelTool` in
+  `ActivityPill.tsx`) since the synthesized snapshot already drives the
+  panel. All shapes verified empirically against `claude` 2.1.170.
 - **File-edit diffs**: every adapter (Codex, Claude Code, Cursor CLI)
   shares the snapshot-then-diff machinery in
   `packages/sidecar/internal/adapter/filediff.go`. The flow is uniform:
@@ -839,6 +955,52 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   oscillators (no bundled asset) which can be silently blocked by
   autoplay policy on browsers that haven't seen a user gesture yet,
   but on a logged-in dashboard that's effectively never.
+- **Interactive controls must not render inside `<label>`** (`ui/Select`,
+  adapter chips): a `<label>` implicitly associates with its FIRST
+  labelable descendant, then (1) re-dispatches clicks on non-labelable
+  areas to it — selecting a dropdown option re-toggled the panel open;
+  clicking empty space next to the adapter chips selected the first
+  chip — and (2) propagates `:hover` styling to it, so hovering blank
+  field space lit up the first chip as if selected. The click half is
+  engine-dependent, which made it look like a Safari bug: Blink skips
+  forwarding when propagation is stopped (the panel's
+  `stopPropagation` "fixed" Chrome), WebKit runs label activation as
+  the click's default action and forwards regardless. Structural fix:
+  the dialog's `Field` takes `as="div"` for any children that embed
+  their own interactive controls (model picker, adapter chips). Keep
+  it that way.
+- **Model catalogs describe; they never gate**: selections pass
+  through `Command.options` → adapter argv with NO validation against
+  the catalog — on the server, the sidecar, or anywhere else. This is
+  deliberate: it keeps stale catalogs harmless, makes the free-text
+  "custom…" model id a first-class path, and matches the entitlement
+  reality (Claude Code's `sonnet[1m]` is plan/credit-gated with no way
+  to pre-check; a bad choice must surface as a turn error). Resist
+  adding validation here when something "looks wrong" — degraded
+  pass-through is the designed behavior.
+- **Cursor slug parsing: at most ONE effort token, labeling only**:
+  `models_cursor.go` groups cursor's ~110 flat slugs into families by
+  stripping variant segments right-to-left (`fast`, `thinking`, and a
+  single effort token, with `extra-high` counting as one token across
+  two segments). The one-effort rule is load-bearing — `max` is an
+  effort suffix in `claude-fable-5-max` but part of the *model name*
+  in `gpt-5.1-codex-max-low`, and segment order flips between
+  generations (`claude-opus-4-8-thinking-high` vs
+  `claude-4.6-opus-high-thinking`). Crucially the parser only ever
+  produces LABELS (`family`/`variantLabel`); the dispatched value is
+  always the exact slug from the CLI's own list, so a parsing miss is
+  a cosmetic grouping bug, never a dispatch failure. Don't "improve"
+  it into slug recomposition.
+- **Claude Code's model catalog is a compiled-in table**: the CLI has
+  no list-models surface (no subcommand; the stream-json control
+  protocol rejects `supported_models` and friends — probed on 2.1.170),
+  so `models_claude.go` hardcodes the documented aliases + effort/1m
+  facets. Safe because aliases track the latest models and `--effort`
+  falls back gracefully, but the facet matrix should be re-checked
+  against https://code.claude.com/docs/en/model-config when models
+  launch. Codex's catalog command lives under `codex debug models` —
+  machine-readable JSON but nominally a debug surface; the parser is
+  defensive and any failure degrades to the free-text input.
 - **Context-window lookup is hand-maintained**: the donut on the
   session header's `UsageBadge` reads its denominator from
   `packages/shared-types/src/contextWindow.ts`, a hardcoded family →

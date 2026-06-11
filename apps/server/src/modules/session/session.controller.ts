@@ -11,8 +11,18 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { IsArray, IsBoolean, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import {
+  IsArray,
+  IsBoolean,
+  IsInt,
+  IsObject,
+  IsOptional,
+  IsString,
+  Min,
+  MinLength,
+} from 'class-validator';
 import { Transform, Type } from 'class-transformer';
+import type { ModelSelection } from '@argus/shared-types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SessionService } from './session.service';
 import { CommandService } from '../command/command.service';
@@ -31,6 +41,21 @@ class CreateSessionDto {
   @IsOptional()
   @IsString()
   prompt?: string;
+
+  /** Session-default model choice from the new-session dialog. The
+   *  shape is deliberately not deep-validated — selections pass
+   *  through to the CLI opaquely (free-text models are a feature). */
+  @IsOptional()
+  @IsObject()
+  modelSelection?: ModelSelection;
+}
+
+class SetSessionModelDto {
+  /** New session-default selection; null clears to "CLI default".
+   *  Same pass-through validation stance as CreateSessionDto. */
+  @IsOptional()
+  @IsObject()
+  modelSelection?: ModelSelection | null;
 }
 
 class RenameSessionDto {
@@ -117,7 +142,12 @@ export class SessionController {
   @Post()
   async create(@Req() req: AuthedRequest, @Body() body: CreateSessionDto) {
     const title = body.title ?? body.prompt?.slice(0, 60) ?? 'New session';
-    const session = await this.sessions.create(req.user.id, body.agentId, title);
+    const session = await this.sessions.create(
+      req.user.id,
+      body.agentId,
+      title,
+      body.modelSelection,
+    );
     let command = null;
     if (body.prompt) {
       command = await this.commands.dispatch(req.user.id, session.id, body.prompt);
@@ -174,6 +204,15 @@ export class SessionController {
     @Body() body: RenameSessionDto,
   ) {
     return this.sessions.rename(req.user.id, id, body.title);
+  }
+
+  @Patch(':id/model')
+  setModel(
+    @Req() req: AuthedRequest,
+    @Param('id') id: string,
+    @Body() body: SetSessionModelDto,
+  ) {
+    return this.sessions.setModelSelection(req.user.id, id, body.modelSelection ?? null);
   }
 
   @Post(':id/archive')

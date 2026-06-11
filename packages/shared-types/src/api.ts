@@ -7,6 +7,8 @@ import type {
   FSEntry,
   GitCommit,
   GitStatus,
+  ModelCatalogEntry,
+  ModelSelection,
   ResultChunk,
   SessionStatus,
 } from './protocol';
@@ -60,6 +62,23 @@ export interface MachineDTO {
   iconKey: string | null;
 }
 
+/**
+ * Server-side metadata for a "project" — the (machineId, workingDir)
+ * pair the sidebar groups sessions under. Projects still have no
+ * first-class lifecycle (the sidebar derives rows from agents'
+ * workingDirs plus client-local placeholders); this row exists for
+ * metadata that must roam across browsers. Today that's just the
+ * user-picked icon glyph, workspace-shared like Machine.iconKey.
+ */
+export interface ProjectDTO {
+  id: string;
+  machineId: string;
+  workingDir: string;
+  /** User-picked glyph (a single A-Z letter today). Null = use the
+   *  frontend's default folder icon. Set via PATCH /projects/icon. */
+  iconKey: string | null;
+}
+
 export interface AgentDTO {
   id: string;
   /** User-friendly label, unique within a machine. */
@@ -99,6 +118,9 @@ export interface SessionDTO {
   title: string;
   externalId: string | null;
   status: SessionStatus;
+  /** Session-default model choice; null/absent means "CLI default".
+   *  Merged into every turn's Command.options (per-turn override wins). */
+  modelSelection?: ModelSelection | null;
   /** ISO timestamp; null means the session is active/unarchived. */
   archivedAt: string | null;
   createdAt: string;
@@ -129,6 +151,10 @@ export interface CommandDTO {
   kind: 'execute' | 'cancel';
   prompt: string | null;
   status: CommandStatus;
+  /** Merged adapter options this turn was dispatched with (session
+   *  default + per-turn override) — primarily the ModelSelection keys.
+   *  Absent for pre-feature rows and turns sent with no options. */
+  options?: Record<string, unknown>;
   createdAt: string;
   completedAt: string | null;
   /** Files the user attached to this turn; absent/empty for plain text. */
@@ -141,6 +167,13 @@ export interface CreateSessionRequest {
   agentId: string;
   title?: string;
   prompt?: string;
+  /** Session-default model choice from the new-session dialog. */
+  modelSelection?: ModelSelection;
+}
+
+export interface UpdateSessionModelRequest {
+  /** New session default; null clears back to "CLI default". */
+  modelSelection: ModelSelection | null;
 }
 
 export interface CreateCommandRequest {
@@ -149,6 +182,19 @@ export interface CreateCommandRequest {
    *  to this turn. The server links them to the created command. */
   attachmentIds?: string[];
   options?: Record<string, unknown>;
+}
+
+/**
+ * REST face of GET /agents/:id/models. `fetchedAt` lets the dashboard
+ * show staleness; `source` distinguishes the compiled-in claude-code
+ * table from live CLI output. The server caches per agent with a TTL —
+ * pass `?refresh=1` to bypass.
+ */
+export interface ModelCatalogResponse {
+  agentId: string;
+  source: 'static' | 'cli';
+  fetchedAt: string;
+  models: ModelCatalogEntry[];
 }
 
 // ─────────────────────────────────────────────────────────────────────

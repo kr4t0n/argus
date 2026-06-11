@@ -206,6 +206,21 @@ function describe(name: string, input: Record<string, unknown>, fallback: string
     return { verb: 'Searched web for', arg: query, mono: false };
   if (n === 'task' || n === 'todo' || n === 'todowrite')
     return { verb: 'Updated todos', arg: '', mono: false };
+  if (n === 'taskcreate') {
+    const subject = (input.subject as string | undefined) ?? '';
+    return { verb: 'Created task', arg: subject, mono: false };
+  }
+  if (n === 'taskupdate') {
+    const taskId = (input.taskId as string | undefined) ?? '';
+    const status = (input.status as string | undefined) ?? '';
+    const arg = taskId ? `#${taskId}${status ? ` → ${status}` : ''}` : '';
+    return { verb: 'Updated task', arg, mono: false };
+  }
+  if (n === 'tasklist') return { verb: 'Listed tasks', arg: '', mono: false };
+  if (n === 'taskget') {
+    const taskId = (input.taskId as string | undefined) ?? '';
+    return { verb: 'Read task', arg: taskId ? `#${taskId}` : '', mono: false };
+  }
   if (n === 'agent') {
     const subtype = (input.subagent_type as string | undefined) ?? '';
     const desc = (input.description as string | undefined) ?? '';
@@ -231,6 +246,8 @@ function iconFor(name: string): LucideIcon {
   if (n === 'glob' || n === 'find' || n === 'ls') return FolderSearch;
   if (n === 'bash' || n === 'shell' || n === 'exec' || n === 'run') return Terminal;
   if (n === 'task' || n === 'todo' || n === 'todowrite') return ListTree;
+  if (n === 'taskcreate' || n === 'taskupdate' || n === 'tasklist' || n === 'taskget')
+    return ListTree;
   if (n === 'agent') return Bot;
   if (n === 'fetch' || n === 'webfetch' || n === 'websearch') return Globe;
   if (n === 'codebase' || n === 'symbols') return FileCode2;
@@ -258,7 +275,15 @@ function iconColorFor(name: string): string {
     return 'text-teal-600/70 dark:text-teal-400/70';
   if (n === 'bash' || n === 'shell' || n === 'exec' || n === 'run')
     return 'text-emerald-600/70 dark:text-emerald-400/70';
-  if (n === 'task' || n === 'todo' || n === 'todowrite')
+  if (
+    n === 'task' ||
+    n === 'todo' ||
+    n === 'todowrite' ||
+    n === 'taskcreate' ||
+    n === 'taskupdate' ||
+    n === 'tasklist' ||
+    n === 'taskget'
+  )
     return 'text-orange-600/70 dark:text-orange-400/70';
   if (n === 'agent')
     return 'text-amber-600/80 dark:text-amber-400/80';
