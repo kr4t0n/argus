@@ -586,7 +586,21 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - **stream-json drift**: each CLI's NDJSON event shape changes between
   versions. The mappers (`mapClaudeLine`, `mapCodexLine`) are
   defensive — unknown events fall through as `progress` chunks rather than
-  crashing.
+  crashing. For `system` events, the unknown-subtype fallback is
+  **deliberately visible** (Content `"system"` → italic row in the
+  activity timeline): that junk row is the observability breadcrumb that
+  tells us a new subtype appeared and needs explicit handling. Don't
+  "fix" it by making the fallback content-less — special-case known-noisy
+  subtypes individually instead (as done for `thinking_tokens`,
+  `task_notification`, and `api_retry`).
+- **`api_retry` (Claude Code)**: `{"type":"system","subtype":"api_retry",
+  "error_status":502,"attempt":N,"max_retries":10,"retry_delay_ms":…}`
+  fires when an API call fails retryably and the CLI is backing off; it
+  can fire several times per turn during API incidents. Mapped to a
+  **content-less** `progress` chunk (full event in `meta`) so it doesn't
+  render as a junk "system" row. No UI affordance yet — a future
+  improvement could read `meta` to show "retrying N/10" while the turn
+  stalls in backoff.
 - **Extended thinking (Claude Code)**: newer `claude` emits two distinct
   thinking signals, handled in `mapClaudeLine`:
   1. `{"type":"system","subtype":"thinking_tokens","estimated_tokens":N,

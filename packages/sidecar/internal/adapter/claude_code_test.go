@@ -35,6 +35,50 @@ func TestMapClaudeThinkingTokens(t *testing.T) {
 	}
 }
 
+// TestMapClaudeAPIRetry verifies the `system`/`api_retry` event is forwarded
+// content-less (no junk "system" row in the activity timeline) with the full
+// event preserved in Meta.
+func TestMapClaudeAPIRetry(t *testing.T) {
+	line := `{"type":"system","subtype":"api_retry","uuid":"u1","session_id":"s1",` +
+		`"error":"server_error","error_status":502,"attempt":1,"max_retries":10,` +
+		`"retry_delay_ms":560.59}`
+	chunks := mapClaudeLine(line, nil, "")
+
+	if len(chunks) != 1 {
+		t.Fatalf("want 1 chunk, got %d: %+v", len(chunks), chunks)
+	}
+	c := chunks[0]
+	if c.Kind != protocol.KindProgress {
+		t.Fatalf("want KindProgress, got %q", c.Kind)
+	}
+	if c.Content != "" {
+		t.Fatalf("want empty content (no junk row), got %q", c.Content)
+	}
+	if got := c.Meta["subtype"]; got != "api_retry" {
+		t.Fatalf("want subtype=api_retry in Meta, got %v", got)
+	}
+}
+
+// TestMapClaudeUnknownSystemSubtype pins the deliberate fall-through: system
+// events with subtypes we don't handle yet must stay VISIBLE (Content ==
+// "system") — that junk row is the observability breadcrumb that tells us a
+// new event shape appeared and is worth handling explicitly.
+func TestMapClaudeUnknownSystemSubtype(t *testing.T) {
+	line := `{"type":"system","subtype":"some_future_event","session_id":"s1"}`
+	chunks := mapClaudeLine(line, nil, "")
+
+	if len(chunks) != 1 {
+		t.Fatalf("want 1 chunk, got %d: %+v", len(chunks), chunks)
+	}
+	c := chunks[0]
+	if c.Kind != protocol.KindProgress {
+		t.Fatalf("want KindProgress, got %q", c.Kind)
+	}
+	if c.Content != "system" {
+		t.Fatalf("want visible content %q, got %q", "system", c.Content)
+	}
+}
+
 // TestMapClaudeThinkingBlock verifies an assistant `thinking` content block
 // is surfaced as a progress chunk tagged contentType=thinking — and crucially
 // NOT as a delta, which would leak the reasoning into the final answer.

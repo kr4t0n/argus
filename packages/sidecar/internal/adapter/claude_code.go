@@ -335,6 +335,17 @@ func mapClaudeLine(line string, state *fileEditState, workingDir string) []Chunk
 			// wants the feedback) and rely on the next chunk to imply
 			// completion.
 			return nil
+		case "api_retry":
+			// Emitted when an API call fails with a retryable error (e.g.
+			// a 502) and Claude Code is about to back off and retry; can
+			// fire several times per turn (attempt/max_retries/error_status/
+			// retry_delay_ms ride in the event). Forwarded content-less so
+			// it never renders as a junk "system" row, with the full event
+			// in Meta should a UI want to surface retry status. Unknown
+			// subtypes intentionally keep falling through to the visible
+			// generic chunk below — that junk row is how we notice new
+			// event shapes worth handling.
+			return []Chunk{{Kind: protocol.KindProgress, Meta: ev}}
 		case "thinking_tokens":
 			// Newer Claude Code emits this repeatedly while extended
 			// thinking is in progress: `estimated_tokens` is the running
