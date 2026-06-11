@@ -106,13 +106,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `command/` — persists commands, `XADD`s to `agent:{id}:cmd`, handles cancel.
   `dispatch` merges `Session.modelSelection` under per-turn `options`
   and records the merged map on `Command.options`.
-- `machine/models.{service,controller}.ts` — `GET /agents/:id/models`,
-  the model-catalog RPC (same pending-promise pattern as `fs.service`:
-  publish `list-models` on `machine:{mid}:control`, resolve on the
-  `model-catalog-response` lifecycle event) plus a 1-hour per-agent
-  cache and in-flight request collapsing. `?refresh=1` bypasses the
-  cache. Catalog errors reject the request — the dashboard degrades to
-  a free-text model input.
+- `machine/models.{service,controller}.ts` — `GET /agents/:id/models`.
+  Reads are DB-first: the sidecar pushes each agent's catalog at
+  supervisor spawn (unsolicited `model-catalog-response`, empty
+  `requestId`) and it's persisted on `Agent.modelCatalog`/`At`, so the
+  endpoint is a Postgres read — warm across server restarts and for
+  every browser. Stored catalogs older than 6h are served as-is while
+  a background revalidate runs (stale-while-revalidate; reads never
+  block on freshness). The live RPC (same pending-promise pattern as
+  `fs.service`) runs only for `?refresh=1` (the picker's manual
+  refresh — the one synchronous path), the cold no-stored-catalog
+  case, and the background revalidate; all of them re-persist.
+  In-flight live fetches are collapsed per agent.
 - `attachment/` — file/image attachments. `POST /attachments` (JWT-
   guarded, multer `FileInterceptor`) streams an upload into S3/MinIO
   (`@aws-sdk/client-s3`, `forcePathStyle` for MinIO) and records an
@@ -275,9 +280,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     (`models_claude.go` static alias table, `models_codex.go` parses
     `codex debug models` JSON, `models_cursor.go` parses
     `cursor-agent models` lines and labels family/variant groups).
-    The supervisor's `HandleListModels` answers the `list-models`
-    control RPC with a 12 s exec deadline so a wedged CLI surfaces as
-    a catalog error, not a server-side timeout.
+    Two paths: the daemon fires `PushModelCatalog` after every
+    supervisor spawn (unsolicited push, empty `requestId`, 30 s exec
+    budget, errors logged-not-published so a boot hiccup can't clobber
+    the server's stored copy), and `HandleListModels` answers the
+    on-demand `list-models` RPC with a 12 s deadline so a wedged CLI
+    surfaces as a catalog error, not a server-side timeout. Both run
+    under `cliSlots` (4) — a dedicated subprocess gate, deliberately
+    NOT `fsSlots`, so tree walks and CLI probes can't queue behind
+    each other.
 - `sidecarlink/` — gorilla/websocket client that dials
   `ws://{server.url}/sidecar-link`, performs a `hello`/`hello-ack`
   handshake, and exposes `Publish(frame)` + `Inbound()`. Reconnects

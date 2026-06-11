@@ -195,6 +195,13 @@ model Agent {
   lastHeartbeatAt  DateTime
   registeredAt     DateTime
   archivedAt       DateTime? // soft-hide from sidebar; preserves history.
+  // Stored model catalog: {source, models: ModelCatalogEntry[]}.
+  // Written by the sidecar's unsolicited push at supervisor spawn and
+  // by every on-demand fetch; read by GET /agents/:id/models so the
+  // picker never waits on a live CLI exec. modelCatalogAt drives the
+  // stale-while-revalidate threshold. NULL = never probed.
+  modelCatalog     Json?
+  modelCatalogAt   DateTime?
 
   machine   Machine    @relation(fields: [machineId], references: [id], onDelete: Cascade)
   sessions  Session[]

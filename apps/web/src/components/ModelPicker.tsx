@@ -40,7 +40,10 @@ export function useModelCatalog(agentId: string | null) {
   const [catalog, setCatalog] = useState<ModelCatalogResponse | null>(
     agentId ? (catalogCache.get(agentId) ?? null) : null,
   );
+  // loading = nothing to show yet; refreshing = newer data on its way
+  // while the current list stays interactive (client-side SWR).
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -49,15 +52,16 @@ export function useModelCatalog(agentId: string | null) {
       setError(null);
       return;
     }
-    const cached = catalogCache.get(agentId);
-    if (cached) {
-      setCatalog(cached);
-      setError(null);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
+    const cached = catalogCache.get(agentId) ?? null;
+    setCatalog(cached);
     setError(null);
+    // Always revalidate, even on cache hit — the server read is a
+    // Postgres lookup now (catalogs are pushed by the sidecar at agent
+    // spawn), so this is cheap and picks up server-side refreshes the
+    // module cache would otherwise mask for the whole page lifetime.
+    let cancelled = false;
+    if (cached) setRefreshing(true);
+    else setLoading(true);
     api
       .getModelCatalog(agentId)
       .then((resp) => {
@@ -65,20 +69,26 @@ export function useModelCatalog(agentId: string | null) {
         if (!cancelled) setCatalog(resp);
       })
       .catch((e: Error) => {
-        if (!cancelled) setError(e.message || 'failed to load models');
+        // A failed revalidate keeps showing the cached list silently.
+        if (!cancelled && !cached) setError(e.message || 'failed to load models');
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       });
     return () => {
       cancelled = true;
     };
   }, [agentId]);
 
+  /** Manual refresh — the one path that forces a live CLI probe
+   *  (`?refresh=1`). The current list stays interactive throughout;
+   *  a failure leaves it untouched and surfaces the reason. */
   const refresh = () => {
     if (!agentId) return;
-    catalogCache.delete(agentId);
-    setLoading(true);
+    setRefreshing(true);
     setError(null);
     api
       .getModelCatalog(agentId, { refresh: true })
@@ -86,11 +96,11 @@ export function useModelCatalog(agentId: string | null) {
         catalogCache.set(agentId, resp);
         setCatalog(resp);
       })
-      .catch((e: Error) => setError(e.message || 'failed to load models'))
-      .finally(() => setLoading(false));
+      .catch((e: Error) => setError(e.message || 'refresh failed'))
+      .finally(() => setRefreshing(false));
   };
 
-  return { catalog, loading, error, refresh };
+  return { catalog, loading, refreshing, error, refresh };
 }
 
 const EFFORT_LABEL: Record<string, string> = {
@@ -113,7 +123,7 @@ type Props = {
 };
 
 export function ModelPicker({ agentId, value, onChange }: Props) {
-  const { catalog, loading, error, refresh } = useModelCatalog(agentId);
+  const { catalog, loading, refreshing, error, refresh } = useModelCatalog(agentId);
   // Sticky custom mode: once the user picks "custom…" we keep the text
   // input visible even while the field is empty.
   const [customMode, setCustomMode] = useState(false);
@@ -136,12 +146,10 @@ export function ModelPicker({ agentId, value, onChange }: Props) {
   }, [catalog]);
 
   const selected = value?.model ? byId.get(value.model) : undefined;
-  const isCustom = customMode || (!!value?.model && !selected && !!catalog);
-
-  // No catalog at all (unknown agent, fetch failed) → free-text input
-  // is the whole picker. This is the designed degradation path, and
-  // doubles as the advanced escape hatch.
-  const catalogUnavailable = !catalog && !loading;
+  // A set model with no matching catalog entry renders as custom even
+  // while the catalog is absent/loading — if the list arrives and
+  // contains it, this flips to the dropdown selection automatically.
+  const isCustom = customMode || (!!value?.model && !selected);
 
   function emitEntry(entry: ModelCatalogEntry) {
     const sel: ModelSelection = { model: entry.id };
@@ -187,44 +195,6 @@ export function ModelPicker({ agentId, value, onChange }: Props) {
         ? `f:${selected.family}`
         : `m:${selected.id}`
       : '';
-
-  if (loading) {
-    return (
-      <div className="flex items-center gap-2 rounded-md bg-surface-2/40 px-3 py-2 text-xs text-fg-tertiary">
-        <Loader2 className="h-3 w-3 animate-spin" />
-        loading models…
-      </div>
-    );
-  }
-
-  if (catalogUnavailable) {
-    return (
-      <div className="space-y-1">
-        <input
-          value={value?.model ?? ''}
-          onChange={(e) =>
-            onChange(e.target.value.trim() ? { model: e.target.value.trim() } : null)
-          }
-          placeholder="default (or type a model id)"
-          className="w-full rounded-md bg-surface-2/40 px-3 py-2 font-mono text-xs text-fg-primary outline-none transition-colors placeholder:text-fg-muted focus:bg-surface-2"
-        />
-        <div className="flex items-center gap-1.5 text-meta">
-          <span>{error ? `model list unavailable: ${error}` : 'model list unavailable'}</span>
-          {agentId && (
-            <button
-              type="button"
-              onClick={refresh}
-              className="inline-flex items-center gap-0.5 text-fg-tertiary hover:text-fg-primary"
-              title="retry"
-            >
-              <RefreshCw className="h-2.5 w-2.5" />
-              retry
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
 
   const familyMembers = selected?.family ? (families.get(selected.family) ?? []) : [];
 
@@ -325,7 +295,31 @@ export function ModelPicker({ agentId, value, onChange }: Props) {
         {selected?.description && (
           <span className="min-w-0 text-meta">{selected.description}</span>
         )}
+
+        {agentId && (
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={refreshing}
+            title="refresh model list (probes the CLI directly)"
+            className="ml-auto rounded-md p-1.5 text-fg-muted transition-colors hover:bg-surface-2/60 hover:text-fg-primary disabled:hover:bg-transparent"
+          >
+            <RefreshCw className={cn('h-3 w-3', refreshing && 'animate-spin')} />
+          </button>
+        )}
       </div>
+
+      {loading && (
+        <div className="flex items-center gap-1.5 text-meta">
+          <Loader2 className="h-2.5 w-2.5 animate-spin" />
+          loading models — Default works right away
+        </div>
+      )}
+      {error && !loading && (
+        <div className="text-meta text-amber-600 dark:text-amber-400/80">
+          {catalog ? `refresh failed: ${error}` : `model list unavailable: ${error}`}
+        </div>
+      )}
 
       {isCustom && (
         <input

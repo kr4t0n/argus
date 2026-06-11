@@ -647,16 +647,24 @@ export interface ListModelsRequestCommand {
 }
 
 /**
- * Sidecar's reply. `source` says how the catalog was produced: 'static'
- * (claude-code's compiled-in table) or 'cli' (codex `debug models`,
- * cursor `models`). On failure (CLI errored, not logged in, parse
- * failure) `error` is set and `models` omitted — the dashboard degrades
- * to a free-text model input.
+ * Sidecar's reply — or unsolicited push. `source` says how the catalog
+ * was produced: 'static' (claude-code's compiled-in table) or 'cli'
+ * (codex `debug models`, cursor `models`). On failure (CLI errored,
+ * not logged in, parse failure) `error` is set and `models` omitted —
+ * the dashboard degrades to a free-text model input.
+ *
+ * `requestId === ''` marks an UNSOLICITED push: the sidecar publishes
+ * the catalog after every supervisor spawn/register so the server's
+ * stored copy is warm before any picker opens. The server persists
+ * push payloads on the Agent row and skips the pending-request map.
+ * Error pushes are not published (a boot-time CLI hiccup shouldn't
+ * clobber a previously stored good catalog).
  */
 export interface ModelCatalogResponseEvent {
   kind: 'model-catalog-response';
   machineId: string;
   agentId: string;
+  /** Correlates to a ListModelsRequestCommand; '' = unsolicited push. */
   requestId: string;
   source?: 'static' | 'cli';
   models?: ModelCatalogEntry[];

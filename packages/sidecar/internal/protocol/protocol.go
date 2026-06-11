@@ -386,15 +386,20 @@ type ListModelsRequestCommand struct {
 	TS        int64  `json:"ts"`
 }
 
-// ModelCatalogResponseEvent is the sidecar's reply. Source is "static"
-// (compiled-in table) or "cli" (parsed live CLI output). On failure
-// Error is set and Models nil — the dashboard degrades to a free-text
-// model input rather than blocking the picker.
+// ModelCatalogResponseEvent is the sidecar's reply — or unsolicited
+// push. Source is "static" (compiled-in table) or "cli" (parsed live
+// CLI output). On failure Error is set and Models nil — the dashboard
+// degrades to a free-text model input rather than blocking the picker.
+//
+// RequestID == "" marks an UNSOLICITED push: published after every
+// supervisor spawn/register so the server's stored catalog is warm
+// before any picker opens. Error pushes are not published — a
+// boot-time CLI hiccup must not clobber a stored good catalog.
 type ModelCatalogResponseEvent struct {
 	Kind      string              `json:"kind"` // "model-catalog-response"
 	MachineID string              `json:"machineId"`
 	AgentID   string              `json:"agentId"`
-	RequestID string              `json:"requestId"`
+	RequestID string              `json:"requestId"` // "" = unsolicited push
 	Source    string              `json:"source,omitempty"`
 	Models    []ModelCatalogEntry `json:"models,omitempty"`
 	Error     string              `json:"error,omitempty"`
