@@ -10,15 +10,19 @@ type: application
 # Chart version is independent of the app it ships. Bump on chart
 # changes. Releasing a new chart version only requires bumping this
 # field — see helm-publish.yml.
-version: 0.2.0
+version: 0.2.1
 # App version tracks the Docker image tags pulled by default. Bump in
 # lockstep with `version` whenever the chart starts requiring features
 # only present in newer images; otherwise it can lag.
 #
-# 0.2.0 ships file/image attachments — the default images now include the
+# 0.2.1 ships the per-session model picker and support for Claude Code
+# ≥ 2.1.x task tools (TaskCreate/TaskUpdate/TaskList rendered in the
+# To-dos panel; pair with sidecar ≥ v0.2.1 on agent hosts).
+#
+# 0.2.0 shipped file/image attachments — the default images include the
 # attachment module, so `objectStore` works out of the box (set the
 # endpoint + bucket + creds to enable it).
-appVersion: "0.2.0"
+appVersion: "0.2.1"
 
 home: https://github.com/kr4t0n/argus
 sources:
