@@ -570,6 +570,26 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Gotchas
 
+- **`path:line` citations in markdown links**: CLI agents emit links like
+  `[src/foo.go:123](src/foo.go:123)`. TWO layers conspire against these,
+  and both must be handled (`StreamViewer.tsx`):
+  1. react-markdown sanitizes hrefs *before* any custom `a` renderer
+     runs — `defaultUrlTransform` keeps only http(s)/mailto/relative
+     URLs, and `xxx.txt:1` parses as unknown scheme `xxx.txt:`, so the
+     renderer receives `href=""` (and an empty-href anchor is a live
+     link that reloads the current page — symptom: "clicking the link
+     opened a new session"). `fileLinkUrlTransform` (passed via the
+     `urlTransform` prop) rescues exactly the hrefs `splitLineSuffix`
+     (`FileChips.tsx`) recognizes as `path:line`.
+  2. The `a` renderer's own URL-scheme test would *also* misroute
+     `xxx.txt:1` as an external anchor, so it strips the line suffix
+     before testing and re-tests the bare path (keeps
+     `http://localhost:3000` a real URL).
+  Known miss: a dot-less, slash-less name like `Makefile:12` is
+  indistinguishable from a URI scheme and renders as inert text. The
+  line number rides on the file-tab entry (`fileTabsStore.ts`, not part
+  of the tab key) and the viewer scrolls/highlights via shiki's
+  per-line `.line` spans + the `.line-target` rule in `index.css`.
 - **Prisma + workspace import**: the server can only typecheck if `rootDir`
   is unset, because `@argus/shared-types` lives outside `apps/server/src`.
   `nest build` is fine because it only compiles `src/`.
