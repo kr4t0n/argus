@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Code2, Download, Eye, FileWarning, Loader2 } from 'lucide-react';
@@ -42,7 +42,7 @@ function WorkingFileView({ file }: { file: OpenWorkingFile }) {
   if (state.status === 'error') {
     return <ErrorViewer message={state.message} />;
   }
-  return <FileContentView path={file.path} name={file.name} result={state.result} />;
+  return <FileContentView path={file.path} name={file.name} result={state.result} line={file.line} />;
 }
 
 function useFetchFileContent(file: OpenWorkingFile) {
@@ -88,13 +88,16 @@ export function FileContentView({
   path,
   name,
   result,
+  line,
 }: {
   path: string;
   name: string;
   result: FSReadResult;
+  /** 1-based line to scroll to / highlight in the source view. */
+  line?: number;
 }) {
   if (result.kind === 'text') {
-    return <PreviewableTextViewer path={path} name={name} content={result.content} />;
+    return <PreviewableTextViewer path={path} name={name} content={result.content} line={line} />;
   }
   if (result.kind === 'image') {
     return <ImageViewer mime={result.mime} base64={result.base64} name={name} />;
@@ -117,10 +120,12 @@ function PreviewableTextViewer({
   path,
   name,
   content,
+  line,
 }: {
   path: string;
   name: string;
   content: string;
+  line?: number;
 }) {
   const previewKind = useMemo<PreviewKind>(() => {
     const lang = languageForPath(path);
@@ -131,7 +136,7 @@ function PreviewableTextViewer({
   const [showSource, setShowSource] = useState(false);
 
   if (previewKind === null) {
-    return <TextViewer path={path} content={content} />;
+    return <TextViewer path={path} content={content} line={line} />;
   }
   return (
     <div className="relative h-full">
@@ -152,7 +157,7 @@ function PreviewableTextViewer({
         )}
       </button>
       {showSource ? (
-        <TextViewer path={path} content={content} />
+        <TextViewer path={path} content={content} line={line} />
       ) : previewKind === 'markdown' ? (
         <div className="markdown h-full overflow-auto px-6 py-5 text-sm leading-relaxed text-fg-primary">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
@@ -164,8 +169,9 @@ function PreviewableTextViewer({
   );
 }
 
-function TextViewer({ path, content }: { path: string; content: string }) {
+function TextViewer({ path, content, line }: { path: string; content: string; line?: number }) {
   const [html, setHtml] = useState<string | null>(null);
+  const hostRef = useRef<HTMLDivElement | null>(null);
   // Use the RESOLVED theme (not the user pref) so an OS-driven flip
   // while on 'system' also re-runs the highlight with the matching
   // shiki theme. highlightCode reads `currentShikiTheme()` off
@@ -183,6 +189,20 @@ function TextViewer({ path, content }: { path: string; content: string }) {
     };
   }, [content, path, resolvedTheme]);
 
+  // Scroll to / highlight the cited line once shiki's html is in the
+  // DOM. Runs again when `line` changes (same tab re-opened from a new
+  // citation) and clears the previous mark, so at most one line is lit.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (html === null || !host) return;
+    for (const el of host.querySelectorAll('.line-target')) el.classList.remove('line-target');
+    if (!line) return;
+    const target = host.querySelectorAll<HTMLElement>('.line')[line - 1];
+    if (!target) return;
+    target.classList.add('line-target');
+    target.scrollIntoView({ block: 'center' });
+  }, [html, line]);
+
   if (html === null) {
     return (
       <div className="flex h-full items-center justify-center text-fg-tertiary text-xs">
@@ -191,7 +211,11 @@ function TextViewer({ path, content }: { path: string; content: string }) {
     );
   }
   return (
-    <div className="shiki-host h-full overflow-auto" dangerouslySetInnerHTML={{ __html: html }} />
+    <div
+      ref={hostRef}
+      className="shiki-host h-full overflow-auto"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
   );
 }
 

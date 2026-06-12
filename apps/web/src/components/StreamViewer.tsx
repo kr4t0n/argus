@@ -8,7 +8,7 @@ import { api, ApiError, apiUrl } from '../lib/api';
 import { useSessionStore } from '../stores/sessionStore';
 import { splitDeltas } from '../lib/deltaSplit';
 import { ActivityPanel, ActivityPill } from './ActivityPill';
-import { FileChips, extractFiles, toAgentRelative } from './FileChips';
+import { FileChips, extractFiles, splitLineSuffix, toAgentRelative } from './FileChips';
 import { TodoWindow } from './TodoWindow';
 import { SubAgentWindow } from './SubAgentWindow';
 import { MarkdownCodeBlock } from './MarkdownCodeBlock';
@@ -467,16 +467,23 @@ function AnswerBlock({
     () => ({
       pre: MarkdownCodeBlock,
       a({ href, children }: { href?: string; children?: React.ReactNode }) {
+        // Strip a `path:line` citation suffix BEFORE the URL-scheme test:
+        // `xxx.txt:1` would otherwise parse as scheme `xxx.txt` and render
+        // as a (broken) external anchor. Real URLs survive the split —
+        // `http://localhost:3000` strips to `http://localhost`, which
+        // still matches the scheme test below and falls through as a
+        // normal anchor with the ORIGINAL href.
+        const { path: hrefPath, line } = href ? splitLineSuffix(href) : { path: '' };
         // Real URLs / fragments / mail / tel — leave as a normal anchor,
         // but force a new tab so they can't replace the app.
-        if (!href || /^[a-z][a-z0-9+\-.]*:/i.test(href) || href.startsWith('#')) {
+        if (!href || /^[a-z][a-z0-9+\-.]*:/i.test(hrefPath) || href.startsWith('#')) {
           return (
             <a href={href} target="_blank" rel="noreferrer noopener">
               {children}
             </a>
           );
         }
-        const rel = toAgentRelative(href, workingDir);
+        const rel = toAgentRelative(hrefPath, workingDir);
         if (!rel) {
           // Outside the workspace, a directory, or we have no agent
           // to fetch from — render as inert text so the broken
@@ -488,7 +495,7 @@ function AnswerBlock({
             role="button"
             tabIndex={0}
             title="Double-click to preview"
-            onDoubleClick={() => openFile({ agentId, path: rel })}
+            onDoubleClick={() => openFile({ agentId, path: rel, line })}
             className="cursor-pointer select-none text-sky-600 hover:underline dark:text-sky-400"
           >
             {children}

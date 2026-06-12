@@ -570,6 +570,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Gotchas
 
+- **`path:line` citations in markdown links**: CLI agents emit links like
+  `[src/foo.go:123](src/foo.go:123)`. The web's markdown `a`-renderer
+  (`StreamViewer.tsx`) runs `splitLineSuffix` (`FileChips.tsx`) *before*
+  its URL-scheme test — without that, `xxx.txt:1` parses as scheme
+  `xxx.txt:` and renders as a broken external anchor. The stripped path
+  is re-tested against the scheme regex so `http://localhost:3000`
+  still falls through as a real URL. Known miss: a dot-less,
+  slash-less name like `Makefile:12` is indistinguishable from a URI
+  scheme and stays an anchor. The line number rides on the file-tab
+  entry (`fileTabsStore.ts`, not part of the tab key) and the viewer
+  scrolls/highlights via shiki's per-line `.line` spans + the
+  `.line-target` rule in `index.css`.
 - **Prisma + workspace import**: the server can only typecheck if `rootDir`
   is unset, because `@argus/shared-types` lives outside `apps/server/src`.
   `nest build` is fine because it only compiles `src/`.

@@ -252,3 +252,8 @@ textarea::-webkit-scrollbar-corner {
 .shiki-host pre.shiki code {
   @apply font-mono;
 }
+/* Line cited via a `path:line` link. Shiki emits inline `.line` spans;
+   inline-block + full width lets the background cover the whole row. */
+.shiki-host .line.line-target {
+  @apply inline-block w-full rounded-sm bg-sky-500/15;
+}
