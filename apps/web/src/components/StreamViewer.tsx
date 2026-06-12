@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AlertCircle, Check, Copy, FileText, GitBranch, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -422,6 +422,22 @@ const CommandBlock = memo(function CommandBlock({
   );
 });
 
+/**
+ * react-markdown sanitizes every href BEFORE the custom `a` renderer
+ * sees it, and `defaultUrlTransform` keeps only http(s)/mailto/relative
+ * URLs. A `path:line` citation like `test.txt:1` parses as the unknown
+ * scheme `test.txt:`, so the default transform blanks it to '' and the
+ * renderer can no longer tell it was a file link (an empty-href anchor
+ * then just reloads the current page on click). Preserve exactly the
+ * hrefs that `splitLineSuffix` recognizes as `path:line`; everything
+ * else keeps the default sanitization.
+ */
+function fileLinkUrlTransform(url: string): string {
+  const safe = defaultUrlTransform(url);
+  if (safe) return safe;
+  return splitLineSuffix(url).line !== undefined ? url : safe;
+}
+
 /** Walk up to the nearest ancestor that actually scrolls vertically. */
 function findScrollParent(el: HTMLElement): HTMLElement | null {
   let p: HTMLElement | null = el.parentElement;
@@ -473,10 +489,17 @@ function AnswerBlock({
         // `http://localhost:3000` strips to `http://localhost`, which
         // still matches the scheme test below and falls through as a
         // normal anchor with the ORIGINAL href.
-        const { path: hrefPath, line } = href ? splitLineSuffix(href) : { path: '' };
+        // No href at all — e.g. an unknown-scheme URL that
+        // fileLinkUrlTransform didn't rescue and sanitization blanked.
+        // An empty-href anchor is a live link to the CURRENT page, so
+        // render inert text instead.
+        if (!href) {
+          return <span className="font-mono text-fg-secondary">{children}</span>;
+        }
+        const { path: hrefPath, line } = splitLineSuffix(href);
         // Real URLs / fragments / mail / tel — leave as a normal anchor,
         // but force a new tab so they can't replace the app.
-        if (!href || /^[a-z][a-z0-9+\-.]*:/i.test(hrefPath) || href.startsWith('#')) {
+        if (/^[a-z][a-z0-9+\-.]*:/i.test(hrefPath) || href.startsWith('#')) {
           return (
             <a href={href} target="_blank" rel="noreferrer noopener">
               {children}
@@ -556,7 +579,11 @@ function AnswerBlock({
     >
       {bodyText && (
         <div className="markdown text-sm leading-relaxed text-fg-primary max-w-none">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={markdownComponents}
+            urlTransform={fileLinkUrlTransform}
+          >
             {bodyText}
           </ReactMarkdown>
           {streaming && <span className="typewriter-cursor" />}
