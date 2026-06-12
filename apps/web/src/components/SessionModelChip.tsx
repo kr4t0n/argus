@@ -14,10 +14,10 @@ import { cn } from '../lib/utils';
  *
  * The draft is committed once on close (outside click / Escape), not
  * per change — the custom free-text path would otherwise PATCH per
- * keystroke. The catalog is only fetched while the popover is open
- * (`agentId` is nulled when closed), so rendering a session header
- * never triggers a sidecar CLI exec; the chip label degrades to the
- * raw model id until the picker has been opened once.
+ * keystroke. The catalog is fetched on mount so the collapsed label
+ * shows the display name ("Fable"), not the raw id ("fable") — safe
+ * since catalog reads are a DB lookup (sidecar pushes at spawn), not
+ * a CLI exec, and module/server caches absorb repeat mounts.
  */
 export function SessionModelChip({
   session,
@@ -29,10 +29,13 @@ export function SessionModelChip({
   const upsertSession = useSessionStore((s) => s.upsertSession);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<ModelSelection | null>(session.modelSelection ?? null);
-  const [saving, setSaving] = useState(false);
+  // Selection being committed. While the PATCH is in flight the closed
+  // chip keeps showing this value — rendering session state (stale) or
+  // a "saving…" placeholder would blink the label on every commit.
+  // `undefined` = nothing in flight; `null` is a real value (Default).
+  const [pending, setPending] = useState<ModelSelection | null | undefined>(undefined);
   const wrapRef = useRef<HTMLDivElement>(null);
-  // null while closed → no fetch; module/server caches make reopening cheap.
-  const { catalog } = useModelCatalog(open ? (agentId ?? null) : null);
+  const { catalog } = useModelCatalog(agentId ?? null);
 
   // Resync the draft when another browser/dialog changes the session.
   useEffect(() => {
@@ -44,15 +47,18 @@ export function SessionModelChip({
     const normalized = next?.model ? next : null;
     const before = session.modelSelection ?? null;
     if (JSON.stringify(normalized) === JSON.stringify(before)) return;
-    setSaving(true);
+    setPending(normalized);
     try {
       const updated = await api.setSessionModel(session.id, normalized);
+      // upsertSession + setPending batch into one render: the label
+      // hands off from `pending` to the updated session without an
+      // intermediate frame.
       upsertSession(updated);
     } catch {
       // Revert the chip to the server's truth; the next open shows it.
       setDraft(before);
     } finally {
-      setSaving(false);
+      setPending(undefined);
     }
   }
 
@@ -82,7 +88,10 @@ export function SessionModelChip({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, session.id]);
 
-  const label = modelSelectionLabel(open ? draft : (session.modelSelection ?? null), catalog);
+  const label = modelSelectionLabel(
+    open ? draft : pending !== undefined ? pending : (session.modelSelection ?? null),
+    catalog,
+  );
 
   return (
     <div ref={wrapRef} className="relative">
@@ -98,7 +107,7 @@ export function SessionModelChip({
         )}
       >
         <Cpu className="h-3 w-3 shrink-0" />
-        <span className="truncate">{saving ? 'saving…' : label}</span>
+        <span className="truncate">{label}</span>
         <ChevronDown className="h-3 w-3 shrink-0" />
       </button>
       {open && (
