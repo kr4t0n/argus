@@ -1,5 +1,10 @@
 import { create } from 'zustand';
-import type { CommandDTO, ResultChunkDTO, SessionDTO } from '@argus/shared-types';
+import type {
+  CommandDTO,
+  ResultChunkDTO,
+  SessionDTO,
+  SessionStatusEvent,
+} from '@argus/shared-types';
 import { api } from '../lib/api';
 
 interface SessionEntry {
@@ -39,6 +44,10 @@ interface SessionState {
   loadOlder: (id: string) => Promise<void>;
 
   upsertSession: (s: SessionDTO) => void;
+  /** Apply a `session:status` WS event (status + unread) to the list and
+   *  any cached entry, guarded by `updatedAt` so a stale echo can't
+   *  resurrect a dot the user already cleared. */
+  applySessionStatus: (ev: SessionStatusEvent) => void;
   removeSession: (id: string) => void;
 
   upsertCommand: (c: CommandDTO) => void;
@@ -60,6 +69,20 @@ function sortOrder(sessions: Record<string, SessionDTO>): string[] {
   return Object.values(sessions)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .map((s) => s.id);
+}
+
+/**
+ * A session write is stale if we've already applied one with a newer
+ * `updatedAt`. Every server-side status/unread write bumps `updatedAt`
+ * (Prisma `@updatedAt`), so this totally orders the otherwise-unordered
+ * mix of WS `session:status` events and REST `loadSession` responses.
+ * Without it, a late-arriving `loadSession` snapshot (captured before a
+ * `markSeen` cleared `unread`) could resurrect a sidebar dot the user
+ * had already dismissed — the original "green dot won't clear" race.
+ * Equal timestamps are treated as fresh (idempotent re-apply).
+ */
+function isStaleUpdate(prev: SessionDTO | undefined, nextUpdatedAt: string): boolean {
+  return !!prev && nextUpdatedAt < prev.updatedAt;
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -87,8 +110,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // (including older commands fetched later via loadOlder; those are
     // always <= the current max seq so the max stays monotonic).
     const lastSeq = data.chunks.reduce((m, c) => Math.max(m, c.seq), 0);
+    // A concurrent status write (e.g. `markSeen` flipping `unread`) may
+    // have landed via WS while this GET was in flight, carrying a newer
+    // `updatedAt`. Keep the fresher session row rather than letting this
+    // snapshot roll back status/unread. Chunks/commands below still
+    // merge in regardless — only the session row is gated.
+    const prevSession = get().sessions[id];
+    const session = isStaleUpdate(prevSession, data.session.updatedAt)
+      ? prevSession!
+      : data.session;
     const entry: SessionEntry = {
-      session: data.session,
+      session,
       commands: data.commands,
       chunks: data.chunks.slice().sort(bySeq),
       lastSeq,
@@ -96,7 +128,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       hasMore: data.hasMore,
       loadingOlder: false,
     };
-    const sessions = { ...get().sessions, [id]: data.session };
+    const sessions = { ...get().sessions, [id]: session };
     set({
       entries: { ...get().entries, [id]: entry },
       sessions,
@@ -153,10 +185,31 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   upsertSession(s) {
+    // Drop a stale full-DTO upsert (e.g. a reordered session:updated) so
+    // it can't roll back a newer status/unread write we already applied.
+    if (isStaleUpdate(get().sessions[s.id], s.updatedAt)) return;
     const sessions = { ...get().sessions, [s.id]: s };
     const entries = get().entries[s.id]
       ? { ...get().entries, [s.id]: { ...get().entries[s.id]!, session: s } }
       : get().entries;
+    set({ sessions, order: sortOrder(sessions), entries });
+  },
+
+  applySessionStatus(ev) {
+    const prev = get().sessions[ev.id];
+    // Not in the list yet (never loaded this page-load) — a
+    // session:created/updated will populate it with the right state.
+    if (!prev) return;
+    if (isStaleUpdate(prev, ev.updatedAt)) return;
+    const next: SessionDTO = {
+      ...prev,
+      status: ev.status,
+      unread: ev.unread,
+      updatedAt: ev.updatedAt,
+    };
+    const sessions = { ...get().sessions, [ev.id]: next };
+    const e = get().entries[ev.id];
+    const entries = e ? { ...get().entries, [ev.id]: { ...e, session: next } } : get().entries;
     set({ sessions, order: sortOrder(sessions), entries });
   },
 

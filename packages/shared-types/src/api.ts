@@ -118,12 +118,38 @@ export interface SessionDTO {
   title: string;
   externalId: string | null;
   status: SessionStatus;
+  /** Unread-result marker, orthogonal to `status`. Set true when a turn
+   *  reaches a terminal state (`idle` on success, `failed` on error)
+   *  and the user may not have seen it; cleared to false the moment the
+   *  user opens the session (`markSeen`). The sidebar shows a dot iff
+   *  `unread`, colored by `status` (emerald for idle, red for failed).
+   *  Splitting this from `status` is what lets a seen failure stop
+   *  showing a dot without losing the "last turn errored" lifecycle
+   *  state. */
+  unread: boolean;
   /** Session-default model choice; null/absent means "CLI default".
    *  Merged into every turn's Command.options (per-turn override wins). */
   modelSelection?: ModelSelection | null;
   /** ISO timestamp; null means the session is active/unarchived. */
   archivedAt: string | null;
   createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Payload for the `session:status` WS event. Carries `unread` and
+ * `updatedAt` alongside `status` (rather than the full SessionDTO) so
+ * the client can drive the sidebar dot directly, and — critically —
+ * apply a monotonic `updatedAt` guard. Because every status/unread
+ * write bumps `Session.updatedAt`, a stale REST `loadSession` response
+ * (which captured the row before a later `markSeen` cleared `unread`)
+ * carries an older `updatedAt` and is rejected, so it can no longer
+ * resurrect a dot the user already cleared.
+ */
+export interface SessionStatusEvent {
+  id: string;
+  status: SessionStatus;
+  unread: boolean;
   updatedAt: string;
 }
 

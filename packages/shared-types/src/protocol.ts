@@ -13,7 +13,16 @@ export type AgentType = BuiltInAgentType | (string & {});
 
 export type AgentStatus = 'online' | 'offline' | 'busy' | 'error';
 
-export type SessionStatus = 'active' | 'idle' | 'done' | 'failed';
+/**
+ * Session lifecycle state — the "is a turn running / how did the last
+ * one end" axis. Deliberately separate from the unread axis
+ * (`SessionDTO.unread`): whether the sidebar shows a dot is a function
+ * of `unread`, while the dot's COLOR is a function of `status`. A turn
+ * starting flips this to `'active'`; a successful finish lands `'idle'`;
+ * an errored finish lands `'failed'`. `'idle'` is also the resting
+ * state of a brand-new session that has never run.
+ */
+export type SessionStatus = 'active' | 'idle' | 'failed';
 
 export type CommandStatus = 'pending' | 'sent' | 'running' | 'completed' | 'failed' | 'cancelled';
 
