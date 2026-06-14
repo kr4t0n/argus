@@ -7,8 +7,8 @@ are intentionally **out of scope** — see the trade-offs section below.
 
 | Field         | Value                 |
 | ------------- | --------------------- |
-| Chart version | `0.3.0`               |
-| App version   | `0.3.0`               |
+| Chart version | `0.2.2`               |
+| App version   | `0.2.2`               |
 | Server image  | `kr4t0n/argus-server` |
 | Web image     | `kr4t0n/argus-web`    |
 
