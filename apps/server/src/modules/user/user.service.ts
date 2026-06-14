@@ -410,7 +410,7 @@ export class UserService {
     const updated = await this.prisma.user
       .update({
         where: { id: userId },
-        data: { extensions: { notes: next.notes, progress: next.progress } },
+        data: { extensions: { notes: next.notes, progress: next.progress, diff: next.diff } },
         select: { extensions: true },
       })
       .catch((err) => {
@@ -431,6 +431,7 @@ function coerceExtensions(raw: unknown): UserExtensionsResponse {
   return {
     notes: map.notes === true,
     progress: map.progress === true,
+    diff: map.diff === true,
   };
 }
 

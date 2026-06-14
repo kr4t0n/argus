@@ -507,7 +507,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   updated, model). The bottom region is tabbed: **Commits** (`GitLogPanel`),
   **Files** (`FileTree`), **Terminal** (`<TerminalPane>`), and — only when
   the Notes extension is on (`uiStore.notesExtensionEnabled`) and the agent
-  has a `workingDir` — **Note** (`<NotePane>`).
+  has a `workingDir` — **Note** (`<NotePane>`), plus two more extension tabs gated the same
+  way: **Progress** (`<ProgressPane>`, `progressExtensionEnabled`) and
+  **Diff** (`<DiffPane>`, `diffExtensionEnabled`). ContextPane receives
+  the session's `commands` (not just `chunks`) so the Diff tab can scope
+  its file diffs to the last turn.
 - `components/MachinePanel.tsx` — `/machines/:id` route. Header with
   machine glyph + name + status dot + sidecar-update / new-agent buttons.
   Below the header: 2:3 grid with Host KV + Supports adapters on the
@@ -525,12 +529,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   (per-CLI plan windows pulled
   from each sidecar's heartbeat — see `packages/sidecar/internal/quota`
   and the `/me/quota` endpoint), Preferences (notifications, user
-  rules editor), and Extensions (opt-in features; currently just
-  **Notes**). The on/off flag is an account-level preference persisted
+  rules editor), and Extensions (opt-in features: **Notes**, **Progress**,
+  **Diff**). Each on/off flag is an account-level preference persisted
   server-side via `GET`/`PUT /me/extensions` (a JSON map on `User`, so
-  new extensions need no migration); `uiStore.notesExtensionEnabled` is
-  a localStorage cache for synchronous, flash-free reads, reconciled
-  against the server on bootstrap (`App.tsx`). Capped at `max-w-6xl`.
+  new extensions need no migration — `coerceExtensions` defaults unknown
+  keys to `false`); the matching `uiStore.*ExtensionEnabled` flag is a
+  localStorage cache for synchronous, flash-free reads, reconciled
+  against the server on bootstrap (`App.tsx`). Each toggle PUTs the full
+  flag set (no server-side merge), so all toggles forward every flag.
+  Capped at `max-w-6xl`.
 - `components/TerminalPane.tsx` — xterm.js bound to one agent. Owns the
   WebSocket plumbing, a debounced ResizeObserver for fit, base64 encoding
   on input, and a duplicate-seq guard on output. Renders inside the
@@ -548,6 +555,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   user (see `/me/extensions` and `/me/project-notes`), so they survive
   browser switches. Unlike `User.rules`, notes are personal scratch and
   are never fanned out to sidecars.
+- `components/DiffPane.tsx` — the **Diff** tab. Pure client-side
+  aggregation: it scans the loaded `chunks` for the session's most recent
+  Execute command and collects every result chunk with `meta.isDiff`,
+  grouping by `meta.filePath` with summed `+/-` counts and the file path
+  shown relative to `workingDir`. No new capture — it reuses the unified
+  diffs the sidecar already emits per edit (see **File-edit diffs**) and
+  the shared `components/ui/DiffBlock.tsx` renderer. Re-derives reactively,
+  so diffs stream in live while a turn is still editing.
 
 ## Conventions
 
@@ -705,8 +720,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the matching tool *result* event it calls `state.BuildDiff(toolID,
   kind)` which re-reads the file and returns a unified diff. The diff
   is emitted as the result chunk's content with `meta.isDiff: true`,
-  which the web UI (`DiffBlock` in `ToolPill.tsx`) renders with
-  per-line colors. Snapshots are scoped to a single Execute() and use
+  which the web UI renders with per-line colors via the shared
+  `components/ui/DiffBlock.tsx` (used both inline in `ToolPill.tsx` and,
+  aggregated per file for the last turn, in `DiffPane.tsx`). Snapshots are scoped to a single Execute() and use
   256 KiB / NUL-byte / 400-line caps to keep payloads sane. If a
   snapshot fails (binary, too big) we silently fall back to the
   adapter's plain-text result. When adding a new adapter, identify
