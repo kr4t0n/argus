@@ -38,6 +38,7 @@ export class SessionService {
       title: s.title,
       externalId: s.externalId,
       status: s.status as SessionDTO['status'],
+      unread: s.unread,
       modelSelection: (s.modelSelection as ModelSelection | null) ?? null,
       archivedAt: s.archivedAt ? s.archivedAt.toISOString() : null,
       createdAt: s.createdAt.toISOString(),
@@ -283,10 +284,18 @@ export class SessionService {
     return dto;
   }
 
-  async setStatus(id: string, status: SessionDTO['status']) {
+  /**
+   * Update a session's lifecycle `status`, optionally flipping the
+   * `unread` marker in the same write. Terminal transitions pass
+   * `unread: true` (a result the user may not have seen); the streaming
+   * transition passes `unread: false` (a fresh turn supersedes any prior
+   * unread result). Every write bumps `updatedAt` (Prisma `@updatedAt`),
+   * which the client relies on to order out-of-order status echoes.
+   */
+  async setStatus(id: string, status: SessionDTO['status'], opts?: { unread?: boolean }) {
     const s = await this.prisma.session.update({
       where: { id },
-      data: { status },
+      data: { status, ...(opts?.unread !== undefined ? { unread: opts.unread } : {}) },
     });
     const dto = SessionService.toDto(s);
     this.gateway.emitSessionStatus(dto);
@@ -294,16 +303,23 @@ export class SessionService {
   }
 
   /**
-   * Flip a session from `'done'` (the unread-completion marker shown as
-   * a dot in the sidebar) back to `'idle'` once the user opens it. No-op
-   * for any other status, so callers can fire-and-forget on every view
-   * without having to gate it. Authorization-checked: throws via
-   * `get` if the session belongs to another user.
+   * Clear the `unread` marker once the user opens a session — this is
+   * what drops the sidebar dot (green or red alike), independent of the
+   * `status` lifecycle value, which is left untouched. No-op when
+   * already seen, so callers can fire-and-forget on every view.
+   * Authorization-checked: throws via `get` if the session belongs to
+   * another user.
    */
   async markSeen(userId: string, id: string) {
     const existing = await this.get(userId, id);
-    if (existing.status !== 'done') return SessionService.toDto(existing);
-    return this.setStatus(id, 'idle');
+    if (!existing.unread) return SessionService.toDto(existing);
+    const s = await this.prisma.session.update({
+      where: { id },
+      data: { unread: false },
+    });
+    const dto = SessionService.toDto(s);
+    this.gateway.emitSessionStatus(dto);
+    return dto;
   }
 
   async setExternalId(id: string, externalId: string) {

@@ -139,9 +139,10 @@ export const api = {
   archiveSession: (id: string) => http<SessionDTO>(`/sessions/${id}/archive`, { method: 'POST' }),
   unarchiveSession: (id: string) =>
     http<SessionDTO>(`/sessions/${id}/unarchive`, { method: 'POST' }),
-  /** Flip a 'done' session back to 'idle' once the user has opened it,
-   *  clearing the sidebar's unread dot. No-op server-side for any other
-   *  status, so callers can fire-and-forget on every view. */
+  /** Clear a session's `unread` marker once the user has opened it,
+   *  removing the sidebar's dot (green or red). Leaves `status`
+   *  untouched and is a no-op once already seen, so callers can
+   *  fire-and-forget on every view. */
   markSessionSeen: (id: string) =>
     http<SessionDTO>(`/sessions/${id}/seen`, { method: 'POST' }),
   deleteSession: (id: string) => http<void>(`/sessions/${id}`, { method: 'DELETE' }),

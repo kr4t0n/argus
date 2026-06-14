@@ -386,18 +386,16 @@ function RailSessionFlyout({
               {s.status === 'active' && (
                 <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
               )}
-              {s.status === 'failed' && (
+              {s.unread && s.status === 'failed' && (
                 <span className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />
               )}
-              {s.status === 'done' && (
+              {s.unread && s.status === 'idle' && (
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
               )}
               <span
                 className={cn(
                   'min-w-0 flex-1 truncate',
-                  s.status === 'done'
-                    ? 'font-semibold text-fg-primary'
-                    : 'text-fg-secondary',
+                  s.unread ? 'font-semibold text-fg-primary' : 'text-fg-secondary',
                 )}
               >
                 {s.title}

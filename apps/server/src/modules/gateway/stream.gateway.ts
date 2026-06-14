@@ -161,9 +161,15 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   emitSessionStatus(session: SessionDTO) {
-    this.server
-      .to(`user:${session.userId}`)
-      .emit('session:status', { id: session.id, status: session.status });
+    // Carry `unread` (the dot trigger) and `updatedAt` (the client's
+    // monotonic ordering key) so a stale REST response can't resurrect
+    // a status/unread the user already cleared.
+    this.server.to(`user:${session.userId}`).emit('session:status', {
+      id: session.id,
+      status: session.status,
+      unread: session.unread,
+      updatedAt: session.updatedAt,
+    });
   }
 
   emitSessionCloneFailed(payload: { sessionId: string; userId: string; reason: string }) {

@@ -50,6 +50,9 @@ class UpdateExtensionsDto {
 
   @IsBoolean()
   progress!: boolean;
+
+  @IsBoolean()
+  diff!: boolean;
 }
 
 /**
@@ -133,6 +136,7 @@ export class UserController {
     return this.users.setExtensions(req.user.id, {
       notes: body.notes,
       progress: body.progress,
+      diff: body.diff,
     });
   }
 }

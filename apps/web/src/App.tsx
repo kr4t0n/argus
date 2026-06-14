@@ -103,6 +103,7 @@ export default function App() {
         const ui = useUIStore.getState();
         ui.setNotesExtensionEnabled(e.notes);
         ui.setProgressExtensionEnabled(e.progress);
+        ui.setDiffExtensionEnabled(e.diff);
       })
       .catch(() => {});
     const socket = ensureSocket();
@@ -149,21 +150,27 @@ export default function App() {
         // received while SessionPanel has the session open and joined
         // the room. `session:status` is broadcast to `user:{id}` so
         // the browser keeps receiving it after navigating away, which
-        // is exactly when we want to notify. Read prev status BEFORE
-        // upserting so we detect the active → done/failed transition
-        // and don't re-fire on idempotent re-emits.
+        // is exactly when we want to notify. Read prev status from the
+        // sidebar list (not the `entries` cache, which only exists for
+        // opened sessions) BEFORE applying, so we detect the active →
+        // terminal transition for every session and don't re-fire on
+        // idempotent re-emits.
         //
-        // Successful completion lands as `'done'` (an unread marker the
-        // sidebar surfaces with a green dot); SessionPanel flips it back
-        // to `'idle'` once the user opens the session via the
-        // `markSessionSeen` round trip. Failures land as `'failed'`.
-        const entry = useSessionStore.getState().entries[p.id];
-        const prevStatus = entry?.session.status;
-        if (entry) upsertSession({ ...entry.session, status: p.status });
+        // A successful turn lands lifecycle-`idle`, an error lands
+        // `failed`, and both set `unread` so the sidebar surfaces a dot
+        // until the user opens the session (markSeen clears `unread`).
+        // `applySessionStatus` is `updatedAt`-guarded against stale
+        // echoes, so a late REST snapshot can't resurrect the dot.
+        const prev = useSessionStore.getState().sessions[p.id];
+        const prevStatus = prev?.status;
+        useSessionStore.getState().applySessionStatus(p);
 
         if (!useUIStore.getState().notificationsEnabled) return;
+        // Only a fresh terminal result deserves a notification: the
+        // session was running and now carries an unread, non-active
+        // result. (`unread` also filters out the markSeen echo.)
         if (prevStatus !== 'active') return;
-        if (p.status !== 'done' && p.status !== 'failed') return;
+        if (p.status === 'active' || !p.unread) return;
 
         // `visibilityState` only tracks tab visibility within the browser —
         // it stays 'visible' when the user switches to a different OS app
@@ -175,8 +182,8 @@ export default function App() {
         const activeSessionId = activeSessionIdFromPath(window.location.pathname);
         if (tabVisible && windowFocused && activeSessionId === p.id) return;
 
-        const title = entry?.session.title?.trim() || `session ${p.id.slice(0, 8)}`;
-        const success = p.status === 'done';
+        const title = prev?.title?.trim() || `session ${p.id.slice(0, 8)}`;
+        const success = p.status !== 'failed';
         playDoneSound(success);
         showCompletionNotification({
           sessionId: p.id,

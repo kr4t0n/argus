@@ -6,6 +6,7 @@ import type {
   ProjectDTO,
   ResultChunkDTO,
   SessionDTO,
+  SessionStatusEvent,
   SidecarUpdatePlanEntry,
   TerminalClosedMessage,
   TerminalDTO,
@@ -49,7 +50,7 @@ export interface ServerToClientEvents {
   'agent:spawn-failed': (payload: { machineId: string; agentId: string; reason: string }) => void;
   'session:created': (session: SessionDTO) => void;
   'session:updated': (session: SessionDTO) => void;
-  'session:status': (payload: { id: string; status: SessionDTO['status'] }) => void;
+  'session:status': (payload: SessionStatusEvent) => void;
   /** Sidecar couldn't fork the on-disk CLI session for a freshly-forked
    *  Argus session — surfaced as a toast in the dashboard. The session
    *  row remains valid (history is reproduced) but `externalId` stays

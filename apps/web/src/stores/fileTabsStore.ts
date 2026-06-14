@@ -30,6 +30,10 @@ interface OpenFileBase {
 export interface OpenWorkingFile extends OpenFileBase {
   kind: 'file';
   path: string;
+  /** 1-based line to scroll to / highlight, from `path:line` citations.
+   *  Not part of `key` — reopening the same file at a different line
+   *  retargets the existing tab instead of spawning a duplicate. */
+  line?: number;
 }
 
 /** An uploaded attachment, fetched over HTTP from its tokenized url. Opens
@@ -55,7 +59,7 @@ interface FileTabsState {
   activeKey: string | null;
   contents: Record<string, FileContentState>;
 
-  openFile: (file: { agentId: string; path: string }) => void;
+  openFile: (file: { agentId: string; path: string; line?: number }) => void;
   openAttachment: (att: {
     agentId: string;
     id: string;
@@ -85,15 +89,26 @@ export const useFileTabsStore = create<FileTabsState>((set, get) => ({
   activeKey: null,
   contents: {},
 
-  openFile({ agentId, path }) {
+  openFile({ agentId, path, line }) {
     const key = fileKey(agentId, path);
     const existing = get().openFiles.find((f) => f.key === key);
     if (existing) {
-      set({ activeKey: key });
+      // Refresh `line` on the existing tab so a second citation into the
+      // same file re-scrolls the already-open viewer (or clears the
+      // highlight when the new open has no line).
+      set((s) => ({
+        activeKey: key,
+        openFiles: s.openFiles.map((f) =>
+          f.key === key && f.kind === 'file' ? { ...f, line } : f,
+        ),
+      }));
       return;
     }
     set((s) => ({
-      openFiles: [...s.openFiles, { kind: 'file', key, agentId, path, name: fileName(path) }],
+      openFiles: [
+        ...s.openFiles,
+        { kind: 'file', key, agentId, path, name: fileName(path), line },
+      ],
       activeKey: key,
     }));
   },

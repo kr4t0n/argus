@@ -85,6 +85,25 @@ export function displayPath(abs: string, workingDir?: string | null): string {
  *     `extractFiles` already drops the obvious dir-listing tools, but
  *     this guard catches anything that slips through
  */
+/**
+ * Split a `path:line` / `path:line:col` reference (the form CLI agents
+ * use to cite code, e.g. `src/foo.go:123`) into the bare path and the
+ * line number. The path part must contain a `.` or `/` to count — that
+ * keeps real URI schemes (`tel:123`, `mailto:`) and bare words out,
+ * while `http://localhost:3000` is handled by callers re-checking the
+ * stripped path against the URL-scheme test. Bare no-extension names
+ * (`Makefile:12`) are the accepted miss — indistinguishable from a
+ * scheme. Column numbers are parsed but dropped; the viewer scrolls
+ * to lines, not columns.
+ */
+export function splitLineSuffix(path: string): { path: string; line?: number } {
+  // Lazy `+?` so `src/foo.go:123:45` splits at the FIRST numeric suffix
+  // (line 123, col 45) instead of greedily keeping `:123` in the path.
+  const m = /^(.+?):(\d+)(?::\d+)?$/.exec(path);
+  if (!m || !/[./]/.test(m[1])) return { path };
+  return { path: m[1], line: Number(m[2]) };
+}
+
 export function toAgentRelative(path: string, workingDir?: string | null): string | null {
   let rel: string;
   if (path.startsWith('/')) {

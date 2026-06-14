@@ -199,9 +199,16 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
         })
         .then((cmd) => this.gateway.emitCommandUpdated(CommandService.toDto(cmd)))
         .catch(() => {});
-      await this.sessions.setStatus(chunk.sessionId, status === 'failed' ? 'failed' : 'done');
+      // Terminal: success lands lifecycle-`idle`, error lands `failed`,
+      // and either way the result is unread until the user opens it —
+      // that `unread` flag is what surfaces the sidebar dot.
+      await this.sessions.setStatus(chunk.sessionId, status === 'failed' ? 'failed' : 'idle', {
+        unread: true,
+      });
     } else {
-      await this.sessions.setStatus(chunk.sessionId, 'active');
+      // A fresh turn is running: clear any prior unread result so the
+      // dot doesn't linger while the amber "active" indicator shows.
+      await this.sessions.setStatus(chunk.sessionId, 'active', { unread: false });
     }
   }
 }

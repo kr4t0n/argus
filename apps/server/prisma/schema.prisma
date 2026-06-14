@@ -221,7 +221,13 @@ model Session {
   agentId    String
   title      String
   externalId String?
-  status     String   @default("active") // active | idle | done | failed
+  status     String   @default("active") // active | idle | failed (lifecycle only)
+  // Unread-result marker, orthogonal to `status`. True when a turn
+  // reached a terminal state (idle=success, failed=error) the user may
+  // not have seen; cleared on open (markSeen). The sidebar shows a dot
+  // iff `unread`, colored by `status`. See SessionStatus / unread in
+  // packages/shared-types.
+  unread     Boolean  @default(false)
   // Session-default ModelSelection (shared-types) merged into every
   // turn's Command.options at dispatch (per-turn override wins).
   // NULL = "CLI default" — no model flags passed, pre-feature behavior.

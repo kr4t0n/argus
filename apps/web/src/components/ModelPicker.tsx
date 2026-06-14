@@ -211,9 +211,12 @@ export function ModelPicker({ agentId, value, onChange }: Props) {
 
   // One wrap-tolerant row: model gets the most room, the secondary
   // control (variant or effort) shares the line when it fits, facet
-  // chips and the vendor note ("NO ZDR") trail. flex-wrap is the
-  // safety valve — long model names (codex) push the secondary
-  // controls onto a second line instead of truncating everything.
+  // chips trail and the refresh button anchors the row's right edge.
+  // flex-wrap is the safety valve — long model names (codex) push the
+  // secondary controls onto a second line instead of truncating
+  // everything. The description renders below the row, not in it: as
+  // a trailing flex item it wraps to a full line in narrow panels and
+  // strands the ml-auto refresh button alone on a third line.
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -292,10 +295,6 @@ export function ModelPicker({ agentId, value, onChange }: Props) {
           />
         )}
 
-        {selected?.description && (
-          <span className="min-w-0 text-meta">{selected.description}</span>
-        )}
-
         {agentId && (
           <button
             type="button"
@@ -308,6 +307,8 @@ export function ModelPicker({ agentId, value, onChange }: Props) {
           </button>
         )}
       </div>
+
+      {selected?.description && <div className="text-meta">{selected.description}</div>}
 
       {loading && (
         <div className="flex items-center gap-1.5 text-meta">

@@ -134,7 +134,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `result-ingestor/` — single XREADGROUP across **all** agent result streams
   (refreshed every 5s). Persists each chunk and **immediately** forwards to
   WS room `session:{sessionId}` (no batching — the typewriter UX needs it).
-  Also flips command/session status on `final`/`error`.
+  Also flips command/session status on `final`/`error` (success →
+  session `idle` + `unread`, error → `failed` + `unread`; interim
+  chunks → `active` + clears `unread`).
 - `terminal/` — interactive PTY plumbing. Owns the `Terminal` row, exposes
   REST (`POST/GET /agents/:id/terminals`, `DELETE /terminals/:id`), a WS
   subgateway for `terminal:input` / `terminal:resize` / `terminal:close`,
@@ -505,7 +507,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   updated, model). The bottom region is tabbed: **Commits** (`GitLogPanel`),
   **Files** (`FileTree`), **Terminal** (`<TerminalPane>`), and — only when
   the Notes extension is on (`uiStore.notesExtensionEnabled`) and the agent
-  has a `workingDir` — **Note** (`<NotePane>`).
+  has a `workingDir` — **Note** (`<NotePane>`), plus two more extension tabs gated the same
+  way: **Progress** (`<ProgressPane>`, `progressExtensionEnabled`) and
+  **Diff** (`<DiffPane>`, `diffExtensionEnabled`). ContextPane receives
+  the session's `commands` (not just `chunks`) so the Diff tab can scope
+  its file diffs to the last turn.
 - `components/MachinePanel.tsx` — `/machines/:id` route. Header with
   machine glyph + name + status dot + sidecar-update / new-agent buttons.
   Below the header: 2:3 grid with Host KV + Supports adapters on the
@@ -523,12 +529,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   (per-CLI plan windows pulled
   from each sidecar's heartbeat — see `packages/sidecar/internal/quota`
   and the `/me/quota` endpoint), Preferences (notifications, user
-  rules editor), and Extensions (opt-in features; currently just
-  **Notes**). The on/off flag is an account-level preference persisted
+  rules editor), and Extensions (opt-in features: **Notes**, **Progress**,
+  **Diff**). Each on/off flag is an account-level preference persisted
   server-side via `GET`/`PUT /me/extensions` (a JSON map on `User`, so
-  new extensions need no migration); `uiStore.notesExtensionEnabled` is
-  a localStorage cache for synchronous, flash-free reads, reconciled
-  against the server on bootstrap (`App.tsx`). Capped at `max-w-6xl`.
+  new extensions need no migration — `coerceExtensions` defaults unknown
+  keys to `false`); the matching `uiStore.*ExtensionEnabled` flag is a
+  localStorage cache for synchronous, flash-free reads, reconciled
+  against the server on bootstrap (`App.tsx`). Each toggle PUTs the full
+  flag set (no server-side merge), so all toggles forward every flag.
+  Capped at `max-w-6xl`.
 - `components/TerminalPane.tsx` — xterm.js bound to one agent. Owns the
   WebSocket plumbing, a debounced ResizeObserver for fit, base64 encoding
   on input, and a duplicate-seq guard on output. Renders inside the
@@ -546,6 +555,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   user (see `/me/extensions` and `/me/project-notes`), so they survive
   browser switches. Unlike `User.rules`, notes are personal scratch and
   are never fanned out to sidecars.
+- `components/DiffPane.tsx` — the **Diff** tab. Pure client-side
+  aggregation: it scans the loaded `chunks` for the session's most recent
+  Execute command and collects every result chunk with `meta.isDiff`,
+  grouping by `meta.filePath` with summed `+/-` counts and the file path
+  shown relative to `workingDir`. No new capture — it reuses the unified
+  diffs the sidecar already emits per edit (see **File-edit diffs**) and
+  the shared `components/ui/DiffBlock.tsx` renderer. Re-derives reactively,
+  so diffs stream in live while a turn is still editing.
 
 ## Conventions
 
@@ -570,6 +587,26 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Gotchas
 
+- **`path:line` citations in markdown links**: CLI agents emit links like
+  `[src/foo.go:123](src/foo.go:123)`. TWO layers conspire against these,
+  and both must be handled (`StreamViewer.tsx`):
+  1. react-markdown sanitizes hrefs *before* any custom `a` renderer
+     runs — `defaultUrlTransform` keeps only http(s)/mailto/relative
+     URLs, and `xxx.txt:1` parses as unknown scheme `xxx.txt:`, so the
+     renderer receives `href=""` (and an empty-href anchor is a live
+     link that reloads the current page — symptom: "clicking the link
+     opened a new session"). `fileLinkUrlTransform` (passed via the
+     `urlTransform` prop) rescues exactly the hrefs `splitLineSuffix`
+     (`FileChips.tsx`) recognizes as `path:line`.
+  2. The `a` renderer's own URL-scheme test would *also* misroute
+     `xxx.txt:1` as an external anchor, so it strips the line suffix
+     before testing and re-tests the bare path (keeps
+     `http://localhost:3000` a real URL).
+  Known miss: a dot-less, slash-less name like `Makefile:12` is
+  indistinguishable from a URI scheme and renders as inert text. The
+  line number rides on the file-tab entry (`fileTabsStore.ts`, not part
+  of the tab key) and the viewer scrolls/highlights via shiki's
+  per-line `.line` spans + the `.line-target` rule in `index.css`.
 - **Prisma + workspace import**: the server can only typecheck if `rootDir`
   is unset, because `@argus/shared-types` lives outside `apps/server/src`.
   `nest build` is fine because it only compiles `src/`.
@@ -683,8 +720,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the matching tool *result* event it calls `state.BuildDiff(toolID,
   kind)` which re-reads the file and returns a unified diff. The diff
   is emitted as the result chunk's content with `meta.isDiff: true`,
-  which the web UI (`DiffBlock` in `ToolPill.tsx`) renders with
-  per-line colors. Snapshots are scoped to a single Execute() and use
+  which the web UI renders with per-line colors via the shared
+  `components/ui/DiffBlock.tsx` (used both inline in `ToolPill.tsx` and,
+  aggregated per file for the last turn, in `DiffPane.tsx`). Snapshots are scoped to a single Execute() and use
   256 KiB / NUL-byte / 400-line caps to keep payloads sane. If a
   snapshot fails (binary, too big) we silently fall back to the
   adapter's plain-text result. When adding a new adapter, identify
@@ -932,20 +970,38 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   receiving command updates entirely, so notifications would never
   fire in exactly the case they're meant for. `session:status` goes
   to `user:{userId}` (always joined). Status semantics:
-  `result-ingestor.service.ts` flips success to `'done'` (the unread
-  marker the sidebar surfaces with a green dot + bold title) and
-  failure to `'failed'`; `'idle'` is the post-acknowledgement steady
-  state, reached after `SessionPanel`'s `markSeen` effect calls
-  `POST /sessions/:id/seen`. So the notification trigger is
-  `active → done`, not `active → idle` — by the time the user has
-  opened the session, the status is already idle and we don't want
-  to re-notify them about something they're looking at. Fork-created
-  sessions land directly at `'idle'` (no run yet, nothing to
-  acknowledge). Reading prev-status before upsert prevents re-fires
-  on idempotent re-emits (the ingestor emits `active` on every
-  interim chunk) and also prevents the `done → idle` transition
-  from triggering a second notification, since the prev-status
-  guard only matches `active`. `Notification.requestPermission()`
+  `status` is lifecycle-only (`active`/`idle`/`failed`) and a
+  separate `unread` boolean drives the sidebar dot — the dot shows
+  iff `unread`, colored by `status` (emerald=idle, red=failed; amber
+  while `active`). `result-ingestor.service.ts` lands success at
+  `idle` + `unread:true` and failure at `failed` + `unread:true`;
+  `SessionPanel`'s effect clears `unread` (via `POST /sessions/:id/seen`,
+  which now flips ONLY `unread`, leaving `status` intact) the moment
+  the user opens the session. So the notification trigger is
+  `prevStatus === 'active'` AND the incoming event is a terminal,
+  unread result (`status !== 'active' && unread`) — `unread` also
+  filters out the `markSeen` echo, so opening a session can't
+  re-notify. Fork-created sessions land directly at `idle` with
+  `unread:false` (no run yet, nothing to acknowledge). Reading
+  prev-status before applying prevents re-fires on idempotent
+  re-emits (the ingestor emits `active` on every interim chunk).
+- **Session-status echoes are `updatedAt`-ordered to kill a
+  dot-resurrection race**: the dot used to get stuck because the
+  status lived only on the server and arrived over two unordered
+  channels — the `session:status` WS event and REST `loadSession`
+  responses. A background prefetch (`App.tsx` `onAgentStatus`, fired
+  the instant a turn completes) could issue a `loadSession` whose DB
+  read captured the pre-`markSeen` state and then land AFTER the
+  `markSeen` clear, resurrecting the dot until a hard refresh. Fix:
+  the `session:status` payload carries `unread` + `updatedAt`, and
+  `sessionStore`'s `applySessionStatus`/`loadSession`/`upsertSession`
+  reject any write whose `updatedAt` is older than what's already
+  stored (`isStaleUpdate`). Every server status write bumps
+  `updatedAt` (Prisma `@updatedAt`), so `markSeen` always wins over a
+  stale snapshot. `applySessionStatus` also patches the sidebar
+  `sessions` map directly (the old handler dropped the update unless
+  the session was in the `entries` cache), so dots clear for
+  unopened sessions too. `Notification.requestPermission()`
   MUST run inside a user-gesture handler —
   `UserPanel.NotificationToggle` calls it directly from the click
   handler, so don't refactor through `useEffect` without preserving
