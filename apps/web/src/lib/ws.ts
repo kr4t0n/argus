@@ -9,6 +9,7 @@ import type {
   ResultChunkDTO,
   ServerToClientEvents,
   SessionDTO,
+  SessionStatusEvent,
   SidecarUpdatePlanEntry,
   TerminalClosedMessage,
   TerminalDTO,
@@ -34,7 +35,7 @@ type Handler = {
   onAgentSpawnFailed?: (p: { machineId: string; agentId: string; reason: string }) => void;
   onSessionCreated?: (s: SessionDTO) => void;
   onSessionUpdated?: (s: SessionDTO) => void;
-  onSessionStatus?: (p: { id: string; status: SessionDTO['status'] }) => void;
+  onSessionStatus?: (p: SessionStatusEvent) => void;
   onSessionCloneFailed?: (p: { sessionId: string; reason: string }) => void;
   onCommandCreated?: (c: CommandDTO) => void;
   onCommandUpdated?: (c: CommandDTO) => void;

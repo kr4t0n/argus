@@ -876,17 +876,23 @@ function SessionRow({
     }
   }
 
-  const unread = !archived && session.status === 'done';
+  // Dot visibility comes from `unread`; its color comes from `status`.
+  // While a turn runs (`active`) the amber dot always shows; once it
+  // finishes, the dot persists only until the user opens the session.
+  const unread = !archived && session.unread;
   const content = (
     <span className="flex items-center gap-1.5 min-w-0 flex-1">
       {agentType && <AgentTypeIcon type={agentType} />}
       {!archived && session.status === 'active' && (
         <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
       )}
-      {!archived && session.status === 'failed' && (
-        <span className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />
+      {unread && session.status === 'failed' && (
+        <span
+          className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0"
+          title="task failed — open to mark seen"
+        />
       )}
-      {unread && (
+      {unread && session.status === 'idle' && (
         <span
           className="h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0"
           title="task complete — open to mark seen"

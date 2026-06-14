@@ -10,7 +10,6 @@ const map: Record<Status, string> = {
   offline: 'status-offline',
   active: 'status-busy',
   idle: 'status-offline',
-  done: 'status-online',
   failed: 'status-error',
 };
 

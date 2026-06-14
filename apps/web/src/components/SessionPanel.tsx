@@ -85,24 +85,25 @@ export function SessionPanel() {
     };
   }, [sessionId, loadSession]);
 
-  // `'done'` is the unread-completion marker the result-ingestor sets
-  // on success; the sidebar surfaces it as a green dot + bold title. As
-  // soon as the user is looking at the session, flip it back to `'idle'`
-  // so the marker disappears. Two paths trigger this:
-  //   1. Navigating into a session that was already 'done'.
+  // `unread` is the terminal-result marker the result-ingestor sets when
+  // a turn finishes (success or error); the sidebar surfaces it as a
+  // green/red dot + bold title. As soon as the user is looking at the
+  // session, clear it so the dot disappears — independent of the
+  // `status` lifecycle value (a seen failure stops showing a dot but
+  // stays lifecycle-`failed`). Two paths trigger this:
+  //   1. Navigating into a session that was already unread.
   //   2. The active turn lands while the panel is mounted — the WS
-  //      session:status event upserts the cached entry to 'done', this
+  //      session:status event flips the cached entry to unread, this
   //      effect re-runs, and we clear it.
-  // The server-side `markSeen` is a no-op for any other status, so we
-  // can fire-and-forget without checking what we're overwriting.
-  const sessionStatus = entry?.session.status;
+  // `markSeen` is a no-op once already seen, so fire-and-forget is safe.
+  const unread = entry?.session.unread;
   useEffect(() => {
     if (!sessionId) return;
-    if (sessionStatus !== 'done') return;
+    if (!unread) return;
     void api.markSessionSeen(sessionId).catch(() => {
-      /* silent — server-side is idempotent and the WS upsert will retry */
+      /* silent — server-side is idempotent; a later WS event re-asserts */
     });
-  }, [sessionId, sessionStatus]);
+  }, [sessionId, unread]);
 
   const running = useMemo(() => {
     if (!entry) return false;

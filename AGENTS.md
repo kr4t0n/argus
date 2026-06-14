@@ -134,7 +134,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `result-ingestor/` — single XREADGROUP across **all** agent result streams
   (refreshed every 5s). Persists each chunk and **immediately** forwards to
   WS room `session:{sessionId}` (no batching — the typewriter UX needs it).
-  Also flips command/session status on `final`/`error`.
+  Also flips command/session status on `final`/`error` (success →
+  session `idle` + `unread`, error → `failed` + `unread`; interim
+  chunks → `active` + clears `unread`).
 - `terminal/` — interactive PTY plumbing. Owns the `Terminal` row, exposes
   REST (`POST/GET /agents/:id/terminals`, `DELETE /terminals/:id`), a WS
   subgateway for `terminal:input` / `terminal:resize` / `terminal:close`,
@@ -952,20 +954,38 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   receiving command updates entirely, so notifications would never
   fire in exactly the case they're meant for. `session:status` goes
   to `user:{userId}` (always joined). Status semantics:
-  `result-ingestor.service.ts` flips success to `'done'` (the unread
-  marker the sidebar surfaces with a green dot + bold title) and
-  failure to `'failed'`; `'idle'` is the post-acknowledgement steady
-  state, reached after `SessionPanel`'s `markSeen` effect calls
-  `POST /sessions/:id/seen`. So the notification trigger is
-  `active → done`, not `active → idle` — by the time the user has
-  opened the session, the status is already idle and we don't want
-  to re-notify them about something they're looking at. Fork-created
-  sessions land directly at `'idle'` (no run yet, nothing to
-  acknowledge). Reading prev-status before upsert prevents re-fires
-  on idempotent re-emits (the ingestor emits `active` on every
-  interim chunk) and also prevents the `done → idle` transition
-  from triggering a second notification, since the prev-status
-  guard only matches `active`. `Notification.requestPermission()`
+  `status` is lifecycle-only (`active`/`idle`/`failed`) and a
+  separate `unread` boolean drives the sidebar dot — the dot shows
+  iff `unread`, colored by `status` (emerald=idle, red=failed; amber
+  while `active`). `result-ingestor.service.ts` lands success at
+  `idle` + `unread:true` and failure at `failed` + `unread:true`;
+  `SessionPanel`'s effect clears `unread` (via `POST /sessions/:id/seen`,
+  which now flips ONLY `unread`, leaving `status` intact) the moment
+  the user opens the session. So the notification trigger is
+  `prevStatus === 'active'` AND the incoming event is a terminal,
+  unread result (`status !== 'active' && unread`) — `unread` also
+  filters out the `markSeen` echo, so opening a session can't
+  re-notify. Fork-created sessions land directly at `idle` with
+  `unread:false` (no run yet, nothing to acknowledge). Reading
+  prev-status before applying prevents re-fires on idempotent
+  re-emits (the ingestor emits `active` on every interim chunk).
+- **Session-status echoes are `updatedAt`-ordered to kill a
+  dot-resurrection race**: the dot used to get stuck because the
+  status lived only on the server and arrived over two unordered
+  channels — the `session:status` WS event and REST `loadSession`
+  responses. A background prefetch (`App.tsx` `onAgentStatus`, fired
+  the instant a turn completes) could issue a `loadSession` whose DB
+  read captured the pre-`markSeen` state and then land AFTER the
+  `markSeen` clear, resurrecting the dot until a hard refresh. Fix:
+  the `session:status` payload carries `unread` + `updatedAt`, and
+  `sessionStore`'s `applySessionStatus`/`loadSession`/`upsertSession`
+  reject any write whose `updatedAt` is older than what's already
+  stored (`isStaleUpdate`). Every server status write bumps
+  `updatedAt` (Prisma `@updatedAt`), so `markSeen` always wins over a
+  stale snapshot. `applySessionStatus` also patches the sidebar
+  `sessions` map directly (the old handler dropped the update unless
+  the session was in the `entries` cache), so dots clear for
+  unopened sessions too. `Notification.requestPermission()`
   MUST run inside a user-gesture handler —
   `UserPanel.NotificationToggle` calls it directly from the click
   handler, so don't refactor through `useEffect` without preserving
