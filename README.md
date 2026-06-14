@@ -128,6 +128,12 @@ binary ships alongside the sidecar and is auto-added to `PATH` on
 every shell the sidecar spawns; the JSONL event stream it writes
 into `<workingDir>/.argus/progress/` is tailed by a per-agent
 watcher and rebroadcast to subscribed dashboards.
+- **Last-turn diff (opt-in extension)**: enable the **Diff** extension
+and the session right panel grows a **Diff** tab showing every file the
+agent changed in its most recent turn, grouped per file with `+/-`
+counts. It reuses the unified diffs the sidecar already computes for
+each edit (the same ones shown inline on tool cards), so it adds no new
+capture and updates live as a turn edits files.
 - **Redis Streams** for the bus: durable, replayable, no extra ops weight on
 top of the Redis you already run.
 

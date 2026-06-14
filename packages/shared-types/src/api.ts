@@ -514,6 +514,10 @@ export interface UserExtensionsResponse {
    *  live background tasks reported by `argus-bg` running in the
    *  agent's shell. */
   progress: boolean;
+  /** Diff extension — adds a Diff tab to the session pane showing the
+   *  file diffs from the session's most recent turn (built from the
+   *  per-edit unified diffs the sidecar already captures). */
+  diff: boolean;
 }
 
 /** Request body for `PUT /me/extensions`. The client sends the full
@@ -521,6 +525,7 @@ export interface UserExtensionsResponse {
 export interface UpdateUserExtensionsRequest {
   notes: boolean;
   progress: boolean;
+  diff: boolean;
 }
 
 /** REST response for `GET /machines/:machineId/background-tasks`. One

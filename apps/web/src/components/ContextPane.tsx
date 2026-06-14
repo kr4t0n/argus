@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { AgentDTO, ResultChunkDTO, SessionDTO } from '@argus/shared-types';
+import type { AgentDTO, CommandDTO, ResultChunkDTO, SessionDTO } from '@argus/shared-types';
 import { ChevronDown, Cpu, Folder, Info } from 'lucide-react';
 import { AgentTypeIcon } from './ui/AgentTypeIcon';
 import { StatusDot } from './ui/StatusDot';
@@ -8,6 +8,7 @@ import { GitLogPanel } from './GitLogPanel';
 import { SessionModelChip } from './SessionModelChip';
 import { NotePane } from './NotePane';
 import { ProgressPane } from './ProgressPane';
+import { DiffPane } from './DiffPane';
 import { TerminalPane } from './TerminalPane';
 import { cn, relativeTime } from '../lib/utils';
 import { useSessionModel } from '../lib/usage';
@@ -16,22 +17,27 @@ import { useUIStore } from '../stores/uiStore';
 type Props = {
   agent: AgentDTO | undefined;
   session: SessionDTO | undefined;
+  /** Loaded commands for the active session — the Diff tab reads the most
+   *  recent one to scope its file diffs to the last turn. */
+  commands: CommandDTO[];
   /** Whole stream of result chunks for the active session. Used here
-   *  only to derive token usage — kept as a raw prop (not pre-aggregated)
-   *  so the hook can memoize against the same array reference Zustand
-   *  hands out, sharing the recompute path with the header `UsageBadge`. */
+   *  to derive token usage and (for the Diff tab) the last turn's file
+   *  diffs — kept as a raw prop (not pre-aggregated) so the hook can
+   *  memoize against the same array reference Zustand hands out, sharing
+   *  the recompute path with the header `UsageBadge`. */
   chunks: ResultChunkDTO[];
 };
 
-type TabKey = 'commits' | 'files' | 'terminal' | 'note' | 'progress';
+type TabKey = 'commits' | 'files' | 'terminal' | 'note' | 'progress' | 'diff';
 
-export function ContextPane({ agent, session, chunks }: Props) {
-  // Notes / Progress extensions: when on, each adds a per-project tab
-  // to the pane. Both need a workingDir to attach to (the project key),
-  // so the tab only appears when the agent has one (same gate the
-  // Commits/Files tabs use).
+export function ContextPane({ agent, session, commands, chunks }: Props) {
+  // Notes / Progress / Diff extensions: when on, each adds a tab to the
+  // pane. All gate on a workingDir (the project key for Notes/Progress;
+  // file diffs only exist when the agent has a working tree), matching
+  // the Commits/Files tabs.
   const notesEnabled = useUIStore((s) => s.notesExtensionEnabled);
   const progressEnabled = useUIStore((s) => s.progressExtensionEnabled);
+  const diffEnabled = useUIStore((s) => s.diffExtensionEnabled);
   // Model surfaces in the very first system / init progress chunk a
   // turn emits, so it appears almost immediately on session open.
   // Token usage (input/output/cache) lives in the header badge's
@@ -53,8 +59,11 @@ export function ContextPane({ agent, session, chunks }: Props) {
     if (progressEnabled && agent.workingDir) {
       t.push({ key: 'progress', label: 'Progress' });
     }
+    if (diffEnabled && agent.workingDir) {
+      t.push({ key: 'diff', label: 'Diff' });
+    }
     return t;
-  }, [agent, notesEnabled, progressEnabled]);
+  }, [agent, notesEnabled, progressEnabled, diffEnabled]);
 
   const [active, setActive] = useState<TabKey>('commits');
   useEffect(() => {
@@ -150,6 +159,9 @@ export function ContextPane({ agent, session, chunks }: Props) {
               machineId={agent.machineId}
               workingDir={agent.workingDir}
             />
+          )}
+          {active === 'diff' && (
+            <DiffPane commands={commands} chunks={chunks} workingDir={agent.workingDir} />
           )}
         </div>
       </div>

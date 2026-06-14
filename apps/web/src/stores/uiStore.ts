@@ -44,6 +44,10 @@ interface UIState {
    *  `argus-bg` for the project. Same caching scheme as
    *  notesExtensionEnabled. */
   progressExtensionEnabled: boolean;
+  /** Extensions → Diff: when on, the session right-pane gains a "Diff"
+   *  tab showing the file diffs from the session's most recent turn.
+   *  Same caching scheme as notesExtensionEnabled. */
+  diffExtensionEnabled: boolean;
   toggleSidebar: () => void;
   setSidebarWidth: (w: number) => void;
   toggleContextPane: () => void;
@@ -56,6 +60,7 @@ interface UIState {
   setNotificationsEnabled: (v: boolean) => void;
   setNotesExtensionEnabled: (v: boolean) => void;
   setProgressExtensionEnabled: (v: boolean) => void;
+  setDiffExtensionEnabled: (v: boolean) => void;
 }
 
 export const SIDEBAR_MIN = 220;
@@ -78,6 +83,7 @@ export const useUIStore = create<UIState>()(
       notificationsEnabled: false,
       notesExtensionEnabled: false,
       progressExtensionEnabled: false,
+      diffExtensionEnabled: false,
       toggleSidebar() {
         set({ sidebarOpen: !get().sidebarOpen });
       },
@@ -124,6 +130,9 @@ export const useUIStore = create<UIState>()(
       },
       setProgressExtensionEnabled(v) {
         set({ progressExtensionEnabled: v });
+      },
+      setDiffExtensionEnabled(v) {
+        set({ diffExtensionEnabled: v });
       },
     }),
     { name: 'argus.ui' },

@@ -103,6 +103,7 @@ export default function App() {
         const ui = useUIStore.getState();
         ui.setNotesExtensionEnabled(e.notes);
         ui.setProgressExtensionEnabled(e.progress);
+        ui.setDiffExtensionEnabled(e.diff);
       })
       .catch(() => {});
     const socket = ensureSocket();

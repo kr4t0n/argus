@@ -284,6 +284,7 @@ export function SessionPanel() {
           <ContextPane
             agent={agent}
             session={entry.session}
+            commands={entry.commands}
             chunks={entry.chunks}
           />
         </div>
