@@ -494,7 +494,7 @@ function AnswerBlock({
         // An empty-href anchor is a live link to the CURRENT page, so
         // render inert text instead.
         if (!href) {
-          return <span className="font-mono text-fg-secondary">{children}</span>;
+          return <span className="break-words font-mono text-fg-secondary">{children}</span>;
         }
         const { path: hrefPath, line } = splitLineSuffix(href);
         // Real URLs / fragments / mail / tel — leave as a normal anchor,
@@ -511,7 +511,7 @@ function AnswerBlock({
           // Outside the workspace, a directory, or we have no agent
           // to fetch from — render as inert text so the broken
           // relative URL can't be followed by a stray click.
-          return <span className="font-mono text-fg-secondary">{children}</span>;
+          return <span className="break-words font-mono text-fg-secondary">{children}</span>;
         }
         return (
           <span
@@ -519,7 +519,7 @@ function AnswerBlock({
             tabIndex={0}
             title="Double-click to preview"
             onDoubleClick={() => openFile({ agentId, path: rel, line })}
-            className="cursor-pointer select-none text-sky-600 hover:underline dark:text-sky-400"
+            className="cursor-pointer select-none break-words text-sky-600 hover:underline dark:text-sky-400"
           >
             {children}
           </span>
