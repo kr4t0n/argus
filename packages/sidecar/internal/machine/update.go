@@ -155,9 +155,21 @@ func (d *Daemon) handleUpdateSidecar(ctx context.Context, req protocol.UpdateSid
 		// the version check, but a stale dashboard could still
 		// click the per-machine button. Treat as a no-op success.
 		d.log.Printf("update-sidecar: already on %s, nothing to do", tag)
+		// An install that predates argus-bg can be on the latest
+		// sidecar yet still be missing the companion — fetch it if
+		// absent so the Progress tab starts working without forcing
+		// a redundant sidecar bump.
+		if bgMissing() {
+			d.refreshBG(updCtx, uplog)
+		}
 		d.publishUpdateDownloaded(ctx, req.RequestID, tag, RestartManual)
 		return
 	}
+
+	// Sidecar was swapped — keep argus-bg in lockstep from the same
+	// release before we hand off to the restart path. Best-effort: a
+	// companion hiccup must not abort the (already-completed) sidecar swap.
+	d.refreshBG(updCtx, uplog)
 
 	mode := detectRestartMode()
 	d.log.Printf("update-sidecar: swapped to %s, restartMode=%s", tag, mode)
@@ -177,6 +189,34 @@ func (d *Daemon) handleUpdateSidecar(ctx context.Context, req protocol.UpdateSid
 	state.restartMode = mode
 	state.mu.Unlock()
 	d.requestShutdown()
+}
+
+// refreshBG keeps the argus-bg companion in lockstep with the sidecar after
+// a remote-triggered update. Best-effort: a failure is logged but never
+// aborts the update/restart, since the sidecar itself is already swapped.
+// Pinned to DefaultRepo for the same hostile-server reason handleUpdateSidecar
+// pins Update — the dashboard never gets to redirect the download to a fork.
+func (d *Daemon) refreshBG(ctx context.Context, logger *log.Logger) {
+	if tag, err := updater.DownloadCompanion(ctx, updater.Options{
+		Repo:   updater.DefaultRepo,
+		Logger: logger,
+	}, "argus-bg"); err != nil {
+		d.log.Printf("update-sidecar: argus-bg refresh skipped: %v", err)
+	} else {
+		d.log.Printf("update-sidecar: argus-bg refreshed from %s", tag)
+	}
+}
+
+// bgMissing reports whether the argus-bg companion is absent next to the
+// sidecar binary. Conservatively returns false on any path-resolution error
+// so we never trigger a redundant download we can't reason about.
+func bgMissing() bool {
+	path, err := updater.CompanionPath("argus-bg")
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(path)
+	return errors.Is(err, os.ErrNotExist)
 }
 
 // RestartMode returns the post-shutdown restart action, if any.

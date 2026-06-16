@@ -424,6 +424,16 @@ The swap is atomic (`os.Rename` over the running executable). After
 updating, restart the running sidecar process so it picks up the new
 binary (see Step 7 for service-manager recipes).
 
+`update` also refreshes the `argus-bg` companion (the background-task
+progress wrapper) from the same release, so the two stay in lockstep. To
+(re)install just `argus-bg` — e.g. on an older install that predates it,
+or to repair a missing copy — without touching the sidecar:
+
+```bash
+argus-sidecar download-bg         # installs argus-bg next to the sidecar
+argus-bg version                  # print the baked-in tag
+```
+
 ### Step 6: Initialize the sidecar
 
 The sidecar has no YAML config file. There's a one-time `init`
@@ -660,6 +670,7 @@ These can be overridden with environment variables on the sidecar
 | `argus-server`  | `docker compose pull server && docker compose up -d server`. Migrations apply on boot.    |
 | `argus-web`     | `docker compose pull web && docker compose up -d web`.                                    |
 | `argus-sidecar` | `argus-sidecar update` (downloads, verifies, atomic swap), then restart the service unit. |
+| `argus-bg`      | Refreshed automatically by `argus-sidecar update`; or `argus-sidecar download-bg` to (re)install it on its own. |
 
 
 `:latest` follows `main`. For controlled upgrades, pin to `:X.Y.Z` in

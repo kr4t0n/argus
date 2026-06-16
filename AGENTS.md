@@ -327,20 +327,39 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   with the child's exit code so shell pipelines behave.
   The tqdm parser lives in `tqdm.go` with a table-driven test
   (`tqdm_test.go`) covering vanilla, description-prefixed,
-  ANSI-coloured, and HH:MM:SS-eta variants.
+  ANSI-coloured, and HH:MM:SS-eta variants. Carries its own
+  `main.Version` (baked by the same Makefile `-ldflags` as the
+  sidecar) so `argus-bg version` makes companion drift observable.
 - `updater/` — self-update: reads the GitHub Releases API for
   `argus-sidecar-v*` tags, picks the matching `OS-arch` asset,
   verifies it against `SHASUMS256.txt`, and atomically `os.Rename`s
-  over the running binary. Drives both `argus-sidecar update` (CLI)
-  and remote `update-sidecar` commands from the dashboard
+  over the running binary. The download→verify→chmod→atomic-install
+  step is factored into `installFromRelease`, parameterized by asset
+  base name + destination, so it backs both `Update` (sidecar → the
+  running executable) and `DownloadCompanion` (a sibling binary →
+  alongside the executable; `CompanionPath` resolves the location).
+  Drives `argus-sidecar update` (CLI), `argus-sidecar download-bg`
+  (CLI), and remote `update-sidecar` commands from the dashboard
   (`machine/update.go`). On the remote path the daemon detects its
   restart mode (`self`, `supervisor`, `manual` — see the gotcha
   below) and either re-execs in place via `syscall.Exec`, exits 0
   for systemd/launchd, or stays put and asks the operator to
   restart manually.
+- **argus-bg lockstep.** `argus-bg` carries no comparable embedded
+  version, so `Update` deliberately doesn't touch it. Instead, after
+  a successful sidecar swap — or whenever `argus-bg` is absent next to
+  the binary — both the CLI `update` (`cmd/sidecar/main.go`) and the
+  remote `handleUpdateSidecar` (`machine/update.go`, via `refreshBG` /
+  `bgMissing`) call `DownloadCompanion("argus-bg")` from the *same*
+  release. It's best-effort: a checksum/permission failure on the
+  companion is logged but never fails the sidecar update. The standalone
+  `download-bg` subcommand fetches the companion unconditionally for
+  installs that predate `argus-bg` or to repair a corrupt copy. Remote
+  refreshes pin `updater.DefaultRepo` for the same hostile-server reason
+  the remote sidecar update does.
 - `cmd/sidecar/main.go` — subcommand dispatch (`init`, `update`,
-  `version`, default = run daemon), flag parsing, signal handling,
-  runner glue.
+  `download-bg`, `version`, default = run daemon), flag parsing, signal
+  handling, runner glue.
 
 ### `apps/web/src/`
 
@@ -883,8 +902,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the dashboard's `Update sidecar` action publishes
   `update-sidecar` on the host's Redis control stream. The sidecar
   re-uses `internal/updater` to fetch + verify + atomically rename
-  the new binary, then picks one of three handoff strategies
-  *itself* based on environment hints — the server has no say:
+  the new binary (and, best-effort, refresh the `argus-bg` companion
+  from the same release — see the argus-bg lockstep note above), then
+  picks one of three handoff strategies *itself* based on environment
+  hints — the server has no say:
     - **`self`**: nothing supervises us. The daemon `syscall.Exec`s
       the freshly installed binary in-place. PID stays the same and
       the `flock(2)` hold on the pidfile is preserved across `exec`
