@@ -171,6 +171,44 @@ func TestInstallFromReleaseMissingAsset(t *testing.T) {
 	}
 }
 
+// TestParseCompanionVersion pins the "<name> <version> <goos>/<goarch>"
+// parsing both binaries' `version` output shares — including extra
+// whitespace — and confirms unparseable lines are rejected (so the probe
+// fails safe rather than returning a bogus version).
+func TestParseCompanionVersion(t *testing.T) {
+	ok := []struct{ in, want string }{
+		{"argus-bg argus-sidecar-v1.2.3 linux/amd64\n", "argus-sidecar-v1.2.3"},
+		{"argus-bg dev darwin/arm64\n", "dev"},
+		{"  argus-bg   argus-sidecar-v9.9.9   linux/amd64  \n", "argus-sidecar-v9.9.9"},
+	}
+	for _, tc := range ok {
+		got, err := parseCompanionVersion(tc.in)
+		if err != nil || got != tc.want {
+			t.Errorf("parseCompanionVersion(%q) = (%q, %v), want (%q, nil)", tc.in, got, err, tc.want)
+		}
+	}
+	bad := []string{"", "\n", "argus-bg\n", "   \n"}
+	for _, in := range bad {
+		if got, err := parseCompanionVersion(in); err == nil {
+			t.Errorf("parseCompanionVersion(%q) = (%q, nil), want error", in, got)
+		}
+	}
+}
+
+// TestCompanionUpToDateMissing exercises the fail-safe path: with no companion
+// binary next to the test executable, the version probe fails and
+// CompanionUpToDate must report "not up to date" (so the caller re-installs)
+// with an empty detected version.
+func TestCompanionUpToDateMissing(t *testing.T) {
+	upToDate, installed := CompanionUpToDate("argus-bg-nonexistent-xyz", "argus-sidecar-v1.0.0")
+	if upToDate {
+		t.Errorf("CompanionUpToDate(missing) upToDate = true, want false")
+	}
+	if installed != "" {
+		t.Errorf("CompanionUpToDate(missing) installed = %q, want empty", installed)
+	}
+}
+
 // TestCompanionPath confirms a companion resolves to a sibling of the running
 // executable (the directory the daemon prepends to PATH for spawned shells).
 func TestCompanionPath(t *testing.T) {

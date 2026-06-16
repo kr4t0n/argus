@@ -345,18 +345,30 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   below) and either re-execs in place via `syscall.Exec`, exits 0
   for systemd/launchd, or stays put and asks the operator to
   restart manually.
-- **argus-bg lockstep.** `argus-bg` carries no comparable embedded
-  version, so `Update` deliberately doesn't touch it. Instead, after
-  a successful sidecar swap — or whenever `argus-bg` is absent next to
-  the binary — both the CLI `update` (`cmd/sidecar/main.go`) and the
-  remote `handleUpdateSidecar` (`machine/update.go`, via `refreshBG` /
-  `bgMissing`) call `DownloadCompanion("argus-bg")` from the *same*
-  release. It's best-effort: a checksum/permission failure on the
-  companion is logged but never fails the sidecar update. The standalone
-  `download-bg` subcommand fetches the companion unconditionally for
-  installs that predate `argus-bg` or to repair a corrupt copy. Remote
-  refreshes pin `updater.DefaultRepo` for the same hostile-server reason
-  the remote sidecar update does.
+- **argus-bg lockstep.** `Update` deliberately doesn't touch `argus-bg`;
+  the caller decides when to refresh it. Both the CLI `update`
+  (`cmd/sidecar/main.go`) and the remote `handleUpdateSidecar`
+  (`machine/update.go`, via `refreshBG`) gate the refresh on
+  `updater.CompanionUpToDate("argus-bg", tag)`, where `tag` is the release
+  the sidecar just resolved to. That probe execs the installed
+  `<bin-dir>/argus-bg version` (absolute path — never PATH-resolved) and
+  compares its reported tag to `tag`; it refreshes via
+  `DownloadCompanion("argus-bg")` from the *same* release on anything but
+  an exact match. **It is fail-safe**: a missing file, exec error, wrong
+  arch, an old `argus-bg` with no `version` subcommand, or an unparseable
+  line all read as "not up to date" → reinstall — never skip. This is what
+  closes the *present-but-stale* hole (e.g. a prior best-effort refresh
+  that failed leaves `argus-bg` behind on an otherwise-current sidecar).
+  `--force` bypasses the probe and always reinstalls. The whole step is
+  best-effort: a checksum/permission failure on the companion is logged but
+  never fails the sidecar update. The standalone `download-bg` subcommand
+  fetches the companion unconditionally (no version gate) — it's the
+  explicit repair path. Remote refreshes pin `updater.DefaultRepo` for the
+  same hostile-server reason the remote sidecar update does.
+  Trade-off worth knowing: gating on version means a same-version-but-
+  corrupt `argus-bg` is *not* re-verified (the always-download path used to
+  re-check its SHA every run); `--force` or `download-bg` is the escape
+  hatch.
 - `cmd/sidecar/main.go` — subcommand dispatch (`init`, `update`,
   `download-bg`, `version`, default = run daemon), flag parsing, signal
   handling, runner glue.

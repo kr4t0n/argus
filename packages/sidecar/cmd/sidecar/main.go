@@ -383,12 +383,22 @@ func runUpdate(args []string) {
 		logger.Fatalf("update failed: %v", err)
 	}
 
-	// Keep argus-bg in lockstep with the sidecar. Refresh it when the
-	// sidecar was actually swapped (tag changed), the user forced a
-	// reinstall, or argus-bg is simply absent (older installs predate it).
-	// Best-effort: a checksum/permission hiccup here must not fail the whole
-	// command — the sidecar itself is already current.
-	if tag != Version || *force || !companionPresent("argus-bg") {
+	// Keep argus-bg in lockstep with the sidecar. `tag` is the release the
+	// sidecar just resolved to, so it's also the version argus-bg should be
+	// on. Refresh unless argus-bg already reports that exact tag — a check
+	// that also catches a present-but-stale copy (e.g. a prior refresh that
+	// failed mid-run) and a missing/corrupt one (the probe fails safe toward
+	// reinstall). `--force` always reinstalls. Best-effort: a hiccup here
+	// must not fail the whole command — the sidecar itself is already current.
+	refreshBG := *force
+	if !refreshBG {
+		if upToDate, installed := updater.CompanionUpToDate("argus-bg", tag); upToDate {
+			logger.Printf("argus-bg already on %s — skipping", installed)
+		} else {
+			refreshBG = true
+		}
+	}
+	if refreshBG {
 		if bgTag, err := updater.DownloadCompanion(context.Background(), opts, "argus-bg"); err != nil {
 			logger.Printf("warning: argus-bg refresh skipped: %v", err)
 		} else {
@@ -423,20 +433,6 @@ func runDownloadBG(args []string) {
 		logger.Fatalf("download-bg failed: %v", err)
 	}
 	fmt.Printf("argus-bg installed from %s\n", tag)
-}
-
-// companionPresent reports whether a sibling binary already exists next to
-// the sidecar executable. Used by `update` to decide whether a missing
-// companion needs a one-off fetch even when the sidecar is already current.
-// On any resolution error we report "present" so we don't trigger a noisy
-// best-effort download on an already-up-to-date no-op `update`.
-func companionPresent(name string) bool {
-	path, err := updater.CompanionPath(name)
-	if err != nil {
-		return true
-	}
-	_, err = os.Stat(path)
-	return err == nil
 }
 
 func resolveCachePath(override string) (string, error) {

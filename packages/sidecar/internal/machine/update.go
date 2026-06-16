@@ -155,12 +155,14 @@ func (d *Daemon) handleUpdateSidecar(ctx context.Context, req protocol.UpdateSid
 		// the version check, but a stale dashboard could still
 		// click the per-machine button. Treat as a no-op success.
 		d.log.Printf("update-sidecar: already on %s, nothing to do", tag)
-		// An install that predates argus-bg can be on the latest
-		// sidecar yet still be missing the companion — fetch it if
-		// absent so the Progress tab starts working without forcing
-		// a redundant sidecar bump.
-		if bgMissing() {
+		// Even on the latest sidecar, argus-bg may be missing OR
+		// present-but-stale (e.g. a prior best-effort refresh failed) —
+		// re-fetch unless it already reports this exact tag. The probe
+		// fails safe toward refresh on a missing/corrupt copy.
+		if upToDate, installed := updater.CompanionUpToDate("argus-bg", tag); !upToDate {
 			d.refreshBG(updCtx, uplog)
+		} else {
+			d.log.Printf("update-sidecar: argus-bg already on %s", installed)
 		}
 		d.publishUpdateDownloaded(ctx, req.RequestID, tag, RestartManual)
 		return
@@ -205,18 +207,6 @@ func (d *Daemon) refreshBG(ctx context.Context, logger *log.Logger) {
 	} else {
 		d.log.Printf("update-sidecar: argus-bg refreshed from %s", tag)
 	}
-}
-
-// bgMissing reports whether the argus-bg companion is absent next to the
-// sidecar binary. Conservatively returns false on any path-resolution error
-// so we never trigger a redundant download we can't reason about.
-func bgMissing() bool {
-	path, err := updater.CompanionPath("argus-bg")
-	if err != nil {
-		return false
-	}
-	_, err = os.Stat(path)
-	return errors.Is(err, os.ErrNotExist)
 }
 
 // RestartMode returns the post-shutdown restart action, if any.

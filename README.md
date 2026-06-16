@@ -377,13 +377,15 @@ update can read the release asset list.
 
 `update` also keeps the **`argus-bg`** companion (the tqdm progress
 wrapper shipped in the same release that surfaces background-task
-progress in the dashboard) in lockstep: after swapping the sidecar — or
-whenever `argus-bg` is missing next to it — it fetches and sha256-verifies
-`argus-bg` into the same directory. This is best-effort, so a checksum or
-permission hiccup on the companion never fails the sidecar update itself.
-To (re)install just the companion without touching the sidecar — handy on
-installs that predate `argus-bg`, or to repair a missing/corrupt copy —
-use:
+progress in the dashboard) in lockstep: unless `argus-bg` already reports
+the release `update` resolved to, it fetches and sha256-verifies
+`argus-bg` into the same directory. The version check reads `argus-bg`'s
+own `version` output, so it also repairs a copy that's present but stale
+(or missing, or corrupt — anything it can't confirm is treated as
+"refresh"). This is best-effort, so a checksum or permission hiccup on the
+companion never fails the sidecar update itself. To force a (re)install of
+just the companion without touching the sidecar — handy on installs that
+predate `argus-bg`, or to repair a copy — use:
 
 ```bash
 argus-sidecar download-bg              # install argus-bg next to the sidecar

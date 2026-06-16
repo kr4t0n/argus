@@ -35,6 +35,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -187,6 +188,67 @@ func CompanionPath(name string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(filepath.Dir(exe), name), nil
+}
+
+// companionVersionTimeout bounds the `<companion> version` probe. The
+// subcommand returns instantly for a healthy binary; the cap only matters if
+// a corrupt copy somehow hangs instead of failing fast.
+const companionVersionTimeout = 5 * time.Second
+
+// CompanionVersion execs the installed companion (resolved via CompanionPath)
+// as `<abs-path> version` and returns the version tag it prints. We probe the
+// binary's *own* output rather than trusting a sidecar-side record, so a
+// wrong-arch or hand-swapped copy is caught — not just a stale tag.
+//
+// A non-nil error means we could not positively determine the version: the
+// file is absent, not executable, the wrong architecture, exits non-zero
+// (e.g. an older argus-bg with no `version` subcommand), or prints something
+// unparseable. Callers MUST treat every error as "needs (re)install" — see
+// CompanionUpToDate — so a broken companion always self-heals rather than
+// being skipped.
+func CompanionVersion(name string) (string, error) {
+	path, err := CompanionPath(name)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), companionVersionTimeout)
+	defer cancel()
+	// Absolute path on purpose: never let PATH resolve to a different copy
+	// than the one we'd be replacing.
+	out, err := exec.CommandContext(ctx, path, "version").Output()
+	if err != nil {
+		return "", fmt.Errorf("probe %s version: %w", name, err)
+	}
+	return parseCompanionVersion(string(out))
+}
+
+// parseCompanionVersion pulls the tag out of the `version` line both binaries
+// share: "<name> <version> <goos>/<goarch>". Anything without at least a name
+// and a version field is rejected so an unexpected format fails safe.
+func parseCompanionVersion(out string) (string, error) {
+	fields := strings.Fields(out)
+	if len(fields) < 2 {
+		return "", fmt.Errorf("unparseable version output %q", strings.TrimSpace(out))
+	}
+	return fields[1], nil
+}
+
+// CompanionUpToDate reports whether the installed companion `name` already
+// matches `wantTag` exactly (the lockstep target — typically the release tag
+// the sidecar just resolved). It returns the detected version for logging.
+//
+// Fail-safe by design: any inability to positively confirm the version
+// (missing, exec error, parse failure, a dev build, or simply a different/
+// older tag) yields upToDate=false, so the caller re-installs rather than
+// risk leaving a stale or corrupt copy. Exact equality — not >= — keeps the
+// companion in true lockstep with the sidecar, including the prerelease↔stable
+// switch where the sidecar itself may move "backwards".
+func CompanionUpToDate(name, wantTag string) (upToDate bool, installed string) {
+	got, err := CompanionVersion(name)
+	if err != nil {
+		return false, ""
+	}
+	return got == wantTag, got
 }
 
 // resolveExe returns the canonical, symlink-resolved path to the running
