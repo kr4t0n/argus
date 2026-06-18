@@ -100,6 +100,12 @@ so the bucket only needs to be reachable from the server, never from
 remote agent hosts. Files land under `<workingDir>/.argus/uploads/`
 (hidden from the file tree) and stick around for the session so
 `--resume` turns can reference them again.
+- **Prompt queue**: while a turn is running you can keep typing and hit
+send — the message drops into a small queue shown above the input
+instead of being lost. Edit or remove queued items inline; they're
+dispatched one at a time, in order, as soon as the agent goes idle. The
+queue is per-session and survives a reload, so you can line up several
+follow-ups and walk away.
 - **Interactive terminal per agent (opt-in)**: tick the "attach
 interactive terminal" box when creating an agent and the dashboard's
 right panel grows a real PTY shell on that machine — full ANSI
