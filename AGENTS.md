@@ -563,6 +563,26 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   diffs the sidecar already emits per edit (see **File-edit diffs**) and
   the shared `components/ui/DiffBlock.tsx` renderer. Re-derives reactively,
   so diffs stream in live while a turn is still editing.
+- `components/Composer.tsx` + `components/PromptQueue.tsx` +
+  `stores/queueStore.ts` — the **prompt queue**. While a turn is running
+  the Composer's submit no longer no-ops: it parks the prompt (text +
+  already-uploaded attachment ids/name/mime, *not* the object-URL
+  thumbnail — those don't survive a reload) into a per-session FIFO in
+  `queueStore` (persisted under `argus.queue`), rendered as the small
+  editable/removable list `PromptQueue` shows directly above the input.
+  `SessionPanel` owns the **flush**: a single effect dispatches the head
+  whenever the session is idle, the agent is reachable, and something is
+  queued, then optimistically `upsertCommand`s the returned (status
+  `sent`) row so `running` flips immediately — that's what keeps the
+  drain strictly serialized (one turn at a time) instead of firing the
+  whole backlog at once. A flush whose `sendCommand` throws restores the
+  prompt to the head (`enqueueFront`) and marks it *stalled* (a ref) so a
+  hard error can't hot-loop; the stall clears when the head changes
+  (user removed/edited it) or on a recovery transition (turn finished /
+  agent reconnected). Agent-offline is handled by the gate, not the
+  stall: the queue just sits until status flips back. A manual submit
+  while the backlog is still draining also queues (joins the back) rather
+  than jumping the FIFO.
 
 ## Conventions
 
