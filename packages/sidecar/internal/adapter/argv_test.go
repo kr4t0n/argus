@@ -134,6 +134,7 @@ func TestModelSelectionArgv(t *testing.T) {
 		assertArgvContains(t, got, []string{"--model", "gpt-5.5"})
 		assertArgvContains(t, got, []string{"-c", "model_reasoning_effort=high"})
 		assertArgvContains(t, got, []string{"-c", "service_tier=fast"})
+		assertArgvContains(t, got, []string{"--dangerously-bypass-approvals-and-sandbox"})
 	})
 
 	t.Run("cursor slug only", func(t *testing.T) {
