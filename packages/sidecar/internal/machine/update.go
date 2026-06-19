@@ -155,9 +155,23 @@ func (d *Daemon) handleUpdateSidecar(ctx context.Context, req protocol.UpdateSid
 		// the version check, but a stale dashboard could still
 		// click the per-machine button. Treat as a no-op success.
 		d.log.Printf("update-sidecar: already on %s, nothing to do", tag)
+		// Even on the latest sidecar, argus-bg may be missing OR
+		// present-but-stale (e.g. a prior best-effort refresh failed) —
+		// re-fetch unless it already reports this exact tag. The probe
+		// fails safe toward refresh on a missing/corrupt copy.
+		if upToDate, installed := updater.CompanionUpToDate("argus-bg", tag); !upToDate {
+			d.refreshBG(updCtx, uplog)
+		} else {
+			d.log.Printf("update-sidecar: argus-bg already on %s", installed)
+		}
 		d.publishUpdateDownloaded(ctx, req.RequestID, tag, RestartManual)
 		return
 	}
+
+	// Sidecar was swapped — keep argus-bg in lockstep from the same
+	// release before we hand off to the restart path. Best-effort: a
+	// companion hiccup must not abort the (already-completed) sidecar swap.
+	d.refreshBG(updCtx, uplog)
 
 	mode := detectRestartMode()
 	d.log.Printf("update-sidecar: swapped to %s, restartMode=%s", tag, mode)
@@ -177,6 +191,22 @@ func (d *Daemon) handleUpdateSidecar(ctx context.Context, req protocol.UpdateSid
 	state.restartMode = mode
 	state.mu.Unlock()
 	d.requestShutdown()
+}
+
+// refreshBG keeps the argus-bg companion in lockstep with the sidecar after
+// a remote-triggered update. Best-effort: a failure is logged but never
+// aborts the update/restart, since the sidecar itself is already swapped.
+// Pinned to DefaultRepo for the same hostile-server reason handleUpdateSidecar
+// pins Update — the dashboard never gets to redirect the download to a fork.
+func (d *Daemon) refreshBG(ctx context.Context, logger *log.Logger) {
+	if tag, err := updater.DownloadCompanion(ctx, updater.Options{
+		Repo:   updater.DefaultRepo,
+		Logger: logger,
+	}, "argus-bg"); err != nil {
+		d.log.Printf("update-sidecar: argus-bg refresh skipped: %v", err)
+	} else {
+		d.log.Printf("update-sidecar: argus-bg refreshed from %s", tag)
+	}
 }
 
 // RestartMode returns the post-shutdown restart action, if any.
