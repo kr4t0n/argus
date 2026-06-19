@@ -283,9 +283,7 @@ const CommandBlock = memo(function CommandBlock({
   // response body. See `lib/deltaSplit.ts` for the full rationale; this
   // lets adapters that emit one assistant text per reasoning step
   // (cursor-cli, claude-code) surface a clean final answer instead of a
-  // glued-together transcript. While the turn is still running this same
-  // trailing text is shown as a live preview (`liveText` below) rather
-  // than the body, so preamble never flashes in the response area.
+  // glued-together transcript.
   const finalDeltaText = useMemo(() => {
     const { finalDeltas } = splitDeltas(chunks);
     return finalDeltas.map((c) => c.delta ?? '').join('');
@@ -297,14 +295,15 @@ const CommandBlock = memo(function CommandBlock({
   // A turn is "done" once it stops running or a terminal chunk lands.
   // Until then, the trailing assistant text is the model's CURRENT
   // utterance and can't be classified yet: it becomes pre-tool narration
-  // if a tool follows, or the final answer if the turn ends. We only know
-  // which once the next tool arrives (or the turn settles). So while the
-  // turn runs we render that text as a live preview in the activity area
-  // and keep the response body empty — that's what stops a preamble from
-  // flashing in the body and then yanking up into the activity pill the
-  // instant a tool follows.
+  // if a tool follows, or the final answer if the turn ends — and we only
+  // know which once the next tool arrives (or the turn settles). So while
+  // the turn is live we fold ALL of its text into the activity pill (the
+  // ActivityPanel renders the running deltas as thoughts, see
+  // `buildTimeline(..., live)`) and keep the response body empty. Nothing
+  // ever renders as a standalone block that could flash and then relocate
+  // when a tool follows; the settled final answer simply lands in the
+  // body once the turn is done.
   const turnDone = !running || !!finalChunk || !!errorChunk;
-  const liveText = turnDone ? '' : finalDeltaText;
 
   // The response body only ever holds the settled final answer (the
   // post-last-tool deltas). Fall back to `final.content` only when no
@@ -413,8 +412,7 @@ const CommandBlock = memo(function CommandBlock({
       <div className="mt-4 space-y-3">
         <TodoWindow chunks={chunks} />
         <SubAgentWindow chunks={chunks} />
-        {activityOpen && <ActivityPanel chunks={chunks} />}
-        {liveText && <LiveResponse text={liveText} />}
+        {activityOpen && <ActivityPanel chunks={chunks} live={!turnDone} />}
         {(bodyText || files.length > 0) && (
           <AnswerBlock
             bodyText={bodyText}
@@ -464,25 +462,6 @@ function findScrollParent(el: HTMLElement): HTMLElement | null {
     p = p.parentElement;
   }
   return null;
-}
-
-/**
- * The agent's *current* assistant utterance while a turn is still
- * running, shown in the activity area (under the pill) as a subdued,
- * streaming preview. It is intentionally NOT the response body: this
- * text may turn into pre-tool narration the moment the next tool lands
- * (at which point it folds into the activity timeline) or settle into
- * the final answer when the turn ends (at which point the body renders
- * it). Keeping it here until then is what prevents the old "preamble
- * flashes in the response area, then yanks into the pill" jump.
- */
-function LiveResponse({ text }: { text: string }) {
-  return (
-    <div className="markdown max-w-none text-sm leading-relaxed text-fg-secondary">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-      <span className="typewriter-cursor" />
-    </div>
-  );
 }
 
 function AnswerBlock({

@@ -39,7 +39,9 @@ export function ActivityPill({ chunks, running, startedAt, endedAt, open, onTogg
   const tools = chunks.filter(
     (c) => c.kind === 'tool' && !isNestedSubAgentChunk(c) && !isDedicatedPanelTool(c),
   );
-  const items: TimelineItem[] = useMemo(() => buildTimeline(chunks), [chunks]);
+  // `running` is the live flag: while the turn runs, the trailing deltas
+  // fold in as thoughts so `items` reflects what the expanded panel shows.
+  const items: TimelineItem[] = useMemo(() => buildTimeline(chunks, running), [chunks, running]);
 
   // Re-render on a 100 ms tick while the turn is live so the elapsed-time
   // readout advances smoothly instead of jumping whenever a chunk arrives.
@@ -101,8 +103,16 @@ export function ActivityPill({ chunks, running, startedAt, endedAt, open, onTogg
  * defeat the purpose since a long timeline is usually taller than the
  * viewport itself.
  */
-export function ActivityPanel({ chunks }: { chunks: ResultChunkDTO[] }) {
-  const items: TimelineItem[] = useMemo(() => buildTimeline(chunks), [chunks]);
+export function ActivityPanel({
+  chunks,
+  live = false,
+}: {
+  chunks: ResultChunkDTO[];
+  /** While true, the turn's trailing deltas are folded in as live
+   *  thoughts instead of being left to the StreamViewer body. */
+  live?: boolean;
+}) {
+  const items: TimelineItem[] = useMemo(() => buildTimeline(chunks, live), [chunks, live]);
   if (items.length === 0) return null;
   return (
     <div className="ml-1 space-y-1.5 border-l border-default/60 pl-4">
@@ -184,8 +194,16 @@ type TimelineItem =
  * 'thought' items here; deltas after the last tool are the final
  * assistant answer and are intentionally NOT in the timeline — the
  * StreamViewer body renders those as the message proper.
+ *
+ * `live` flips that last rule while a turn is still running: the trailing
+ * deltas can't be classified yet (they become preamble if a tool follows,
+ * or the answer if the turn ends), so we fold them in as thoughts too and
+ * the body stays empty until the turn settles. This keeps streaming text
+ * from ever rendering as a standalone block that flashes and relocates
+ * when the next tool lands. Once the turn is done, `live` is false again
+ * and the trailing deltas drop out of the timeline into the body.
  */
-function buildTimeline(chunks: ResultChunkDTO[]): TimelineItem[] {
+function buildTimeline(chunks: ResultChunkDTO[], live = false): TimelineItem[] {
   const { boundarySeq } = splitDeltas(chunks);
 
   const resultByToolId = new Map<string, ResultChunkDTO>();
@@ -215,7 +233,9 @@ function buildTimeline(chunks: ResultChunkDTO[]): TimelineItem[] {
 
   for (const c of chunks) {
     if (c.kind === 'delta') {
-      if (c.seq > boundarySeq) continue; // final answer, rendered by StreamViewer body
+      // Settled: trailing (post-tool) deltas are the final answer, owned
+      // by the StreamViewer body. Live: fold them in here as a thought.
+      if (!live && c.seq > boundarySeq) continue;
       if (!buf) buf = { ids: [], texts: [] };
       buf.ids.push(c.id);
       buf.texts.push(c.delta ?? '');
