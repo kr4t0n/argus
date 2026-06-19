@@ -327,20 +327,51 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   with the child's exit code so shell pipelines behave.
   The tqdm parser lives in `tqdm.go` with a table-driven test
   (`tqdm_test.go`) covering vanilla, description-prefixed,
-  ANSI-coloured, and HH:MM:SS-eta variants.
+  ANSI-coloured, and HH:MM:SS-eta variants. Carries its own
+  `main.Version` (baked by the same Makefile `-ldflags` as the
+  sidecar) so `argus-bg version` makes companion drift observable.
 - `updater/` — self-update: reads the GitHub Releases API for
   `argus-sidecar-v*` tags, picks the matching `OS-arch` asset,
   verifies it against `SHASUMS256.txt`, and atomically `os.Rename`s
-  over the running binary. Drives both `argus-sidecar update` (CLI)
-  and remote `update-sidecar` commands from the dashboard
+  over the running binary. The download→verify→chmod→atomic-install
+  step is factored into `installFromRelease`, parameterized by asset
+  base name + destination, so it backs both `Update` (sidecar → the
+  running executable) and `DownloadCompanion` (a sibling binary →
+  alongside the executable; `CompanionPath` resolves the location).
+  Drives `argus-sidecar update` (CLI), `argus-sidecar download-bg`
+  (CLI), and remote `update-sidecar` commands from the dashboard
   (`machine/update.go`). On the remote path the daemon detects its
   restart mode (`self`, `supervisor`, `manual` — see the gotcha
   below) and either re-execs in place via `syscall.Exec`, exits 0
   for systemd/launchd, or stays put and asks the operator to
   restart manually.
+- **argus-bg lockstep.** `Update` deliberately doesn't touch `argus-bg`;
+  the caller decides when to refresh it. Both the CLI `update`
+  (`cmd/sidecar/main.go`) and the remote `handleUpdateSidecar`
+  (`machine/update.go`, via `refreshBG`) gate the refresh on
+  `updater.CompanionUpToDate("argus-bg", tag)`, where `tag` is the release
+  the sidecar just resolved to. That probe execs the installed
+  `<bin-dir>/argus-bg version` (absolute path — never PATH-resolved) and
+  compares its reported tag to `tag`; it refreshes via
+  `DownloadCompanion("argus-bg")` from the *same* release on anything but
+  an exact match. **It is fail-safe**: a missing file, exec error, wrong
+  arch, an old `argus-bg` with no `version` subcommand, or an unparseable
+  line all read as "not up to date" → reinstall — never skip. This is what
+  closes the *present-but-stale* hole (e.g. a prior best-effort refresh
+  that failed leaves `argus-bg` behind on an otherwise-current sidecar).
+  `--force` bypasses the probe and always reinstalls. The whole step is
+  best-effort: a checksum/permission failure on the companion is logged but
+  never fails the sidecar update. The standalone `download-bg` subcommand
+  fetches the companion unconditionally (no version gate) — it's the
+  explicit repair path. Remote refreshes pin `updater.DefaultRepo` for the
+  same hostile-server reason the remote sidecar update does.
+  Trade-off worth knowing: gating on version means a same-version-but-
+  corrupt `argus-bg` is *not* re-verified (the always-download path used to
+  re-check its SHA every run); `--force` or `download-bg` is the escape
+  hatch.
 - `cmd/sidecar/main.go` — subcommand dispatch (`init`, `update`,
-  `version`, default = run daemon), flag parsing, signal handling,
-  runner glue.
+  `download-bg`, `version`, default = run daemon), flag parsing, signal
+  handling, runner glue.
 
 ### `apps/web/src/`
 
@@ -563,6 +594,26 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   diffs the sidecar already emits per edit (see **File-edit diffs**) and
   the shared `components/ui/DiffBlock.tsx` renderer. Re-derives reactively,
   so diffs stream in live while a turn is still editing.
+- `components/Composer.tsx` + `components/PromptQueue.tsx` +
+  `stores/queueStore.ts` — the **prompt queue**. While a turn is running
+  the Composer's submit no longer no-ops: it parks the prompt (text +
+  already-uploaded attachment ids/name/mime, *not* the object-URL
+  thumbnail — those don't survive a reload) into a per-session FIFO in
+  `queueStore` (persisted under `argus.queue`), rendered as the small
+  editable/removable list `PromptQueue` shows directly above the input.
+  `SessionPanel` owns the **flush**: a single effect dispatches the head
+  whenever the session is idle, the agent is reachable, and something is
+  queued, then optimistically `upsertCommand`s the returned (status
+  `sent`) row so `running` flips immediately — that's what keeps the
+  drain strictly serialized (one turn at a time) instead of firing the
+  whole backlog at once. A flush whose `sendCommand` throws restores the
+  prompt to the head (`enqueueFront`) and marks it *stalled* (a ref) so a
+  hard error can't hot-loop; the stall clears when the head changes
+  (user removed/edited it) or on a recovery transition (turn finished /
+  agent reconnected). Agent-offline is handled by the gate, not the
+  stall: the queue just sits until status flips back. A manual submit
+  while the backlog is still draining also queues (joins the back) rather
+  than jumping the FIFO.
 
 ## Conventions
 
@@ -883,8 +934,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the dashboard's `Update sidecar` action publishes
   `update-sidecar` on the host's Redis control stream. The sidecar
   re-uses `internal/updater` to fetch + verify + atomically rename
-  the new binary, then picks one of three handoff strategies
-  *itself* based on environment hints — the server has no say:
+  the new binary (and, best-effort, refresh the `argus-bg` companion
+  from the same release — see the argus-bg lockstep note above), then
+  picks one of three handoff strategies *itself* based on environment
+  hints — the server has no say:
     - **`self`**: nothing supervises us. The daemon `syscall.Exec`s
       the freshly installed binary in-place. PID stays the same and
       the `flock(2)` hold on the pidfile is preserved across `exec`

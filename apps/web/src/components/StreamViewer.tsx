@@ -278,11 +278,14 @@ const CommandBlock = memo(function CommandBlock({
   isFirst,
 }: CommandBlockProps) {
   // Only deltas AFTER the last tool/output chunk count as the user-facing
-  // answer — earlier deltas are "thinking" the model emitted between tool
-  // calls and are rendered inline by ActivityPill instead. See
-  // `lib/deltaSplit.ts` for the full rationale; this lets adapters that
-  // emit one assistant text per reasoning step (cursor-cli, claude-code)
-  // surface a clean final answer instead of a glued-together transcript.
+  // answer — earlier deltas are "thinking"/preamble the model emitted
+  // between tool calls and belong in the activity timeline, not the
+  // response body. See `lib/deltaSplit.ts` for the full rationale; this
+  // lets adapters that emit one assistant text per reasoning step
+  // (cursor-cli, claude-code) surface a clean final answer instead of a
+  // glued-together transcript. While the turn is still running this same
+  // trailing text is shown as a live preview (`liveText` below) rather
+  // than the body, so preamble never flashes in the response area.
   const finalDeltaText = useMemo(() => {
     const { finalDeltas } = splitDeltas(chunks);
     return finalDeltas.map((c) => c.delta ?? '').join('');
@@ -291,11 +294,24 @@ const CommandBlock = memo(function CommandBlock({
   const errorChunk = chunks.find((c) => c.kind === 'error');
   const files = useMemo(() => extractFiles(chunks), [chunks]);
 
-  // Fall back to `final.content` only when no post-tool deltas exist at
-  // all — covers adapters that publish a single result event with no
-  // streamed deltas, plus the (rare) case of a turn that ended on a tool
-  // call with no closing assistant message.
-  const bodyText = finalDeltaText || finalChunk?.content?.trim() || '';
+  // A turn is "done" once it stops running or a terminal chunk lands.
+  // Until then, the trailing assistant text is the model's CURRENT
+  // utterance and can't be classified yet: it becomes pre-tool narration
+  // if a tool follows, or the final answer if the turn ends. We only know
+  // which once the next tool arrives (or the turn settles). So while the
+  // turn runs we render that text as a live preview in the activity area
+  // and keep the response body empty — that's what stops a preamble from
+  // flashing in the body and then yanking up into the activity pill the
+  // instant a tool follows.
+  const turnDone = !running || !!finalChunk || !!errorChunk;
+  const liveText = turnDone ? '' : finalDeltaText;
+
+  // The response body only ever holds the settled final answer (the
+  // post-last-tool deltas). Fall back to `final.content` only when no
+  // post-tool deltas exist at all — covers adapters that publish a single
+  // result event with no streamed deltas, plus the (rare) case of a turn
+  // that ended on a tool call with no closing assistant message.
+  const bodyText = turnDone ? finalDeltaText || finalChunk?.content?.trim() || '' : '';
 
   const startedAt = new Date(command.createdAt).getTime();
   const endedAt = command.completedAt ? new Date(command.completedAt).getTime() : null;
@@ -398,12 +414,13 @@ const CommandBlock = memo(function CommandBlock({
         <TodoWindow chunks={chunks} />
         <SubAgentWindow chunks={chunks} />
         {activityOpen && <ActivityPanel chunks={chunks} />}
+        {liveText && <LiveResponse text={liveText} />}
         {(bodyText || files.length > 0) && (
           <AnswerBlock
             bodyText={bodyText}
             files={files}
             workingDir={workingDir}
-            streaming={running && !finalChunk && !errorChunk}
+            streaming={false}
             sessionId={command.sessionId}
             commandId={command.id}
             agentId={command.agentId}
@@ -447,6 +464,25 @@ function findScrollParent(el: HTMLElement): HTMLElement | null {
     p = p.parentElement;
   }
   return null;
+}
+
+/**
+ * The agent's *current* assistant utterance while a turn is still
+ * running, shown in the activity area (under the pill) as a subdued,
+ * streaming preview. It is intentionally NOT the response body: this
+ * text may turn into pre-tool narration the moment the next tool lands
+ * (at which point it folds into the activity timeline) or settle into
+ * the final answer when the turn ends (at which point the body renders
+ * it). Keeping it here until then is what prevents the old "preamble
+ * flashes in the response area, then yanks into the pill" jump.
+ */
+function LiveResponse({ text }: { text: string }) {
+  return (
+    <div className="markdown max-w-none text-sm leading-relaxed text-fg-secondary">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      <span className="typewriter-cursor" />
+    </div>
+  );
 }
 
 function AnswerBlock({
@@ -494,7 +530,7 @@ function AnswerBlock({
         // An empty-href anchor is a live link to the CURRENT page, so
         // render inert text instead.
         if (!href) {
-          return <span className="font-mono text-fg-secondary">{children}</span>;
+          return <span className="break-words font-mono text-fg-secondary">{children}</span>;
         }
         const { path: hrefPath, line } = splitLineSuffix(href);
         // Real URLs / fragments / mail / tel — leave as a normal anchor,
@@ -511,7 +547,7 @@ function AnswerBlock({
           // Outside the workspace, a directory, or we have no agent
           // to fetch from — render as inert text so the broken
           // relative URL can't be followed by a stray click.
-          return <span className="font-mono text-fg-secondary">{children}</span>;
+          return <span className="break-words font-mono text-fg-secondary">{children}</span>;
         }
         return (
           <span
@@ -519,7 +555,7 @@ function AnswerBlock({
             tabIndex={0}
             title="Double-click to preview"
             onDoubleClick={() => openFile({ agentId, path: rel, line })}
-            className="cursor-pointer select-none text-sky-600 hover:underline dark:text-sky-400"
+            className="cursor-pointer select-none break-words text-sky-600 hover:underline dark:text-sky-400"
           >
             {children}
           </span>

@@ -42,6 +42,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -51,6 +52,13 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/term"
 )
+
+// Version is injected at build time via -ldflags="-X main.Version=…", the
+// same flag the Makefile already passes to the sidecar build. Untagged dev
+// builds report "dev"; release builds report the git tag (e.g.
+// "argus-sidecar-v0.1.0") so `argus-bg version` makes companion drift
+// observable next to `argus-sidecar version`.
+var Version = "dev"
 
 // progressThrottle is the minimum wall-clock gap between two emitted
 // progress events for the same task. The other gate is "integer percent
@@ -67,6 +75,7 @@ func main() {
 
 Usage:
   argus-bg [flags] -- <command> [args...]
+  argus-bg version
 
 Flags:
   -id <id>           task id (default: random uuid)
@@ -83,16 +92,12 @@ stays enabled. The JSONL stream lands in $ARGUS_PROGRESS_DIR, or
 	teePath := fs.String("tee", "", "tee raw output to this log file")
 
 	argv := os.Args[1:]
-	for _, a := range argv {
-		if a == "-h" || a == "--help" {
-			fs.Usage()
-			os.Exit(0)
-		}
-	}
 
-	// Standard library `flag` stops at `--` but consumes it; we want
-	// to keep everything after it as the wrapped command verbatim
-	// (which may itself contain flags), so split argv manually first.
+	// Everything after the first `--` is the wrapped command, verbatim — its
+	// own flags must not be mistaken for ours. So locate the separator first
+	// and only scan the flags region (before `--`) for our -h/--help/version
+	// tokens. (Scanning all of argv would misfire on e.g.
+	// `argus-bg -- mytool --version`.)
 	sep := -1
 	for i, a := range argv {
 		if a == "--" {
@@ -100,6 +105,21 @@ stays enabled. The JSONL stream lands in $ARGUS_PROGRESS_DIR, or
 			break
 		}
 	}
+	flagsEnd := len(argv)
+	if sep >= 0 {
+		flagsEnd = sep
+	}
+	for _, a := range argv[:flagsEnd] {
+		switch a {
+		case "-h", "--help":
+			fs.Usage()
+			os.Exit(0)
+		case "version", "--version", "-v":
+			fmt.Printf("argus-bg %s %s/%s\n", Version, runtime.GOOS, runtime.GOARCH)
+			os.Exit(0)
+		}
+	}
+
 	if sep < 0 {
 		fs.Usage()
 		fmt.Fprintln(os.Stderr, "\nerror: missing `--` separator before command")

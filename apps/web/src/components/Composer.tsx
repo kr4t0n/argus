@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUp, Square, Paperclip, X, FileText, Loader2, AlertCircle } from 'lucide-react';
+import { ArrowUp, ListPlus, Square, Paperclip, X, FileText, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from './ui/Button';
 import { ImageLightbox } from './ImageLightbox';
+import { PromptQueue } from './PromptQueue';
 import { cn } from '../lib/utils';
 import { api } from '../lib/api';
+import { useQueueStore } from '../stores/queueStore';
 
 type PendingAttachment = {
   localId: string;
@@ -22,6 +24,9 @@ type Props = {
   disabled?: boolean;
   running?: boolean;
   placeholder?: string;
+  /** When set, a submit while `running` queues the prompt for this
+   *  session instead of sending it immediately (see PromptQueue). */
+  sessionId?: string;
   onSend: (prompt: string, attachmentIds: string[]) => void | Promise<void>;
   onCancel?: () => void;
   initial?: string;
@@ -32,6 +37,7 @@ export function Composer({
   disabled,
   running,
   placeholder,
+  sessionId,
   onSend,
   onCancel,
   initial = '',
@@ -42,6 +48,14 @@ export function Composer({
   const [dragOver, setDragOver] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const enqueue = useQueueStore((s) => s.enqueue);
+  const queuedCount = useQueueStore((s) => (sessionId ? s.queues[sessionId]?.length ?? 0 : 0));
+  // Drives the queue affordance (placeholder + list-plus button): you're
+  // adding to the queue, not sending, while a turn is in flight.
+  const canQueue = !!sessionId && !!running;
+  // The actual send-vs-queue decision is broader: also queue while the
+  // backlog is still draining so a manual submit can't jump the FIFO.
+  const shouldQueue = !!sessionId && (!!running || queuedCount > 0);
 
   useEffect(() => {
     setValue(initial);
@@ -119,15 +133,31 @@ export function Composer({
   }
 
   async function handleSend() {
-    if (!canSend || running) return;
+    if (!canSend) return;
+    // A turn is in flight but there's no session to queue against — leave
+    // the draft untouched rather than clearing it into the void.
+    if (running && !sessionId) return;
     const prompt = value.trim();
     const ids = doneIds;
     // Optimistic clear (matches the prior text-only behavior). Uploaded
     // files persist server-side, so a failed send doesn't lose the bytes.
     setValue('');
     onChange?.('');
+    // Snapshot attachment metadata before we drop the local state — the
+    // queue needs the server ids (+ name/mime for a chip) to re-attach
+    // when the turn eventually flushes.
+    const queuedAttachments = attachments
+      .filter((a) => a.status === 'done' && a.id)
+      .map((a) => ({ id: a.id as string, name: a.name, mime: a.mime }));
     attachments.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
     setAttachments([]);
+    // A turn is in flight (or the backlog is still draining) — park this
+    // prompt in the session's queue instead of sending. SessionPanel
+    // flushes the queue FIFO once the agent is idle.
+    if (shouldQueue) {
+      enqueue(sessionId!, prompt, queuedAttachments);
+      return;
+    }
     await onSend(prompt, ids);
   }
 
@@ -144,6 +174,7 @@ export function Composer({
 
   return (
     <div className="bg-surface-0 px-6 pt-4 pb-4">
+      {sessionId && <PromptQueue sessionId={sessionId} />}
       <div
         onDragOver={(e) => {
           e.preventDefault();
@@ -187,23 +218,43 @@ export function Composer({
             }}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
-            placeholder={placeholder ?? 'Request changes or ask a question…'}
+            placeholder={
+              canQueue ? 'Queue a follow-up…' : placeholder ?? 'Request changes or ask a question…'
+            }
             disabled={disabled}
             rows={1}
             aria-label="Send a message"
             className="flex-1 resize-none bg-transparent text-sm text-fg-primary placeholder:text-fg-muted outline-none focus:ring-0 py-1.5 no-scrollbar"
           />
           {running ? (
-            <Button
-              size="icon"
-              variant="subtle"
-              onClick={onCancel}
-              title="Cancel (esc)"
-              aria-label="Cancel running command"
-              className="rounded-full"
-            >
-              <Square className="h-3 w-3" strokeWidth={2.5} fill="currentColor" />
-            </Button>
+            <>
+              {(!!value.trim() || attachments.length > 0) && (
+                <Button
+                  size="icon"
+                  onClick={handleSend}
+                  disabled={!canSend}
+                  title={uploading ? 'Waiting for uploads…' : 'Add to queue (⏎)'}
+                  aria-label="Add to queue"
+                  className="rounded-full"
+                >
+                  {uploading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <ListPlus className="h-4 w-4" strokeWidth={2.5} />
+                  )}
+                </Button>
+              )}
+              <Button
+                size="icon"
+                variant="subtle"
+                onClick={onCancel}
+                title="Cancel (esc)"
+                aria-label="Cancel running command"
+                className="rounded-full"
+              >
+                <Square className="h-3 w-3" strokeWidth={2.5} fill="currentColor" />
+              </Button>
+            </>
           ) : (
             <Button
               size="icon"

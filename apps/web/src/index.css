@@ -220,7 +220,7 @@ textarea::-webkit-scrollbar-corner {
   @apply mt-0;
 }
 .markdown a {
-  @apply text-sky-600 hover:underline dark:text-sky-400;
+  @apply break-words text-sky-600 hover:underline dark:text-sky-400;
 }
 .markdown table {
   @apply my-3 w-full border-collapse text-sm;

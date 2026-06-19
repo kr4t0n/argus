@@ -100,6 +100,12 @@ so the bucket only needs to be reachable from the server, never from
 remote agent hosts. Files land under `<workingDir>/.argus/uploads/`
 (hidden from the file tree) and stick around for the session so
 `--resume` turns can reference them again.
+- **Prompt queue**: while a turn is running you can keep typing and hit
+send — the message drops into a small queue shown above the input
+instead of being lost. Edit or remove queued items inline; they're
+dispatched one at a time, in order, as soon as the agent goes idle. The
+queue is per-session and survives a reload, so you can line up several
+follow-ups and walk away.
 - **Interactive terminal per agent (opt-in)**: tick the "attach
 interactive terminal" box when creating an agent and the dashboard's
 right panel grows a real PTY shell on that machine — full ANSI
@@ -375,6 +381,24 @@ your launchd/systemd unit afterwards to pick up the new binary. If the
 GitHub repo is private, set `GITHUB_TOKEN` in the environment so the
 update can read the release asset list.
 
+`update` also keeps the **`argus-bg`** companion (the tqdm progress
+wrapper shipped in the same release that surfaces background-task
+progress in the dashboard) in lockstep: unless `argus-bg` already reports
+the release `update` resolved to, it fetches and sha256-verifies
+`argus-bg` into the same directory. The version check reads `argus-bg`'s
+own `version` output, so it also repairs a copy that's present but stale
+(or missing, or corrupt — anything it can't confirm is treated as
+"refresh"). This is best-effort, so a checksum or permission hiccup on the
+companion never fails the sidecar update itself. To force a (re)install of
+just the companion without touching the sidecar — handy on installs that
+predate `argus-bg`, or to repair a copy — use:
+
+```bash
+argus-sidecar download-bg              # install argus-bg next to the sidecar
+argus-sidecar download-bg --prerelease # from the latest pre-release
+argus-bg version                       # print the baked-in version
+```
+
 ##### Remote updates from the dashboard
 
 You can also trigger the same self-update remotely from the dashboard so
@@ -395,7 +419,8 @@ you don't have to SSH into every host when you cut a new release.
 Both paths use the same machinery: the server publishes an
 `update-sidecar` command on the host's Redis control stream, the sidecar
 reuses its existing `argus-sidecar update` flow to download + verify +
-swap the binary, then chooses how to bring up the new image:
+swap the binary (refreshing the `argus-bg` companion in the same step,
+best-effort), then chooses how to bring up the new image:
 
 - **`self`** — the daemon was started by `argus-sidecar start` (or any
   other non-supervised invocation). It re-execs the freshly installed

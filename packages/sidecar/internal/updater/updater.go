@@ -15,6 +15,11 @@
 //     rename-over-self is atomic and safe: the running process keeps its
 //     in-memory image, future invocations get the new binary.
 //
+// The same download/verify/atomic-swap primitive (installFromRelease) also
+// backs DownloadCompanion, which installs sibling binaries shipped in the
+// same release — currently argus-bg — next to the sidecar executable so the
+// two stay in version lockstep.
+//
 // Windows is intentionally not supported — the sidecar only ships
 // linux/darwin binaries.
 package updater
@@ -30,6 +35,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -86,23 +92,35 @@ func (a *asset) downloadURL() string {
 	return a.BrowserDownloadURL
 }
 
-// Update performs the full update flow. Returns the tag we updated to (or
-// the current tag, if already up to date) plus an error describing any
-// failure. The current executable is unchanged unless we successfully
-// completed the swap.
-func Update(ctx context.Context, opts Options) (string, error) {
-	repo := opts.Repo
+// resolve fills in the zero-value defaults for an Options (repo, logger,
+// client) so the public entry points share one normalization path.
+func (o Options) resolve() (repo string, logger *log.Logger, client *http.Client) {
+	repo = o.Repo
 	if repo == "" {
 		repo = DefaultRepo
 	}
-	logger := opts.Logger
+	logger = o.Logger
 	if logger == nil {
 		logger = log.Default()
 	}
-	client := opts.HTTPClient
+	client = o.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 60 * time.Second}
 	}
+	return repo, logger, client
+}
+
+// Update performs the full update flow for the sidecar binary itself.
+// Returns the tag we updated to (or the current tag, if already up to date)
+// plus an error describing any failure. The current executable is unchanged
+// unless we successfully completed the swap.
+//
+// Companion binaries (argus-bg) are intentionally NOT touched here — they
+// have no embedded version to compare against, so the caller decides when to
+// refresh them via DownloadCompanion (see `argus-sidecar update` and
+// `download-bg`).
+func Update(ctx context.Context, opts Options) (string, error) {
+	repo, logger, client := opts.resolve()
 
 	rel, err := pickLatestRelease(ctx, client, repo, opts.IncludePrerelease)
 	if err != nil {
@@ -115,21 +133,128 @@ func Update(ctx context.Context, opts Options) (string, error) {
 		return rel.TagName, nil
 	}
 
-	binAssetName := fmt.Sprintf("argus-sidecar-%s-%s", runtime.GOOS, runtime.GOARCH)
-	binAsset := findAsset(rel.Assets, binAssetName)
-	if binAsset == nil {
-		return "", fmt.Errorf("release %s has no asset named %q (built for an unsupported platform?)", rel.TagName, binAssetName)
-	}
-	sumsAsset := findAsset(rel.Assets, "SHASUMS256.txt")
-	if sumsAsset == nil {
-		return "", fmt.Errorf("release %s has no SHASUMS256.txt — refusing to update without checksum", rel.TagName)
-	}
-
-	expectedSum, err := fetchExpectedChecksum(ctx, client, sumsAsset.downloadURL(), binAssetName)
+	exe, err := resolveExe()
 	if err != nil {
-		return "", fmt.Errorf("fetch checksum: %w", err)
+		return "", err
 	}
 
+	if err := installFromRelease(ctx, client, logger, rel, "argus-sidecar", exe); err != nil {
+		return "", err
+	}
+
+	logger.Printf("updated %s -> %s", exe, rel.TagName)
+	logger.Printf("restart any running sidecar processes to pick up the new binary")
+	return rel.TagName, nil
+}
+
+// DownloadCompanion fetches a sibling binary published in the same release
+// (e.g. "argus-bg") and installs it into the same directory as the running
+// sidecar executable — the directory the daemon prepends to PATH for the
+// shells it spawns, so the companion becomes callable unqualified.
+//
+// Unlike Update there is no "already current" short-circuit: companions carry
+// no comparable version, so callers decide cadence. The `update` flow calls
+// this after a sidecar swap (and when the companion is missing) to keep the
+// pair in lockstep; the `download-bg` subcommand calls it unconditionally as
+// an explicit (re)install. Returns the release tag installed from.
+func DownloadCompanion(ctx context.Context, opts Options, name string) (string, error) {
+	repo, logger, client := opts.resolve()
+
+	rel, err := pickLatestRelease(ctx, client, repo, opts.IncludePrerelease)
+	if err != nil {
+		return "", err
+	}
+	logger.Printf("latest release: %s (%s)", rel.TagName, rel.HTMLURL)
+
+	dest, err := CompanionPath(name)
+	if err != nil {
+		return "", err
+	}
+	if err := installFromRelease(ctx, client, logger, rel, name, dest); err != nil {
+		return "", err
+	}
+
+	logger.Printf("installed %s -> %s (%s)", name, dest, rel.TagName)
+	return rel.TagName, nil
+}
+
+// CompanionPath returns where a sibling binary should live: alongside the
+// resolved sidecar executable. Exported so callers can probe for a missing
+// companion (e.g. an old install that predates argus-bg) before deciding to
+// download it.
+func CompanionPath(name string) (string, error) {
+	exe, err := resolveExe()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(exe), name), nil
+}
+
+// companionVersionTimeout bounds the `<companion> version` probe. The
+// subcommand returns instantly for a healthy binary; the cap only matters if
+// a corrupt copy somehow hangs instead of failing fast.
+const companionVersionTimeout = 5 * time.Second
+
+// CompanionVersion execs the installed companion (resolved via CompanionPath)
+// as `<abs-path> version` and returns the version tag it prints. We probe the
+// binary's *own* output rather than trusting a sidecar-side record, so a
+// wrong-arch or hand-swapped copy is caught — not just a stale tag.
+//
+// A non-nil error means we could not positively determine the version: the
+// file is absent, not executable, the wrong architecture, exits non-zero
+// (e.g. an older argus-bg with no `version` subcommand), or prints something
+// unparseable. Callers MUST treat every error as "needs (re)install" — see
+// CompanionUpToDate — so a broken companion always self-heals rather than
+// being skipped.
+func CompanionVersion(name string) (string, error) {
+	path, err := CompanionPath(name)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), companionVersionTimeout)
+	defer cancel()
+	// Absolute path on purpose: never let PATH resolve to a different copy
+	// than the one we'd be replacing.
+	out, err := exec.CommandContext(ctx, path, "version").Output()
+	if err != nil {
+		return "", fmt.Errorf("probe %s version: %w", name, err)
+	}
+	return parseCompanionVersion(string(out))
+}
+
+// parseCompanionVersion pulls the tag out of the `version` line both binaries
+// share: "<name> <version> <goos>/<goarch>". Anything without at least a name
+// and a version field is rejected so an unexpected format fails safe.
+func parseCompanionVersion(out string) (string, error) {
+	fields := strings.Fields(out)
+	if len(fields) < 2 {
+		return "", fmt.Errorf("unparseable version output %q", strings.TrimSpace(out))
+	}
+	return fields[1], nil
+}
+
+// CompanionUpToDate reports whether the installed companion `name` already
+// matches `wantTag` exactly (the lockstep target — typically the release tag
+// the sidecar just resolved). It returns the detected version for logging.
+//
+// Fail-safe by design: any inability to positively confirm the version
+// (missing, exec error, parse failure, a dev build, or simply a different/
+// older tag) yields upToDate=false, so the caller re-installs rather than
+// risk leaving a stale or corrupt copy. Exact equality — not >= — keeps the
+// companion in true lockstep with the sidecar, including the prerelease↔stable
+// switch where the sidecar itself may move "backwards".
+func CompanionUpToDate(name, wantTag string) (upToDate bool, installed string) {
+	got, err := CompanionVersion(name)
+	if err != nil {
+		return false, ""
+	}
+	return got == wantTag, got
+}
+
+// resolveExe returns the canonical, symlink-resolved path to the running
+// executable. We resolve symlinks so the atomic rename lands on the real file
+// (not a symlink) and so companions install next to the actual binary.
+func resolveExe() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", fmt.Errorf("locate current executable: %w", err)
@@ -138,11 +263,34 @@ func Update(ctx context.Context, opts Options) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve executable symlink: %w", err)
 	}
+	return exe, nil
+}
+
+// installFromRelease downloads the `<assetBase>-<goos>-<goarch>` asset from
+// rel, verifies it against the release's SHASUMS256.txt, and atomically
+// installs it (0755) at destPath. The temp file is placed in destPath's
+// directory so the final rename is atomic (same filesystem). destPath need
+// not already exist — only its parent directory must.
+func installFromRelease(ctx context.Context, client *http.Client, logger *log.Logger, rel *release, assetBase, destPath string) error {
+	binAssetName := fmt.Sprintf("%s-%s-%s", assetBase, runtime.GOOS, runtime.GOARCH)
+	binAsset := findAsset(rel.Assets, binAssetName)
+	if binAsset == nil {
+		return fmt.Errorf("release %s has no asset named %q (built for an unsupported platform?)", rel.TagName, binAssetName)
+	}
+	sumsAsset := findAsset(rel.Assets, "SHASUMS256.txt")
+	if sumsAsset == nil {
+		return fmt.Errorf("release %s has no SHASUMS256.txt — refusing to install without checksum", rel.TagName)
+	}
+
+	expectedSum, err := fetchExpectedChecksum(ctx, client, sumsAsset.downloadURL(), binAssetName)
+	if err != nil {
+		return fmt.Errorf("fetch checksum: %w", err)
+	}
 
 	logger.Printf("downloading %s (%.1f MB)…", binAsset.Name, float64(binAsset.Size)/1024/1024)
-	tmpPath, gotSum, err := downloadToTemp(ctx, client, binAsset.downloadURL(), exe)
+	tmpPath, gotSum, err := downloadToTemp(ctx, client, binAsset.downloadURL(), destPath)
 	if err != nil {
-		return "", fmt.Errorf("download binary: %w", err)
+		return fmt.Errorf("download binary: %w", err)
 	}
 	// If anything below fails, leave nothing behind on disk.
 	defer func() {
@@ -152,24 +300,21 @@ func Update(ctx context.Context, opts Options) (string, error) {
 	}()
 
 	if !strings.EqualFold(gotSum, expectedSum) {
-		return "", fmt.Errorf("checksum mismatch: expected %s, got %s", expectedSum, gotSum)
+		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedSum, gotSum)
 	}
 	logger.Printf("checksum verified (sha256 %s)", gotSum)
 
 	if err := os.Chmod(tmpPath, 0o755); err != nil {
-		return "", fmt.Errorf("chmod temp binary: %w", err)
+		return fmt.Errorf("chmod temp binary: %w", err)
 	}
 
 	// Atomic swap. On POSIX this works even if the file is currently being
 	// executed: the running process keeps the old inode (and its mmap'd
 	// pages) until exit; new invocations get the new file.
-	if err := os.Rename(tmpPath, exe); err != nil {
-		return "", fmt.Errorf("install new binary at %s: %w", exe, err)
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		return fmt.Errorf("install new binary at %s: %w", destPath, err)
 	}
-
-	logger.Printf("updated %s -> %s", exe, rel.TagName)
-	logger.Printf("restart any running sidecar processes to pick up the new binary")
-	return rel.TagName, nil
+	return nil
 }
 
 // pickLatestRelease lists recent releases and returns the highest-versioned
