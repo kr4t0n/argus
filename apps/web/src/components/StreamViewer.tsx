@@ -418,7 +418,6 @@ const CommandBlock = memo(function CommandBlock({
             bodyText={bodyText}
             files={files}
             workingDir={workingDir}
-            streaming={false}
             sessionId={command.sessionId}
             commandId={command.id}
             agentId={command.agentId}
@@ -468,7 +467,6 @@ function AnswerBlock({
   bodyText,
   files,
   workingDir,
-  streaming,
   sessionId,
   commandId,
   agentId,
@@ -476,7 +474,6 @@ function AnswerBlock({
   bodyText: string;
   files: ReturnType<typeof extractFiles>;
   workingDir?: string | null;
-  streaming: boolean;
   sessionId: string;
   commandId: string;
   agentId: string;
@@ -601,7 +598,6 @@ function AnswerBlock({
           >
             {bodyText}
           </ReactMarkdown>
-          {streaming && <span className="typewriter-cursor" />}
         </div>
       )}
       {files.length > 0 && (
@@ -609,7 +605,7 @@ function AnswerBlock({
           <FileChips files={files} workingDir={workingDir} agentId={agentId} />
         </div>
       )}
-      {!streaming && bodyText && (
+      {bodyText && (
         <div className="mt-2 flex items-center gap-1 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
           <Tooltip content={copied ? 'Copied' : 'Copy as markdown'}>
             <button
