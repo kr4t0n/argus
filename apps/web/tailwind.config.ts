@@ -51,15 +51,6 @@ export default {
           custom: '#a3a3a3',
         },
       },
-      keyframes: {
-        blink: {
-          '0%, 50%': { opacity: '1' },
-          '50.01%, 100%': { opacity: '0' },
-        },
-      },
-      animation: {
-        blink: 'blink 1s steps(1) infinite',
-      },
     },
   },
   plugins: [animate],

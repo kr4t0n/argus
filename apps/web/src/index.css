@@ -163,10 +163,6 @@ textarea::-webkit-scrollbar-corner {
   .brand-dot {
     @apply h-2 w-2 rounded-full bg-emerald-600/90 ring-1 ring-emerald-600/15 dark:bg-emerald-500/80 dark:ring-emerald-400/15;
   }
-  .typewriter-cursor::after {
-    content: '▍';
-    @apply ml-[2px] animate-blink text-fg-tertiary;
-  }
   .no-scrollbar {
     scrollbar-width: none;
     -ms-overflow-style: none;
