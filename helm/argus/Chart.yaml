@@ -10,10 +10,18 @@ type: application
 # Chart version is independent of the app it ships. Bump on chart
 # changes. Releasing a new chart version only requires bumping this
 # field — see helm-publish.yml.
-version: 0.2.3
+version: 0.2.4
 # App version tracks the Docker image tags pulled by default. Bump in
 # lockstep with `version` whenever the chart starts requiring features
 # only present in newer images; otherwise it can lag.
+#
+# 0.2.4 is a small control-plane (web) refinement with no schema change:
+# the streaming preamble/thinking now folds directly into the activity
+# pill (instead of a separate preview block that flashed and relocated
+# when a tool followed), so only the settled final answer lands in the
+# response body. (This release also carries a sidecar change — codex now
+# bypasses approvals + sandbox directly instead of via --full-auto —
+# shipped separately via the argus-sidecar release for agent hosts.)
 #
 # 0.2.3 is a control-plane (web) release with no schema change: a prompt
 # queue that lets you line up follow-up messages while a turn is running
@@ -36,7 +44,7 @@ version: 0.2.3
 # 0.2.0 shipped file/image attachments — the default images include the
 # attachment module, so `objectStore` works out of the box (set the
 # endpoint + bucket + creds to enable it).
-appVersion: "0.2.3"
+appVersion: "0.2.4"
 
 home: https://github.com/kr4t0n/argus
 sources:
