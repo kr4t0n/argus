@@ -1,6 +1,13 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 import type { CommandDTO, ResultChunkDTO } from '@argus/shared-types';
 import { DiffBlock } from './ui/DiffBlock';
+import { cn } from '../lib/utils';
+
+/** Max rendered height of a single file's diff before it scrolls inside
+ *  its own box. A cap (not a literal fixed height) so small diffs stay
+ *  short while a huge patch can't dominate the pane. */
+const FILE_MAX_HEIGHT = 'max-h-80';
 
 type Props = {
   commands: CommandDTO[];
@@ -88,6 +95,13 @@ export function DiffPane({ commands, chunks, workingDir }: Props) {
     return order.map((p) => byPath.get(p)!);
   }, [executes, chunks, workingDir]);
 
+  // Per-file collapse state, keyed by the stable absolute path so it
+  // survives the live re-derivation as a turn keeps editing. Files
+  // default to expanded (absent from the map); the header toggles them.
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const toggle = (rawPath: string) =>
+    setCollapsed((c) => ({ ...c, [rawPath]: !c[rawPath] }));
+
   if (executes.length === 0) {
     return <p className="pt-2 text-sm text-fg-tertiary">No turns yet.</p>;
   }
@@ -97,28 +111,56 @@ export function DiffPane({ commands, chunks, workingDir }: Props) {
 
   return (
     <div className="space-y-4 pb-4">
-      {groups.map((g) => (
-        <div key={g.rawPath} className="space-y-1">
-          <div className="flex items-center gap-2 text-[11px]">
-            <span className="min-w-0 flex-1 truncate font-mono text-fg-secondary" title={g.rawPath}>
-              {g.path}
-            </span>
-            {g.changeKind && (
-              <span className="shrink-0 text-[10px] uppercase tracking-widest text-fg-muted">
-                {g.changeKind}
+      {groups.map((g) => {
+        const isCollapsed = collapsed[g.rawPath] ?? false;
+        return (
+          <div key={g.rawPath} className="space-y-1">
+            {/* Whole header row toggles the file open/closed. */}
+            <button
+              type="button"
+              onClick={() => toggle(g.rawPath)}
+              aria-expanded={!isCollapsed}
+              className="group flex w-full items-center gap-2 text-[11px]"
+            >
+              <ChevronDown
+                className={cn(
+                  'h-3 w-3 shrink-0 text-fg-muted transition-transform group-hover:text-fg-tertiary',
+                  isCollapsed && '-rotate-90',
+                )}
+              />
+              <span
+                className="min-w-0 flex-1 truncate text-left font-mono text-fg-secondary"
+                title={g.rawPath}
+              >
+                {g.path}
               </span>
+              {g.changeKind && (
+                <span className="shrink-0 text-[10px] uppercase tracking-widest text-fg-muted">
+                  {g.changeKind}
+                </span>
+              )}
+              <span className="shrink-0 font-mono tabular-nums">
+                {g.add > 0 && (
+                  <span className="text-emerald-600 dark:text-emerald-400">+{g.add}</span>
+                )}
+                {g.add > 0 && g.del > 0 && ' '}
+                {g.del > 0 && <span className="text-red-600 dark:text-red-400">-{g.del}</span>}
+              </span>
+            </button>
+            {/* Cap each file's diff height and scroll inside it, so one
+                huge patch can't push every other file off-screen. The
+                DiffBlocks themselves stay uncapped — the wrapper owns the
+                height + (visible) scrollbar. */}
+            {!isCollapsed && (
+              <div className={cn(FILE_MAX_HEIGHT, 'space-y-1 overflow-y-auto')}>
+                {g.diffs.map((d, i) => (
+                  <DiffBlock key={i} text={d} maxHeightClass="" />
+                ))}
+              </div>
             )}
-            <span className="shrink-0 font-mono tabular-nums">
-              {g.add > 0 && <span className="text-emerald-600 dark:text-emerald-400">+{g.add}</span>}
-              {g.add > 0 && g.del > 0 && ' '}
-              {g.del > 0 && <span className="text-red-600 dark:text-red-400">-{g.del}</span>}
-            </span>
           </div>
-          {g.diffs.map((d, i) => (
-            <DiffBlock key={i} text={d} maxHeightClass="" />
-          ))}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
