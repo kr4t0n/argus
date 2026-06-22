@@ -705,8 +705,9 @@ scheme (TLS) and including the password.
 **Agent registers, but commands hang forever with no output.**
 Almost always a TTY-prompt problem in the wrapped CLI. The built-in
 adapters set the right "skip approval prompts" flag by default
-(`--dangerously-skip-permissions` for claude, `--full-auto` for
-codex, `--yolo` for cursor) so this should never bite a stock
+(`--dangerously-skip-permissions` for claude,
+`--dangerously-bypass-approvals-and-sandbox` for codex, `--yolo` for
+cursor) so this should never bite a stock
 install — but if you create an agent with custom `adapter` overrides
 that disable those, the CLI will sit waiting for a TTY that doesn't
 exist. Drop the override or re-create the agent without it.

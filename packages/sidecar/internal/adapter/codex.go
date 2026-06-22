@@ -20,10 +20,13 @@ import (
 //
 // Two defaults differ from interactive `codex`:
 //   - skipGitRepoCheck=true so working dirs that aren't git repos still run
-//   - fullAuto=true so tool calls execute without TTY approval prompts
+//   - fullAuto=true so tool calls execute without TTY approval prompts. This
+//     emits `--dangerously-bypass-approvals-and-sandbox`, which disables BOTH
+//     the approval gate and the OS sandbox (codex runs fully unsandboxed).
 //
-// Both can be flipped from the sidecar YAML, and `sandbox` lets you swap the
-// `--full-auto` shorthand for an explicit `--sandbox <mode>`.
+// Both can be flipped from the sidecar YAML, and `sandbox` takes precedence:
+// set a `sandbox` mode to emit an explicit `--sandbox <mode>` (a real
+// sandbox) instead of the bypass flag.
 type CodexAdapter struct {
 	binary           string
 	workingDir       string
@@ -95,7 +98,9 @@ func (a *CodexAdapter) Execute(
 	// Flag layout (codex exec [...flags...] [resume <id>] <prompt>):
 	//   --json                           NDJSON stream on stdout
 	//   --skip-git-repo-check            allow non-git working dirs
-	//   --full-auto | --sandbox <mode>   no TTY approval prompts
+	//   --dangerously-bypass-approvals-and-sandbox | --sandbox <mode>
+	//                                    no TTY approval prompts (the former
+	//                                    also runs codex fully unsandboxed)
 	//   -m / --model                     per-command model override
 	//   -c model_reasoning_effort=<l>    thinking strength (minimal…xhigh)
 	//   -c service_tier=fast             priority/fast service tier
@@ -107,7 +112,10 @@ func (a *CodexAdapter) Execute(
 	case a.sandbox != "":
 		flags = append(flags, "--sandbox", a.sandbox)
 	case a.fullAuto:
-		flags = append(flags, "--full-auto")
+		// Disables both the approval gate and the OS sandbox. `--full-auto`
+		// (sandboxed auto-approve) is the gentler alternative; set a
+		// `sandbox` mode above if you need the sandbox back.
+		flags = append(flags, "--dangerously-bypass-approvals-and-sandbox")
 	}
 	if model, ok := cmd.Options[protocol.OptionModel].(string); ok && model != "" {
 		flags = append(flags, "--model", model)
