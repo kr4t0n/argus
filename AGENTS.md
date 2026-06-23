@@ -209,12 +209,24 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     heartbeats, subscribes to `machine:{mid}:control`, fans
     create/destroy/sync commands out to per-agent `supervisor`s, and
     holds the single sidecar↔server WebSocket on behalf of all agents
-    on this host.
+    on this host. It also runs **one** machine-wide command reader
+    (`commandReaderLoop`): a single `XREADGROUP` fanning in over every
+    `agent:{id}:cmd` stream under one consumer group
+    (`SidecarCommandGroup(machineID)`), re-snapshotting the agent set
+    each iteration so create/destroy is picked up within `cmdReadBlock`.
+    Decoded entries are routed to the owning supervisor over an
+    in-process channel. This is the key reason a machine holds a
+    *constant* number of Redis connections (control reader + command
+    reader + publishes) instead of one blocking connection per agent.
+    See the "Sidecar command consumption" gotcha.
   - `supervisor.go` owns one agent: builds the adapter, pings it once,
-    drains `agent:{id}:cmd`, dispatches to the adapter, forwards
-    chunks back on `agent:{id}:result`, heartbeats, and gracefully
-    drains on destroy. There is no per-agent process — supervisors are
-    goroutines inside the single daemon.
+    receives commands on its `cmdCh` (fed by the daemon's command
+    reader — it does **not** read Redis itself), dispatches to the
+    adapter, forwards chunks back on `agent:{id}:result`, heartbeats,
+    and gracefully drains on destroy. There is no per-agent process —
+    supervisors are goroutines inside the single daemon. The supervisor
+    still owns the `XACK` for each command (after the handler completes)
+    and the in-flight `WaitGroup` that shutdown drains.
   - `attachments.go` — `materializeAttachments` runs inside
     `handleCommand` **before** `adapter.Execute`: for each
     `cmd.Attachments` ref it HTTP-GETs `{serverURL}/attachments/{id}?
@@ -667,6 +679,27 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   separate package.
 - **Two Redis connections**: do **not** call `XREADGROUP` on the shared
   `cmd` ioredis client — it parks the socket and starves every other call.
+- **Sidecar command consumption is machine-wide, not per-agent**: the
+  daemon runs a single `commandReaderLoop` that `XREADGROUP`s across all
+  `agent:{id}:cmd` streams at once under one group,
+  `SidecarCommandGroup(machineID)` (`"sidecar-cmd-{mid}"`), and hands each
+  entry to the owning supervisor over its `cmdCh`. This replaced the old
+  per-agent reader (group `sidecar-{agentID}`), where every agent parked
+  its own blocking connection — the thing that blew up connection count
+  under N machines × N projects × N CLIs on a small Redis. Consequences to
+  keep in mind: (1) the consumer group is ensured in `spawnSupervisor`
+  *before* the supervisor enters the map and registers, so the reader
+  never hits `NOGROUP` on a live agent and no command lands ahead of the
+  group's start position; (2) the reader **self-heals** after a Redis
+  flush — a batch-wide `NOGROUP` triggers `ensureCommandGroups` + retry
+  (the old per-agent loop ensured once and would wedge forever after a
+  flush); (3) `cmdReadCount` is kept small because anything `XREADGROUP`'d
+  into a supervisor's `cmdCh` but not yet handled is lost (un-acked,
+  delivered to a dead consumer) if the daemon shuts down mid-drain — same
+  "delivered but unprocessed" loss class as before, just bounded here by
+  the per-read count; (4) `enqueue` selects on the supervisor's `runCtx`
+  so a destroyed/draining agent makes the reader ack-drop rather than
+  block the whole machine's command intake.
 - **Stream MAXLEN is silent message loss, not just memory pressure**:
   every `XADD` on both sides (`apps/server/src/infra/redis/redis.service.ts`
   and `packages/sidecar/internal/bus/bus.go`) trims with `MAXLEN ~ N`,

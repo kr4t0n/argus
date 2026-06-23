@@ -3,7 +3,6 @@ package machine
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -43,6 +42,18 @@ type supervisor struct {
 	cmdCancel context.CancelFunc
 	doneCh    chan struct{}
 
+	// cmdCh receives commands the daemon's single machine-wide reader
+	// fanned in from this agent's command stream. Replaces the old
+	// per-agent blocking XREADGROUP loop (which parked one Redis
+	// connection per agent) with an in-process hand-off, so the whole
+	// machine reads commands on one connection regardless of agent count.
+	cmdCh chan inboundCmd
+
+	// runCtx is the supervisor's run-scoped context, cancelled by stop()
+	// (or parent shutdown). enqueue selects on it so the reader never
+	// blocks handing a command to a supervisor that's already draining.
+	runCtx context.Context
+
 	cancels sync.Map // commandID → context.CancelFunc
 	busy    int64
 
@@ -72,8 +83,20 @@ type supervisor struct {
 
 const (
 	heartbeatInterval = 5 * time.Second
-	cmdReadBlock      = 2 * time.Second
+	// cmdQueueDepth buffers commands the daemon's machine-wide reader
+	// hands to this supervisor. Generous because the run loop drains it
+	// fast (execution is offloaded to goroutines); the buffer just
+	// absorbs a burst so the shared reader isn't stalled by one agent.
+	cmdQueueDepth = 64
 )
+
+// inboundCmd is one command the machine-wide reader hands to a
+// supervisor: the raw decoded stream payload plus the Redis stream
+// message ID the supervisor must ack once the command is handled.
+type inboundCmd struct {
+	msgID   string
+	payload map[string]any
+}
 
 // newSupervisor builds (and `Ping`s) the adapter for an AgentRecord. It
 // does NOT start the consume loop — the daemon does that via Start, so
@@ -128,6 +151,7 @@ func newSupervisor(
 		serverURL:  serverURL,
 		httpClient: &http.Client{Timeout: 2 * time.Minute},
 		doneCh:     make(chan struct{}),
+		cmdCh:      make(chan inboundCmd, cmdQueueDepth),
 	}, nil
 }
 
@@ -142,6 +166,7 @@ func newSupervisor(
 func (s *supervisor) Start(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	s.cmdCancel = cancel
+	s.runCtx = ctx
 	go func() {
 		defer close(s.doneCh)
 		s.run(ctx)
@@ -155,6 +180,19 @@ func (s *supervisor) stop() {
 		s.cmdCancel()
 	}
 	<-s.doneCh
+}
+
+// enqueue hands one command to the supervisor's run loop. Returns false
+// if the supervisor is shutting down (run-scoped ctx cancelled), so the
+// machine-wide reader can ack-drop the entry instead of blocking on a
+// supervisor that will never drain it.
+func (s *supervisor) enqueue(m inboundCmd) bool {
+	select {
+	case s.cmdCh <- m:
+		return true
+	case <-s.runCtx.Done():
+		return false
+	}
 }
 
 func (s *supervisor) run(ctx context.Context) {
@@ -200,69 +238,23 @@ func (s *supervisor) run(ctx context.Context) {
 		}
 	}()
 
+	// Commands arrive over s.cmdCh from the daemon's single machine-wide
+	// reader (Daemon.commandReaderLoop), not from a per-agent XREADGROUP
+	// — that's what keeps the machine on one Redis connection regardless
+	// of agent count. The consumer group is ensured by the daemon at
+	// spawn time; this loop only needs the stream/group names to ack.
 	cmdStream := protocol.CommandStream(s.spec.AgentID)
-	group := protocol.SidecarConsumerGroup(s.spec.AgentID)
-	if err := s.bus.EnsureGroup(ctx, cmdStream, group); err != nil {
-		s.log.Printf("agent %s: ensure group: %v", s.spec.AgentID, err)
-	}
-
-	consumer := "c-" + uuid.NewString()[:8]
+	group := protocol.SidecarCommandGroup(s.machine)
 	s.log.Printf("agent %s ready (type=%s)", s.spec.AgentID, s.spec.Type)
 
+loop:
 	for {
-		if ctx.Err() != nil {
-			break
+		select {
+		case <-ctx.Done():
+			break loop
+		case m := <-s.cmdCh:
+			s.dispatchCommand(ctx, &wg, cmdStream, group, m)
 		}
-		msgID, payload, err := s.bus.ReadMessage(ctx, cmdStream, group, consumer, cmdReadBlock)
-		if errors.Is(err, context.Canceled) {
-			break
-		}
-		if err != nil {
-			s.log.Printf("agent %s: read error: %v", s.spec.AgentID, err)
-			time.Sleep(time.Second)
-			continue
-		}
-		if msgID == "" {
-			continue
-		}
-
-		cmd, err := decodeCommand(payload)
-		if err != nil {
-			s.log.Printf("agent %s: decode command: %v", s.spec.AgentID, err)
-			_ = s.bus.Ack(ctx, cmdStream, group, msgID)
-			continue
-		}
-
-		if cmd.Kind == "cancel" {
-			if c, ok := s.cancels.Load(cmd.ID); ok {
-				c.(context.CancelFunc)()
-			}
-			_ = s.adapter.Cancel(ctx, cmd.ID)
-			_ = s.bus.Ack(ctx, cmdStream, group, msgID)
-			continue
-		}
-
-		if cmd.Kind == "clone-session" {
-			// Dispatch off the loop like execute: handleCloneSession copies
-			// + rewrites the CLI's session JSONL synchronously, which would
-			// otherwise stall the next command until the fork finishes.
-			// Safe to run concurrently — the server gates prompting a forked
-			// session on the session-external-id event this publishes.
-			wg.Add(1)
-			go func(c protocol.Command, id string) {
-				defer wg.Done()
-				s.handleCloneSession(ctx, c)
-				_ = s.bus.Ack(ctx, cmdStream, group, id)
-			}(cmd, msgID)
-			continue
-		}
-
-		wg.Add(1)
-		go func(c protocol.Command, id string) {
-			defer wg.Done()
-			s.handleCommand(ctx, c)
-			_ = s.bus.Ack(ctx, cmdStream, group, id)
-		}(cmd, msgID)
 	}
 
 	// Watchers are closed by their own goroutine on ctx.Done() (it owns
@@ -279,6 +271,58 @@ func (s *supervisor) run(ctx context.Context) {
 	})
 
 	wg.Wait()
+}
+
+// dispatchCommand handles one command handed in by the machine-wide
+// reader, with the same semantics the per-agent read loop used: a
+// malformed entry is acked and dropped; cancels are handled inline and
+// acked immediately; clone-session and execute run on their own
+// goroutines (tracked by wg so shutdown drains them) and ack on
+// completion.
+func (s *supervisor) dispatchCommand(ctx context.Context, wg *sync.WaitGroup, cmdStream, group string, m inboundCmd) {
+	if m.payload == nil {
+		s.log.Printf("agent %s: dropping malformed command entry %s", s.spec.AgentID, m.msgID)
+		_ = s.bus.Ack(ctx, cmdStream, group, m.msgID)
+		return
+	}
+
+	cmd, err := decodeCommand(m.payload)
+	if err != nil {
+		s.log.Printf("agent %s: decode command: %v", s.spec.AgentID, err)
+		_ = s.bus.Ack(ctx, cmdStream, group, m.msgID)
+		return
+	}
+
+	if cmd.Kind == "cancel" {
+		if c, ok := s.cancels.Load(cmd.ID); ok {
+			c.(context.CancelFunc)()
+		}
+		_ = s.adapter.Cancel(ctx, cmd.ID)
+		_ = s.bus.Ack(ctx, cmdStream, group, m.msgID)
+		return
+	}
+
+	if cmd.Kind == "clone-session" {
+		// Dispatch off the loop like execute: handleCloneSession copies
+		// + rewrites the CLI's session JSONL synchronously, which would
+		// otherwise stall the next command until the fork finishes.
+		// Safe to run concurrently — the server gates prompting a forked
+		// session on the session-external-id event this publishes.
+		wg.Add(1)
+		go func(c protocol.Command, id string) {
+			defer wg.Done()
+			s.handleCloneSession(ctx, c)
+			_ = s.bus.Ack(ctx, cmdStream, group, id)
+		}(cmd, m.msgID)
+		return
+	}
+
+	wg.Add(1)
+	go func(c protocol.Command, id string) {
+		defer wg.Done()
+		s.handleCommand(ctx, c)
+		_ = s.bus.Ack(ctx, cmdStream, group, id)
+	}(cmd, m.msgID)
 }
 
 func (s *supervisor) register(ctx context.Context) error {
