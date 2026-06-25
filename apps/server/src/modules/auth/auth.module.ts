@@ -1,12 +1,17 @@
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
+import { ApiKeyService } from './api-key.service';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { UserBootstrap } from './user.bootstrap';
 
+// Global so JwtAuthGuard — used via @UseGuards across many feature modules —
+// can resolve its ApiKeyService dependency without each module re-importing
+// AuthModule. (The JWT strategy was already process-global via passport.)
+@Global()
 @Module({
   imports: [
     PassportModule,
@@ -28,8 +33,8 @@ import { UserBootstrap } from './user.bootstrap';
       inject: [ConfigService],
     }),
   ],
-  providers: [AuthService, JwtStrategy, UserBootstrap],
+  providers: [AuthService, ApiKeyService, JwtStrategy, UserBootstrap],
   controllers: [AuthController],
-  exports: [AuthService, JwtModule],
+  exports: [AuthService, ApiKeyService, JwtModule],
 })
 export class AuthModule {}

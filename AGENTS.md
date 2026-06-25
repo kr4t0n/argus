@@ -73,7 +73,29 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ### `apps/server/src/modules/`
 
-- `auth/` — JWT login, single admin user bootstrapped from env.
+- `auth/` — credentials and the request guard. Two credential types both
+  resolve to a `{ id, email, role }` user on `req.user`:
+  - **JWT** — human login. `POST /auth/login` (email/password, single admin
+    bootstrapped from env) returns a `token`; lifetime is `JWT_EXPIRES_IN`
+    (default `7d`; `"never"`/empty mints a token with no `exp`).
+  - **API key** — machine/integration callers, sent as the `X-API-Key`
+    header. Revocable (`revokedAt`) without rotating `JWT_SECRET`, optionally
+    expiring, and `readonly` by default. Only a SHA-256 hash is stored in the
+    `ApiKey` table (fast hash is fine — keys are high-entropy, not passwords);
+    the plaintext is shown once at mint. Managed via `POST`/`GET`/`DELETE
+    /auth/api-keys`, which are **JWT-only** (`requireHuman`) so a leaked key
+    can't mint successors or list siblings.
+
+  `JwtAuthGuard` (historical name — it now guards both) checks `X-API-Key`
+  first and otherwise falls back to the JWT bearer path. For a `readonly` key
+  it rejects any non-`GET`/`HEAD`/`OPTIONS` request with 403 — that *is*
+  "read-only", since Argus has no route-level RBAC (the only authz beyond a
+  valid credential is per-row ownership checks). The guard depends on
+  `ApiKeyService`, so `AuthModule` is `@Global()` to keep it resolvable in
+  every feature module that does `@UseGuards(JwtAuthGuard)`. The web user
+  panel (`apps/web/src/pages/UserPanel.tsx`, "API keys" section) drives the
+  management endpoints — create with a read-only toggle, one-time secret
+  reveal + copy + live "test" call, and inline-confirm revoke.
 - `machine/` — owns the `Machine` table and the agent control plane.
   Consumes `agent:lifecycle` (`machine-register`, `machine-heartbeat`,
   `agent-spawned`, `agent-spawn-failed`, `agent-destroyed`), upserts

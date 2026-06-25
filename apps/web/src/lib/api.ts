@@ -1,9 +1,12 @@
 import type {
   AgentDTO,
+  ApiKeyDTO,
   AttachmentDTO,
   BackgroundTasksResponse,
   CommandDTO,
   CreateAgentRequest,
+  CreateApiKeyRequest,
+  CreatedApiKey,
   CreateCommandRequest,
   CreateSessionRequest,
   FSListResponse,
@@ -79,6 +82,37 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
   me: () => http<{ user: { id: string; email: string; role: string } }>('/auth/me'),
+
+  // Personal API keys — long-lived, revocable credentials for calling the
+  // REST API from scripts/dashboards. Managed only over the JWT session
+  // (the server refuses key-management requests authenticated by a key).
+  listMyApiKeys: () => http<ApiKeyDTO[]>('/auth/api-keys'),
+  createMyApiKey: (body: CreateApiKeyRequest) =>
+    http<CreatedApiKey>('/auth/api-keys', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  revokeMyApiKey: (id: string) =>
+    http<{ revoked: boolean }>(`/auth/api-keys/${id}`, { method: 'DELETE' }),
+  /** Smoke-test a freshly-minted key by hitting a read endpoint with it in
+   *  the `X-API-Key` header (NOT the JWT). Returns the visible agent count
+   *  on success. Only usable right after creation, while the plaintext is
+   *  still in hand — stored keys are hashes and can't be replayed. */
+  testApiKey: async (secret: string): Promise<number> => {
+    const res = await fetch(`${BASE}/agents`, { headers: { 'X-API-Key': secret } });
+    if (!res.ok) {
+      let msg = res.statusText;
+      try {
+        const body = (await res.json()) as { message?: string };
+        if (body?.message) msg = body.message;
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(msg, res.status);
+    }
+    const agents = (await res.json()) as unknown;
+    return Array.isArray(agents) ? agents.length : 0;
+  },
 
   listAgents: (opts?: { includeArchived?: boolean }) =>
     http<AgentDTO[]>(`/agents${opts?.includeArchived ? '?includeArchived=true' : ''}`),

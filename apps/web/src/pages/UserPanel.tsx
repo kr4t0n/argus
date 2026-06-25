@@ -1,7 +1,9 @@
 import { ReactNode, useCallback, useEffect, useState } from 'react';
-import { Check, Loader2, User } from 'lucide-react';
+import { Check, Copy, KeyRound, Loader2, Trash2, User } from 'lucide-react';
 import type {
   ActivityDay,
+  ApiKeyDTO,
+  CreatedApiKey,
   QuotaWindow,
   TokenUsage,
   UserActivityResponse,
@@ -12,6 +14,7 @@ import type {
 } from '@argus/shared-types';
 import { USER_RULES_MAX_BYTES, hasUsage } from '@argus/shared-types';
 import { ApiError, api } from '../lib/api';
+import { copyTextToClipboard } from '../lib/clipboard';
 import { cn } from '../lib/utils';
 import { useAuthStore } from '../stores/authStore';
 import { useUIStore } from '../stores/uiStore';
@@ -118,6 +121,14 @@ export function UserPanel() {
                   Extensions
                 </a>
               </li>
+              <li>
+                <a
+                  href="#api-keys"
+                  className="block text-sm text-fg-secondary transition-colors hover:text-fg-primary"
+                >
+                  API keys
+                </a>
+              </li>
             </ul>
           </nav>
 
@@ -202,6 +213,24 @@ export function UserPanel() {
                 description="Adds a Diff tab to the session right panel showing every file the agent changed in the most recent turn, as a per-file diff. Updates live as the turn edits files."
                 control={<DiffExtensionToggle />}
               />
+            </Group>
+
+            <Group id="api-keys" title="API keys">
+              <Row
+                title="Personal API keys"
+                description={
+                  <>
+                    Long-lived credentials for calling the Argus REST API from a script or
+                    dashboard, as an alternative to logging in. Send a key in the{' '}
+                    <code className="font-mono text-fg-secondary">X-API-Key</code> header. A{' '}
+                    <span className="font-medium text-fg-secondary">read-only</span> key is confined
+                    to read requests; revoke a key anytime to cut off access instantly. Keys act as
+                    you, so they can see everything your account can.
+                  </>
+                }
+              >
+                <ApiKeysManager />
+              </Row>
             </Group>
 
             {/* Trailing room so the last Group can scroll up to the
@@ -610,6 +639,306 @@ function RulesEditor() {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Create / list / revoke personal API keys. Mirrors RulesEditor's
+ *  load-once-then-mutate-locally pattern (no global store): the list is
+ *  fetched on mount and kept in sync by splicing results of create/revoke
+ *  calls, so there's no refetch round-trip. */
+function ApiKeysManager() {
+  const [keys, setKeys] = useState<ApiKeyDTO[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [name, setName] = useState('');
+  const [readOnly, setReadOnly] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  // The most recently minted key, kept around only to show its one-time
+  // plaintext secret. Cleared once the user dismisses the reveal.
+  const [created, setCreated] = useState<CreatedApiKey | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listMyApiKeys()
+      .then((ks) => {
+        if (!cancelled) setKeys(ks);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLoadError(err instanceof ApiError ? err.message : 'failed to load API keys');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const trimmed = name.trim();
+  const canCreate = trimmed.length > 0 && !creating;
+
+  const onCreate = useCallback(async () => {
+    if (trimmed.length === 0 || creating) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const fresh = await api.createMyApiKey({ name: trimmed, readonly: readOnly });
+      // Splice the new row in (without the secret — that lives only in
+      // `created` for the one-time reveal) and reset the form.
+      const row: ApiKeyDTO = {
+        id: fresh.id,
+        name: fresh.name,
+        prefix: fresh.prefix,
+        readonly: fresh.readonly,
+        createdAt: fresh.createdAt,
+        lastUsedAt: fresh.lastUsedAt,
+        expiresAt: fresh.expiresAt,
+      };
+      setCreated(fresh);
+      setKeys((prev) => [row, ...(prev ?? [])]);
+      setName('');
+    } catch (err) {
+      setCreateError(err instanceof ApiError ? err.message : 'failed to create key');
+    } finally {
+      setCreating(false);
+    }
+  }, [trimmed, creating, readOnly]);
+
+  const onRevoked = useCallback((id: string) => {
+    setKeys((prev) => (prev ?? []).filter((k) => k.id !== id));
+    setCreated((c) => (c && c.id === id ? null : c));
+  }, []);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onCreate();
+          }}
+          maxLength={100}
+          placeholder="Key name, e.g. dashboard"
+          className="min-w-0 flex-1 rounded-md bg-surface-1/60 px-4 py-2.5 text-sm text-fg-primary outline-none placeholder:text-fg-muted transition-colors focus:bg-surface-1"
+        />
+        <label className="inline-flex cursor-pointer select-none items-center gap-2 text-xs text-fg-secondary">
+          <input
+            type="checkbox"
+            checked={readOnly}
+            onChange={(e) => setReadOnly(e.target.checked)}
+            className="h-3.5 w-3.5 accent-emerald-600"
+          />
+          Read-only
+        </label>
+        <Button onClick={onCreate} disabled={!canCreate} size="sm">
+          {creating ? (
+            <>
+              <Loader2 className="h-3 w-3 animate-spin" /> creating…
+            </>
+          ) : (
+            'Create key'
+          )}
+        </Button>
+      </div>
+      {createError && <p className="text-xs text-red-500 dark:text-red-400">{createError}</p>}
+
+      {created && <CreatedKeyReveal created={created} onDismiss={() => setCreated(null)} />}
+
+      {loadError && <p className="text-sm text-red-500 dark:text-red-400">{loadError}</p>}
+      {!loadError && !keys && (
+        <div className="flex items-center gap-2 text-xs text-fg-tertiary">
+          <Loader2 className="h-3 w-3 animate-spin" /> loading…
+        </div>
+      )}
+      {!loadError && keys && keys.length === 0 && (
+        <p className="text-xs text-fg-tertiary">
+          No API keys yet. Create one above to call the Argus API from a script or dashboard.
+        </p>
+      )}
+      {!loadError && keys && keys.length > 0 && (
+        <ul className="overflow-hidden rounded-md border border-default">
+          {keys.map((k) => (
+            <ApiKeyRow key={k.id} apiKey={k} onRevoked={onRevoked} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** One-time reveal of a freshly-minted secret, with copy + a live "Test"
+ *  that calls the API using the key. The secret is shown only here — once
+ *  dismissed it's unrecoverable, hence the warning copy. */
+function CreatedKeyReveal({
+  created,
+  onDismiss,
+}: {
+  created: CreatedApiKey;
+  onDismiss: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [test, setTest] = useState<{ state: 'idle' | 'running' | 'ok' | 'err'; msg?: string }>({
+    state: 'idle',
+  });
+
+  const onCopy = useCallback(async () => {
+    if (await copyTextToClipboard(created.key)) {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    }
+  }, [created.key]);
+
+  const onTest = useCallback(async () => {
+    setTest({ state: 'running' });
+    try {
+      const count = await api.testApiKey(created.key);
+      setTest({ state: 'ok', msg: `Works — ${count} agent${count === 1 ? '' : 's'} visible` });
+    } catch (err) {
+      setTest({ state: 'err', msg: err instanceof ApiError ? err.message : 'request failed' });
+    }
+  }, [created.key]);
+
+  return (
+    <div className="rounded-md border border-emerald-500/30 bg-emerald-50/40 p-4 dark:bg-emerald-900/10">
+      <div className="flex items-start gap-3">
+        <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500 dark:text-emerald-400" />
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium text-fg-primary">Key “{created.name}” created</div>
+          <p className="mt-0.5 text-xs text-fg-tertiary">
+            Copy it now — for security the secret is shown only once and can’t be retrieved again.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded bg-surface-0 px-3 py-2 font-mono text-xs text-fg-primary">
+              {created.key}
+            </code>
+            <Button onClick={onCopy} size="sm" variant="outline">
+              {copied ? (
+                <>
+                  <Check className="h-3 w-3" /> copied
+                </>
+              ) : (
+                <>
+                  <Copy className="h-3 w-3" /> copy
+                </>
+              )}
+            </Button>
+            <Button onClick={onTest} size="sm" variant="outline" disabled={test.state === 'running'}>
+              {test.state === 'running' ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" /> testing…
+                </>
+              ) : (
+                'Test'
+              )}
+            </Button>
+          </div>
+          {test.state === 'ok' && (
+            <p className="mt-2 inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
+              <Check className="h-3 w-3" /> {test.msg}
+            </p>
+          )}
+          {test.state === 'err' && (
+            <p className="mt-2 text-xs text-red-500 dark:text-red-400">{test.msg}</p>
+          )}
+        </div>
+        <button
+          onClick={onDismiss}
+          className="shrink-0 text-xs text-fg-tertiary transition-colors hover:text-fg-primary"
+        >
+          Done
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** A row in the key list: metadata + a two-click "Revoke → Confirm" guard
+ *  (no reusable confirm dialog exists in the app, so confirm is inline). */
+function ApiKeyRow({
+  apiKey,
+  onRevoked,
+}: {
+  apiKey: ApiKeyDTO;
+  onRevoked: (id: string) => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const onRevoke = useCallback(async () => {
+    if (!confirming) {
+      setConfirming(true);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.revokeMyApiKey(apiKey.id);
+      onRevoked(apiKey.id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'failed to revoke');
+      setBusy(false);
+      setConfirming(false);
+    }
+  }, [confirming, apiKey.id, onRevoked]);
+
+  return (
+    <li className="flex items-center gap-4 border-b border-default px-4 py-3 last:border-b-0">
+      <KeyRound className="h-4 w-4 shrink-0 text-fg-tertiary" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-sm font-medium text-fg-primary">{apiKey.name}</span>
+          <span
+            className={cn(
+              'rounded px-1.5 py-0.5 text-[10px] font-medium',
+              apiKey.readonly
+                ? 'bg-surface-2 text-fg-secondary'
+                : 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
+            )}
+          >
+            {apiKey.readonly ? 'read-only' : 'read/write'}
+          </span>
+        </div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-fg-tertiary">
+          <code className="font-mono">{apiKey.prefix}…</code>
+          <span>·</span>
+          <span>created {timeAgo(apiKey.createdAt)}</span>
+          <span>·</span>
+          <span>{apiKey.lastUsedAt ? `last used ${timeAgo(apiKey.lastUsedAt)}` : 'never used'}</span>
+        </div>
+        {error && <p className="mt-1 text-[11px] text-red-500 dark:text-red-400">{error}</p>}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {confirming && !busy && (
+          <button
+            onClick={() => setConfirming(false)}
+            className="text-xs text-fg-tertiary transition-colors hover:text-fg-primary"
+          >
+            cancel
+          </button>
+        )}
+        <Button
+          onClick={onRevoke}
+          disabled={busy}
+          size="sm"
+          variant={confirming ? 'danger' : 'outline'}
+        >
+          {busy ? (
+            <>
+              <Loader2 className="h-3 w-3 animate-spin" /> revoking…
+            </>
+          ) : confirming ? (
+            'Confirm'
+          ) : (
+            <>
+              <Trash2 className="h-3 w-3" /> Revoke
+            </>
+          )}
+        </Button>
+      </div>
+    </li>
   );
 }
 
