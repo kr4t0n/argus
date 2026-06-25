@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,16 @@ import (
 const (
 	machineHeartbeatInterval = 5 * time.Second
 	controlReadBlock         = 2 * time.Second
+	// cmdReadBlock bounds the single machine-wide command reader's
+	// XREADGROUP. On expiry the reader re-snapshots the agent set, so a
+	// newly-spawned agent's command stream is picked up — and a
+	// destroyed agent's dropped — within this window.
+	cmdReadBlock = 2 * time.Second
+	// cmdReadCount caps entries pulled per agent stream per read. Small
+	// on purpose: commands are human-paced, and a tight cap bounds how
+	// many sit buffered (and would be lost) if the daemon shuts down
+	// mid-drain.
+	cmdReadCount = 10
 	// fsConcurrencyLimit caps how many fs-list / fs-read handlers run
 	// in parallel across all agents. Picked empirically: high enough
 	// that a tree refresh of ~20 expanded folders drains in parallel
@@ -171,7 +182,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.quota = quota.New(d.log)
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		d.machineHeartbeatLoop(ctx)
@@ -179,6 +190,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go func() {
 		defer wg.Done()
 		d.quota.Run(ctx)
+	}()
+	// Single machine-wide command reader: fans in every agent's command
+	// stream on one connection, replacing the old per-agent blocking
+	// readers (one parked Redis connection each).
+	go func() {
+		defer wg.Done()
+		d.commandReaderLoop(ctx)
 	}()
 
 	consumer := "c-" + uuid.NewString()[:8]
@@ -247,6 +265,97 @@ func (d *Daemon) machineHeartbeatLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// commandReaderLoop is the single, machine-wide consumer of every
+// agent's command stream. One blocking XREADGROUP fans in over all
+// agent:{id}:cmd streams under one consumer group, then routes each
+// entry to the owning supervisor over its in-process channel. This
+// replaces the old one-blocking-reader-per-agent model, which parked a
+// Redis connection per agent; the machine now reads commands on a single
+// connection regardless of how many agents it runs.
+//
+// The stream set is re-snapshotted every iteration, so agents created or
+// destroyed at runtime are picked up (or dropped) within one cmdReadBlock.
+func (d *Daemon) commandReaderLoop(ctx context.Context) {
+	group := protocol.SidecarCommandGroup(d.cache.MachineID)
+	consumer := "cmd-" + uuid.NewString()[:8]
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		// Snapshot the current command streams and a stream→supervisor
+		// route table. Groups are ensured at spawn time, so every stream
+		// here already has its group (except after a Redis flush — handled
+		// via the NOGROUP branch below).
+		d.mu.Lock()
+		streams := make([]string, 0, len(d.supervisors))
+		routes := make(map[string]*supervisor, len(d.supervisors))
+		for id, s := range d.supervisors {
+			st := protocol.CommandStream(id)
+			streams = append(streams, st)
+			routes[st] = s
+		}
+		d.mu.Unlock()
+
+		if len(streams) == 0 {
+			// No agents yet (or all gone) — wait a beat, then re-check.
+			// Avoids a hot spin before the first agent is spawned.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(cmdReadBlock):
+			}
+			continue
+		}
+
+		msgs, err := d.bus.ReadGroupMulti(ctx, streams, group, consumer, cmdReadCount, cmdReadBlock)
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		if err != nil {
+			// After a Redis flush (the bus holds no durable data) the
+			// groups vanish and XREADGROUP fails NOGROUP for the whole
+			// batch. Recreate the groups on the current streams and retry
+			// — without this the reader would log-and-sleep forever and
+			// never deliver another command until every agent was bounced.
+			if isNoGroup(err) {
+				d.ensureCommandGroups(ctx, streams, group)
+				continue
+			}
+			d.log.Printf("command read error: %v", err)
+			time.Sleep(time.Second)
+			continue
+		}
+
+		for _, m := range msgs {
+			s := routes[m.Stream]
+			if s == nil || !s.enqueue(inboundCmd{msgID: m.ID, payload: m.Payload}) {
+				// Agent vanished between snapshot and read, or is shutting
+				// down. Ack-drop so the entry doesn't dangle in the PEL.
+				_ = d.bus.Ack(ctx, m.Stream, group, m.ID)
+			}
+		}
+	}
+}
+
+// ensureCommandGroups (re)creates the shared command consumer group on
+// each stream. The reader uses it to self-heal after a Redis flush.
+func (d *Daemon) ensureCommandGroups(ctx context.Context, streams []string, group string) {
+	for _, st := range streams {
+		if err := d.bus.EnsureGroup(ctx, st, group); err != nil {
+			d.log.Printf("command reader: ensure group on %s: %v", st, err)
+		}
+	}
+}
+
+// isNoGroup reports whether err is Redis's NOGROUP (missing stream or
+// consumer group), which the reader treats as "recreate the group(s) and
+// retry" rather than a transient error to back off on.
+func isNoGroup(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "NOGROUP")
 }
 
 // dispatchControl decodes a single control message and routes it to the
@@ -524,10 +633,27 @@ func (d *Daemon) spawnSupervisor(ctx context.Context, rec AgentRecord, publishAc
 		}
 		return
 	}
+	// Ensure the shared command group on this agent's stream BEFORE the
+	// supervisor becomes visible to the machine-wide reader (added to the
+	// map) and before it registers — so the reader never hits NOGROUP on
+	// it, and no command published right after register lands ahead of
+	// the group's start position. Non-fatal: the reader re-ensures groups
+	// if it ever does hit NOGROUP (e.g. after a Redis flush).
+	cmdStream := protocol.CommandStream(rec.AgentID)
+	group := protocol.SidecarCommandGroup(d.cache.MachineID)
+	if err := d.bus.EnsureGroup(ctx, cmdStream, group); err != nil {
+		d.log.Printf("agent %s: ensure command group: %v", rec.AgentID, err)
+	}
+	// Start the supervisor (which sets s.runCtx) BEFORE publishing it to
+	// the map. The machine-wide reader routes commands by reading the map
+	// under d.mu, then calls s.enqueue — which selects on s.runCtx. If we
+	// inserted first, the reader could see a supervisor whose runCtx isn't
+	// set yet. Inserting after Start (with the lock as the barrier) means
+	// any reader that can see the supervisor also sees a live runCtx.
+	s.Start(ctx)
 	d.mu.Lock()
 	d.supervisors[rec.AgentID] = s
 	d.mu.Unlock()
-	s.Start(ctx)
 
 	d.upsertCache(rec)
 	if publishAck {

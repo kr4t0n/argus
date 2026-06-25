@@ -781,9 +781,14 @@ func StreamMaxLen(streamKey string) int64 {
 	}
 }
 
-// SidecarConsumerGroup is the consumer group name an agent supervisor
-// uses on its own per-agent command stream. We name it after the agent
-// itself so two supervisors for the same agent (a brief overlap during
-// daemon restart) share a single group and cooperatively drain pending
-// entries instead of double-delivering.
-func SidecarConsumerGroup(agentID string) string { return "sidecar-" + agentID }
+// SidecarCommandGroup is the consumer group the sidecar's single,
+// machine-wide command reader uses across every agent's per-agent
+// command stream (agent:{id}:cmd). One group per machine — not one per
+// agent — is what lets a single XREADGROUP fan in over all of a
+// machine's command streams on one Redis connection, instead of parking
+// a blocking connection per agent.
+//
+// Keyed off the (stable, cache-persisted) machineID so a daemon restart
+// rejoins the same group on each stream and cooperatively drains pending
+// entries instead of double-delivering during the brief overlap.
+func SidecarCommandGroup(machineID string) string { return "sidecar-cmd-" + machineID }
