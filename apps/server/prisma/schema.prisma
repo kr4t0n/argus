@@ -34,6 +34,44 @@ model User {
   sessions     Session[]
   projectNotes ProjectNote[]
   attachments  Attachment[]
+  apiKeys      ApiKey[]
+}
+
+// Long-lived, revocable credential for machine-to-machine callers
+// (dashboards, integrations) — an alternative to the human email/password
+// → JWT flow. Unlike a JWT, a key can be revoked (`revokedAt`) without
+// rotating JWT_SECRET (which would log out every human), and carries a
+// `readonly` flag the auth guard enforces by HTTP method. The plaintext
+// secret is shown ONCE at creation and never stored: only its SHA-256
+// `hash` lives here (a fast hash is fine — keys are high-entropy random
+// tokens, not low-entropy passwords, so no bcrypt needed, and the unique
+// hash gives an O(1) indexed lookup on verify). A key always acts AS a
+// user, so per-user scoping (e.g. a caller's own sessions) is unchanged.
+model ApiKey {
+  id         String    @id @default(cuid())
+  // Human label shown in the management UI, e.g. "dashboard".
+  name       String
+  // First chars of the plaintext (e.g. "argus_AbCd12"), stored so the UI
+  // can identify a key after creation without ever revealing the secret.
+  prefix     String
+  // SHA-256 hex of the full plaintext key. Unique so verify is a single
+  // indexed findUnique rather than a scan-and-compare.
+  hash       String    @unique
+  // The user this key authenticates as.
+  userId     String
+  // When true, the auth guard rejects any non-GET/HEAD/OPTIONS request.
+  readonly   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  // Bumped (best-effort) on each successful verify, for "last used" UI.
+  lastUsedAt DateTime?
+  // Optional hard expiry. NULL = never expires.
+  expiresAt  DateTime?
+  // Soft revocation tombstone. NULL = active; set = rejected on verify.
+  revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 // A free-form note the user keeps for a "project" — the

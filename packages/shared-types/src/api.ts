@@ -528,6 +528,39 @@ export interface UpdateUserExtensionsRequest {
   diff: boolean;
 }
 
+/** Public metadata for one API key — everything EXCEPT the secret. The
+ *  plaintext is never stored (only its SHA-256 hash is) and is returned
+ *  exactly once, at creation, in CreatedApiKey.key. Backs the rows in the
+ *  user panel's "API keys" section. Timestamps are ISO-8601 strings;
+ *  `lastUsedAt` is null until the key first authenticates a request, and
+ *  `expiresAt` null means the key never expires. */
+export interface ApiKeyDTO {
+  id: string;
+  name: string;
+  /** Leading chars of the plaintext (e.g. "argus_AbCd12") — enough to
+   *  recognise a key in the list without revealing the secret. */
+  prefix: string;
+  /** When true the auth guard confines the key to GET/HEAD/OPTIONS. */
+  readonly: boolean;
+  createdAt: string;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+}
+
+/** Request body for `POST /auth/api-keys`. `readonly` defaults to true
+ *  server-side when omitted. */
+export interface CreateApiKeyRequest {
+  name: string;
+  readonly?: boolean;
+}
+
+/** Response to `POST /auth/api-keys`: the new key's metadata PLUS the
+ *  one-time plaintext `key`. This is the ONLY time the secret is exposed —
+ *  it is stored only as a hash, so it can never be retrieved again. */
+export interface CreatedApiKey extends ApiKeyDTO {
+  key: string;
+}
+
 /** REST response for `GET /machines/:machineId/background-tasks`. One
  *  row per active-or-recently-ended background task in the given
  *  project, keyed by taskId. `endedAt` set ⇒ task has finished and the

@@ -546,6 +546,46 @@ See `[.env.example](./.env.example)` for the full list. Highlights:
 | `ATTACHMENT_MAX_FILES` | Max attachments per turn (default 10)                   |
 
 
+## API keys
+
+The REST API is normally reached with a JWT from `POST /auth/login`. For
+machine-to-machine callers (dashboards, integrations) you can instead mint a
+**revocable API key**. Unlike a JWT it can be revoked without rotating
+`JWT_SECRET` (which would log out every user), and it can be restricted to
+read-only.
+
+Manage keys from the dashboard — the user panel's **API keys** section lets you
+create a key (with a read-only toggle), copy and test the one-time secret, and
+revoke keys. Or use the REST API directly.
+
+Mint one with a logged-in admin token (`$API` is your server URL, e.g.
+`http://localhost:4000`):
+
+```bash
+TOKEN=$(curl -s -X POST "$API/auth/login" -H 'Content-Type: application/json' \
+  -d '{"email":"admin@argus.local","password":"…"}' | jq -r .token)
+
+# readonly defaults to true; pass "readonly": false for a read/write key
+curl -s -X POST "$API/auth/api-keys" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"name":"dashboard"}'
+# → {"id":"…","name":"dashboard","prefix":"argus_AbCd12","readonly":true,"key":"argus_…"}
+```
+
+The `key` is shown **once** — store it, it cannot be retrieved again. Then call
+the API with it in the `X-API-Key` header:
+
+```bash
+curl -s "$API/agents" -H "X-API-Key: argus_…"             # 200 — reads work
+curl -s -X POST "$API/sessions" -H "X-API-Key: argus_…"   # 403 — read-only key
+```
+
+A read-only key is confined to `GET`/`HEAD`/`OPTIONS`; every mutation is
+rejected with 403. List keys with `GET /auth/api-keys` and revoke one with
+`DELETE /auth/api-keys/:id` (both JWT-only — an API key can't manage keys). A
+key acts as the user who created it, so per-user data (e.g. sessions) stays
+scoped to that account — create a dedicated `viewer` user for an integration
+if you don't want it tied to your admin login.
+
 ## Adding a custom CLI agent
 
 1. Create `packages/sidecar/internal/adapter/myagent.go`.
