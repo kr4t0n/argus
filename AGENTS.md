@@ -627,7 +627,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   shown relative to `workingDir`. No new capture — it reuses the unified
   diffs the sidecar already emits per edit (see **File-edit diffs**) and
   the shared `components/ui/DiffBlock.tsx` renderer. Re-derives reactively,
-  so diffs stream in live while a turn is still editing.
+  so diffs stream in live while a turn is still editing. Each file's
+  header row is a collapse toggle (chevron), and its diff body is wrapped
+  in a `max-h-80` `overflow-y-auto` box so one huge patch can't push the
+  other files off-screen — the wrapper owns the cap + visible scrollbar,
+  the inner `DiffBlock`s stay uncapped (`maxHeightClass=""`). Collapse
+  state is local component state keyed by the file's stable absolute path
+  (`collapsed[rawPath]`), so it survives the live re-derivation; files
+  default to expanded. State resets when the Diff tab unmounts.
 - `components/Composer.tsx` + `components/PromptQueue.tsx` +
   `stores/queueStore.ts` + `lib/queueDrainer.ts` — the **prompt queue**.
   While a turn is running the Composer's submit no longer no-ops: it parks
