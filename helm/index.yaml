@@ -2,8 +2,33 @@ apiVersion: v1
 entries:
   argus:
   - apiVersion: v2
+    appVersion: 0.2.6
+    created: "2026-07-04T16:17:07.911248821Z"
+    description: 'Argus — multi-machine agent management dashboard. This chart deploys
+      the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
+      NOT bundled — point at your own managed instances or run the bitnami subcharts
+      alongside. '
+    digest: 220f877c27b0bedb312a59f9ce800112310918d4242ab6b9ed2c43e05f45c4b9
+    home: https://github.com/kr4t0n/argus
+    keywords:
+    - argus
+    - agents
+    - claude-code
+    - codex
+    - cursor-cli
+    maintainers:
+    - name: kr4t0n
+      url: https://github.com/kr4t0n
+    name: argus
+    sources:
+    - https://github.com/kr4t0n/argus
+    type: application
+    urls:
+    - https://kr4t0n.github.io/argus/helm/argus-0.2.6.tgz
+    version: 0.2.6
+  - apiVersion: v2
     appVersion: 0.2.5
-    created: "2026-06-25T07:22:06.125475848Z"
+    created: "2026-07-04T16:17:07.910374877Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -28,7 +53,7 @@ entries:
     version: 0.2.5
   - apiVersion: v2
     appVersion: 0.2.4
-    created: "2026-06-25T07:22:06.124583143Z"
+    created: "2026-07-04T16:17:07.909503498Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -53,7 +78,7 @@ entries:
     version: 0.2.4
   - apiVersion: v2
     appVersion: 0.2.3
-    created: "2026-06-25T07:22:06.123649231Z"
+    created: "2026-07-04T16:17:07.908614346Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -78,7 +103,7 @@ entries:
     version: 0.2.3
   - apiVersion: v2
     appVersion: 0.2.2
-    created: "2026-06-25T07:22:06.122027896Z"
+    created: "2026-07-04T16:17:07.907655934Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -103,7 +128,7 @@ entries:
     version: 0.2.2
   - apiVersion: v2
     appVersion: 0.2.1
-    created: "2026-06-25T07:22:06.121104834Z"
+    created: "2026-07-04T16:17:07.90600742Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -128,7 +153,7 @@ entries:
     version: 0.2.1
   - apiVersion: v2
     appVersion: 0.2.0
-    created: "2026-06-25T07:22:06.120206539Z"
+    created: "2026-07-04T16:17:07.905143074Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -153,7 +178,7 @@ entries:
     version: 0.2.0
   - apiVersion: v2
     appVersion: 0.1.16
-    created: "2026-06-25T07:22:06.11930092Z"
+    created: "2026-07-04T16:17:07.904263059Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -178,7 +203,7 @@ entries:
     version: 0.2.0-rc.1
   - apiVersion: v2
     appVersion: 0.1.16
-    created: "2026-06-25T07:22:06.103748065Z"
+    created: "2026-07-04T16:17:07.889277967Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -203,7 +228,7 @@ entries:
     version: 0.1.16
   - apiVersion: v2
     appVersion: 0.1.15
-    created: "2026-06-25T07:22:06.10279122Z"
+    created: "2026-07-04T16:17:07.888425543Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -228,7 +253,7 @@ entries:
     version: 0.1.15
   - apiVersion: v2
     appVersion: 0.1.14
-    created: "2026-06-25T07:22:06.101921318Z"
+    created: "2026-07-04T16:17:07.887607143Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -253,7 +278,7 @@ entries:
     version: 0.1.14
   - apiVersion: v2
     appVersion: 0.1.13
-    created: "2026-06-25T07:22:06.101046396Z"
+    created: "2026-07-04T16:17:07.886739582Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -278,7 +303,7 @@ entries:
     version: 0.1.13
   - apiVersion: v2
     appVersion: 0.1.12
-    created: "2026-06-25T07:22:06.100039848Z"
+    created: "2026-07-04T16:17:07.885896907Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -303,7 +328,7 @@ entries:
     version: 0.1.12
   - apiVersion: v2
     appVersion: 0.1.11
-    created: "2026-06-25T07:22:06.098731831Z"
+    created: "2026-07-04T16:17:07.884696192Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -328,7 +353,7 @@ entries:
     version: 0.1.11
   - apiVersion: v2
     appVersion: 0.1.10
-    created: "2026-06-25T07:22:06.09757874Z"
+    created: "2026-07-04T16:17:07.883192121Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -353,7 +378,7 @@ entries:
     version: 0.1.10
   - apiVersion: v2
     appVersion: 0.1.9
-    created: "2026-06-25T07:22:06.118395972Z"
+    created: "2026-07-04T16:17:07.903394295Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -378,7 +403,7 @@ entries:
     version: 0.1.9
   - apiVersion: v2
     appVersion: 0.1.8
-    created: "2026-06-25T07:22:06.117555674Z"
+    created: "2026-07-04T16:17:07.902584361Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -403,7 +428,7 @@ entries:
     version: 0.1.8
   - apiVersion: v2
     appVersion: 0.1.7
-    created: "2026-06-25T07:22:06.116743529Z"
+    created: "2026-07-04T16:17:07.901766161Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -428,7 +453,7 @@ entries:
     version: 0.1.7
   - apiVersion: v2
     appVersion: 0.1.7-rc.1
-    created: "2026-06-25T07:22:06.115700984Z"
+    created: "2026-07-04T16:17:07.900963381Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -453,7 +478,7 @@ entries:
     version: 0.1.7-rc.1
   - apiVersion: v2
     appVersion: 0.1.6
-    created: "2026-06-25T07:22:06.113949285Z"
+    created: "2026-07-04T16:17:07.900110296Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -478,7 +503,7 @@ entries:
     version: 0.1.6
   - apiVersion: v2
     appVersion: 0.1.5
-    created: "2026-06-25T07:22:06.113029068Z"
+    created: "2026-07-04T16:17:07.898432828Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -503,7 +528,7 @@ entries:
     version: 0.1.5
   - apiVersion: v2
     appVersion: 0.1.4
-    created: "2026-06-25T07:22:06.112214819Z"
+    created: "2026-07-04T16:17:07.897634967Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -528,7 +553,7 @@ entries:
     version: 0.1.4
   - apiVersion: v2
     appVersion: 0.1.3
-    created: "2026-06-25T07:22:06.111357359Z"
+    created: "2026-07-04T16:17:07.896824552Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -553,7 +578,7 @@ entries:
     version: 0.1.3
   - apiVersion: v2
     appVersion: 0.1.2
-    created: "2026-06-25T07:22:06.110539915Z"
+    created: "2026-07-04T16:17:07.896038001Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -578,7 +603,7 @@ entries:
     version: 0.1.2
   - apiVersion: v2
     appVersion: manual-24629223743
-    created: "2026-06-25T07:22:06.10973841Z"
+    created: "2026-07-04T16:17:07.895229009Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -603,7 +628,7 @@ entries:
     version: 0.1.2-test.6
   - apiVersion: v2
     appVersion: manual-24629223743
-    created: "2026-06-25T07:22:06.108900407Z"
+    created: "2026-07-04T16:17:07.894308428Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -628,7 +653,7 @@ entries:
     version: 0.1.2-test.5
   - apiVersion: v2
     appVersion: manual-24629223743
-    created: "2026-06-25T07:22:06.1080017Z"
+    created: "2026-07-04T16:17:07.893519173Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -653,7 +678,7 @@ entries:
     version: 0.1.2-test.4
   - apiVersion: v2
     appVersion: manual-24629223743
-    created: "2026-06-25T07:22:06.106386687Z"
+    created: "2026-07-04T16:17:07.89270473Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -678,7 +703,7 @@ entries:
     version: 0.1.2-test.3
   - apiVersion: v2
     appVersion: manual-24629223743
-    created: "2026-06-25T07:22:06.105425084Z"
+    created: "2026-07-04T16:17:07.890962806Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -703,7 +728,7 @@ entries:
     version: 0.1.2-test.2
   - apiVersion: v2
     appVersion: manual-24629223743
-    created: "2026-06-25T07:22:06.104573385Z"
+    created: "2026-07-04T16:17:07.890109551Z"
     description: 'Argus — multi-machine agent management dashboard. This chart deploys
       the control plane (NestJS server + React web UI). PostgreSQL and Redis are intentionally
       NOT bundled — point at your own managed instances or run the bitnami subcharts
@@ -726,4 +751,4 @@ entries:
     urls:
     - https://kr4t0n.github.io/argus/helm/argus-0.1.2-test.1.tgz
     version: 0.1.2-test.1
-generated: "2026-06-25T07:22:06.096584615Z"
+generated: "2026-07-04T16:17:07.882205296Z"
