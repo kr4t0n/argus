@@ -5,7 +5,6 @@ import { useAgentStore } from '../stores/agentStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
 import { useFileTabsStore } from '../stores/fileTabsStore';
-import { useQueueStore, type QueuedPrompt } from '../stores/queueStore';
 import { api } from '../lib/api';
 import { joinSession, leaveSession } from '../lib/ws';
 import { AgentTypeIcon } from './ui/AgentTypeIcon';
@@ -33,18 +32,12 @@ export function SessionPanel() {
   const entry = useSessionStore((s) => (sessionId ? s.entries[sessionId] : undefined));
   const loadSession = useSessionStore((s) => s.loadSession);
   const loadOlder = useSessionStore((s) => s.loadOlder);
-  const upsertCommand = useSessionStore((s) => s.upsertCommand);
   const agent = useAgentStore((s) =>
     entry?.session ? s.agents[entry.session.agentId] : undefined,
   );
-
-  // Queued follow-up prompts for this session (typed while a turn was
-  // running). The flush effect below drains them FIFO as the agent goes
-  // idle. `queueLen` keeps the effect dependency stable — we re-read the
-  // live queue via the store inside the effect to avoid stale closures.
-  const queueLen = useQueueStore((s) => (sessionId ? s.queues[sessionId]?.length ?? 0 : 0));
-  const dequeueHead = useQueueStore((s) => s.dequeueHead);
-  const enqueueFront = useQueueStore((s) => s.enqueueFront);
+  // The queued follow-ups for this session are drained app-wide by
+  // `useQueueDrainer` (see App.tsx), so they keep sending even when this
+  // panel isn't open — no per-panel flush here anymore.
 
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const contextPaneOpen = useUIStore((s) => s.contextPaneOpen);
@@ -121,59 +114,6 @@ export function SessionPanel() {
       ['pending', 'sent', 'running'].includes(c.status),
     );
   }, [entry]);
-
-  // Drain the prompt queue (see PromptQueue/queueStore). Whenever the
-  // session is idle, the agent is reachable, and something is queued, we
-  // dispatch the head and optimistically flip the session to "running"
-  // so the next item waits its turn — strict FIFO, one turn at a time.
-  const agentOnline = !!agent && agent.status !== 'offline';
-  const flushingRef = useRef(false);
-  // Id of a head whose send just failed: held back so a hard error (e.g.
-  // a rejected attachment) can't hot-loop. Cleared when the head changes
-  // (user removed/edited it) or on a recovery transition below.
-  const stalledRef = useRef<string | null>(null);
-  const prevRunningRef = useRef(running);
-  const prevAgentOnlineRef = useRef(agentOnline);
-  useEffect(() => {
-    // A finished turn or a reconnect is a fresh chance to retry a stalled
-    // head; clear the hold so the gate below re-arms.
-    const runningFell = prevRunningRef.current && !running;
-    const cameOnline = !prevAgentOnlineRef.current && agentOnline;
-    prevRunningRef.current = running;
-    prevAgentOnlineRef.current = agentOnline;
-    if (runningFell || cameOnline) stalledRef.current = null;
-
-    if (!sessionId) return;
-    if (running || flushingRef.current) return; // busy, or a send in flight
-    if (!agentOnline) return; // can't dispatch — keep it queued
-    if (queueLen === 0) return;
-
-    const head = useQueueStore.getState().queues[sessionId]?.[0];
-    if (!head) return;
-    if (stalledRef.current && stalledRef.current !== head.id) stalledRef.current = null;
-    if (stalledRef.current === head.id) return;
-
-    const item: QueuedPrompt | undefined = dequeueHead(sessionId);
-    if (!item) return;
-    flushingRef.current = true;
-    void (async () => {
-      try {
-        const cmd = await api.sendCommand(sessionId, {
-          prompt: item.prompt,
-          attachmentIds: item.attachments.length
-            ? item.attachments.map((a) => a.id)
-            : undefined,
-        });
-        upsertCommand(cmd); // flips `running` → serializes the next flush
-      } catch {
-        // Restore the prompt and hold it back so we don't spin retrying.
-        enqueueFront(sessionId, item);
-        stalledRef.current = item.id;
-      } finally {
-        flushingRef.current = false;
-      }
-    })();
-  }, [sessionId, running, agentOnline, queueLen, dequeueHead, enqueueFront, upsertCommand]);
 
   // Stable callback so <StreamViewer>'s useCallback/useEffect deps don't
   // churn on every parent render; the store closure already captures id.

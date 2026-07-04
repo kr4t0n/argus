@@ -25,6 +25,7 @@ import {
 } from './components/SidecarUpdateToasts';
 import { SessionCloneFailedToasts } from './components/SessionCloneFailedToasts';
 import { useApplyTheme } from './lib/theme';
+import { useQueueDrainer } from './lib/queueDrainer';
 
 function ProtectedRoutes() {
   const token = useAuthStore((s) => s.token);
@@ -44,6 +45,10 @@ export default function App() {
   // Keep <html>'s dark class in sync with the persisted theme +
   // OS preference. Runs once at mount; idempotent.
   useApplyTheme();
+
+  // App-wide prompt-queue drainer: sends queued follow-ups for ANY
+  // session as its agent frees up, regardless of which session is open.
+  useQueueDrainer();
 
   const bootstrap = useAuthStore((s) => s.bootstrap);
   const token = useAuthStore((s) => s.token);
