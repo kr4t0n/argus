@@ -629,25 +629,44 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the shared `components/ui/DiffBlock.tsx` renderer. Re-derives reactively,
   so diffs stream in live while a turn is still editing.
 - `components/Composer.tsx` + `components/PromptQueue.tsx` +
-  `stores/queueStore.ts` — the **prompt queue**. While a turn is running
-  the Composer's submit no longer no-ops: it parks the prompt (text +
-  already-uploaded attachment ids/name/mime, *not* the object-URL
-  thumbnail — those don't survive a reload) into a per-session FIFO in
-  `queueStore` (persisted under `argus.queue`), rendered as the small
-  editable/removable list `PromptQueue` shows directly above the input.
-  `SessionPanel` owns the **flush**: a single effect dispatches the head
-  whenever the session is idle, the agent is reachable, and something is
-  queued, then optimistically `upsertCommand`s the returned (status
-  `sent`) row so `running` flips immediately — that's what keeps the
-  drain strictly serialized (one turn at a time) instead of firing the
-  whole backlog at once. A flush whose `sendCommand` throws restores the
-  prompt to the head (`enqueueFront`) and marks it *stalled* (a ref) so a
-  hard error can't hot-loop; the stall clears when the head changes
-  (user removed/edited it) or on a recovery transition (turn finished /
-  agent reconnected). Agent-offline is handled by the gate, not the
-  stall: the queue just sits until status flips back. A manual submit
-  while the backlog is still draining also queues (joins the back) rather
-  than jumping the FIFO.
+  `stores/queueStore.ts` + `lib/queueDrainer.ts` — the **prompt queue**.
+  While a turn is running the Composer's submit no longer no-ops: it parks
+  the prompt (text + already-uploaded attachment ids/name/mime, *not* the
+  object-URL thumbnail — those don't survive a reload) into a per-session
+  FIFO in `queueStore` (persisted under `argus.queue`), rendered as the
+  small editable/removable list `PromptQueue` shows directly above the
+  input. **Draining is app-wide**, not per-panel: `useQueueDrainer()` is
+  mounted once in `App.tsx` and sends queued follow-ups for ANY session as
+  its agent frees up, regardless of which session (if any) is open. A
+  manual submit while a backlog is still draining also queues (joins the
+  back) rather than jumping the FIFO.
+  - **Pacing clock = `session.status`, not the agent heartbeat.** Agent
+    online/busy is heartbeat-reported every 5s (too laggy for turn-to-turn
+    pacing); `session.status` ('active' while streaming → 'idle'/'failed'
+    when done) is event-driven AND broadcast to the whole `user:{id}` room,
+    so `sessionStore.sessions[id].status` stays fresh for every session,
+    open or not. The drainer subscribes to the queue/session/agent stores
+    (debounced ~120ms to coalesce chunk-append bursts) and re-evaluates.
+  - **Serialization is per SESSION, not per agent.** Each turn spawns its
+    own short-lived CLI process (`claude --resume <session-external-id>`)
+    and the sidecar dispatches them as independent goroutines with no
+    per-agent lock (`supervisor.go` `go handleCommand`, no `cliSlots` gate
+    on `Execute`) — so sessions sharing an agent run truly in parallel. The
+    drainer therefore gates a session only on its OWN state: skip while
+    `session.status === 'active'`, or while an `inFlight` guard is set (it
+    bridges the dispatch→first-chunk window where the new turn isn't
+    `active` yet; clears once it goes active or after a 30s timeout). The
+    one invariant it protects: never two turns for the SAME session at once
+    (they'd both resume the same id off the pre-turn transcript and corrupt
+    it). Agent heartbeat `busy` is ignored (laggy + wrong granularity);
+    agent status is used only for reachability (skip `offline`/`error`).
+  - On a loaded (open) session the drainer also optimistically
+    `upsertCommand`s the returned row for instant feedback. A failed
+    `sendCommand` restores the head (`enqueueFront`) and stalls it with a
+    60s cooldown so a hard error can't hot-loop while transient ones still
+    self-heal. Known gap: cross-tab isn't coordinated (each tab's persisted
+    queue is independent), so the same session queued in two tabs could
+    double-send.
 
 ## Conventions
 
