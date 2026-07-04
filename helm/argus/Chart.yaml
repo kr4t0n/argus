@@ -10,10 +10,21 @@ type: application
 # Chart version is independent of the app it ships. Bump on chart
 # changes. Releasing a new chart version only requires bumping this
 # field — see helm-publish.yml.
-version: 0.2.5
+version: 0.2.6
 # App version tracks the Docker image tags pulled by default. Bump in
 # lockstep with `version` whenever the chart starts requiring features
 # only present in newer images; otherwise it can lag.
+#
+# 0.2.6 is a control-plane (web) release with no schema change, adding two
+# UI features: the prompt queue now drains app-wide in the background —
+# queued follow-ups keep sending for any session as its agent frees up,
+# regardless of which session is open, and sessions that share an agent
+# run in parallel (per-session serialization only). And the Diff pane's
+# per-file diffs are now collapsible and height-capped (scroll inside a
+# file) so one huge patch can't dominate the pane. The bundled sidecar is
+# unchanged from 0.2.5 — the parallel per-session execution these rely on
+# is existing sidecar behaviour — but a matching argus-sidecar release is
+# cut in lockstep for agent hosts.
 #
 # 0.2.5 adds revocable, read-only API keys: a second credential type
 # (sent via the `X-API-Key` header) alongside JWT login, managed from a
@@ -54,7 +65,7 @@ version: 0.2.5
 # 0.2.0 shipped file/image attachments — the default images include the
 # attachment module, so `objectStore` works out of the box (set the
 # endpoint + bucket + creds to enable it).
-appVersion: "0.2.5"
+appVersion: "0.2.6"
 
 home: https://github.com/kr4t0n/argus
 sources:
