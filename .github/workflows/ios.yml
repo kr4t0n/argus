@@ -7,7 +7,7 @@ name: ios
 # which runners have).
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, 'feat/ios-*']
     paths:
       - 'apps/ios/**'
       - '.github/workflows/ios.yml'
