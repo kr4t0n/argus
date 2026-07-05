@@ -1,0 +1,28 @@
+[
+  {
+    "id": "48cbe45b-b56e-4fcd-aac4-7229ec9f243f",
+    "name": "kyles-Mac-mini",
+    "hostname": "kyles-Mac-mini.local",
+    "os": "darwin",
+    "arch": "arm64",
+    "sidecarVersion": "0.2.1-rc.4",
+    "availableAdapters": [
+      {
+        "type": "codex",
+        "binary": "/opt/homebrew/bin/codex",
+        "version": "0.121.0"
+      },
+      {
+        "type": "cursor-cli",
+        "binary": "/Users/kyle/.local/bin/cursor-agent",
+        "version": "2026.05.01-eea359f"
+      }
+    ],
+    "status": "offline",
+    "lastSeenAt": "2026-06-19T12:01:43.750Z",
+    "registeredAt": "2026-06-08T14:44:29.648Z",
+    "archivedAt": null,
+    "agentCount": 2,
+    "iconKey": null
+  }
+]

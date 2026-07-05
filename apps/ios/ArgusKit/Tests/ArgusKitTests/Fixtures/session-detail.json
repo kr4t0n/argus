@@ -1,0 +1,380 @@
+{
+  "session": {
+    "id": "cmqapime52f2x115hiyrwtwiy",
+    "userId": "cmq5ak870000049uqyv9xc8sc",
+    "agentId": "2715f1f3-3c79-46f4-93ba-14161cbbbfde",
+    "title": "test",
+    "externalId": "e9181c09-a4bb-4e04-9b90-aeacd09c69d0",
+    "status": "idle",
+    "unread": false,
+    "modelSelection": {
+      "model": "claude-opus-4-8-xhigh"
+    },
+    "archivedAt": null,
+    "createdAt": "2026-06-12T09:11:11.837Z",
+    "updatedAt": "2026-06-22T09:31:06.346Z"
+  },
+  "commands": [
+    {
+      "id": "cmqj9bl2p8dgd4ggoxxeb9ign",
+      "sessionId": "cmqapime52f2x115hiyrwtwiy",
+      "agentId": "2715f1f3-3c79-46f4-93ba-14161cbbbfde",
+      "kind": "execute",
+      "prompt": "a",
+      "status": "completed",
+      "createdAt": "2026-06-18T08:47:45.265Z",
+      "completedAt": "2026-06-18T08:47:54.069Z",
+      "usage": null,
+      "options": {
+        "model": "gpt-5.1-codex-mini-high"
+      }
+    },
+    {
+      "id": "cmqj9bxd78dh34ggo6cb69caa",
+      "sessionId": "cmqapime52f2x115hiyrwtwiy",
+      "agentId": "2715f1f3-3c79-46f4-93ba-14161cbbbfde",
+      "kind": "execute",
+      "prompt": "a",
+      "status": "failed",
+      "createdAt": "2026-06-18T08:48:01.195Z",
+      "completedAt": "2026-06-18T08:48:18.197Z",
+      "usage": null,
+      "options": {
+        "model": "gpt-5.1-codex-mini-high"
+      }
+    },
+    {
+      "id": "cmqjaukd68fu54ggo880mds33",
+      "sessionId": "cmqapime52f2x115hiyrwtwiy",
+      "agentId": "2715f1f3-3c79-46f4-93ba-14161cbbbfde",
+      "kind": "execute",
+      "prompt": "what is under the project",
+      "status": "completed",
+      "createdAt": "2026-06-18T09:30:30.427Z",
+      "completedAt": "2026-06-18T09:31:09.381Z",
+      "usage": {
+        "inputTokens": 4,
+        "outputTokens": 219,
+        "durationApiMs": 22131,
+        "cacheReadTokens": 32952,
+        "cacheWriteTokens": 33339
+      },
+      "options": {
+        "model": "claude-opus-4-8-xhigh"
+      }
+    },
+    {
+      "id": "cmqjojqm2914v4ggokmglbkek",
+      "sessionId": "cmqapime52f2x115hiyrwtwiy",
+      "agentId": "2715f1f3-3c79-46f4-93ba-14161cbbbfde",
+      "kind": "execute",
+      "prompt": "hi",
+      "status": "completed",
+      "createdAt": "2026-06-18T15:53:59.930Z",
+      "completedAt": "2026-06-18T15:54:24.544Z",
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 13,
+        "durationApiMs": 8686,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 34688
+      },
+      "options": {
+        "model": "claude-opus-4-8-xhigh"
+      }
+    },
+    {
+      "id": "cmqjok9ng91634ggo7naejgao",
+      "sessionId": "cmqapime52f2x115hiyrwtwiy",
+      "agentId": "2715f1f3-3c79-46f4-93ba-14161cbbbfde",
+      "kind": "execute",
+      "prompt": "hi3",
+      "status": "completed",
+      "createdAt": "2026-06-18T15:54:24.605Z",
+      "completedAt": "2026-06-18T15:54:48.558Z",
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 19,
+        "durationApiMs": 4311,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 35471
+      },
+      "options": {
+        "model": "claude-opus-4-8-xhigh"
+      }
+    }
+  ],
+  "chunks": [
+    {
+      "id": "eff2a695-960f-4822-9415-c12760aa1f48",
+      "commandId": "cmqj9bl2p8dgd4ggoxxeb9ign",
+      "seq": 1,
+      "kind": "final",
+      "delta": null,
+      "content": null,
+      "meta": null,
+      "ts": "2026-06-18T08:47:52.766Z"
+    },
+    {
+      "id": "cad5b1d7-f067-4711-b5a3-dcd26ad16654",
+      "commandId": "cmqj9bxd78dh34ggo6cb69caa",
+      "seq": 1,
+      "kind": "progress",
+      "delta": null,
+      "content": "session initialised",
+      "meta": {
+        "cwd": "/Users/kyle/temp",
+        "type": "system",
+        "model": "Codex 5.1 Mini High",
+        "subtype": "init",
+        "session_id": "e9181c09-a4bb-4e04-9b90-aeacd09c69d0",
+        "apiKeySource": "login",
+        "permissionMode": "default"
+      },
+      "ts": "2026-06-18T08:48:10.709Z"
+    },
+    {
+      "id": "e3456781-8e34-4eea-88d9-1dd043c76479",
+      "commandId": "cmqj9bxd78dh34ggo6cb69caa",
+      "seq": 2,
+      "kind": "stderr",
+      "delta": null,
+      "content": "k: Named models unavailable Free plans can only use Auto. Switch to Auto or upgrade plans to continue.",
+      "meta": null,
+      "ts": "2026-06-18T08:48:13.190Z"
+    },
+    {
+      "id": "bce9e6c6-2ce8-4387-bb92-62b21ca865fe",
+      "commandId": "cmqj9bxd78dh34ggo6cb69caa",
+      "seq": 3,
+      "kind": "error",
+      "delta": null,
+      "content": "exit status 1",
+      "meta": null,
+      "ts": "2026-06-18T08:48:13.515Z"
+    },
+    {
+      "id": "627813cf-bfcc-4a19-a24a-6d8af0e8c81e",
+      "commandId": "cmqjaukd68fu54ggo880mds33",
+      "seq": 1,
+      "kind": "progress",
+      "delta": null,
+      "content": "session initialised",
+      "meta": {
+        "cwd": "/Users/kyle/temp",
+        "type": "system",
+        "model": "Opus 4.8 300K Extra High No Thinking",
+        "subtype": "init",
+        "session_id": "e9181c09-a4bb-4e04-9b90-aeacd09c69d0",
+        "apiKeySource": "login",
+        "permissionMode": "default"
+      },
+      "ts": "2026-06-18T09:30:41.072Z"
+    },
+    {
+      "id": "31db0255-311d-49a9-9fd7-135645ec17f4",
+      "commandId": "cmqjaukd68fu54ggo880mds33",
+      "seq": 2,
+      "kind": "tool",
+      "delta": null,
+      "content": "Bash list workspace contents",
+      "meta": {
+        "id": "toolu_01VdDheZpow1MvpZBv6FR4v8",
+        "tool": "Bash",
+        "input": {
+          "command": "ls -la",
+          "timeout": 30000,
+          "description": "list workspace contents",
+          "isBackground": false,
+          "workingDirectory": ""
+        }
+      },
+      "ts": "2026-06-18T09:30:50.816Z"
+    },
+    {
+      "id": "1e56b74f-a42a-4838-a12c-1dc92bb3aa50",
+      "commandId": "cmqjaukd68fu54ggo880mds33",
+      "seq": 3,
+      "kind": "stdout",
+      "delta": null,
+      "content": "total 32\ndrwxr-xr-x   7 kyle  staff   224 Jun 14 22:17 .\ndrwxr-x---+ 45 kyle  staff  1440 Jun 18 17:30 ..\ndrwxr-xr-x@  4 kyle  staff   128 Jun  8 23:04 .argus\n-rw-r--r--@  1 root  staff    94 Jun 14 22:16 random_test.txt\n-rw-r--r--@  1 root  staff   102 Jun 14 22:17 random_test_1.txt\n-rw-r--r--@  1 root  staff   118 Jun 14 22:17 random_test_2.txt\n-rw-r--r--@  1 root  staff    50 Jun 12 16:37 test.txt\n",
+      "meta": {
+        "exitCode": 0,
+        "toolResultFor": "toolu_01VdDheZpow1MvpZBv6FR4v8"
+      },
+      "ts": "2026-06-18T09:30:57.841Z"
+    },
+    {
+      "id": "53e27cb1-be0c-4e51-baf8-b0d57f7f514e",
+      "commandId": "cmqjaukd68fu54ggo880mds33",
+      "seq": 4,
+      "kind": "delta",
+      "delta": "Here's what's under `/Users/kyle/temp`:\n\n- `.argus/` — a directory (contents not listed)\n- `random_test.txt` — created earlier (94 B)\n- `random_test_1.txt` — created earlier (102 B)\n- `random_test_2.txt` — created earlier (118 B)\n- `test.txt` — pre-existing (50 B)\n\nWant me to look inside `.argus/` or any of the files?",
+      "content": null,
+      "meta": null,
+      "ts": "2026-06-18T09:31:03.193Z"
+    },
+    {
+      "id": "0bcff35e-a316-4449-ae97-ea1cd183de95",
+      "commandId": "cmqjaukd68fu54ggo880mds33",
+      "seq": 5,
+      "kind": "final",
+      "delta": null,
+      "content": "Here's what's under `/Users/kyle/temp`:\n\n- `.argus/` — a directory (contents not listed)\n- `random_test.txt` — created earlier (94 B)\n- `random_test_1.txt` — created earlier (102 B)\n- `random_test_2.txt` — created earlier (118 B)\n- `test.txt` — pre-existing (50 B)\n\nWant me to look inside `.argus/` or any of the files?",
+      "meta": {
+        "type": "result",
+        "usage": {
+          "inputTokens": 4,
+          "outputTokens": 219,
+          "cacheReadTokens": 32952,
+          "cacheWriteTokens": 33339
+        },
+        "result": "Here's what's under `/Users/kyle/temp`:\n\n- `.argus/` — a directory (contents not listed)\n- `random_test.txt` — created earlier (94 B)\n- `random_test_1.txt` — created earlier (102 B)\n- `random_test_2.txt` — created earlier (118 B)\n- `test.txt` — pre-existing (50 B)\n\nWant me to look inside `.argus/` or any of the files?",
+        "subtype": "success",
+        "is_error": false,
+        "request_id": "44c930c8-6dea-4889-a937-80af584a48f0",
+        "session_id": "e9181c09-a4bb-4e04-9b90-aeacd09c69d0",
+        "duration_ms": 22131,
+        "duration_api_ms": 22131
+      },
+      "ts": "2026-06-18T09:31:03.202Z"
+    },
+    {
+      "id": "5f85425b-3bc3-4cd2-8bb1-2e438003788d",
+      "commandId": "cmqjaukd68fu54ggo880mds33",
+      "seq": 6,
+      "kind": "final",
+      "delta": null,
+      "content": null,
+      "meta": null,
+      "ts": "2026-06-18T09:31:04.778Z"
+    },
+    {
+      "id": "f8d1631e-691f-479e-9355-cd9910d59886",
+      "commandId": "cmqjojqm2914v4ggokmglbkek",
+      "seq": 1,
+      "kind": "progress",
+      "delta": null,
+      "content": "session initialised",
+      "meta": {
+        "cwd": "/Users/kyle/temp",
+        "type": "system",
+        "model": "Opus 4.8 1M Extra High",
+        "subtype": "init",
+        "session_id": "e9181c09-a4bb-4e04-9b90-aeacd09c69d0",
+        "apiKeySource": "login",
+        "permissionMode": "default"
+      },
+      "ts": "2026-06-18T15:54:11.859Z"
+    },
+    {
+      "id": "e6a5a98c-2cf9-4236-b047-188653e3e847",
+      "commandId": "cmqjojqm2914v4ggokmglbkek",
+      "seq": 2,
+      "kind": "delta",
+      "delta": "Hi! What can I do for you?",
+      "content": null,
+      "meta": null,
+      "ts": "2026-06-18T15:54:20.535Z"
+    },
+    {
+      "id": "ebdc5986-c4f2-4941-8894-8bd9dc8cadef",
+      "commandId": "cmqjojqm2914v4ggokmglbkek",
+      "seq": 3,
+      "kind": "final",
+      "delta": null,
+      "content": "Hi! What can I do for you?",
+      "meta": {
+        "type": "result",
+        "usage": {
+          "inputTokens": 2,
+          "outputTokens": 13,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 34688
+        },
+        "result": "Hi! What can I do for you?",
+        "subtype": "success",
+        "is_error": false,
+        "request_id": "e48db614-6dd2-4b9b-b554-75c3e877c405",
+        "session_id": "e9181c09-a4bb-4e04-9b90-aeacd09c69d0",
+        "duration_ms": 8686,
+        "duration_api_ms": 8686
+      },
+      "ts": "2026-06-18T15:54:20.546Z"
+    },
+    {
+      "id": "40198e32-fff9-4e10-b369-5a414ebac3e1",
+      "commandId": "cmqjojqm2914v4ggokmglbkek",
+      "seq": 4,
+      "kind": "final",
+      "delta": null,
+      "content": null,
+      "meta": null,
+      "ts": "2026-06-18T15:54:23.687Z"
+    },
+    {
+      "id": "66d87104-959f-4bc0-ab6e-4c4c85b920d4",
+      "commandId": "cmqjok9ng91634ggo7naejgao",
+      "seq": 1,
+      "kind": "progress",
+      "delta": null,
+      "content": "session initialised",
+      "meta": {
+        "cwd": "/Users/kyle/temp",
+        "type": "system",
+        "model": "Opus 4.8 300K Extra High No Thinking",
+        "subtype": "init",
+        "session_id": "e9181c09-a4bb-4e04-9b90-aeacd09c69d0",
+        "apiKeySource": "login",
+        "permissionMode": "default"
+      },
+      "ts": "2026-06-18T15:54:38.405Z"
+    },
+    {
+      "id": "a2ed04f9-6cf2-48b7-8865-b2c2c746644e",
+      "commandId": "cmqjok9ng91634ggo7naejgao",
+      "seq": 2,
+      "kind": "delta",
+      "delta": "Hi! Let me know what you'd like to work on.",
+      "content": null,
+      "meta": null,
+      "ts": "2026-06-18T15:54:42.707Z"
+    },
+    {
+      "id": "d4806fdb-ff77-473c-bf3e-072cead8b037",
+      "commandId": "cmqjok9ng91634ggo7naejgao",
+      "seq": 3,
+      "kind": "final",
+      "delta": null,
+      "content": "Hi! Let me know what you'd like to work on.",
+      "meta": {
+        "type": "result",
+        "usage": {
+          "inputTokens": 2,
+          "outputTokens": 19,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 35471
+        },
+        "result": "Hi! Let me know what you'd like to work on.",
+        "subtype": "success",
+        "is_error": false,
+        "request_id": "a1cc8afb-1e51-4828-805f-40a5fed67d3c",
+        "session_id": "e9181c09-a4bb-4e04-9b90-aeacd09c69d0",
+        "duration_ms": 4311,
+        "duration_api_ms": 4311
+      },
+      "ts": "2026-06-18T15:54:42.716Z"
+    },
+    {
+      "id": "b414fa0c-8f1f-499c-890f-f76f99f050da",
+      "commandId": "cmqjok9ng91634ggo7naejgao",
+      "seq": 4,
+      "kind": "final",
+      "delta": null,
+      "content": null,
+      "meta": null,
+      "ts": "2026-06-18T15:54:48.316Z"
+    }
+  ],
+  "hasMore": true
+}

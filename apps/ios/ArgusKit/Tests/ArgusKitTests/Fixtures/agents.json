@@ -1,0 +1,30 @@
+[
+  {
+    "id": "c8c8c975-ef5e-4d52-9a72-65fd6f654d2a",
+    "name": "codex-157ffb",
+    "type": "codex",
+    "machineId": "48cbe45b-b56e-4fcd-aac4-7229ec9f243f",
+    "machineName": "kyles-Mac-mini",
+    "status": "offline",
+    "supportsTerminal": true,
+    "version": "0.121.0",
+    "workingDir": "/Users/kyle/temp",
+    "lastHeartbeatAt": "2026-06-19T12:01:43.749Z",
+    "registeredAt": "2026-06-08T14:45:19.180Z",
+    "archivedAt": null
+  },
+  {
+    "id": "2715f1f3-3c79-46f4-93ba-14161cbbbfde",
+    "name": "cursor-cli-a9e800",
+    "type": "cursor-cli",
+    "machineId": "48cbe45b-b56e-4fcd-aac4-7229ec9f243f",
+    "machineName": "kyles-Mac-mini",
+    "status": "offline",
+    "supportsTerminal": true,
+    "version": "2026.05.01-eea359f",
+    "workingDir": "/Users/kyle/temp",
+    "lastHeartbeatAt": "2026-06-19T12:01:43.756Z",
+    "registeredAt": "2026-06-08T14:46:19.795Z",
+    "archivedAt": null
+  }
+]
