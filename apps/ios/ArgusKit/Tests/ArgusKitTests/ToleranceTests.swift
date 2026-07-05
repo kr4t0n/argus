@@ -69,6 +69,7 @@ struct ToleranceTests {
 
         // And the engine accepts sessionId-less chunks as trusted.
         var state = TranscriptState(sessionId: "whatever")
-        #expect(state.append(chunk: chunk))
+        let inserted = state.append(chunk: chunk)
+        #expect(inserted)
     }
 }

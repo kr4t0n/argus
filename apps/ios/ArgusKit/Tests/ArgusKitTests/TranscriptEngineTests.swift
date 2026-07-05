@@ -8,10 +8,15 @@ struct TranscriptEngineTests {
         var state = TranscriptState(sessionId: "sess-1")
         state.upsert(command: TestSupport.command(status: .running))
 
+        // Mutating calls hoisted out of #expect — the macro rewrites its
+        // expression into a closure whose captures are immutable.
         let first = TestSupport.chunk(id: "c1", seq: 2, kind: .delta, delta: "b")
-        #expect(state.append(chunk: first))
-        #expect(!state.append(chunk: first))
-        #expect(state.append(chunk: TestSupport.chunk(id: "c2", seq: 1, kind: .delta, delta: "a")))
+        let insertedFirst = state.append(chunk: first)
+        let insertedDuplicate = state.append(chunk: first)
+        let insertedSecond = state.append(chunk: TestSupport.chunk(id: "c2", seq: 1, kind: .delta, delta: "a"))
+        #expect(insertedFirst)
+        #expect(!insertedDuplicate)
+        #expect(insertedSecond)
 
         let ordered = state.chunksByCommand["cmd-1"]?.map(\.seq)
         #expect(ordered == [1, 2])
@@ -22,7 +27,8 @@ struct TranscriptEngineTests {
     func rejectsForeignSession() {
         var state = TranscriptState(sessionId: "sess-1")
         let foreign = TestSupport.chunk(sessionId: "sess-OTHER", seq: 1, kind: .delta, delta: "x")
-        #expect(!state.append(chunk: foreign))
+        let inserted = state.append(chunk: foreign)
+        #expect(!inserted)
     }
 
     @Test("command upsert replaces in place and keeps createdAt order")
