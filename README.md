@@ -149,7 +149,9 @@ top of the Redis you already run.
 argus/
 ├── apps/
 │   ├── web/                  Vite + React + TS + Tailwind + Zustand
-│   └── server/               NestJS + Prisma + Socket.IO
+│   ├── server/               NestJS + Prisma + Socket.IO
+│   └── ios/                  Native SwiftUI client for iOS/iPadOS (WIP —
+│                             ArgusKit foundations; see apps/ios/README.md)
 ├── packages/
 │   ├── shared-types/         TS types shared by web + server
 │   └── sidecar/              Go sidecar (single binary)

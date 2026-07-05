@@ -675,6 +675,33 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     queue is independent), so the same session queued in two tabs could
     double-send.
 
+### `apps/ios/` (native client — WIP)
+
+- `ArgusKit/` — SwiftPM package holding everything except UI: Codable
+  DTO mirrors of shared-types, `ArgusClient` (REST), `StreamClient`
+  (Socket.IO `/stream` → `AsyncStream`), and a pure transcript engine
+  (`TranscriptState` + ports of `deltaSplit` / `parseUsage` /
+  `contextWindow`). The SwiftUI app target arrives in Phase 1
+  (XcodeGen-generated, never committed). See `apps/ios/README.md`.
+- **No codegen, by decision.** An earlier OpenAPI-pipeline attempt
+  (`feat/ios-native-client`, deprecated) fought swift-openapi-generator
+  constantly. Instead the Swift models are hand-written and
+  decode-tolerant (unknown fields ignored, open enums fall back to
+  `.unknown`), and contract confidence comes from
+  `scripts/capture-ios-fixtures.sh`: it captures sanitized live-server
+  responses into the package's test fixtures, which CI decodes.
+  **If you change a shared-types DTO, update the Swift mirror and
+  re-capture the fixtures in the same PR.**
+- Swift is authored on Linux but only compiles on macOS —
+  `.github/workflows/ios.yml` (macOS runner, `swift build` + `swift
+  test`) is the primary verifier, not the dev box.
+- Wire gotcha the fixtures encode: REST-served chunks drop
+  `agentId`/`sessionId`/`isFinal` and serialize `ts` as an ISO string,
+  while the WS `chunk` event relays the full wire shape with numeric
+  millis; command rows carry a denormalized `usage` field shared-types
+  omits. `ResultChunk`'s custom decoder + Codable's ignore-unknown
+  default absorb all of this — don't add strict decoding.
+
 ## Conventions
 
 - **Path alias**: `@argus/shared-types` resolves to the package's source
