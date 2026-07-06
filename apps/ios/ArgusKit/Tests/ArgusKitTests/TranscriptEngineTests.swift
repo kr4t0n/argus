@@ -100,12 +100,14 @@ struct TranscriptEngineTests {
         #expect(turn.answer == "The answer is 42.")
         #expect(turn.narration == "let me look")
         #expect(!turn.isRunning)
-        // The stdout is PAIRED into the tool row (web parity), not a
-        // standalone item — one timeline entry, carrying the result body.
-        #expect(turn.timeline.count == 1)
-        #expect(turn.timeline[0].kind == .tool)
-        #expect(turn.timeline[0].toolName == "Read")
-        #expect(turn.timeline[0].resultText == "file contents")
+        // The pre-tool delta interleaves as a thought row; the stdout is
+        // PAIRED into the tool row (web parity), not a standalone item.
+        #expect(turn.timeline.count == 2)
+        #expect(turn.timeline[0].kind == .thought)
+        #expect(turn.timeline[0].text == "let me look")
+        #expect(turn.timeline[1].kind == .tool)
+        #expect(turn.timeline[1].toolName == "Read")
+        #expect(turn.timeline[1].resultText == "file contents")
         #expect(turn.usage?.inputTokens == 100)
     }
 
