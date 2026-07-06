@@ -546,6 +546,8 @@ See `[.env.example](./.env.example)` for the full list. Highlights:
 | `S3_REGION`            | Region sent to the S3 client (`us-east-1`; ignored by MinIO) |
 | `ATTACHMENT_MAX_FILE_BYTES` | Per-file upload cap in bytes (default 25 MiB)      |
 | `ATTACHMENT_MAX_FILES` | Max attachments per turn (default 10)                   |
+| `APNS_TEAM_ID` / `APNS_KEY_ID` / `APNS_KEY_BASE64` | APNs auth key for the native iOS client's push notifications; unset = push disabled (see `.env.example`) |
+| `APNS_TOPIC` / `APNS_ENV` | iOS bundle id (`app.argus.ios`) and APNs environment (`sandbox`/`production`) |
 
 
 ## API keys

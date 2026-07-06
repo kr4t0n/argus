@@ -187,6 +187,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   background-tasks?workingDir=...` hydrates a tab opening mid-run.
   No DB persistence — JSONL on the agent's disk is authoritative if
   you need history.
+- `push/` — APNs sender for native clients. `DeviceController`
+  (`POST /me/devices` upsert-by-token — re-homing a token that moved
+  accounts — and idempotent `DELETE /me/devices/:token`) plus
+  `PushService`: env-gated (all `APNS_*` unset = silent no-op),
+  provider JWT (ES256 via jsonwebtoken, cached ~45 min), transport is
+  raw `node:http2` because APNs requires HTTP/2 and Node's fetch can't
+  speak it. Fired from `result-ingestor` at the exact point a session
+  flips to `idle`/`failed` + unread (the same trigger as the web's
+  desktop notifications); payload carries only the session title +
+  "Turn completed/failed" (no prompt text on lock screens) and a
+  `sessionId` for the client deep link. 410/`BadDeviceToken`/
+  `Unregistered` feedback prunes the `DeviceToken` row.
 - `sidecar-link/` — raw WebSocket server on path `/sidecar-link`
   attached to the same `http.Server` as NestJS (via `HttpAdapterHost`,
   `noServer` pattern). Owns one connection per sidecar, validates a
