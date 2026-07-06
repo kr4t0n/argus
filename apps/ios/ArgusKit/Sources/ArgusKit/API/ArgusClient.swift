@@ -321,4 +321,14 @@ public final class ArgusClient: @unchecked Sendable {
         let request = try makeRequest(method, path, query: query, bodyData: nil)
         _ = try await perform(request)
     }
+
+    func sendMultipart<T: Decodable>(
+        path: String,
+        contentType: String,
+        body: Data
+    ) async throws -> T {
+        var request = try makeRequest("POST", path, query: [], bodyData: body)
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        return try decode(try await perform(request))
+    }
 }

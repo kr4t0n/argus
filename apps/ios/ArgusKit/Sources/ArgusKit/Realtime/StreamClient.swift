@@ -14,32 +14,32 @@ import SocketIO
 // there is no socket-side replay buffer.
 
 /// Small payloads for events that don't carry a full DTO.
-public struct IdStatusPayload: Decodable, Sendable {
+public struct IdStatusPayload: Decodable, Equatable, Sendable {
     public let id: String
     public let status: String
 }
 
-public struct IdPayload: Decodable, Sendable {
+public struct IdPayload: Decodable, Equatable, Sendable {
     public let id: String
 }
 
-public struct AgentSpawnFailedPayload: Decodable, Sendable {
+public struct AgentSpawnFailedPayload: Decodable, Equatable, Sendable {
     public let machineId: String
     public let agentId: String
     public let reason: String
 }
 
-public struct SessionCloneFailedPayload: Decodable, Sendable {
+public struct SessionCloneFailedPayload: Decodable, Equatable, Sendable {
     public let sessionId: String
     public let reason: String
 }
 
-public struct FSChangedPayload: Decodable, Sendable {
+public struct FSChangedPayload: Decodable, Equatable, Sendable {
     public let agentId: String
     public let path: String
 }
 
-public struct GitChangedPayload: Decodable, Sendable {
+public struct GitChangedPayload: Decodable, Equatable, Sendable {
     public let agentId: String
 }
 
