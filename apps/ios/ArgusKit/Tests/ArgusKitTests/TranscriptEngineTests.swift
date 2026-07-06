@@ -168,6 +168,28 @@ struct TranscriptEngineTests {
         #expect(turn.answer == "All done.")
     }
 
+    @Test("tool-narration progress (tool_use_id) is dropped, not a system row")
+    func toolNarrationProgressDropped() throws {
+        var state = TranscriptState(sessionId: "sess-1")
+        state.upsert(command: TestSupport.command(status: .completed))
+        state.mergeBackfill(commands: [], chunks: [
+            TestSupport.chunk(
+                id: "t1", seq: 1, kind: .tool, content: "Bash",
+                meta: ["tool": .string("Bash"), "id": .string("x1"),
+                       "input": .object(["command": .string("git add .")])]
+            ),
+            // Claude's task_started description, tagged with tool_use_id —
+            // duplicates the tool row, so it must not render.
+            TestSupport.chunk(
+                id: "p1", seq: 2, kind: .progress, content: "Commit changes",
+                meta: ["tool_use_id": .string("x1")]
+            ),
+        ])
+        let turn = try #require(state.turns(agentType: "custom").first)
+        #expect(turn.timeline.map(\.kind) == [.tool])
+        #expect(!turn.timeline.contains { $0.kind == .system })
+    }
+
     @Test("stderr result marks the tool row as an error")
     func toolErrorPairing() throws {
         var state = TranscriptState(sessionId: "sess-1")

@@ -407,6 +407,13 @@ public struct TranscriptState: Equatable, Sendable {
                     }
                     continue
                 }
+                // Tool-narration progress (Claude's task_started
+                // `description`, tagged with tool_use_id) duplicates the
+                // tool row — the web skips it (ActivityPill buildTimeline),
+                // so drop it here too.
+                if let toolUseId = chunk.meta?["tool_use_id"]?.string, !toolUseId.isEmpty {
+                    continue
+                }
                 // Content-less progress (api_retry etc.) renders nothing;
                 // content-ful unknown subtypes stay VISIBLE on purpose.
                 if let content = chunk.content, !content.isEmpty {
