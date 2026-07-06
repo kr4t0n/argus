@@ -43,6 +43,14 @@ public struct GitChangedPayload: Decodable, Equatable, Sendable {
     public let agentId: String
 }
 
+/// The server's retention window for an ended task elapsed (or a user
+/// dismissed it) — drop the row.
+public struct BackgroundTaskRemovedPayload: Decodable, Equatable, Sendable {
+    public let machineId: String
+    public let workingDir: String
+    public let taskId: String
+}
+
 /// One live event from the `/stream` namespace — the Phase-1 subset plus
 /// fleet upkeep. Terminal, background-task, and sidecar-update events are
 /// wired in later phases.
@@ -73,6 +81,11 @@ public enum ServerEvent: Sendable {
 
     case fsChanged(FSChangedPayload)
     case gitChanged(GitChangedPayload)
+
+    /// Scoped to `project:<machineId>:<workingDir>` rooms
+    /// (`subscribe:project`).
+    case backgroundTaskUpdated(BackgroundTaskDTO)
+    case backgroundTaskRemoved(BackgroundTaskRemovedPayload)
 }
 
 /// Owns the Socket.IO connection and surfaces typed events as an
@@ -172,6 +185,8 @@ public final class StreamClient {
         on(socket, "project:upsert", ServerEvent.projectUpsert)
         on(socket, "fs:changed", ServerEvent.fsChanged)
         on(socket, "git:changed", ServerEvent.gitChanged)
+        on(socket, "background-task:updated", ServerEvent.backgroundTaskUpdated)
+        on(socket, "background-task:removed", ServerEvent.backgroundTaskRemoved)
     }
 
     /// Register a typed handler: decode the event's first argument into

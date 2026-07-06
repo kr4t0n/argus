@@ -277,6 +277,63 @@ public final class ArgusClient: @unchecked Sendable {
         try await send("PUT", "/me/extensions", body: extensions)
     }
 
+    /// Per-project scratchpad (Notes extension). Personal: never synced
+    /// to sidecars, keyed by the (machineId, workingDir) project pair.
+    public func getProjectNotes(machineId: String, workingDir: String) async throws -> String {
+        struct Response: Decodable {
+            let notes: String
+        }
+        let response: Response = try await send(
+            "GET", "/me/project-notes",
+            query: [
+                URLQueryItem(name: "machineId", value: machineId),
+                URLQueryItem(name: "workingDir", value: workingDir),
+            ]
+        )
+        return response.notes
+    }
+
+    @discardableResult
+    public func setProjectNotes(
+        machineId: String,
+        workingDir: String,
+        notes: String
+    ) async throws -> String {
+        struct Body: Encodable {
+            let notes: String
+        }
+        struct Response: Decodable {
+            let notes: String
+        }
+        let response: Response = try await send(
+            "PUT", "/me/project-notes",
+            query: [
+                URLQueryItem(name: "machineId", value: machineId),
+                URLQueryItem(name: "workingDir", value: workingDir),
+            ],
+            body: Body(notes: notes)
+        )
+        return response.notes
+    }
+
+    /// Active + recently-ended background tasks (Progress extension) —
+    /// hydrates the pane; `background-task:*` events keep it live.
+    public func listBackgroundTasks(machineId: String, workingDir: String) async throws -> [BackgroundTaskDTO] {
+        let response: BackgroundTasksResponse = try await send(
+            "GET", "/machines/\(machineId)/background-tasks",
+            query: [URLQueryItem(name: "workingDir", value: workingDir)]
+        )
+        return response.tasks
+    }
+
+    /// Global effect: every dashboard viewing the project drops the card.
+    public func dismissBackgroundTask(machineId: String, workingDir: String, taskId: String) async throws {
+        try await sendVoid(
+            "DELETE", "/machines/\(machineId)/background-tasks/\(taskId)",
+            query: [URLQueryItem(name: "workingDir", value: workingDir)]
+        )
+    }
+
     // MARK: Core
 
     private func flag(_ name: String, _ on: Bool) -> [URLQueryItem] {
