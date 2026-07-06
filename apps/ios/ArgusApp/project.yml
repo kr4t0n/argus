@@ -1,8 +1,9 @@
-# XcodeGen manifest — `xcodegen generate` produces ArgusApp.xcodeproj
-# (never committed; Info.plist below is generated too). Re-run only when
+# XcodeGen manifest — run `./generate.sh` (NOT bare `xcodegen generate`;
+# it seeds the local.yml include first) to produce ArgusApp.xcodeproj
+# (never committed; Info.plist is generated too). Re-run only when
 # adding/renaming sources or editing this file.
 #
-# Device builds & push: personal settings live in an OPTIONAL, gitignored
+# Device builds & push: personal settings live in the gitignored
 # `local.yml` next to this file so they survive regeneration. Example:
 #
 #   targets:
@@ -17,9 +18,9 @@
 #         properties:
 #           aps-environment: development
 name: ArgusApp
+# XcodeGen has no optional includes — generate.sh guarantees this file.
 include:
   - path: local.yml
-    optional: true
 options:
   bundleIdPrefix: app.argus
   deploymentTarget:

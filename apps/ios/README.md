@@ -103,7 +103,7 @@ The Xcode project is **generated** from `ArgusApp/project.yml` via
 ```bash
 brew install xcodegen                 # once
 cd apps/ios/ArgusApp
-xcodegen generate                     # → ArgusApp.xcodeproj
+./generate.sh                         # → ArgusApp.xcodeproj (seeds local.yml)
 open ArgusApp.xcodeproj
 ```
 
@@ -115,10 +115,10 @@ generate` only after adding/renaming source files or editing
 `project.yml`.
 
 > **Signing:** Simulator builds need no team — just ⌘R. For a
-> **physical device**, create a gitignored `ArgusApp/local.yml` with
-> your team id (template in the header comment of `project.yml`) and
-> re-run `xcodegen generate` — that survives regeneration, unlike a
-> team picked in Xcode's Signing pane. A free Apple ID works for
+> **physical device**, put your team id in the gitignored
+> `ArgusApp/local.yml` (template in the header comment of
+> `project.yml`) and re-run `./generate.sh` — that survives
+> regeneration, unlike a team picked in Xcode's Signing pane. A free Apple ID works for
 > running the app. Never set `CODE_SIGNING_ALLOWED=NO` in project.yml:
 > it silently produces unsigned binaries that a device refuses ("The
 > executable is not codesigned") even with a team selected — CI

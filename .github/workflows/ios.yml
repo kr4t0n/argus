@@ -55,7 +55,7 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate project
-        run: xcodegen generate
+        run: ./generate.sh
       - name: Build for Simulator
         run: >-
           xcodebuild build
