@@ -1,7 +1,7 @@
-# XcodeGen manifest — `xcodegen generate` produces ArgusApp.xcodeproj
+# XcodeGen manifest — `xcodegen generate` produces Argus.xcodeproj
 # (never committed; Info.plist below is generated too). Re-run only when
 # adding/renaming sources or editing this file.
-name: ArgusApp
+name: Argus
 options:
   bundleIdPrefix: app.argus
   deploymentTarget:
@@ -19,7 +19,7 @@ packages:
     from: 1.2.0
 
 targets:
-  ArgusApp:
+  Argus:
     type: application
     platform: iOS
     deploymentTarget: '17.0'
@@ -33,7 +33,7 @@ targets:
         product: SwiftTerm
     scheme: {}
     entitlements:
-      path: ArgusApp.entitlements
+      path: Argus.entitlements
       properties:
         # Sandbox push (Xcode/Simulator builds). Archive/export flips
         # this to production automatically. Remote push in the Simulator
@@ -42,9 +42,6 @@ targets:
     info:
       path: Info.plist
       properties:
-        # Home-screen label (the target stays ArgusApp; renaming it
-        # would ripple through the scheme name CI builds).
-        CFBundleDisplayName: Argus
         # Self-hosted Argus servers on LAN/localhost are plain http.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true

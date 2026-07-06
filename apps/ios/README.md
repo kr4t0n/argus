@@ -59,7 +59,7 @@ apps/ios/
 │       ├── Realtime/             StreamClient — Socket.IO /stream → AsyncStream
 │       └── Engine/               TranscriptState reducer, DeltaSplit, UsageParser,
 │                                 ContextWindows (all pure + unit-tested)
-└── ArgusApp/                     SwiftUI app target (XcodeGen; .xcodeproj generated)
+└── Argus/                        SwiftUI app target (XcodeGen; .xcodeproj generated)
     ├── project.yml               targets, ATS exception, MarkdownUI + ArgusKit deps
     └── Sources/
         ├── ArgusApp.swift        @main, root phase switch, scenePhase handling
@@ -96,15 +96,15 @@ swift test           # needs full Xcode (Testing.framework ships in its SDK)
 
 ## Build & run the app (Xcode)
 
-The Xcode project is **generated** from `ArgusApp/project.yml` via
+The Xcode project is **generated** from `Argus/project.yml` via
 [XcodeGen](https://github.com/yonaskolb/XcodeGen) — reproducible, and the
 `.xcodeproj` / `Info.plist` are never committed:
 
 ```bash
 brew install xcodegen                 # once
-cd apps/ios/ArgusApp
-xcodegen generate                     # → ArgusApp.xcodeproj
-open ArgusApp.xcodeproj
+cd apps/ios/Argus
+xcodegen generate                     # → Argus.xcodeproj
+open Argus.xcodeproj
 ```
 
 Pick an **iPhone or iPad Simulator** destination and ⌘R. On the login

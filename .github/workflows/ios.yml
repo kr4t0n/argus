@@ -45,11 +45,11 @@ jobs:
         run: swift test
 
   argusapp:
-    name: ArgusApp (xcodebuild, iOS Simulator)
+    name: Argus app (xcodebuild, iOS Simulator)
     runs-on: macos-15
     defaults:
       run:
-        working-directory: apps/ios/ArgusApp
+        working-directory: apps/ios/Argus
     steps:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
@@ -59,7 +59,7 @@ jobs:
       - name: Build for Simulator
         run: >-
           xcodebuild build
-          -project ArgusApp.xcodeproj
-          -scheme ArgusApp
+          -project Argus.xcodeproj
+          -scheme Argus
           -destination 'generic/platform=iOS Simulator'
           CODE_SIGNING_ALLOWED=NO
