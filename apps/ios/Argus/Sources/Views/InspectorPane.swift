@@ -748,7 +748,9 @@ private struct DiffPanel: View {
         for item in turn.timeline where item.isDiff {
             let path = item.filePath ?? "unknown"
             if byPath[path] == nil { order.append(path) }
-            byPath[path, default: []].append(item.text)
+            // Diffs now ride the tool row (paired result) — diffBody is
+            // the result text falling back to the row's own content.
+            byPath[path, default: []].append(item.diffBody)
         }
         return order.map { path in
             let text = byPath[path, default: []].joined(separator: "\n")

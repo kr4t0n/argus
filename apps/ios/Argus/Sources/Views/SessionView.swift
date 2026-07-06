@@ -2,7 +2,6 @@ import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
 import ArgusKit
-import MarkdownUI
 
 /// The transcript screen: streaming turns + composer. The Swift
 /// counterpart of the web's SessionPanel/StreamViewer, driven entirely
@@ -267,7 +266,7 @@ struct SessionView: View {
     // MARK: Composer
 
     private var composer: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             if let error = model?.actionError {
                 Text(error)
                     .font(.caption)
@@ -277,75 +276,131 @@ struct SessionView: View {
 
             PromptQueueList(sessionId: sessionId)
 
+            inputBox
+                .frame(maxWidth: 720)
+                .frame(maxWidth: .infinity)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+
+    /// The web's rounded-3xl composer: a soft layered pill wrapping the
+    /// paperclip, the auto-growing field, and the send/stop actions.
+    private var inputBox: some View {
+        VStack(spacing: 8) {
             if !pendingAttachments.isEmpty || uploadsInFlight > 0 {
                 attachmentChips
             }
 
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: 6) {
                 Button {
                     showAttachmentDialog = true
                 } label: {
-                    Image(systemName: "paperclip").font(.title3)
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
                 }
+                .buttonStyle(.plain)
                 .disabled(model == nil)
 
                 TextField(
-                    isBusy ? "Queue a follow-up…" : "Message",
+                    isBusy ? "Queue a follow-up…" : "Request changes or ask a question…",
                     text: $draft,
                     axis: .vertical
                 )
+                .textFieldStyle(.plain)
                 .lineLimit(1...5)
-                .textFieldStyle(.roundedBorder)
+                .padding(.vertical, 6)
                 .disabled(model == nil)
 
                 if model?.isRunning == true {
                     Button {
                         Task { await model?.cancelRunningTurn() }
                     } label: {
-                        Image(systemName: "stop.circle.fill")
-                            .font(.title2)
+                        Image(systemName: "square.fill")
+                            .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(.red)
+                            .frame(width: 32, height: 32)
+                            .background(Circle().fill(Color.surface2))
                     }
+                    .buttonStyle(.plain)
                     .keyboardShortcut(".", modifiers: .command)
                 }
 
                 Button(action: send) {
-                    Image(systemName: isBusy ? "text.badge.plus" : "arrow.up.circle.fill")
-                        .font(.title2)
+                    Group {
+                        if uploadsInFlight > 0 {
+                            ProgressView().controlSize(.small).tint(Color(.systemBackground))
+                        } else {
+                            Image(systemName: isBusy ? "text.badge.plus" : "arrow.up")
+                                .font(.system(size: 15, weight: .bold))
+                        }
+                    }
+                    .foregroundStyle(Color(.systemBackground))
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(canSend ? Color.primary : Color.secondary.opacity(0.3)))
                 }
+                .buttonStyle(.plain)
                 .disabled(!canSend)
                 .keyboardShortcut(.return, modifiers: .command)
             }
         }
-        .padding(10)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color.surface1, in: RoundedRectangle(cornerRadius: 24))
     }
 
     private var attachmentChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 ForEach(pendingAttachments) { attachment in
-                    HStack(spacing: 4) {
-                        Image(systemName: attachment.isImage ? "photo" : "doc")
-                            .font(.caption2)
-                        Text(attachment.filename)
-                            .font(.caption2)
-                            .lineLimit(1)
-                        Button {
-                            pendingAttachments.removeAll { $0.id == attachment.id }
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(.quaternary.opacity(0.5), in: Capsule())
+                    attachmentChip(attachment)
                 }
                 if uploadsInFlight > 0 {
-                    ProgressView().controlSize(.mini)
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 56, height: 56)
                 }
             }
+            .padding(.horizontal, 4)
+        }
+    }
+
+    @ViewBuilder
+    private func attachmentChip(_ attachment: UploadedAttachment) -> some View {
+        let remove = Button {
+            pendingAttachments.removeAll { $0.id == attachment.id }
+        } label: {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 15))
+                .foregroundStyle(.white, .black.opacity(0.5))
+        }
+        .buttonStyle(.plain)
+        .offset(x: 6, y: -6)
+
+        if attachment.isImage, let url = attachment.url.flatMap({ app.client?.absoluteURL(for: $0) }) {
+            AsyncImage(url: url) { phase in
+                if case .success(let image) = phase {
+                    image.resizable().scaledToFill()
+                } else {
+                    Color.surface2
+                }
+            }
+            .frame(width: 56, height: 56)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(.separator)))
+            .overlay(alignment: .topTrailing) { remove }
+        } else {
+            HStack(spacing: 6) {
+                Image(systemName: "doc.text").font(.caption).foregroundStyle(.tertiary)
+                Text(attachment.filename).font(.caption2).lineLimit(1)
+            }
+            .padding(.horizontal, 8)
+            .frame(width: 140, height: 56)
+            .background(Color.surface2, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(.separator)))
+            .overlay(alignment: .topTrailing) { remove }
         }
     }
 
@@ -414,7 +469,8 @@ struct SessionView: View {
                 pendingAttachments.append(UploadedAttachment(
                     id: attachment.id,
                     filename: attachment.filename,
-                    isImage: attachment.mime.hasPrefix("image/")
+                    isImage: attachment.mime.hasPrefix("image/"),
+                    url: attachment.url
                 ))
             } catch {
                 app.handleAPIError(error)
@@ -428,6 +484,8 @@ private struct UploadedAttachment: Identifiable, Equatable {
     let id: String
     let filename: String
     let isImage: Bool
+    /// API-relative tokenized URL for the composer thumbnail preview.
+    let url: String?
 }
 
 // MARK: - Prompt queue strip
@@ -519,17 +577,11 @@ private struct TurnCell: View {
             }
 
             if !turn.timeline.isEmpty || turn.thinkingTokens != nil || !turn.narration.isEmpty {
-                ActivityBlock(turn: turn)
+                ActivityPill(turn: turn)
             }
 
             if !turn.answer.isEmpty {
-                Markdown(turn.answer)
-                    .markdownTextStyle(\.code) {
-                        FontFamilyVariant(.monospaced)
-                        FontSize(.em(0.85))
-                    }
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                AnswerView(markdown: turn.answer, isStreaming: turn.isRunning)
                     .contextMenu {
                         Button("Copy answer", systemImage: "doc.on.doc") {
                             UIPasteboard.general.string = turn.answer
@@ -612,149 +664,3 @@ private struct PromptBubble: View {
     }
 }
 
-/// The activity band under a prompt: narration, thinking counter, and
-/// one row per timeline item (tools expandable to their output).
-private struct ActivityBlock: View {
-    let turn: Turn
-    @State private var expanded: Set<String> = []
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if !turn.narration.isEmpty {
-                Text(turn.narration)
-                    .font(.footnote)
-                    .italic()
-                    .foregroundStyle(.secondary)
-                    .lineLimit(expanded.contains("narration") ? nil : 3)
-                    .onTapGesture { toggle("narration") }
-            }
-
-            if let thinkingTokens = turn.thinkingTokens {
-                Label("thinking · \(thinkingTokens) tokens", systemImage: "brain")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            ForEach(turn.timeline) { item in
-                TimelineRow(
-                    item: item,
-                    isExpanded: expanded.contains(item.id),
-                    onToggle: { toggle(item.id) }
-                )
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private func toggle(_ id: String) {
-        if expanded.contains(id) {
-            expanded.remove(id)
-        } else {
-            expanded.insert(id)
-        }
-    }
-}
-
-private struct TimelineRow: View {
-    let item: TimelineItem
-    let isExpanded: Bool
-    let onToggle: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Button(action: onToggle) {
-                HStack(spacing: 6) {
-                    Image(systemName: symbol)
-                        .font(.caption2)
-                        .foregroundStyle(tint)
-                        .frame(width: 14)
-                    Text(title)
-                        .font(.caption)
-                        .foregroundStyle(item.kind == .error ? .red : .secondary)
-                        .lineLimit(1)
-                    if hasDetail {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.tertiary)
-                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    }
-                    Spacer(minLength: 0)
-                }
-            }
-            .buttonStyle(.plain)
-            .disabled(!hasDetail)
-
-            if isExpanded, hasDetail {
-                if item.isDiff {
-                    ScrollView {
-                        DiffText(text: item.text)
-                    }
-                    .frame(maxHeight: 280)
-                } else {
-                    ScrollView {
-                        Text(item.text)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 240)
-                    .padding(6)
-                    .background(.background.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
-                }
-            }
-        }
-    }
-
-    private var hasDetail: Bool {
-        !item.text.isEmpty
-    }
-
-    private var title: String {
-        switch item.kind {
-        case .tool(let name):
-            let firstLine = item.text
-                .split(separator: "\n", maxSplits: 1)
-                .first.map(String.init) ?? ""
-            return firstLine.isEmpty ? name : firstLine
-        case .thinking(let redacted):
-            return redacted ? "thinking (redacted)" : firstLineOrKind("thinking")
-        case .stdout: return firstLineOrKind("output")
-        case .stderr: return firstLineOrKind("stderr")
-        case .progress, .system: return firstLineOrKind("system")
-        case .error: return firstLineOrKind("error")
-        }
-    }
-
-    private func firstLineOrKind(_ fallback: String) -> String {
-        let firstLine = item.text
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: "\n", maxSplits: 1)
-            .first.map(String.init) ?? ""
-        return firstLine.isEmpty ? fallback : firstLine
-    }
-
-    private var symbol: String {
-        switch item.kind {
-        case .tool: return item.isDiff ? "plus.forwardslash.minus" : "wrench.and.screwdriver"
-        case .stdout: return "terminal"
-        case .stderr: return "exclamationmark.bubble"
-        case .progress, .system: return "info.circle"
-        case .thinking: return "brain"
-        case .error: return "exclamationmark.triangle"
-        }
-    }
-
-    private var tint: Color {
-        switch item.kind {
-        case .tool: return .blue
-        case .stdout: return .green
-        case .stderr: return .orange
-        case .progress, .system: return .secondary
-        case .thinking: return .purple
-        case .error: return .red
-        }
-    }
-}

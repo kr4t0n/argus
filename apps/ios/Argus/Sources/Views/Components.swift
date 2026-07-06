@@ -14,11 +14,71 @@ extension Color {
         )
     }
 
+    /// Theme-adaptive color from two hex literals (light / dark).
+    init(light: UInt32, dark: UInt32) {
+        self.init(UIColor { trait in
+            UIColor(Color(hex: trait.userInterfaceStyle == .dark ? dark : light))
+        })
+    }
+
     // Brand colors from apps/web tailwind tokens (`agent.*`).
     static let agentClaude = Color(hex: 0xFB923C)
     static let agentCodex = Color(hex: 0x10B981)
     static let agentCursor = Color(hex: 0x38BDF8)
     static let agentCustom = Color(hex: 0xA3A3A3)
+
+    // Layered greys mapped to the web's surface-0/1/2 tokens. The system
+    // grouped backgrounds already stack light↔dark the same way.
+    static let surface0 = Color(.systemBackground)
+    static let surface1 = Color(.secondarySystemBackground)
+    static let surface2 = Color(.tertiarySystemBackground)
+
+    /// Inline-code accent (`.markdown code`): red-700 light / blue-200 dark.
+    static let codeInlineFg = Color(light: 0xB91C1C, dark: 0xBFDBFE)
+    /// Markdown link color (sky-600 / sky-400).
+    static let mdLink = Color(light: 0x0284C7, dark: 0x38BDF8)
+    /// Amber (agent tool tint): amber-600 / amber-400.
+    static let toolAmber = Color(light: 0xD97706, dark: 0xFBBF24)
+}
+
+/// Per-tool icon + tint, mirroring the web ToolPill's `iconFor` /
+/// `iconColorFor`. Keyed off the lowercased tool name.
+enum ToolStyle {
+    static func symbol(for rawName: String?) -> String {
+        switch (rawName ?? "").lowercased() {
+        case "read", "cat", "open": return "doc.text"
+        case "write", "create": return "doc.badge.plus"
+        case "edit", "patch", "multiedit": return "pencil"
+        case "delete", "remove", "rm": return "trash"
+        case "rename", "move", "mv": return "arrow.left.arrow.right"
+        case "grep": return "magnifyingglass"
+        case "glob", "find", "ls": return "folder.badge.questionmark"
+        case "bash", "shell", "exec", "run": return "terminal"
+        case "fetch", "webfetch", "websearch": return "globe"
+        case "task", "todo", "todowrite", "updatetodos",
+             "taskcreate", "taskupdate", "tasklist", "taskget":
+            return "list.bullet.indent"
+        case "agent": return "cpu"
+        case "codebase", "symbols": return "chevron.left.forwardslash.chevron.right"
+        default: return "wrench.and.screwdriver"
+        }
+    }
+
+    static func tint(for rawName: String?) -> Color {
+        switch (rawName ?? "").lowercased() {
+        case "read", "cat", "open", "codebase", "symbols": return .blue
+        case "write", "create", "edit", "patch", "multiedit",
+             "rename", "move", "mv": return .purple
+        case "delete", "remove", "rm": return .pink
+        case "grep", "search", "glob", "find", "ls": return .teal
+        case "bash", "shell", "exec", "run": return .green
+        case "fetch", "webfetch", "websearch": return .indigo
+        case "task", "todo", "todowrite", "updatetodos",
+             "taskcreate", "taskupdate", "tasklist", "taskget": return .orange
+        case "agent": return .toolAmber
+        default: return .secondary
+        }
+    }
 }
 
 enum AgentTypeStyle {
