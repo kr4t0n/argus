@@ -70,6 +70,9 @@ final class AppModel {
     /// routed here. Set by SessionView on appear/disappear.
     @ObservationIgnored weak var activeSession: SessionViewModel?
 
+    /// The inspector's live PTY (if any) — terminal events route here.
+    @ObservationIgnored weak var activeTerminal: TerminalController?
+
     /// The JWT, readable from any thread — URLSession calls the token
     /// provider off the main actor, so this cannot be a MainActor
     /// property.
@@ -406,6 +409,7 @@ final class AppModel {
                 await refreshAll()
                 await activeSession?.handleReconnect()
             }
+            activeTerminal?.handleReconnect()
         case .disconnected:
             socketConnected = false
         case .socketError:
@@ -459,6 +463,11 @@ final class AppModel {
             lastBackgroundTaskUpdate = task
         case .backgroundTaskRemoved(let payload):
             lastBackgroundTaskRemoval = payload
+
+        case .terminalOutput, .terminalClosed:
+            activeTerminal?.handle(event)
+        case .terminalCreated, .terminalUpdated:
+            break
         }
     }
 }

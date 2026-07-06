@@ -12,22 +12,25 @@ struct InspectorPane: View {
     private enum Tab: String {
         case commits = "Commits"
         case files = "Files"
+        case terminal = "Terminal"
         case note = "Note"
         case progress = "Progress"
         case diff = "Diff"
     }
 
     @State private var tab: Tab = .commits
+    @State private var terminalController: TerminalController?
 
     private var session: SessionDTO? { app.sessionList.sessions[sessionId] }
     private var agent: AgentDTO? { session.flatMap { app.fleet.agents[$0.agentId] } }
 
-    /// Web ContextPane order: Commits, Files, (Terminal — not on iOS
-    /// yet), Note, Progress, Diff — extension tabs gated on the
-    /// account-level flags, Note additionally on a workingDir (a note is
-    /// project-scoped by definition).
+    /// Web ContextPane order: Commits, Files, Terminal, Note, Progress,
+    /// Diff. Terminal appears only for agents created with the PTY
+    /// opt-in; extension tabs gate on the account-level flags, Note/
+    /// Progress additionally on a workingDir (both are project-scoped).
     private var tabs: [Tab] {
         var result: [Tab] = [.commits, .files]
+        if agent?.supportsTerminal == true { result.append(.terminal) }
         if app.extensions.notes, agent?.workingDir != nil { result.append(.note) }
         if app.extensions.progress, agent?.workingDir != nil { result.append(.progress) }
         if app.extensions.diff { result.append(.diff) }
@@ -52,6 +55,17 @@ struct InspectorPane: View {
                     CommitsPanel(agent: agent)
                 case .files:
                     FileBrowserPanel(agent: agent)
+                case .terminal:
+                    // Lazy like the web: the PTY opens on first visit,
+                    // then the controller (and its scrollback) survives
+                    // tab switches for the inspector's lifetime.
+                    if let terminalController {
+                        TerminalPanel(controller: terminalController)
+                    } else {
+                        ProgressView()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .onAppear { makeTerminalController(agent: agent) }
+                    }
                 case .note:
                     NotePanel(agent: agent)
                 case .progress:
@@ -67,11 +81,25 @@ struct InspectorPane: View {
             }
         }
         .onAppear { if let agent { app.stream?.joinAgent(agent.id) } }
-        .onDisappear { if let agent { app.stream?.leaveAgent(agent.id) } }
+        .onDisappear {
+            if let agent { app.stream?.leaveAgent(agent.id) }
+            terminalController?.shutdown()
+            if app.activeTerminal === terminalController { app.activeTerminal = nil }
+            terminalController = nil
+        }
         .onChange(of: tabs) {
             // A toggled-off extension can strand the selection.
             if !tabs.contains(tab) { tab = .commits }
         }
+    }
+
+    private func makeTerminalController(agent: AgentDTO) {
+        guard terminalController == nil,
+              let client = app.client, let stream = app.stream
+        else { return }
+        let controller = TerminalController(agent: agent, client: client, stream: stream)
+        terminalController = controller
+        app.activeTerminal = controller
     }
 
     private var header: some View {

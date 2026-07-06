@@ -4,14 +4,16 @@ A native **SwiftUI** client for the Argus agent dashboard. It is a *thin
 client*: it speaks the same NestJS REST API + Socket.IO `/stream`
 namespace as the web app and never touches the Go sidecar.
 
-> Status: **Phase 4 — push notifications.** Turn-completion alerts via
-> APNs: enable "Task completion alerts" in the account panel, and a
-> push arrives when a turn finishes in a session you aren't viewing —
-> tapping it deep-links to that session. Needs the server's `APNS_*`
-> env configured (see the repo-root `.env.example`); remote push in the
-> Simulator needs an Apple silicon Mac. Phases 1–3 cover login,
-> streaming transcript, iPad three-column layout, inspector, queue,
-> attachments, fleet + account panels, and creation flows.
+> Status: **Phase 4 + terminal.** Turn-completion alerts via APNs
+> (enable "Task completion alerts" in the account panel; needs the
+> server's `APNS_*` env — see the repo-root `.env.example`; Simulator
+> remote push needs an Apple silicon Mac), and a full **interactive
+> terminal** (SwiftTerm) in the session inspector for agents created
+> with the PTY opt-in — same shell-access trust model as the web's
+> Terminal pane. Phases 1–3 cover login, streaming transcript, iPad
+> three-column layout, inspector (Commits / Files / Terminal / Note /
+> Progress / Diff), queue, attachments, fleet + account panels, and
+> creation flows.
 >
 > This is a **fresh implementation** — the earlier
 > `feat/ios-native-client` branch (OpenAPI-codegen based) is deprecated;
@@ -196,9 +198,12 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   keyboard shortcuts.
 - **Phase 3 (done):** machines panel, user panel
   (activity/usage/quota/extensions), project/agent/session creation.
-- **Phase 4 (this):** APNs push — server: `DeviceToken` table,
+- **Phase 4 (done):** APNs push — server: `DeviceToken` table,
   `POST/DELETE /me/devices`, HTTP/2 APNs sender in the result-ingestor;
   iOS: registration + settings toggle + tap deep-link + on-screen
   suppression.
+- **Post-Phase-4 (this):** inspector parity (Note + Progress tabs, web
+  tab order/gating) and the interactive terminal (SwiftTerm over the
+  `terminal:*` socket events, lazy-opened per inspector).
 - **Later:** Live Activity for a running turn (needs a widget extension
-  + push-to-update tokens); interactive terminal (SwiftTerm).
+  + push-to-update tokens).
