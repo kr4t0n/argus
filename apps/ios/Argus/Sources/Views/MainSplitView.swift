@@ -7,10 +7,10 @@ import ArgusKit
 /// iPhone, where the inspector presents as a sheet.
 struct MainSplitView: View {
     @Environment(AppModel.self) private var app
-    @Environment(\.horizontalSizeClass) private var sizeClass
 
-    /// Bound so a collapsed sidebar can be revealed again — the system
-    /// doesn't always surface a reveal control in the detail column.
+    /// Bound + `.balanced` so the system keeps a working sidebar toggle
+    /// in the detail column when the sidebar is collapsed. Without these
+    /// (unbound + `.automatic`) there was no way to reveal it again.
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
@@ -20,20 +20,6 @@ struct MainSplitView: View {
                 .navigationSplitViewColumnWidth(min: 260, ideal: 320, max: 400)
         } detail: {
             detail
-                .toolbar {
-                    // iPad: when the sidebar is hidden there's otherwise no
-                    // way back. iPhone uses stack nav, so skip it there.
-                    if sizeClass == .regular, columnVisibility == .detailOnly {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Button {
-                                withAnimation { columnVisibility = .all }
-                            } label: {
-                                Image(systemName: "sidebar.leading")
-                            }
-                            .accessibilityLabel("Show sidebar")
-                        }
-                    }
-                }
         }
         .navigationSplitViewStyle(.balanced)
     }
