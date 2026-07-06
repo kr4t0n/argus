@@ -8,58 +8,58 @@ import Foundation
 // making every decode depend on a date strategy.
 
 public struct SessionDTO: Codable, Equatable, Sendable, Identifiable {
-    public let id: String
-    public let userId: String
-    public let agentId: String
-    public let title: String
-    public let externalId: String?
-    public let status: SessionStatus
+    public var id: String
+    public var userId: String
+    public var agentId: String
+    public var title: String
+    public var externalId: String?
+    public var status: SessionStatus
     /// Unread-result marker, orthogonal to `status`. Sidebar dot iff true.
-    public let unread: Bool
+    public var unread: Bool
     /// Session-default model choice; nil means "CLI default".
-    public let modelSelection: ModelSelection?
-    public let archivedAt: String?
-    public let createdAt: String
-    public let updatedAt: String
+    public var modelSelection: ModelSelection?
+    public var archivedAt: String?
+    public var createdAt: String
+    public var updatedAt: String
 }
 
 /// Payload of the `session:status` WS event. `updatedAt` enables the
 /// monotonic staleness guard: every status/unread write bumps the row's
 /// updatedAt, so an older payload must never overwrite a newer one.
 public struct SessionStatusEvent: Codable, Equatable, Sendable {
-    public let id: String
-    public let status: SessionStatus
-    public let unread: Bool
-    public let updatedAt: String
+    public var id: String
+    public var status: SessionStatus
+    public var unread: Bool
+    public var updatedAt: String
 }
 
 public struct AttachmentDTO: Codable, Equatable, Sendable, Identifiable {
-    public let id: String
-    public let filename: String
-    public let mime: String
-    public let size: Int
+    public var id: String
+    public var filename: String
+    public var mime: String
+    public var size: Int
     /// API-base-relative path incl. a short-lived token:
     /// `/attachments/{id}?t={token}` — usable without an Authorization header.
-    public let url: String
-    public let createdAt: String
+    public var url: String
+    public var createdAt: String
 }
 
 /// NOTE: the server also sends fields shared-types omits (e.g. a
 /// denormalized `usage` on command rows). Codable ignores unknown keys —
 /// never add strictness that would reject them.
 public struct CommandDTO: Codable, Equatable, Sendable, Identifiable {
-    public let id: String
-    public let sessionId: String
-    public let agentId: String
-    public let kind: CommandKind
-    public let prompt: String?
-    public let status: CommandStatus
+    public var id: String
+    public var sessionId: String
+    public var agentId: String
+    public var kind: CommandKind
+    public var prompt: String?
+    public var status: CommandStatus
     /// Merged adapter options the turn was dispatched with (ModelSelection
     /// keys today). Absent for pre-feature rows / optionless turns.
-    public let options: [String: JSONValue]?
-    public let createdAt: String
-    public let completedAt: String?
-    public let attachments: [AttachmentDTO]?
+    public var options: [String: JSONValue]?
+    public var createdAt: String
+    public var completedAt: String?
+    public var attachments: [AttachmentDTO]?
 }
 
 /// One streamed fragment of a turn. `seq` is monotonic PER COMMAND (the
@@ -73,25 +73,25 @@ public struct CommandDTO: Codable, Equatable, Sendable, Identifiable {
 ///     columns (implied by the route), `ts` is an ISO string.
 /// The custom decoder below absorbs both.
 public struct ResultChunk: Codable, Equatable, Sendable, Identifiable {
-    public let id: String
-    public let commandId: String
+    public var id: String
+    public var commandId: String
     /// Present on WS-relayed chunks only.
-    public let agentId: String?
+    public var agentId: String?
     /// Present on WS-relayed chunks only.
-    public let sessionId: String?
-    public let seq: Int
-    public let kind: ResultKind
+    public var sessionId: String?
+    public var seq: Int
+    public var kind: ResultKind
     /// Incremental text; present for kind == .delta.
-    public let delta: String?
+    public var delta: String?
     /// Full content for non-delta kinds.
-    public let content: String?
+    public var content: String?
     /// Raw upstream CLI event, verbatim. Everything adapter-specific
     /// (usage, tool names, diffs, thinking) is parsed out of here.
-    public let meta: [String: JSONValue]?
+    public var meta: [String: JSONValue]?
     /// Unix millis.
-    public let ts: Int
+    public var ts: Int
     /// False on REST rows (terminal-ness is re-derivable from `kind`).
-    public let isFinal: Bool
+    public var isFinal: Bool
 
     public init(
         id: String,
@@ -153,10 +153,10 @@ public typealias ResultChunkDTO = ResultChunk
 // MARK: Requests
 
 public struct CreateSessionRequest: Encodable, Sendable {
-    public let agentId: String
-    public let title: String?
-    public let prompt: String?
-    public let modelSelection: ModelSelection?
+    public var agentId: String
+    public var title: String?
+    public var prompt: String?
+    public var modelSelection: ModelSelection?
 
     public init(
         agentId: String,
@@ -172,9 +172,9 @@ public struct CreateSessionRequest: Encodable, Sendable {
 }
 
 public struct CreateCommandRequest: Encodable, Sendable {
-    public let prompt: String
-    public let attachmentIds: [String]?
-    public let options: [String: JSONValue]?
+    public var prompt: String
+    public var attachmentIds: [String]?
+    public var options: [String: JSONValue]?
 
     public init(
         prompt: String,
@@ -191,7 +191,7 @@ public struct CreateCommandRequest: Encodable, Sendable {
 /// null, not an absent key) clears back to "CLI default", so this encodes
 /// the key unconditionally.
 public struct UpdateSessionModelRequest: Encodable, Sendable {
-    public let modelSelection: ModelSelection?
+    public var modelSelection: ModelSelection?
 
     public init(modelSelection: ModelSelection?) {
         self.modelSelection = modelSelection
@@ -209,28 +209,28 @@ public struct UpdateSessionModelRequest: Encodable, Sendable {
 
 /// `GET /sessions/:id` — initial load (tail window) or afterSeq backfill.
 public struct SessionDetailResponse: Decodable, Sendable {
-    public let session: SessionDTO
-    public let commands: [CommandDTO]
-    public let chunks: [ResultChunk]
-    public let hasMore: Bool
+    public var session: SessionDTO
+    public var commands: [CommandDTO]
+    public var chunks: [ResultChunk]
+    public var hasMore: Bool
 }
 
 /// `GET /sessions/:id/chunks?afterSeq=` — reconnect delta fetch.
 public struct SessionChunksResponse: Decodable, Sendable {
-    public let commands: [CommandDTO]
-    public let chunks: [ResultChunk]
+    public var commands: [CommandDTO]
+    public var chunks: [ResultChunk]
 }
 
 /// `GET /sessions/:id/history?before=&limit=` — scroll-up pagination.
 public struct SessionHistoryResponse: Decodable, Sendable {
-    public let commands: [CommandDTO]
-    public let chunks: [ResultChunk]
-    public let hasMore: Bool
+    public var commands: [CommandDTO]
+    public var chunks: [ResultChunk]
+    public var hasMore: Bool
 }
 
 /// `POST /sessions` — `command` is non-nil when the request carried an
 /// initial prompt (the first turn is dispatched inline).
 public struct CreateSessionResponse: Decodable, Sendable {
-    public let session: SessionDTO
-    public let command: CommandDTO?
+    public var session: SessionDTO
+    public var command: CommandDTO?
 }

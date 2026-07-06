@@ -4,59 +4,59 @@ import Foundation
 // and protocol.ts (AvailableAdapter).
 
 public struct AvailableAdapter: Codable, Equatable, Sendable {
-    public let type: AgentType
-    public let binary: String
+    public var type: AgentType
+    public var binary: String
     /// Empty when `<binary> --version` couldn't be parsed.
-    public let version: String
+    public var version: String
 }
 
 public struct MachineDTO: Codable, Equatable, Sendable, Identifiable {
-    public let id: String
-    public let name: String
-    public let hostname: String
-    public let os: String
-    public let arch: String
-    public let sidecarVersion: String
-    public let availableAdapters: [AvailableAdapter]
-    public let status: MachineStatus
-    public let lastSeenAt: String
-    public let registeredAt: String
-    public let archivedAt: String?
-    public let agentCount: Int
-    public let iconKey: String?
+    public var id: String
+    public var name: String
+    public var hostname: String
+    public var os: String
+    public var arch: String
+    public var sidecarVersion: String
+    public var availableAdapters: [AvailableAdapter]
+    public var status: MachineStatus
+    public var lastSeenAt: String
+    public var registeredAt: String
+    public var archivedAt: String?
+    public var agentCount: Int
+    public var iconKey: String?
 }
 
 public struct AgentDTO: Codable, Equatable, Sendable, Identifiable {
-    public let id: String
-    public let name: String
-    public let type: AgentType
-    public let machineId: String
-    public let machineName: String
-    public let status: AgentStatus
-    public let supportsTerminal: Bool
-    public let version: String?
-    public let workingDir: String?
-    public let lastHeartbeatAt: String
-    public let registeredAt: String
-    public let archivedAt: String?
+    public var id: String
+    public var name: String
+    public var type: AgentType
+    public var machineId: String
+    public var machineName: String
+    public var status: AgentStatus
+    public var supportsTerminal: Bool
+    public var version: String?
+    public var workingDir: String?
+    public var lastHeartbeatAt: String
+    public var registeredAt: String
+    public var archivedAt: String?
 }
 
 /// Server-side metadata for a "project" — the `(machineId, workingDir)`
 /// pair the sidebar groups sessions under.
 public struct ProjectDTO: Codable, Equatable, Sendable, Identifiable {
-    public let id: String
-    public let machineId: String
-    public let workingDir: String
-    public let iconKey: String?
+    public var id: String
+    public var machineId: String
+    public var workingDir: String
+    public var iconKey: String?
 }
 
 public struct CreateAgentRequest: Encodable, Sendable {
-    public let name: String
-    public let type: AgentType
-    public let workingDir: String?
-    public let supportsTerminal: Bool?
+    public var name: String
+    public var type: AgentType
+    public var workingDir: String?
+    public var supportsTerminal: Bool?
     /// Adapter-specific options forwarded opaquely to the sidecar.
-    public let adapter: [String: JSONValue]?
+    public var adapter: [String: JSONValue]?
 
     public init(
         name: String,
