@@ -35,6 +35,27 @@ model User {
   projectNotes ProjectNote[]
   attachments  Attachment[]
   apiKeys      ApiKey[]
+  deviceTokens DeviceToken[]
+}
+
+// One push-notification endpoint (an APNs device token today) owned by
+// a user. Registered by native clients via POST /me/devices; the push
+// service fans task-completion alerts out to every row a user has.
+// Tokens are globally unique — re-registering a token under another
+// account re-homes it (a device has exactly one owner). Rows are
+// deleted on logout (client-driven), on APNs "Unregistered"/
+// "BadDeviceToken" feedback (server-driven), and with the user
+// (cascade).
+model DeviceToken {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token      String   @unique
+  platform   String   @default("ios")
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @updatedAt
+
+  @@index([userId])
 }
 
 // Long-lived, revocable credential for machine-to-machine callers

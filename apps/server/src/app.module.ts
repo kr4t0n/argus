@@ -14,6 +14,7 @@ import { TerminalModule } from './modules/terminal/terminal.module';
 import { SidecarLinkModule } from './modules/sidecar-link/sidecar-link.module';
 import { UserModule } from './modules/user/user.module';
 import { AttachmentModule } from './modules/attachment/attachment.module';
+import { PushModule } from './modules/push/push.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { AttachmentModule } from './modules/attachment/attachment.module';
     TerminalModule,
     UserModule,
     AttachmentModule,
+    PushModule,
   ],
 })
 export class AppModule {}
