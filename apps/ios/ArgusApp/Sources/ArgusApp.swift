@@ -31,7 +31,7 @@ struct RootView: View {
         case .loggedOut:
             LoginView()
         case .ready:
-            SessionListView()
+            MainSplitView()
         }
     }
 }

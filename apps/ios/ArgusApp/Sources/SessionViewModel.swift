@@ -23,6 +23,10 @@ final class SessionViewModel {
     private(set) var isRunning = false
     private(set) var hasMoreHistory = false
     private(set) var loadingOlder = false
+    /// Cumulative session usage (header badge ↑/↓ totals).
+    private(set) var usage: TokenUsage?
+    /// Latest-turn live context vs the model window (donut ring).
+    private(set) var context: ContextSnapshot?
     /// Transient send/cancel failure surfaced above the composer.
     var actionError: String?
 
@@ -184,5 +188,7 @@ final class SessionViewModel {
         turns = transcript.turns(agentType: agentType)
         isRunning = transcript.isRunning
         hasMoreHistory = transcript.hasMoreHistory
+        usage = transcript.totalUsage(agentType: agentType)
+        context = transcript.contextSnapshot(agentType: agentType)
     }
 }

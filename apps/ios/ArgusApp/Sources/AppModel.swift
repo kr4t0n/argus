@@ -23,8 +23,27 @@ final class AppModel {
     private(set) var stream: StreamClient?
     private(set) var socketConnected = false
 
+    /// Split-view selection — settable from anywhere (sidebar taps, fork
+    /// navigation).
+    var selectedSessionId: String?
+    /// Right inspector (Files / Commits / Diff) visibility.
+    var inspectorPresented = false
+
+    /// Latest fs/git change events — inspector panels watch these and
+    /// refetch when the agent matches theirs.
+    private(set) var lastFSChange: FSChangedPayload?
+    private(set) var lastGitChange: GitChangedPayload?
+
     let fleet = FleetStore()
     let sessionList = SessionListStore()
+    let queue = QueueStore()
+
+    /// Per-session drain guards (mirror the web's queueDrainer): an
+    /// in-flight mark bridges the dispatch→first-chunk window so the
+    /// same session can never get two concurrent turns; a cooldown keeps
+    /// a hard failure from hot-looping.
+    @ObservationIgnored private var drainInFlight: [String: Date] = [:]
+    @ObservationIgnored private var drainCooldown: [String: Date] = [:]
 
     /// The session view currently on screen — chunk/command events are
     /// routed here. Set by SessionView on appear/disappear.
@@ -112,6 +131,10 @@ final class AppModel {
         user = nil
         client = nil
         activeSession = nil
+        selectedSessionId = nil
+        inspectorPresented = false
+        drainInFlight = [:]
+        drainCooldown = [:]
         fleet.reset()
         sessionList.reset()
         phase = .loggedOut
@@ -145,8 +168,64 @@ final class AppModel {
             fleet.setMachines(try await machines)
             fleet.setProjects(try await projects)
             sessionList.setAll(try await sessions)
+            maybeDrainAllQueues()
         } catch {
             handleAPIError(error)
+        }
+    }
+
+    // MARK: Prompt queue drainer
+
+    /// Route a composer submit through the queue: joining the FIFO tail
+    /// keeps manual sends from jumping a draining backlog, and the
+    /// drainer dispatches immediately when the session is free — so the
+    /// idle case still feels like a direct send.
+    func submitPrompt(sessionId: String, text: String, attachmentIds: [String]) {
+        queue.enqueue(sessionId: sessionId, text: text, attachmentIds: attachmentIds)
+        maybeDrain(sessionId: sessionId)
+    }
+
+    func maybeDrainAllQueues() {
+        for sessionId in Set(queue.items.map(\.sessionId)) {
+            maybeDrain(sessionId: sessionId)
+        }
+    }
+
+    private func maybeDrain(sessionId: String) {
+        guard let client, let head = queue.head(for: sessionId) else { return }
+        // Unknown session yet (lists still loading) → retry on refresh.
+        guard let session = sessionList.sessions[sessionId] else { return }
+        // The ONE invariant: never two turns for the same session.
+        guard session.status != .active else { return }
+        if let since = drainInFlight[sessionId], Date().timeIntervalSince(since) < 30 { return }
+        if let until = drainCooldown[sessionId], Date() < until { return }
+        // Agent reachability only — busy is per-session, not per-agent.
+        if let agent = fleet.agents[session.agentId],
+           agent.status == .offline || agent.status == .error { return }
+
+        drainInFlight[sessionId] = Date()
+        Task {
+            do {
+                let command = try await client.sendCommand(
+                    sessionId: sessionId,
+                    CreateCommandRequest(
+                        prompt: head.text,
+                        attachmentIds: head.attachmentIds.isEmpty ? nil : head.attachmentIds
+                    )
+                )
+                queue.remove(id: head.id)
+                activeSession?.ingest(command: command)
+                // drainInFlight stays set until the session goes active
+                // (or the 30s bridge expires) — that's the guard window.
+            } catch {
+                drainInFlight[sessionId] = nil
+                drainCooldown[sessionId] = Date().addingTimeInterval(60)
+                handleAPIError(error)
+                if activeSession?.sessionId == sessionId {
+                    activeSession?.actionError =
+                        (error as? APIError)?.message ?? error.localizedDescription
+                }
+            }
         }
     }
 
@@ -197,6 +276,13 @@ final class AppModel {
         case .sessionStatus(let status):
             sessionList.applyStatus(status)
             activeSession?.handleStatus(status)
+            if status.status == .active {
+                // Dispatch→active bridge closed; the queue stays parked
+                // until this turn finishes.
+                drainInFlight[status.id] = nil
+            } else {
+                maybeDrain(sessionId: status.id)
+            }
         case .sessionCloneFailed:
             break
 
@@ -219,8 +305,10 @@ final class AppModel {
         case .projectUpsert(let project):
             fleet.upsert(project: project)
 
-        case .fsChanged, .gitChanged:
-            break
+        case .fsChanged(let payload):
+            lastFSChange = payload
+        case .gitChanged(let payload):
+            lastGitChange = payload
         }
     }
 }
