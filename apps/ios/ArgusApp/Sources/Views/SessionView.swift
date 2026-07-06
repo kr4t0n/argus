@@ -560,6 +560,11 @@ private struct TurnCell: View {
     }
 
     private var attachmentRow: some View {
+        // Attachments are part of the USER's message — right-aligned
+        // under the prompt bubble, like the web. A plain trailing frame
+        // doesn't cut it: the horizontal ScrollView fills the row and
+        // pins content leading; the trailing default anchor both aligns
+        // fitting content right and starts overflow scrolled to the end.
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(turn.attachments) { attachment in
@@ -584,8 +589,9 @@ private struct TurnCell: View {
                     }
                 }
             }
+            .padding(.leading, 40)
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        .defaultScrollAnchor(.trailing)
     }
 }
 
