@@ -4,9 +4,10 @@ A native **SwiftUI** client for the Argus agent dashboard. It is a *thin
 client*: it speaks the same NestJS REST API + Socket.IO `/stream`
 namespace as the web app and never touches the Go sidecar.
 
-> Status: **Phase 0 — foundations.** This directory contains `ArgusKit`
-> (models, REST client, realtime layer, transcript engine) with a full
-> test suite. The SwiftUI app target lands in Phase 1.
+> Status: **Phase 1 — MVP app.** `ArgusKit` (models, REST client,
+> realtime layer, transcript engine — CI-tested) plus the `ArgusApp`
+> SwiftUI target: login → project-grouped session list → live streaming
+> transcript with composer, cancel, and history pagination.
 >
 > This is a **fresh implementation** — the earlier
 > `feat/ios-native-client` branch (OpenAPI-codegen based) is deprecated;
@@ -44,14 +45,22 @@ can embed real prompt text and the repo is public.
 
 ```
 apps/ios/
-└── ArgusKit/                     SwiftPM package — everything except UI
-    ├── Package.swift             iOS 17+ / macOS 14+, Swift language mode v5
-    └── Sources/ArgusKit/
-        ├── Models/               DTO mirrors (JSONValue, enums, sessions, fleet, …)
-        ├── API/                  ArgusClient (URLSession), ServerConfig, TokenStore
-        ├── Realtime/             StreamClient — Socket.IO /stream → AsyncStream
-        └── Engine/               TranscriptState reducer, DeltaSplit, UsageParser,
-                                  ContextWindows (all pure + unit-tested)
+├── ArgusKit/                     SwiftPM package — everything except UI
+│   ├── Package.swift             iOS 17+ / macOS 14+, Swift language mode v5
+│   └── Sources/ArgusKit/
+│       ├── Models/               DTO mirrors (JSONValue, enums, sessions, fleet, …)
+│       ├── API/                  ArgusClient (URLSession), ServerConfig, TokenStore
+│       ├── Realtime/             StreamClient — Socket.IO /stream → AsyncStream
+│       └── Engine/               TranscriptState reducer, DeltaSplit, UsageParser,
+│                                 ContextWindows (all pure + unit-tested)
+└── ArgusApp/                     SwiftUI app target (XcodeGen; .xcodeproj generated)
+    ├── project.yml               targets, ATS exception, MarkdownUI + ArgusKit deps
+    └── Sources/
+        ├── ArgusApp.swift        @main, root phase switch, scenePhase handling
+        ├── AppModel.swift        auth, socket ownership, event routing, TokenBox
+        ├── Stores.swift          FleetStore + SessionListStore (+ projectGroups)
+        ├── SessionViewModel.swift per-session transcript state + actions
+        └── Views/                Login, SessionList, Session (transcript+composer)
 ```
 
 Ports that must stay in lockstep with their TS originals:
@@ -78,6 +87,31 @@ cd apps/ios/ArgusKit
 swift build          # works with Command Line Tools alone
 swift test           # needs full Xcode (Testing.framework ships in its SDK)
 ```
+
+## Build & run the app (Xcode)
+
+The Xcode project is **generated** from `ArgusApp/project.yml` via
+[XcodeGen](https://github.com/yonaskolb/XcodeGen) — reproducible, and the
+`.xcodeproj` / `Info.plist` are never committed:
+
+```bash
+brew install xcodegen                 # once
+cd apps/ios/ArgusApp
+xcodegen generate                     # → ArgusApp.xcodeproj
+open ArgusApp.xcodeproj
+```
+
+Pick an **iPhone or iPad Simulator** destination and ⌘R. On the login
+screen enter your server (e.g. `localhost:4000` — the Simulator shares
+the Mac's network; scheme defaults to http for LAN/localhost hosts, ATS
+allows cleartext) plus the seeded admin credentials. Re-run `xcodegen
+generate` only after adding/renaming source files or editing
+`project.yml`.
+
+> **Signing:** none needed for the Simulator (`CODE_SIGNING_ALLOWED=NO`
+> in project.yml). For a physical device, delete the two signing lines
+> there and pick a team in Xcode → Signing & Capabilities (a free Apple
+> ID works).
 
 ## Using ArgusKit
 
@@ -139,8 +173,8 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
 
 ## Roadmap
 
-- **Phase 0 (this):** ArgusKit foundations + fixtures + CI.
-- **Phase 1:** SwiftUI app (XcodeGen target): server/login flow,
+- **Phase 0 (done):** ArgusKit foundations + fixtures + CI.
+- **Phase 1 (this):** SwiftUI app (XcodeGen target): server/login flow,
   project-grouped session list, streaming transcript, composer.
 - **Phase 2:** iPad `NavigationSplitView` + inspector (files, commits,
   diffs), usage badge + context ring, model picker, prompt queue,
