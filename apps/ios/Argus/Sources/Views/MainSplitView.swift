@@ -16,6 +16,10 @@ struct MainSplitView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SessionSidebar(selection: $app.route)
                 .navigationSplitViewColumnWidth(min: 260, ideal: 320, max: 400)
+                // Also strip it from the sidebar column — on the empty
+                // detail state the split view injects the toggle here,
+                // where the detail-side removal doesn't reach.
+                .toolbar(removing: .sidebarToggle)
         } detail: {
             detail
                 // The system's own sidebar toggle is unreliable here
