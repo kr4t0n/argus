@@ -17,8 +17,6 @@ struct UserPanelView: View {
     @State private var window: Window = .month
     @State private var quotas: [UserQuotaRow] = []
     @State private var activity: [ActivityDay] = []
-    @State private var extensions = UserExtensions()
-    @State private var extensionsLoaded = false
     @State private var loadError: String?
 
     var body: some View {
@@ -147,9 +145,8 @@ struct UserPanelView: View {
         } header: {
             Text("Extensions")
         } footer: {
-            Text("Account-level opt-ins, synced with the web dashboard. The iOS inspector currently ships the Diff tab regardless; Notes and Progress tabs arrive in a later phase.")
+            Text("Account-level opt-ins, synced with the web dashboard. Each enabled extension adds its tab to the session inspector.")
         }
-        .disabled(!extensionsLoaded)
     }
 
     private func stat(_ label: String, _ value: String) -> some View {
@@ -168,24 +165,15 @@ struct UserPanelView: View {
         }
     }
 
-    /// Every toggle PUTs the full flag set — same contract as the web
-    /// (no server-side merge). Optimistic with revert on failure.
+    /// Extensions live app-wide on AppModel (the inspector gates its
+    /// tabs on them); each toggle PUTs the full flag set like the web.
     private func extensionBinding(_ keyPath: WritableKeyPath<UserExtensions, Bool>) -> Binding<Bool> {
         Binding(
-            get: { extensions[keyPath: keyPath] },
+            get: { app.extensions[keyPath: keyPath] },
             set: { newValue in
-                let previous = extensions
-                extensions[keyPath: keyPath] = newValue
-                guard let client = app.client else { return }
-                let payload = extensions
-                Task {
-                    do {
-                        extensions = try await client.setMyExtensions(payload)
-                    } catch {
-                        app.handleAPIError(error)
-                        extensions = previous
-                    }
-                }
+                var updated = app.extensions
+                updated[keyPath: keyPath] = newValue
+                Task { await app.setExtensions(updated) }
             }
         )
     }
@@ -196,12 +184,9 @@ struct UserPanelView: View {
             async let usageResponse = client.getMyUsage()
             async let quotaResponse = client.getMyQuota()
             async let activityResponse = client.getMyActivity()
-            async let extensionsResponse = client.getMyExtensions()
             usage = try await usageResponse
             quotas = try await quotaResponse
             activity = try await activityResponse
-            extensions = try await extensionsResponse
-            extensionsLoaded = true
             loadError = nil
         } catch {
             app.handleAPIError(error)

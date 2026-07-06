@@ -9,22 +9,37 @@ struct InspectorPane: View {
     @Environment(AppModel.self) private var app
     let sessionId: String
 
-    private enum Tab: String, CaseIterable {
-        case files = "Files"
+    private enum Tab: String {
         case commits = "Commits"
+        case files = "Files"
+        case note = "Note"
+        case progress = "Progress"
         case diff = "Diff"
     }
 
-    @State private var tab: Tab = .files
+    @State private var tab: Tab = .commits
 
     private var session: SessionDTO? { app.sessionList.sessions[sessionId] }
     private var agent: AgentDTO? { session.flatMap { app.fleet.agents[$0.agentId] } }
 
+    /// Web ContextPane order: Commits, Files, (Terminal — not on iOS
+    /// yet), Note, Progress, Diff — extension tabs gated on the
+    /// account-level flags, Note additionally on a workingDir (a note is
+    /// project-scoped by definition).
+    private var tabs: [Tab] {
+        var result: [Tab] = [.commits, .files]
+        if app.extensions.notes, agent?.workingDir != nil { result.append(.note) }
+        if app.extensions.progress, agent?.workingDir != nil { result.append(.progress) }
+        if app.extensions.diff { result.append(.diff) }
+        return result
+    }
+
     var body: some View {
+        let tabs = self.tabs
         VStack(spacing: 0) {
             header
             Picker("Tab", selection: $tab) {
-                ForEach(Tab.allCases, id: \.self) { Text($0.rawValue) }
+                ForEach(tabs, id: \.self) { Text($0.rawValue) }
             }
             .pickerStyle(.segmented)
             .padding(.horizontal)
@@ -33,10 +48,14 @@ struct InspectorPane: View {
 
             if let agent {
                 switch tab {
-                case .files:
-                    FileBrowserPanel(agent: agent)
                 case .commits:
                     CommitsPanel(agent: agent)
+                case .files:
+                    FileBrowserPanel(agent: agent)
+                case .note:
+                    NotePanel(agent: agent)
+                case .progress:
+                    ProgressPanel(agent: agent)
                 case .diff:
                     DiffPanel()
                 }
@@ -49,6 +68,10 @@ struct InspectorPane: View {
         }
         .onAppear { if let agent { app.stream?.joinAgent(agent.id) } }
         .onDisappear { if let agent { app.stream?.leaveAgent(agent.id) } }
+        .onChange(of: tabs) {
+            // A toggled-off extension can strand the selection.
+            if !tabs.contains(tab) { tab = .commits }
+        }
     }
 
     private var header: some View {
@@ -383,6 +406,225 @@ private struct CommitsPanel: View {
             app.handleAPIError(error)
             loadError = (error as? APIError)?.message ?? error.localizedDescription
         }
+    }
+}
+
+// MARK: - Note (per-project scratchpad)
+
+/// Notes extension: a free-form scratchpad scoped to the project
+/// (machineId + workingDir) — every session in the same directory sees
+/// the same note, synced with the web via /me/project-notes. Debounced
+/// autosave like the web (~700 ms), no Save button.
+private struct NotePanel: View {
+    @Environment(AppModel.self) private var app
+    let agent: AgentDTO
+
+    @State private var text = ""
+    @State private var loaded = false
+    @State private var saveState = ""
+    @State private var saveTask: Task<Void, Never>?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if !loaded {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                TextEditor(text: $text)
+                    .font(.callout)
+                    .scrollContentBackground(.hidden)
+                    .padding(8)
+                    .onChange(of: text) { scheduleSave() }
+                HStack {
+                    Text("Shared by every session in \(projectName) — synced to your account.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                    Spacer()
+                    Text(saveState)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            }
+        }
+        .task { await load() }
+        .onDisappear { saveTask?.cancel() }
+    }
+
+    private var projectName: String {
+        ((agent.workingDir ?? "") as NSString).lastPathComponent
+    }
+
+    private func load() async {
+        guard let client = app.client, let workingDir = agent.workingDir else { return }
+        do {
+            text = try await client.getProjectNotes(
+                machineId: agent.machineId, workingDir: workingDir
+            )
+            loaded = true
+        } catch {
+            app.handleAPIError(error)
+            loaded = true
+            saveState = "couldn't load"
+        }
+    }
+
+    private func scheduleSave() {
+        saveState = "…"
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled,
+                  let client = app.client,
+                  let workingDir = agent.workingDir
+            else { return }
+            do {
+                try await client.setProjectNotes(
+                    machineId: agent.machineId, workingDir: workingDir, notes: text
+                )
+                saveState = "saved"
+            } catch {
+                app.handleAPIError(error)
+                saveState = "save failed"
+            }
+        }
+    }
+}
+
+// MARK: - Progress (background tasks)
+
+/// Progress extension: live background tasks reported by `argus-bg` in
+/// the agent's shell. Joins the project room while visible; REST
+/// hydrates, `background-task:*` events keep it fresh.
+private struct ProgressPanel: View {
+    @Environment(AppModel.self) private var app
+    let agent: AgentDTO
+
+    @State private var tasks: [String: BackgroundTaskDTO] = [:]
+    @State private var loaded = false
+
+    private var workingDir: String { agent.workingDir ?? "" }
+
+    private var ordered: [BackgroundTaskDTO] {
+        tasks.values.sorted { $0.startedAt > $1.startedAt }
+    }
+
+    var body: some View {
+        Group {
+            if !loaded {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if ordered.isEmpty {
+                ContentUnavailableView(
+                    "No background tasks",
+                    systemImage: "timer",
+                    description: Text("Wrap long commands with argus-bg on the agent's machine to see live progress here.")
+                )
+            } else {
+                List(ordered) { task in
+                    BackgroundTaskRow(task: task) {
+                        dismiss(task)
+                    }
+                }
+                .listStyle(.plain)
+                .refreshable { await load() }
+            }
+        }
+        .task { await load() }
+        .onAppear {
+            app.stream?.joinProject(machineId: agent.machineId, workingDir: workingDir)
+        }
+        .onDisappear {
+            app.stream?.leaveProject(machineId: agent.machineId, workingDir: workingDir)
+        }
+        .onChange(of: app.lastBackgroundTaskUpdate) {
+            guard let update = app.lastBackgroundTaskUpdate,
+                  update.machineId == agent.machineId, update.workingDir == workingDir
+            else { return }
+            tasks[update.taskId] = update
+        }
+        .onChange(of: app.lastBackgroundTaskRemoval) {
+            guard let removal = app.lastBackgroundTaskRemoval,
+                  removal.machineId == agent.machineId, removal.workingDir == workingDir
+            else { return }
+            tasks[removal.taskId] = nil
+        }
+    }
+
+    private func load() async {
+        guard let client = app.client, !workingDir.isEmpty else { return }
+        do {
+            let list = try await client.listBackgroundTasks(
+                machineId: agent.machineId, workingDir: workingDir
+            )
+            tasks = Dictionary(uniqueKeysWithValues: list.map { ($0.taskId, $0) })
+            loaded = true
+        } catch {
+            app.handleAPIError(error)
+            loaded = true
+        }
+    }
+
+    private func dismiss(_ task: BackgroundTaskDTO) {
+        guard let client = app.client else { return }
+        tasks[task.taskId] = nil
+        Task {
+            try? await client.dismissBackgroundTask(
+                machineId: agent.machineId, workingDir: workingDir, taskId: task.taskId
+            )
+        }
+    }
+}
+
+private struct BackgroundTaskRow: View {
+    let task: BackgroundTaskDTO
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text(task.label ?? task.desc ?? task.cmd?.joined(separator: " ") ?? task.taskId)
+                    .font(.callout)
+                    .lineLimit(1)
+                Spacer()
+                if task.isEnded {
+                    Text(task.status == "failed" ? "failed" : "done")
+                        .font(.caption2)
+                        .foregroundStyle(task.status == "failed" ? .red : .green)
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if let percent = task.percent {
+                ProgressView(value: min(100, max(0, percent)), total: 100)
+                    .tint(task.isEnded ? (task.status == "failed" ? .red : .green) : .blue)
+            } else if !task.isEnded {
+                ProgressView() // indeterminate: started, no tqdm frame yet
+                    .controlSize(.small)
+            }
+
+            HStack(spacing: 8) {
+                if let current = task.current, let total = task.total {
+                    Text("\(Int(current))/\(Int(total))\(task.unit ?? "")")
+                }
+                if let rate = task.rate {
+                    Text(String(format: "%.1f%@/s", rate, task.unit ?? "it"))
+                }
+                if let eta = task.etaSeconds, !task.isEnded {
+                    Text("eta \(Int(eta))s")
+                }
+                Spacer()
+                Text(RelativeTime.label(msEpoch: task.ts))
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
     }
 }
 

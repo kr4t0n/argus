@@ -85,6 +85,14 @@ enum RelativeTime {
 
     static func label(iso: String) -> String {
         guard let date = ISO8601.parse(iso) else { return "" }
+        return label(date: date)
+    }
+
+    static func label(msEpoch: Double) -> String {
+        label(date: Date(timeIntervalSince1970: msEpoch / 1000))
+    }
+
+    private static func label(date: Date) -> String {
         // "in 0 sec" flickers on fresh events — clamp to "now".
         if abs(date.timeIntervalSinceNow) < 5 { return "now" }
         return formatter.localizedString(for: date, relativeTo: Date())

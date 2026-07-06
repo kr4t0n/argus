@@ -40,6 +40,15 @@ final class AppModel {
     private(set) var lastFSChange: FSChangedPayload?
     private(set) var lastGitChange: GitChangedPayload?
 
+    /// Latest background-task events (Progress extension) — the pane
+    /// watches these while subscribed to its project room.
+    private(set) var lastBackgroundTaskUpdate: BackgroundTaskDTO?
+    private(set) var lastBackgroundTaskRemoval: BackgroundTaskRemovedPayload?
+
+    /// Account-level extension opt-ins — gate the inspector's Note /
+    /// Progress / Diff tabs, exactly like the web's ContextPane.
+    private(set) var extensions = UserExtensions()
+
     /// Task-completion push notifications (device-local preference; the
     /// permission prompt fires on first enable).
     private(set) var pushEnabled = UserDefaults.standard.bool(forKey: pushEnabledKey)
@@ -150,6 +159,7 @@ final class AppModel {
         inspectorPresented = false
         drainInFlight = [:]
         drainCooldown = [:]
+        extensions = UserExtensions()
         fleet.reset()
         sessionList.reset()
         phase = .loggedOut
@@ -238,13 +248,29 @@ final class AppModel {
             async let machines = client.listMachines()
             async let projects = client.listProjects()
             async let sessions = client.listSessions()
+            async let userExtensions = client.getMyExtensions()
             fleet.setAgents(try await agents)
             fleet.setMachines(try await machines)
             fleet.setProjects(try await projects)
             sessionList.setAll(try await sessions)
+            extensions = try await userExtensions
             maybeDrainAllQueues()
         } catch {
             handleAPIError(error)
+        }
+    }
+
+    /// PUT the full extension flag set (no server-side merge), keeping
+    /// the app-wide copy in sync. Optimistic with revert on failure.
+    func setExtensions(_ newValue: UserExtensions) async {
+        guard let client else { return }
+        let previous = extensions
+        extensions = newValue
+        do {
+            extensions = try await client.setMyExtensions(newValue)
+        } catch {
+            handleAPIError(error)
+            extensions = previous
         }
     }
 
@@ -428,6 +454,11 @@ final class AppModel {
             lastFSChange = payload
         case .gitChanged(let payload):
             lastGitChange = payload
+
+        case .backgroundTaskUpdated(let task):
+            lastBackgroundTaskUpdate = task
+        case .backgroundTaskRemoved(let payload):
+            lastBackgroundTaskRemoval = payload
         }
     }
 }
