@@ -7,6 +7,8 @@
 *.xcodeproj/
 ArgusApp/Info.plist
 ArgusApp/ArgusApp.entitlements
+# Per-developer XcodeGen overrides (team id, push entitlement)
+ArgusApp/local.yml
 xcuserdata/
 DerivedData/
 
