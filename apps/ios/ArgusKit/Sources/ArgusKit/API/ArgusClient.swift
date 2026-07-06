@@ -185,6 +185,25 @@ public final class ArgusClient: @unchecked Sendable {
         try await sendVoid("DELETE", "/machines/\(machineId)/agents/\(agentId)")
     }
 
+    public func deleteMachine(id: String) async throws {
+        try await sendVoid("DELETE", "/machines/\(id)")
+    }
+
+    /// Current vs latest sidecar release for one machine.
+    public func getSidecarVersion(machineId: String) async throws -> SidecarVersionInfo {
+        try await send("GET", "/machines/\(machineId)/sidecar/version")
+    }
+
+    /// Remote self-update (202; completion arrives as machine:upsert
+    /// with the new version once the sidecar re-registers).
+    public func updateSidecar(machineId: String) async throws -> SidecarUpdateAccepted {
+        try await send("POST", "/machines/\(machineId)/sidecar/update")
+    }
+
+    public func updateAllSidecars() async throws -> SidecarUpdateBatchAccepted {
+        try await send("POST", "/machines/sidecar/update-all")
+    }
+
     public func listProjects() async throws -> [ProjectDTO] {
         try await send("GET", "/projects")
     }

@@ -51,6 +51,23 @@ struct ToleranceTests {
         #expect(chunk.ts == 1_751_700_000_123)
     }
 
+    @Test("sidecar version/update DTOs decode, incl. unknown plan status")
+    func sidecarModels() throws {
+        let version = try JSONDecoder().decode(SidecarVersionInfo.self, from: Data("""
+        {"current": "0.3.1", "latest": "0.4.0",
+         "latestCheckedAt": "2026-07-06T10:00:00.000Z", "updateAvailable": true}
+        """.utf8))
+        #expect(version.updateAvailable)
+
+        let batch = try JSONDecoder().decode(SidecarUpdateBatchAccepted.self, from: Data("""
+        {"batchId": "b1", "plan": [
+          {"machineId": "m1", "machineName": "mac", "fromVersion": "0.3.1",
+           "status": "some-future-status"}
+        ]}
+        """.utf8))
+        #expect(batch.plan.first?.status == "some-future-status")
+    }
+
     @Test("REST chunk shape: missing fields, ISO-string ts, unknown kind")
     func restChunkShape() throws {
         let json = """
