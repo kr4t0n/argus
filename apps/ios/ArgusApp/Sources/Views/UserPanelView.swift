@@ -27,6 +27,7 @@ struct UserPanelView: View {
             activitySection
             usageSection
             quotaSection
+            notificationsSection
             extensionsSection
             Section {
                 Button("Log out", role: .destructive) { app.logOut() }
@@ -108,6 +109,34 @@ struct UserPanelView: View {
                 }
             }
         }
+    }
+
+    @State private var pushDenied = false
+
+    private var notificationsSection: some View {
+        Section {
+            Toggle("Task completion alerts", isOn: pushBinding)
+        } header: {
+            Text("Notifications")
+        } footer: {
+            if pushDenied {
+                Text("Notifications are denied for Argus in system Settings — enable them there, then flip this back on.")
+            } else {
+                Text("A push arrives when a turn finishes in a session you're not looking at. Requires the server's APNS_* env to be configured.")
+            }
+        }
+    }
+
+    private var pushBinding: Binding<Bool> {
+        Binding(
+            get: { app.pushEnabled },
+            set: { enabled in
+                Task {
+                    let granted = await app.setPushEnabled(enabled)
+                    pushDenied = enabled && !granted
+                }
+            }
+        )
     }
 
     private var extensionsSection: some View {

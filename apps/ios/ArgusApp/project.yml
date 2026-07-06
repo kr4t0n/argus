@@ -27,6 +27,13 @@ targets:
       - package: MarkdownUI
         product: MarkdownUI
     scheme: {}
+    entitlements:
+      path: ArgusApp.entitlements
+      properties:
+        # Sandbox push (Xcode/Simulator builds). Archive/export flips
+        # this to production automatically. Remote push in the Simulator
+        # needs an Apple silicon Mac (supported since Xcode 14).
+        aps-environment: development
     info:
       path: Info.plist
       properties:

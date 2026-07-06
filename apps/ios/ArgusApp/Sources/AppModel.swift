@@ -40,6 +40,12 @@ final class AppModel {
     private(set) var lastFSChange: FSChangedPayload?
     private(set) var lastGitChange: GitChangedPayload?
 
+    /// Task-completion push notifications (device-local preference; the
+    /// permission prompt fires on first enable).
+    private(set) var pushEnabled = UserDefaults.standard.bool(forKey: pushEnabledKey)
+    private static let pushEnabledKey = "argus.push.enabled"
+    private static let pushTokenKey = "argus.push.token"
+
     let fleet = FleetStore()
     let sessionList = SessionListStore()
     let queue = QueueStore()
@@ -93,6 +99,7 @@ final class AppModel {
             user = try await client.me()
             phase = .ready
             connectSocket()
+            setUpPush()
             await refreshAll()
         } catch {
             // Expired/revoked token or unreachable server → login screen
@@ -121,10 +128,12 @@ final class AppModel {
 
         phase = .ready
         connectSocket()
+        setUpPush()
         await refreshAll()
     }
 
     func logOut() {
+        unregisterDeviceForLogout()
         if let config = serverConfig {
             TokenStore.clear(server: config.displayName)
         }
@@ -152,6 +161,65 @@ final class AppModel {
             await refreshAll()
             await activeSession?.reloadSnapshot()
         }
+    }
+
+    // MARK: Push notifications
+
+    /// Wire PushManager and (when previously enabled) refresh this
+    /// device's registration. Called whenever the app reaches `.ready`.
+    private func setUpPush() {
+        PushManager.shared.onDeviceToken = { [weak self] token in
+            guard let self, let client = self.client else { return }
+            UserDefaults.standard.set(token, forKey: Self.pushTokenKey)
+            Task {
+                do {
+                    try await client.registerDevice(token: token)
+                } catch {
+                    self.handleAPIError(error)
+                }
+            }
+        }
+        PushManager.shared.onOpenSession = { [weak self] sessionId in
+            self?.route = .session(sessionId)
+        }
+        // Web behavior: never notify about the session already on screen.
+        PushManager.shared.shouldSuppress = { [weak self] sessionId in
+            self?.activeSession?.sessionId == sessionId
+        }
+        if pushEnabled {
+            // Permission was granted before; re-registering refreshes a
+            // possibly-rotated APNs token (registration is idempotent).
+            Task { _ = await PushManager.shared.requestAndRegister() }
+        }
+    }
+
+    /// Toggle handler. Returns false when the user denied the system
+    /// permission prompt (the toggle should snap back off).
+    @discardableResult
+    func setPushEnabled(_ enabled: Bool) async -> Bool {
+        if enabled {
+            let granted = await PushManager.shared.requestAndRegister()
+            pushEnabled = granted
+            UserDefaults.standard.set(granted, forKey: Self.pushEnabledKey)
+            return granted
+        }
+        pushEnabled = false
+        UserDefaults.standard.set(false, forKey: Self.pushEnabledKey)
+        PushManager.shared.unregister()
+        if let token = UserDefaults.standard.string(forKey: Self.pushTokenKey), let client {
+            UserDefaults.standard.removeObject(forKey: Self.pushTokenKey)
+            Task { try? await client.unregisterDevice(token: token) }
+        }
+        return true
+    }
+
+    /// Best-effort server-side cleanup before credentials vanish.
+    private func unregisterDeviceForLogout() {
+        guard let client,
+              let token = UserDefaults.standard.string(forKey: Self.pushTokenKey)
+        else { return }
+        UserDefaults.standard.removeObject(forKey: Self.pushTokenKey)
+        Task { try? await client.unregisterDevice(token: token) }
     }
 
     /// Central 401 funnel — call from any store/view catch block.

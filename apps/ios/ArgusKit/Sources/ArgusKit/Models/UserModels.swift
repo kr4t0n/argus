@@ -126,3 +126,13 @@ public struct UserExtensions: Codable, Equatable, Sendable {
         self.diff = diff
     }
 }
+
+/// One registered push device (`POST /me/devices`). Registration is
+/// idempotent: re-posting a token refreshes it, and a token that moved
+/// accounts is re-homed (a device has exactly one owner).
+public struct DeviceDTO: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var token: String
+    public var platform: String
+    public var createdAt: String
+}

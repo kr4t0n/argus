@@ -3,6 +3,9 @@ import ArgusKit
 
 @main
 struct ArgusApp: App {
+    // Remote-notification registration callbacks only arrive via a
+    // UIApplicationDelegate.
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var app = AppModel()
     @Environment(\.scenePhase) private var scenePhase
 
@@ -10,7 +13,12 @@ struct ArgusApp: App {
         WindowGroup {
             RootView()
                 .environment(app)
-                .task { await app.bootstrap() }
+                .task {
+                    // Delegate must be set before any notification tap
+                    // can be delivered (incl. cold-launch taps).
+                    PushManager.shared.configure()
+                    await app.bootstrap()
+                }
                 .onChange(of: scenePhase) { _, phase in
                     // iOS suspends the socket in the background; treat
                     // re-activation as a cold start (full snapshot +

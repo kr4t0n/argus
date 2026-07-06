@@ -4,13 +4,14 @@ A native **SwiftUI** client for the Argus agent dashboard. It is a *thin
 client*: it speaks the same NestJS REST API + Socket.IO `/stream`
 namespace as the web app and never touches the Go sidecar.
 
-> Status: **Phase 3 — fleet + account.** Routed detail column (session /
-> machine / user), machines in the sidebar with a full machine panel
-> (host info, adapters, agent roster + destroy, sidecar update, machine
-> delete), account panel (activity heatmap, usage windows, quota bars,
-> extension toggles), and creation flows (new project / session with
-> web-style agent auto-vivify; explicit new-agent form on the machine
-> panel). Phases 1–2 are runtime-verified on iPhone + iPad.
+> Status: **Phase 4 — push notifications.** Turn-completion alerts via
+> APNs: enable "Task completion alerts" in the account panel, and a
+> push arrives when a turn finishes in a session you aren't viewing —
+> tapping it deep-links to that session. Needs the server's `APNS_*`
+> env configured (see the repo-root `.env.example`); remote push in the
+> Simulator needs an Apple silicon Mac. Phases 1–3 cover login,
+> streaming transcript, iPad three-column layout, inspector, queue,
+> attachments, fleet + account panels, and creation flows.
 >
 > This is a **fresh implementation** — the earlier
 > `feat/ios-native-client` branch (OpenAPI-codegen based) is deprecated;
@@ -184,7 +185,11 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   inspector (files, commits, diffs), usage badge + context ring, model
   picker, prompt queue + drainer, attachments, fork/rename/archive,
   keyboard shortcuts.
-- **Phase 3 (this):** machines panel, user panel
+- **Phase 3 (done):** machines panel, user panel
   (activity/usage/quota/extensions), project/agent/session creation.
-- **Phase 4:** APNs push (net-new server work), Live Activity for a
-  running turn; terminal (SwiftTerm) as stretch.
+- **Phase 4 (this):** APNs push — server: `DeviceToken` table,
+  `POST/DELETE /me/devices`, HTTP/2 APNs sender in the result-ingestor;
+  iOS: registration + settings toggle + tap deep-link + on-screen
+  suppression.
+- **Later:** Live Activity for a running turn (needs a widget extension
+  + push-to-update tokens); interactive terminal (SwiftTerm).

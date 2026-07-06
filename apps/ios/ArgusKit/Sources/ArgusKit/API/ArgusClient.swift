@@ -253,6 +253,22 @@ public final class ArgusClient: @unchecked Sendable {
         return response.quotas
     }
 
+    /// Register (or refresh) this device's APNs token — idempotent, so
+    /// call on every launch while push is enabled.
+    @discardableResult
+    public func registerDevice(token: String, platform: String = "ios") async throws -> DeviceDTO {
+        struct Body: Encodable {
+            let token: String
+            let platform: String
+        }
+        return try await send("POST", "/me/devices", body: Body(token: token, platform: platform))
+    }
+
+    /// Fire-and-forget on logout / push-disable (204 even for unknown tokens).
+    public func unregisterDevice(token: String) async throws {
+        try await sendVoid("DELETE", "/me/devices/\(token)")
+    }
+
     public func getMyExtensions() async throws -> UserExtensions {
         try await send("GET", "/me/extensions")
     }
