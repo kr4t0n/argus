@@ -103,7 +103,7 @@ The Xcode project is **generated** from `ArgusApp/project.yml` via
 ```bash
 brew install xcodegen                 # once
 cd apps/ios/ArgusApp
-./generate.sh                         # → ArgusApp.xcodeproj (seeds local.yml)
+xcodegen generate                     # → ArgusApp.xcodeproj
 open ArgusApp.xcodeproj
 ```
 
@@ -114,22 +114,19 @@ allows cleartext) plus the seeded admin credentials. Re-run `xcodegen
 generate` only after adding/renaming source files or editing
 `project.yml`.
 
-> **Signing:** Simulator builds need no team — just ⌘R. For a
-> **physical device**, put your team id in the gitignored
-> `ArgusApp/local.yml` (template in the header comment of
-> `project.yml`) and re-run `./generate.sh` — that survives
-> regeneration, unlike a team picked in Xcode's Signing pane. A free Apple ID works for
-> running the app. Never set `CODE_SIGNING_ALLOWED=NO` in project.yml:
-> it silently produces unsigned binaries that a device refuses ("The
-> executable is not codesigned") even with a team selected — CI
-> disables signing on the xcodebuild command line instead.
+> **Signing:** none needed for the Simulator (`CODE_SIGNING_ALLOWED=NO`
+> in project.yml). For a physical device, delete the two signing lines
+> there and pick a team in Xcode → Signing & Capabilities (a free Apple
+> ID works).
 >
-> **No paid Apple Developer account?** Everything except push works —
-> the server runs with no `APNS_*` env set (push is a silent no-op)
-> and the app is fully functional; the notifications toggle just never
-> produces an alert. Push needs a paid team twice over: the
-> `aps-environment` entitlement (add it via `local.yml`; free personal
-> teams can't sign that capability) and the server's APNs `.p8` key.
+> **No Apple Developer account?** Everything except push works — the
+> server runs with no `APNS_*` env set (push is a silent no-op) and the
+> app is fully functional; the notifications toggle just never produces
+> an alert. One catch on **physical devices** with free-Apple-ID
+> signing: the generated `aps-environment` entitlement can fail
+> provisioning ("profile doesn't support Push Notifications") — delete
+> the `entitlements:` block from `project.yml` and re-run
+> `xcodegen generate`. The Simulator is unaffected either way.
 
 ## Using ArgusKit
 

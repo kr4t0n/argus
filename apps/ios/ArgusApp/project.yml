@@ -1,26 +1,7 @@
-# XcodeGen manifest — run `./generate.sh` (NOT bare `xcodegen generate`;
-# it seeds the local.yml include first) to produce ArgusApp.xcodeproj
-# (never committed; Info.plist is generated too). Re-run only when
+# XcodeGen manifest — `xcodegen generate` produces ArgusApp.xcodeproj
+# (never committed; Info.plist below is generated too). Re-run only when
 # adding/renaming sources or editing this file.
-#
-# Device builds & push: personal settings live in the gitignored
-# `local.yml` next to this file so they survive regeneration. Example:
-#
-#   targets:
-#     ArgusApp:
-#       settings:
-#         base:
-#           DEVELOPMENT_TEAM: AB12CD34EF   # Xcode → Settings → Accounts
-#       # Paid Apple Developer teams only — enables push notifications.
-#       # (Free personal teams can't sign this capability; leave it out.)
-#       entitlements:
-#         path: ArgusApp.entitlements
-#         properties:
-#           aps-environment: development
 name: ArgusApp
-# XcodeGen has no optional includes — generate.sh guarantees this file.
-include:
-  - path: local.yml
 options:
   bundleIdPrefix: app.argus
   deploymentTarget:
@@ -51,6 +32,13 @@ targets:
       - package: SwiftTerm
         product: SwiftTerm
     scheme: {}
+    entitlements:
+      path: ArgusApp.entitlements
+      properties:
+        # Sandbox push (Xcode/Simulator builds). Archive/export flips
+        # this to production automatically. Remote push in the Simulator
+        # needs an Apple silicon Mac (supported since Xcode 14).
+        aps-environment: development
     info:
       path: Info.plist
       properties:
@@ -74,11 +62,7 @@ targets:
         CURRENT_PROJECT_VERSION: 1
         TARGETED_DEVICE_FAMILY: '1,2' # iPhone + iPad
         SWIFT_VERSION: '5.10'
-        # Signing stays ENABLED: Simulator builds need no team, device
-        # builds pick one up from local.yml (or the Signing pane — but
-        # that choice is lost on the next `xcodegen generate`).
-        # Never set CODE_SIGNING_ALLOWED=NO here — it silently produces
-        # unsigned binaries that devices refuse to run, even with a team
-        # selected in Xcode. CI disables signing on the xcodebuild
-        # command line instead.
-        CODE_SIGN_STYLE: Automatic
+        # Simulator needs no signing team. For a physical device, delete
+        # these two lines and set a team in Signing & Capabilities.
+        CODE_SIGNING_ALLOWED: 'NO'
+        CODE_SIGN_IDENTITY: ''
