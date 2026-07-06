@@ -42,6 +42,9 @@ targets:
     info:
       path: Info.plist
       properties:
+        # Home-screen label (the target stays ArgusApp; renaming it
+        # would ripple through the scheme name CI builds).
+        CFBundleDisplayName: Argus
         # Self-hosted Argus servers on LAN/localhost are plain http.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
