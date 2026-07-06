@@ -37,7 +37,6 @@ struct SessionView: View {
         VStack(spacing: 0) {
             ConnectionBanner()
             transcript
-            Divider()
             composer
         }
         .navigationTitle(session?.title ?? "Session")
