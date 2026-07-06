@@ -185,6 +185,39 @@ public final class ArgusClient: @unchecked Sendable {
         try await sendVoid("DELETE", "/machines/\(machineId)/agents/\(agentId)")
     }
 
+    // MARK: Terminals (interactive PTY)
+
+    /// Open a PTY on the agent's machine. Rejected when the agent is
+    /// offline, lacks a PTY runner (`supportsTerminal == false`), or the
+    /// sidecar link is down.
+    public func openTerminal(
+        agentId: String,
+        shell: String? = nil,
+        cwd: String? = nil,
+        cols: Int? = nil,
+        rows: Int? = nil
+    ) async throws -> TerminalDTO {
+        struct Body: Encodable {
+            let shell: String?
+            let cwd: String?
+            let cols: Int?
+            let rows: Int?
+        }
+        return try await send(
+            "POST", "/agents/\(agentId)/terminals",
+            body: Body(shell: shell, cwd: cwd, cols: cols, rows: rows)
+        )
+    }
+
+    public func listTerminals(agentId: String) async throws -> [TerminalDTO] {
+        try await send("GET", "/agents/\(agentId)/terminals")
+    }
+
+    @discardableResult
+    public func closeTerminal(id: String) async throws -> TerminalDTO {
+        try await send("DELETE", "/terminals/\(id)")
+    }
+
     public func deleteMachine(id: String) async throws {
         try await sendVoid("DELETE", "/machines/\(id)")
     }

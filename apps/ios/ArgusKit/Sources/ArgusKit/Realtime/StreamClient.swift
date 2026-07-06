@@ -51,6 +51,20 @@ public struct BackgroundTaskRemovedPayload: Decodable, Equatable, Sendable {
     public let taskId: String
 }
 
+/// One chunk of PTY output. `data` is base64 raw bytes; `seq` is the
+/// duplicate guard (feed strictly increasing seqs only).
+public struct TerminalOutputPayload: Decodable, Equatable, Sendable {
+    public let terminalId: String
+    public let seq: Int
+    public let data: String
+}
+
+public struct TerminalClosedPayload: Decodable, Equatable, Sendable {
+    public let terminalId: String
+    public let exitCode: Int?
+    public let reason: String?
+}
+
 /// One live event from the `/stream` namespace — the Phase-1 subset plus
 /// fleet upkeep. Terminal, background-task, and sidecar-update events are
 /// wired in later phases.
@@ -86,6 +100,13 @@ public enum ServerEvent: Sendable {
     /// (`subscribe:project`).
     case backgroundTaskUpdated(BackgroundTaskDTO)
     case backgroundTaskRemoved(BackgroundTaskRemovedPayload)
+
+    /// created/updated arrive on the user room; output/closed on the
+    /// `terminal:{id}` room (`subscribe:terminal`).
+    case terminalCreated(TerminalDTO)
+    case terminalUpdated(TerminalDTO)
+    case terminalOutput(TerminalOutputPayload)
+    case terminalClosed(TerminalClosedPayload)
 }
 
 /// Owns the Socket.IO connection and surfaces typed events as an
@@ -155,6 +176,23 @@ public final class StreamClient {
         socket?.emit("unsubscribe:project", ["machineId": machineId, "workingDir": workingDir])
     }
 
+    public func joinTerminal(_ id: String) { socket?.emit("subscribe:terminal", id) }
+    public func leaveTerminal(_ id: String) { socket?.emit("unsubscribe:terminal", id) }
+
+    // MARK: Terminal input (client → server; bytes ride base64 in JSON)
+
+    public func sendTerminalInput(terminalId: String, base64Data: String) {
+        socket?.emit("terminal:input", ["terminalId": terminalId, "data": base64Data])
+    }
+
+    public func sendTerminalResize(terminalId: String, cols: Int, rows: Int) {
+        socket?.emit("terminal:resize", ["terminalId": terminalId, "cols": cols, "rows": rows])
+    }
+
+    public func sendTerminalClose(terminalId: String) {
+        socket?.emit("terminal:close", terminalId)
+    }
+
     // MARK: Handlers
 
     private func registerHandlers(on socket: SocketIOClient) {
@@ -187,6 +225,10 @@ public final class StreamClient {
         on(socket, "git:changed", ServerEvent.gitChanged)
         on(socket, "background-task:updated", ServerEvent.backgroundTaskUpdated)
         on(socket, "background-task:removed", ServerEvent.backgroundTaskRemoved)
+        on(socket, "terminal:created", ServerEvent.terminalCreated)
+        on(socket, "terminal:updated", ServerEvent.terminalUpdated)
+        on(socket, "terminal:output", ServerEvent.terminalOutput)
+        on(socket, "terminal:closed", ServerEvent.terminalClosed)
     }
 
     /// Register a typed handler: decode the event's first argument into
