@@ -701,6 +701,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   millis; command rows carry a denormalized `usage` field shared-types
   omits. `ResultChunk`'s custom decoder + Codable's ignore-unknown
   default absorb all of this — don't add strict decoding.
+- Same family: the finalize/cancel `command:updated` events carry a
+  CommandDTO **without `attachments`** (bare `CommandService.toDto`).
+  Any client that replaces its command row on that event wipes the
+  turn's thumbnails — both stores merge instead (web
+  `sessionStore.upsertCommand`, iOS `TranscriptState.upsert`), keeping
+  existing attachments when an update arrives without them.
 
 ## Conventions
 

@@ -50,6 +50,24 @@ struct TranscriptEngineTests {
         #expect(state.commands.count == 2)
     }
 
+    @Test("status flips never wipe a turn's attachments")
+    func attachmentsSurviveStatusFlip() throws {
+        var state = TranscriptState(sessionId: "sess-1")
+        // Creation carries the attachments…
+        state.upsert(command: TestSupport.command(status: .running, attachmentIds: ["att-1"]))
+        // …but the finalize command:updated event does NOT (bare
+        // CommandService.toDto server-side) — it must not wipe them.
+        state.upsert(command: TestSupport.command(status: .completed))
+        let turn = try #require(state.turns(agentType: KnownAgentType.claudeCode).first)
+        #expect(turn.status == .completed)
+        #expect(turn.attachments.map(\.id) == ["att-1"])
+
+        // A later load that DOES carry attachments stays authoritative.
+        state.upsert(command: TestSupport.command(status: .completed, attachmentIds: ["att-1", "att-2"]))
+        let reloaded = try #require(state.turns(agentType: KnownAgentType.claudeCode).first)
+        #expect(reloaded.attachments.count == 2)
+    }
+
     @Test("turn building: narration vs answer, tool timeline, usage")
     func turnBuilding() throws {
         var state = TranscriptState(sessionId: "sess-1")

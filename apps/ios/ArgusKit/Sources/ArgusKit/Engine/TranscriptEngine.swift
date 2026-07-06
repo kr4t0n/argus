@@ -122,7 +122,20 @@ public struct TranscriptState: Equatable, Sendable {
     public mutating func upsert(command: CommandDTO) {
         guard command.sessionId == sessionId else { return }
         if let index = commands.firstIndex(where: { $0.id == command.id }) {
-            commands[index] = command
+            var merged = command
+            // Preserve attachments across hot-path updates: the finalize/
+            // cancel `command:updated` events carry a CommandDTO WITHOUT
+            // `attachments` (bare CommandService.toDto server-side) —
+            // only creation and transcript loads are the source of truth
+            // for them. Without this merge a status flip wipes the
+            // turn's thumbnails. The web has the identical merge in
+            // sessionStore.upsertCommand.
+            if merged.attachments?.isEmpty ?? true,
+               let existing = commands[index].attachments,
+               !existing.isEmpty {
+                merged.attachments = existing
+            }
+            commands[index] = merged
         } else {
             commands.append(command)
             sortCommands()

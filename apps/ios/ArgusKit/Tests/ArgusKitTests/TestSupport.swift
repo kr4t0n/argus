@@ -34,8 +34,20 @@ enum TestSupport {
         kind: CommandKind = .execute,
         prompt: String? = "do the thing",
         status: CommandStatus = .running,
-        createdAt: String = "2026-07-05T10:00:00.000Z"
+        createdAt: String = "2026-07-05T10:00:00.000Z",
+        attachmentIds: [String]? = nil
     ) -> CommandDTO {
+        let attachmentsJSON = attachmentIds.map { ids in
+            let entries = ids.map { attachmentId in
+                """
+                {"id": "\(attachmentId)", "filename": "\(attachmentId).png",
+                 "mime": "image/png", "size": 1,
+                 "url": "/attachments/\(attachmentId)?t=T",
+                 "createdAt": "2026-07-05T10:00:00.000Z"}
+                """
+            }
+            return "[\(entries.joined(separator: ","))]"
+        }
         let json = """
         {
           "id": "\(id)",
@@ -45,7 +57,8 @@ enum TestSupport {
           "prompt": \(prompt.map { "\"\($0)\"" } ?? "null"),
           "status": "\(status.rawValue)",
           "createdAt": "\(createdAt)",
-          "completedAt": null
+          "completedAt": null,
+          "attachments": \(attachmentsJSON ?? "null")
         }
         """
         // Decoding keeps the fixture path honest (CommandDTO has no
