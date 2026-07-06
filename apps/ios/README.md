@@ -116,6 +116,15 @@ generate` only after adding/renaming source files or editing
 > in project.yml). For a physical device, delete the two signing lines
 > there and pick a team in Xcode → Signing & Capabilities (a free Apple
 > ID works).
+>
+> **No Apple Developer account?** Everything except push works — the
+> server runs with no `APNS_*` env set (push is a silent no-op) and the
+> app is fully functional; the notifications toggle just never produces
+> an alert. One catch on **physical devices** with free-Apple-ID
+> signing: the generated `aps-environment` entitlement can fail
+> provisioning ("profile doesn't support Push Notifications") — delete
+> the `entitlements:` block from `project.yml` and re-run
+> `xcodegen generate`. The Simulator is unaffected either way.
 
 ## Using ArgusKit
 
