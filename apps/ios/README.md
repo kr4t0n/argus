@@ -4,10 +4,12 @@ A native **SwiftUI** client for the Argus agent dashboard. It is a *thin
 client*: it speaks the same NestJS REST API + Socket.IO `/stream`
 namespace as the web app and never touches the Go sidecar.
 
-> Status: **Phase 1 — MVP app.** `ArgusKit` (models, REST client,
-> realtime layer, transcript engine — CI-tested) plus the `ArgusApp`
-> SwiftUI target: login → project-grouped session list → live streaming
-> transcript with composer, cancel, and history pagination.
+> Status: **Phase 2 — iPad layout + session depth.** Three-column shell
+> (`NavigationSplitView` sidebar → transcript → inspector with Files /
+> Commits / last-turn Diff), usage badge + context-window ring, model
+> picker, prompt queue with an app-wide drainer, attachments,
+> fork/rename/archive, ⌘↩ send / ⌘. cancel. Phase 1 (login,
+> project-grouped list, streaming transcript) is runtime-verified.
 >
 > This is a **fresh implementation** — the earlier
 > `feat/ios-native-client` branch (OpenAPI-codegen based) is deprecated;
@@ -174,11 +176,13 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
 ## Roadmap
 
 - **Phase 0 (done):** ArgusKit foundations + fixtures + CI.
-- **Phase 1 (this):** SwiftUI app (XcodeGen target): server/login flow,
-  project-grouped session list, streaming transcript, composer.
-- **Phase 2:** iPad `NavigationSplitView` + inspector (files, commits,
-  diffs), usage badge + context ring, model picker, prompt queue,
-  attachments, fork/rename/archive.
+- **Phase 1 (done, runtime-verified):** SwiftUI app (XcodeGen target):
+  server/login flow, project-grouped session list, streaming
+  transcript, composer.
+- **Phase 2 (this):** iPad `NavigationSplitView` + inspector (files,
+  commits, diffs), usage badge + context ring, model picker, prompt
+  queue + drainer, attachments, fork/rename/archive, keyboard
+  shortcuts.
 - **Phase 3:** machines panel, user panel (usage/quota/extensions).
 - **Phase 4:** APNs push (net-new server work), Live Activity for a
   running turn; terminal (SwiftTerm) as stretch.
