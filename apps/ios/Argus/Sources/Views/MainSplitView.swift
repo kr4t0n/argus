@@ -7,10 +7,8 @@ import ArgusKit
 /// iPhone, where the inspector presents as a sheet.
 struct MainSplitView: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
-    /// Bound + `.balanced` so the system keeps a working sidebar toggle
-    /// in the detail column when the sidebar is collapsed. Without these
-    /// (unbound + `.automatic`) there was no way to reveal it again.
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
@@ -20,6 +18,27 @@ struct MainSplitView: View {
                 .navigationSplitViewColumnWidth(min: 260, ideal: 320, max: 400)
         } detail: {
             detail
+                // The system's own sidebar toggle is unreliable here
+                // (missing once a detail is selected, and doubled on the
+                // empty state — especially under Designed-for-iPad on
+                // Mac). Remove it and provide one explicit toggle so
+                // there's always exactly one control.
+                .toolbar(removing: .sidebarToggle)
+                .toolbar {
+                    if sizeClass == .regular {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button {
+                                withAnimation {
+                                    columnVisibility =
+                                        columnVisibility == .detailOnly ? .all : .detailOnly
+                                }
+                            } label: {
+                                Image(systemName: "sidebar.leading")
+                            }
+                            .accessibilityLabel("Toggle sidebar")
+                        }
+                    }
+                }
         }
         .navigationSplitViewStyle(.balanced)
     }
