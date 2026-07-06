@@ -576,7 +576,7 @@ private struct TurnCell: View {
                 PromptBubble(text: turn.prompt)
             }
 
-            if !turn.timeline.isEmpty || turn.thinkingTokens != nil || !turn.narration.isEmpty {
+            if !turn.timeline.isEmpty {
                 ActivityPill(turn: turn)
             }
 

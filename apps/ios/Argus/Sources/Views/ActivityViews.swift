@@ -39,12 +39,6 @@ struct ActivityPill: View {
                     .monospacedDigit()
                 Separator()
                 middle
-                if let thinking = turn.thinkingTokens {
-                    Separator()
-                    Label("\(thinking)", systemImage: "brain")
-                        .labelStyle(.titleAndIcon)
-                        .foregroundStyle(.purple)
-                }
                 Separator()
                 ElapsedLabel(turn: turn)
                 Image(systemName: "chevron.down")
@@ -74,15 +68,9 @@ struct ActivityPill: View {
     }
 
     private var timeline: some View {
+        // Thoughts are interleaved rows now (web parity) — no separate
+        // narration block.
         VStack(alignment: .leading, spacing: 8) {
-            if !turn.narration.isEmpty {
-                Markdown(turn.narration)
-                    .markdownTextStyle(\.text) {
-                        ForegroundColor(.secondary)
-                        FontSize(.em(0.9))
-                    }
-                    .textSelection(.enabled)
-            }
             ForEach(turn.timeline) { item in
                 TimelineRowView(item: item)
             }
@@ -163,6 +151,14 @@ struct TimelineRowView: View {
             ToolPillCard(item: item)
         case .output:
             OutputRow(text: item.text, isError: item.isError, isDiff: item.isDiff)
+        case .thought:
+            Markdown(item.text)
+                .markdownTextStyle(\.text) {
+                    ForegroundColor(.secondary)
+                    FontSize(.em(0.9))
+                }
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         case .thinking(let redacted):
             ThinkingRow(text: item.text, redacted: redacted)
         case .system:

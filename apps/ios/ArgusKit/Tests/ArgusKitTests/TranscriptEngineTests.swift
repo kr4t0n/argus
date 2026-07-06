@@ -139,6 +139,33 @@ struct TranscriptEngineTests {
         #expect(tool.diffBody.contains("+new"))
     }
 
+    @Test("intermediate deltas interleave as thought rows between tools")
+    func interleavedThoughts() throws {
+        var state = TranscriptState(sessionId: "sess-1")
+        state.upsert(command: TestSupport.command(status: .completed))
+        state.mergeBackfill(commands: [], chunks: [
+            TestSupport.chunk(id: "d1", seq: 1, kind: .delta, delta: "let me look"),
+            TestSupport.chunk(
+                id: "t1", seq: 2, kind: .tool, content: "Read a",
+                meta: ["tool": .string("Read"), "id": .string("x1")]
+            ),
+            TestSupport.chunk(id: "d2", seq: 3, kind: .delta, delta: "now edit"),
+            TestSupport.chunk(
+                id: "t2", seq: 4, kind: .tool, content: "Edit b",
+                meta: ["tool": .string("Edit"), "id": .string("x2")]
+            ),
+            TestSupport.chunk(id: "d3", seq: 5, kind: .delta, delta: "All done."),
+            TestSupport.chunk(id: "f1", seq: 6, kind: .final, isFinal: true),
+        ])
+        let turn = try #require(state.turns(agentType: "custom").first)
+        // thought, tool, thought, tool — interleaved by seq. The trailing
+        // delta (seq 5 > boundary 4) is the answer, not a thought.
+        #expect(turn.timeline.map(\.kind) == [.thought, .tool, .thought, .tool])
+        #expect(turn.timeline[0].text == "let me look")
+        #expect(turn.timeline[2].text == "now edit")
+        #expect(turn.answer == "All done.")
+    }
+
     @Test("stderr result marks the tool row as an error")
     func toolErrorPairing() throws {
         var state = TranscriptState(sessionId: "sess-1")

@@ -24,6 +24,10 @@ public struct TimelineItem: Identifiable, Equatable, Sendable {
         case tool
         /// stdout/stderr NOT consumed by a shown tool.
         case output
+        /// Assistant narration between tools (coalesced intermediate
+        /// deltas) — interleaved chronologically, like the web's
+        /// "thought" rows. Distinct from the final answer.
+        case thought
         case thinking(redacted: Bool)
         /// Unknown system subtype — deliberately VISIBLE (project
         /// convention: the junk row is the breadcrumb that a new CLI
@@ -310,10 +314,37 @@ public struct TranscriptState: Equatable, Sendable {
         var thinkingTokens: Int?
         var model: String?
 
+        // Coalesce adjacent intermediate deltas (seq <= boundary) into a
+        // "thought" run, flushed as one row right before the next
+        // non-delta chunk — so narration interleaves chronologically
+        // with the tools instead of collapsing into one block. Deltas
+        // past the boundary are the final answer, not thoughts.
+        var thoughtBuffer = ""
+        var thoughtStart: (id: String, seq: Int)?
+        func flushThought() {
+            defer { thoughtBuffer = ""; thoughtStart = nil }
+            guard let start = thoughtStart,
+                  !thoughtBuffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return }
+            timeline.append(TimelineItem(
+                id: start.id + ":thought", kind: .thought, seq: start.seq, text: thoughtBuffer
+            ))
+        }
+
         for chunk in chunks {
             if model == nil, let found = UsageParser.parseModel(meta: chunk.meta) {
                 model = found
             }
+            if chunk.kind == .delta {
+                if chunk.seq <= split.boundarySeq {
+                    if thoughtStart == nil { thoughtStart = (chunk.id, chunk.seq) }
+                    thoughtBuffer += chunk.delta ?? ""
+                }
+                continue
+            }
+            // Any non-delta closes the current thought run.
+            flushThought()
+
             switch chunk.kind {
             case .delta:
                 continue
@@ -409,6 +440,7 @@ public struct TranscriptState: Equatable, Sendable {
                 }
             }
         }
+        flushThought()
 
         return Turn(
             id: command.id,
