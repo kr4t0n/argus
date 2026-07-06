@@ -508,12 +508,14 @@ private struct TurnCell: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if !turn.prompt.isEmpty {
-                PromptBubble(text: turn.prompt)
-            }
-
+            // Attachments render ABOVE the prompt bubble — matches the
+            // web's user-message layout.
             if !turn.attachments.isEmpty {
                 attachmentRow
+            }
+
+            if !turn.prompt.isEmpty {
+                PromptBubble(text: turn.prompt)
             }
 
             if !turn.timeline.isEmpty || turn.thinkingTokens != nil || !turn.narration.isEmpty {
