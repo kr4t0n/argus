@@ -4,12 +4,13 @@ A native **SwiftUI** client for the Argus agent dashboard. It is a *thin
 client*: it speaks the same NestJS REST API + Socket.IO `/stream`
 namespace as the web app and never touches the Go sidecar.
 
-> Status: **Phase 2 — iPad layout + session depth.** Three-column shell
-> (`NavigationSplitView` sidebar → transcript → inspector with Files /
-> Commits / last-turn Diff), usage badge + context-window ring, model
-> picker, prompt queue with an app-wide drainer, attachments,
-> fork/rename/archive, ⌘↩ send / ⌘. cancel. Phase 1 (login,
-> project-grouped list, streaming transcript) is runtime-verified.
+> Status: **Phase 3 — fleet + account.** Routed detail column (session /
+> machine / user), machines in the sidebar with a full machine panel
+> (host info, adapters, agent roster + destroy, sidecar update, machine
+> delete), account panel (activity heatmap, usage windows, quota bars,
+> extension toggles), and creation flows (new project / session with
+> web-style agent auto-vivify; explicit new-agent form on the machine
+> panel). Phases 1–2 are runtime-verified on iPhone + iPad.
 >
 > This is a **fresh implementation** — the earlier
 > `feat/ios-native-client` branch (OpenAPI-codegen based) is deprecated;
@@ -179,10 +180,11 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
 - **Phase 1 (done, runtime-verified):** SwiftUI app (XcodeGen target):
   server/login flow, project-grouped session list, streaming
   transcript, composer.
-- **Phase 2 (this):** iPad `NavigationSplitView` + inspector (files,
-  commits, diffs), usage badge + context ring, model picker, prompt
-  queue + drainer, attachments, fork/rename/archive, keyboard
-  shortcuts.
-- **Phase 3:** machines panel, user panel (usage/quota/extensions).
+- **Phase 2 (done, runtime-verified):** iPad `NavigationSplitView` +
+  inspector (files, commits, diffs), usage badge + context ring, model
+  picker, prompt queue + drainer, attachments, fork/rename/archive,
+  keyboard shortcuts.
+- **Phase 3 (this):** machines panel, user panel
+  (activity/usage/quota/extensions), project/agent/session creation.
 - **Phase 4:** APNs push (net-new server work), Live Activity for a
   running turn; terminal (SwiftTerm) as stretch.
