@@ -157,7 +157,7 @@ struct SessionView: View {
         Task {
             do {
                 app.sessionList.upsert(try await client.archiveSession(id: sessionId))
-                if app.selectedSessionId == sessionId { app.selectedSessionId = nil }
+                if app.route == .session(sessionId) { app.route = nil }
             } catch {
                 app.handleAPIError(error)
             }
@@ -170,7 +170,7 @@ struct SessionView: View {
             do {
                 let forked = try await client.forkSession(id: sessionId, commandId: turn.id)
                 app.sessionList.upsert(forked)
-                app.selectedSessionId = forked.id
+                app.route = .session(forked.id)
             } catch {
                 app.handleAPIError(error)
                 model?.actionError = (error as? APIError)?.message ?? error.localizedDescription

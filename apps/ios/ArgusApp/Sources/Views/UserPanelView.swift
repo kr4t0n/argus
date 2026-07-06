@@ -1,0 +1,288 @@
+import SwiftUI
+import ArgusKit
+
+/// The account screen — the iOS counterpart of the web's /user page:
+/// activity heatmap, token-usage ledger with rolling windows, per-CLI
+/// plan quota, extension toggles, and log out.
+struct UserPanelView: View {
+    @Environment(AppModel.self) private var app
+
+    private enum Window: String, CaseIterable {
+        case week = "7 days"
+        case month = "30 days"
+        case lifetime = "All time"
+    }
+
+    @State private var usage: WindowedUsage?
+    @State private var window: Window = .month
+    @State private var quotas: [UserQuotaRow] = []
+    @State private var activity: [ActivityDay] = []
+    @State private var extensions = UserExtensions()
+    @State private var extensionsLoaded = false
+    @State private var loadError: String?
+
+    var body: some View {
+        List {
+            accountSection
+            activitySection
+            usageSection
+            quotaSection
+            extensionsSection
+            Section {
+                Button("Log out", role: .destructive) { app.logOut() }
+            }
+        }
+        .navigationTitle("Account")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await load() }
+        .refreshable { await load() }
+    }
+
+    // MARK: Sections
+
+    private var accountSection: some View {
+        Section {
+            HStack(spacing: 12) {
+                Image(systemName: "person.circle.fill")
+                    .font(.largeTitle)
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(app.user?.email ?? "—").font(.headline)
+                    Text(app.user?.role ?? "").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if let loadError {
+                Text(loadError).font(.caption).foregroundStyle(.red)
+            }
+        }
+    }
+
+    private var activitySection: some View {
+        Section("Activity") {
+            if activity.isEmpty {
+                Text("No activity yet.").font(.callout).foregroundStyle(.secondary)
+            } else {
+                ActivityHeatmap(days: activity)
+                    .listRowInsets(EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12))
+            }
+        }
+    }
+
+    private var usageSection: some View {
+        Section("Usage") {
+            if let usage {
+                Picker("Window", selection: $window) {
+                    ForEach(Window.allCases, id: \.self) { Text($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+
+                let current = selected(usage)
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    stat("Input", TokenFormat.compact(current.inputTokens))
+                    stat("Output", TokenFormat.compact(current.outputTokens))
+                    stat("Cache read", TokenFormat.compact(current.cacheReadTokens))
+                    stat("Cache write", TokenFormat.compact(current.cacheWriteTokens))
+                    if let cost = current.costUsd {
+                        stat("Cost", String(format: "$%.2f", cost))
+                    }
+                    if let apiMs = current.durationApiMs {
+                        stat("API time", TokenFormat.duration(ms: apiMs))
+                    }
+                }
+                .padding(.vertical, 4)
+            } else {
+                ProgressView().frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    private var quotaSection: some View {
+        Section("Plan quota") {
+            if quotas.isEmpty {
+                Text("No quota reports from the fleet yet.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(quotas.enumerated()), id: \.offset) { _, row in
+                    QuotaRowView(row: row)
+                }
+            }
+        }
+    }
+
+    private var extensionsSection: some View {
+        Section {
+            Toggle("Notes", isOn: extensionBinding(\.notes))
+            Toggle("Progress", isOn: extensionBinding(\.progress))
+            Toggle("Diff", isOn: extensionBinding(\.diff))
+        } header: {
+            Text("Extensions")
+        } footer: {
+            Text("Account-level opt-ins, synced with the web dashboard. The iOS inspector currently ships the Diff tab regardless; Notes and Progress tabs arrive in a later phase.")
+        }
+        .disabled(!extensionsLoaded)
+    }
+
+    private func stat(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value).font(.title3.monospacedDigit().weight(.semibold))
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func selected(_ usage: WindowedUsage) -> TokenUsage {
+        switch window {
+        case .week: return usage.last7Days
+        case .month: return usage.last30Days
+        case .lifetime: return usage.lifetime
+        }
+    }
+
+    /// Every toggle PUTs the full flag set — same contract as the web
+    /// (no server-side merge). Optimistic with revert on failure.
+    private func extensionBinding(_ keyPath: WritableKeyPath<UserExtensions, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { extensions[keyPath: keyPath] },
+            set: { newValue in
+                let previous = extensions
+                extensions[keyPath: keyPath] = newValue
+                guard let client = app.client else { return }
+                let payload = extensions
+                Task {
+                    do {
+                        extensions = try await client.setMyExtensions(payload)
+                    } catch {
+                        app.handleAPIError(error)
+                        extensions = previous
+                    }
+                }
+            }
+        )
+    }
+
+    private func load() async {
+        guard let client = app.client else { return }
+        do {
+            async let usageResponse = client.getMyUsage()
+            async let quotaResponse = client.getMyQuota()
+            async let activityResponse = client.getMyActivity()
+            async let extensionsResponse = client.getMyExtensions()
+            usage = try await usageResponse
+            quotas = try await quotaResponse
+            activity = try await activityResponse
+            extensions = try await extensionsResponse
+            extensionsLoaded = true
+            loadError = nil
+        } catch {
+            app.handleAPIError(error)
+            loadError = (error as? APIError)?.message ?? error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Quota row
+
+private struct QuotaRowView: View {
+    let row: UserQuotaRow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                AgentTypeIcon(type: row.type)
+                Text(row.type).font(.callout)
+                Spacer()
+                Text(row.machineName)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            if let error = row.error, row.windows.isEmpty {
+                Text(error).font(.caption).foregroundStyle(.orange)
+            }
+            ForEach(row.windows, id: \.key) { window in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text(window.label).font(.caption2).foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(Int(window.utilizationPercent))%")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    ProgressView(value: min(100, max(0, window.utilizationPercent)), total: 100)
+                        .tint(tint(window.utilizationPercent))
+                }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func tint(_ percent: Double) -> Color {
+        if percent >= 85 { return .red }
+        if percent >= 60 { return .orange }
+        return .green
+    }
+}
+
+// MARK: - Activity heatmap
+
+/// GitHub-style contribution grid: 7 rows (Sun–Sat), one column per
+/// week, last ~5 months, scrolled to today. Data is dense (zero-days
+/// included) and ascending, so columns chunk directly.
+private struct ActivityHeatmap: View {
+    let days: [ActivityDay]
+
+    private let cell: CGFloat = 11
+    private let gap: CGFloat = 2
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: gap) {
+                ForEach(weeks.indices, id: \.self) { weekIndex in
+                    VStack(spacing: gap) {
+                        ForEach(weeks[weekIndex].indices, id: \.self) { dayIndex in
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(color(for: weeks[weekIndex][dayIndex]))
+                                .frame(width: cell, height: cell)
+                        }
+                    }
+                }
+            }
+        }
+        .defaultScrollAnchor(.trailing)
+    }
+
+    /// Chunk the trailing ~22 weeks into 7-day columns, phase-aligned so
+    /// the last (partial) week sits in the final column.
+    private var weeks: [[ActivityDay?]] {
+        let tail = Array(days.suffix(22 * 7))
+        guard !tail.isEmpty else { return [] }
+        var columns: [[ActivityDay?]] = []
+        var column: [ActivityDay?] = []
+        // Pad the first column so weeks stay aligned to 7 rows.
+        let remainder = tail.count % 7
+        if remainder != 0 {
+            column = Array(repeating: nil, count: 7 - remainder)
+        }
+        for day in tail {
+            column.append(day)
+            if column.count == 7 {
+                columns.append(column)
+                column = []
+            }
+        }
+        if !column.isEmpty { columns.append(column) }
+        return columns
+    }
+
+    private var maxCount: Int {
+        max(1, days.map(\.count).max() ?? 1)
+    }
+
+    private func color(for day: ActivityDay?) -> Color {
+        guard let day, day.count > 0 else {
+            return Color.gray.opacity(day == nil ? 0 : 0.12)
+        }
+        let intensity = 0.25 + 0.75 * min(1, Double(day.count) / Double(maxCount))
+        return Color.green.opacity(intensity)
+    }
+}

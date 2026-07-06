@@ -23,11 +23,17 @@ final class AppModel {
     private(set) var stream: StreamClient?
     private(set) var socketConnected = false
 
-    /// Split-view selection — settable from anywhere (sidebar taps, fork
-    /// navigation).
-    var selectedSessionId: String?
+    /// Split-view detail route — settable from anywhere (sidebar taps,
+    /// fork navigation, creation flows). Mirrors the web's routes:
+    /// /sessions/:id, /machines/:id, /user.
+    var route: DetailRoute?
     /// Right inspector (Files / Commits / Diff) visibility.
     var inspectorPresented = false
+
+    var selectedSessionId: String? {
+        if case .session(let id) = route { return id }
+        return nil
+    }
 
     /// Latest fs/git change events — inspector panels watch these and
     /// refetch when the agent matches theirs.
@@ -131,7 +137,7 @@ final class AppModel {
         user = nil
         client = nil
         activeSession = nil
-        selectedSessionId = nil
+        route = nil
         inspectorPresented = false
         drainInFlight = [:]
         drainCooldown = [:]
@@ -172,6 +178,51 @@ final class AppModel {
         } catch {
             handleAPIError(error)
         }
+    }
+
+    // MARK: Creation (auto-vivify, mirrors the web's CreateAgentPopover)
+
+    /// Create a session in a project: reuse an existing agent of the
+    /// chosen type within `(machineId, workingDir)` if one exists,
+    /// otherwise create one with an auto-generated name first — the
+    /// agent layer is implementation detail, exactly like the web
+    /// sidebar. Returns the new session (already upserted + routed).
+    func createSession(
+        machineId: String,
+        workingDir: String?,
+        adapterType: AgentType,
+        title: String?
+    ) async throws -> SessionDTO {
+        guard let client else {
+            throw APIError(status: 0, message: "Not connected")
+        }
+        let agent: AgentDTO
+        if let existing = fleet.agents.values.first(where: {
+            $0.machineId == machineId
+                && $0.type == adapterType
+                && $0.workingDir == workingDir
+                && $0.archivedAt == nil
+        }) {
+            agent = existing
+        } else {
+            let suffix = String(UUID().uuidString.prefix(6)).lowercased()
+            agent = try await client.createAgent(
+                machineId: machineId,
+                CreateAgentRequest(
+                    name: "\(adapterType)-\(suffix)",
+                    type: adapterType,
+                    workingDir: workingDir
+                )
+            )
+            fleet.upsert(agent: agent)
+        }
+        let created = try await client.createSession(CreateSessionRequest(
+            agentId: agent.id,
+            title: title?.isEmpty == false ? title : nil
+        ))
+        sessionList.upsert(created.session)
+        route = .session(created.session.id)
+        return created.session
     }
 
     // MARK: Prompt queue drainer
@@ -311,6 +362,15 @@ final class AppModel {
             lastGitChange = payload
         }
     }
+}
+
+/// What the split view's detail column shows — the iOS counterpart of
+/// the web's routes (/sessions/:id, /machines/:id, /user). Doubles as
+/// the sidebar List selection tag.
+enum DetailRoute: Hashable {
+    case session(String)
+    case machine(String)
+    case user
 }
 
 /// Lock-guarded JWT holder. URLSession invokes the client's token

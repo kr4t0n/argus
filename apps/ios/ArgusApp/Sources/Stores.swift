@@ -66,6 +66,9 @@ struct ProjectGroup: Identifiable {
     let id: String
     /// Last path component of the workingDir, or "no project".
     let title: String
+    /// nil when the owning agent is unknown (can't anchor creation).
+    let machineId: String?
+    let workingDir: String?
     let machineName: String
     var sessions: [SessionDTO]
 }
@@ -135,7 +138,12 @@ final class SessionListStore {
                 ?? fleet.machines[machineId]?.name
                 ?? ""
             groups[key, default: ProjectGroup(
-                id: key, title: title, machineName: machineName, sessions: []
+                id: key,
+                title: title,
+                machineId: agent?.machineId,
+                workingDir: agent?.workingDir,
+                machineName: machineName,
+                sessions: []
             )].sessions.append(session)
         }
         var result = Array(groups.values)

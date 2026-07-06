@@ -1,16 +1,18 @@
 import SwiftUI
 import ArgusKit
 
-/// Sidebar: sessions grouped by project — the `(machineId, workingDir)`
-/// pair — exactly like the web sidebar. The agent shows only as a
-/// leading brand icon on each row. Selection drives the split view's
-/// detail column (and pushes on iPhone).
+/// Sidebar: sessions grouped by project (the `(machineId, workingDir)`
+/// pair), a machines section, and the account row — mirroring the web
+/// sidebar's layout. Selection is a DetailRoute so session, machine,
+/// and user rows all drive the same detail column.
 struct SessionSidebar: View {
     @Environment(AppModel.self) private var app
-    @Binding var selection: String?
+    @Binding var selection: DetailRoute?
 
     @State private var renameTarget: SessionDTO?
     @State private var renameText = ""
+    @State private var newSessionProject: ProjectGroup?
+    @State private var showNewProject = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,12 +24,11 @@ struct SessionSidebar: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    if let user = app.user {
-                        Text(user.email)
+                    Button("New project…", systemImage: "folder.badge.plus") {
+                        showNewProject = true
                     }
-                    Button("Log out", role: .destructive) { app.logOut() }
                 } label: {
-                    Image(systemName: "person.circle")
+                    Image(systemName: "plus")
                 }
             }
         }
@@ -35,6 +36,12 @@ struct SessionSidebar: View {
             TextField("Title", text: $renameText)
             Button("Cancel", role: .cancel) { renameTarget = nil }
             Button("Rename") { commitRename() }
+        }
+        .sheet(item: $newSessionProject) { project in
+            NewSessionSheet(project: project)
+        }
+        .sheet(isPresented: $showNewProject) {
+            NewProjectSheet()
         }
     }
 
@@ -45,14 +52,15 @@ struct SessionSidebar: View {
             Spacer()
             ProgressView()
             Spacer()
-        } else if groups.isEmpty {
-            ContentUnavailableView(
-                "No sessions",
-                systemImage: "bubble.left.and.bubble.right",
-                description: Text("Create a session from the web dashboard to see it here.")
-            )
         } else {
             List(selection: $selection) {
+                if groups.isEmpty {
+                    Section {
+                        Text("No sessions yet — create one with the + button.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 ForEach(groups) { group in
                     Section {
                         ForEach(group.sessions) { session in
@@ -60,7 +68,7 @@ struct SessionSidebar: View {
                                 session: session,
                                 agent: app.fleet.agents[session.agentId]
                             )
-                            .tag(session.id)
+                            .tag(DetailRoute.session(session.id))
                             .swipeActions(edge: .trailing) {
                                 Button("Archive", systemImage: "archivebox") {
                                     archive(session)
@@ -85,14 +93,49 @@ struct SessionSidebar: View {
                                 Text("· \(group.machineName)")
                                     .foregroundStyle(.tertiary)
                             }
+                            Spacer()
+                            // Project-scoped "+" — the web's project-row
+                            // hover action.
+                            if group.machineId != nil {
+                                Button {
+                                    newSessionProject = group
+                                } label: {
+                                    Image(systemName: "plus")
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
                         .font(.caption)
                     }
+                }
+
+                Section("Machines") {
+                    ForEach(machines) { machine in
+                        MachineRow(machine: machine)
+                            .tag(DetailRoute.machine(machine.id))
+                    }
+                }
+
+                Section {
+                    HStack(spacing: 10) {
+                        Image(systemName: "person.circle")
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(app.user?.email ?? "Account").font(.callout).lineLimit(1)
+                            Text(app.user?.role ?? "").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                    .tag(DetailRoute.user)
                 }
             }
             .listStyle(.sidebar)
             .refreshable { await app.refreshAll() }
         }
+    }
+
+    private var machines: [MachineDTO] {
+        app.fleet.machines.values
+            .filter { $0.archivedAt == nil }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private var renameAlertBinding: Binding<Bool> {
@@ -122,10 +165,32 @@ struct SessionSidebar: View {
             do {
                 let archived = try await client.archiveSession(id: session.id)
                 app.sessionList.upsert(archived)
-                if selection == session.id { selection = nil }
+                if selection == .session(session.id) { selection = nil }
             } catch {
                 app.handleAPIError(error)
             }
+        }
+    }
+}
+
+private struct MachineRow: View {
+    let machine: MachineDTO
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "desktopcomputer")
+                .foregroundStyle(machine.status == .online ? Color.green : Color.secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(machine.name).font(.callout).lineLimit(1)
+                Text("\(machine.agentCount) agent\(machine.agentCount == 1 ? "" : "s")")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Circle()
+                .fill(machine.status == .online ? Color.green : Color.gray.opacity(0.4))
+                .frame(width: 7, height: 7)
         }
     }
 }
