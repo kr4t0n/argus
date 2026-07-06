@@ -100,10 +100,66 @@ struct TranscriptEngineTests {
         #expect(turn.answer == "The answer is 42.")
         #expect(turn.narration == "let me look")
         #expect(!turn.isRunning)
-        #expect(turn.timeline.count == 2)
-        #expect(turn.timeline[0].kind == .tool(name: "Read"))
-        #expect(turn.timeline[1].toolResultFor == "toolu_1")
+        // The stdout is PAIRED into the tool row (web parity), not a
+        // standalone item — one timeline entry, carrying the result body.
+        #expect(turn.timeline.count == 1)
+        #expect(turn.timeline[0].kind == .tool)
+        #expect(turn.timeline[0].toolName == "Read")
+        #expect(turn.timeline[0].resultText == "file contents")
         #expect(turn.usage?.inputTokens == 100)
+    }
+
+    @Test("edit tool folds its diff result (isDiff/filePath) into the row")
+    func toolDiffPairing() throws {
+        var state = TranscriptState(sessionId: "sess-1")
+        state.upsert(command: TestSupport.command(status: .completed))
+        state.mergeBackfill(commands: [], chunks: [
+            TestSupport.chunk(
+                id: "t1", seq: 1, kind: .tool, content: "Edit app.swift",
+                meta: [
+                    "tool": .string("Edit"), "id": .string("toolu_9"),
+                    "input": .object(["file_path": .string("app.swift")]),
+                ]
+            ),
+            TestSupport.chunk(
+                id: "o1", seq: 2, kind: .stdout, content: "@@ -1 +1 @@\n-old\n+new",
+                meta: [
+                    "toolResultFor": .string("toolu_9"),
+                    "isDiff": .bool(true),
+                    "filePath": .string("app.swift"),
+                ]
+            ),
+        ])
+        let turn = try #require(state.turns(agentType: "custom").first)
+        #expect(turn.timeline.count == 1)
+        let tool = turn.timeline[0]
+        #expect(tool.toolName == "Edit")
+        #expect(tool.isDiff)
+        #expect(tool.filePath == "app.swift")
+        #expect(tool.diffBody.contains("+new"))
+    }
+
+    @Test("stderr result marks the tool row as an error")
+    func toolErrorPairing() throws {
+        var state = TranscriptState(sessionId: "sess-1")
+        state.upsert(command: TestSupport.command(status: .completed))
+        state.mergeBackfill(commands: [], chunks: [
+            TestSupport.chunk(
+                id: "t1", seq: 1, kind: .tool, content: "Bash",
+                meta: [
+                    "tool": .string("Bash"), "id": .string("toolu_5"),
+                    "input": .object(["command": .string("false")]),
+                ]
+            ),
+            TestSupport.chunk(
+                id: "e1", seq: 2, kind: .stderr, content: "boom",
+                meta: ["toolResultFor": .string("toolu_5"), "exitCode": .number(1)]
+            ),
+        ])
+        let turn = try #require(state.turns(agentType: "custom").first)
+        #expect(turn.timeline.count == 1)
+        #expect(turn.timeline[0].isError)
+        #expect(turn.timeline[0].exitCode == 1)
     }
 
     @Test("answer falls back to final content when no post-tool deltas")

@@ -14,13 +14,16 @@ import Foundation
 //     currently-streaming turn; a full snapshot reload on app-foreground
 //     is the robust path and Phase 1 does both).
 
-/// One rendered row in a turn's activity timeline.
+/// One rendered row in a turn's activity timeline. Tool results are
+/// PAIRED into the tool row (like the web's ToolPill): a stdout/stderr
+/// chunk keyed by `meta.toolResultFor` becomes the tool's `resultText` /
+/// `isError` / `isDiff` rather than a standalone row.
 public struct TimelineItem: Identifiable, Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
-        case tool(name: String)
-        case stdout
-        case stderr
-        case progress
+        /// A tool invocation, with its paired result folded in.
+        case tool
+        /// stdout/stderr NOT consumed by a shown tool.
+        case output
         case thinking(redacted: Bool)
         /// Unknown system subtype — deliberately VISIBLE (project
         /// convention: the junk row is the breadcrumb that a new CLI
@@ -33,14 +36,53 @@ public struct TimelineItem: Identifiable, Equatable, Sendable {
     public let id: String
     public let kind: Kind
     public let seq: Int
+    /// This chunk's own content (the tool's label line, or the output/
+    /// system/thinking/error text).
     public let text: String
-    /// For tool chunks: the tool_use id (meta.id) other chunks pair on.
-    public let toolUseId: String?
-    /// For stdout/stderr: the tool_use id this output belongs to.
-    public let toolResultFor: String?
-    /// Unified-diff outputs (meta.isDiff) — render with a diff view.
+    /// Lowercased-agnostic tool name (`meta.tool`), for `.tool` rows.
+    public let toolName: String?
+    /// Raw tool input (`meta.input`), for the expandable "show input".
+    public let toolInput: [String: JSONValue]?
+    /// Paired result body for a `.tool` row (stdout/stderr or a diff);
+    /// nil when the tool produced no captured result.
+    public let resultText: String?
+    /// The (paired result, or this output) came from stderr.
+    public let isError: Bool
+    /// The result/output body is a unified diff (`meta.isDiff`).
     public let isDiff: Bool
     public let filePath: String?
+    /// Process exit code from a paired/own stdout|stderr (`meta.exitCode`).
+    public let exitCode: Int?
+
+    public init(
+        id: String,
+        kind: Kind,
+        seq: Int,
+        text: String,
+        toolName: String? = nil,
+        toolInput: [String: JSONValue]? = nil,
+        resultText: String? = nil,
+        isError: Bool = false,
+        isDiff: Bool = false,
+        filePath: String? = nil,
+        exitCode: Int? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.seq = seq
+        self.text = text
+        self.toolName = toolName
+        self.toolInput = toolInput
+        self.resultText = resultText
+        self.isError = isError
+        self.isDiff = isDiff
+        self.filePath = filePath
+        self.exitCode = exitCode
+    }
+
+    /// Diff body for the DiffPanel / DiffText — the paired result when
+    /// this row is a diff, falling back to `text`.
+    public var diffBody: String { resultText ?? text }
 }
 
 /// One user turn: prompt + activity + answer, derived per command.
@@ -251,6 +293,17 @@ public struct TranscriptState: Equatable, Sendable {
         var answer = split.finalDeltas.compactMap(\.delta).joined()
         let narration = split.intermediateDeltas.compactMap(\.delta).joined()
 
+        // Pass 1: index stdout/stderr results by the tool_use id they
+        // answer, so a tool row can fold in its output/diff (web parity —
+        // ActivityPill's resultByToolId).
+        var resultByToolId: [String: ResultChunk] = [:]
+        for chunk in chunks where chunk.kind == .stdout || chunk.kind == .stderr {
+            if let toolId = chunk.meta?["toolResultFor"]?.string {
+                resultByToolId[toolId] = chunk
+            }
+        }
+        var consumedResultIds = Set<String>()
+
         var timeline: [TimelineItem] = []
         var errorText: String?
         var usage: TokenUsage?
@@ -268,13 +321,38 @@ public struct TranscriptState: Equatable, Sendable {
             case .tool:
                 let name = chunk.meta?["tool"]?.string
                     ?? firstLine(of: chunk.content) ?? "tool"
-                timeline.append(item(for: chunk, kind: .tool(name: name)))
+                let toolId = chunk.meta?["id"]?.string
+                let result = toolId.flatMap { resultByToolId[$0] }
+                if let result { consumedResultIds.insert(result.id) }
+                timeline.append(TimelineItem(
+                    id: chunk.id,
+                    kind: .tool,
+                    seq: chunk.seq,
+                    text: chunk.content ?? "",
+                    toolName: name,
+                    toolInput: chunk.meta?["input"]?.object,
+                    resultText: result?.content,
+                    isError: result?.kind == .stderr,
+                    isDiff: result?.meta?["isDiff"]?.bool ?? false,
+                    filePath: result?.meta?["filePath"]?.string
+                        ?? chunk.meta?["input"]?["file_path"]?.string,
+                    exitCode: result?.meta?["exitCode"]?.int
+                ))
 
-            case .stdout:
-                timeline.append(item(for: chunk, kind: .stdout))
-
-            case .stderr:
-                timeline.append(item(for: chunk, kind: .stderr))
+            case .stdout, .stderr:
+                // Standalone output only — a result already folded into a
+                // tool row is skipped.
+                if consumedResultIds.contains(chunk.id) { continue }
+                timeline.append(TimelineItem(
+                    id: chunk.id,
+                    kind: .output,
+                    seq: chunk.seq,
+                    text: chunk.content ?? "",
+                    isError: chunk.kind == .stderr,
+                    isDiff: chunk.meta?["isDiff"]?.bool ?? false,
+                    filePath: chunk.meta?["filePath"]?.string,
+                    exitCode: chunk.meta?["exitCode"]?.int
+                ))
 
             case .progress:
                 let contentType = chunk.meta?["contentType"]?.string
@@ -285,7 +363,10 @@ public struct TranscriptState: Equatable, Sendable {
                     // Models with display:"omitted" thinking send empty
                     // blocks (signature only) — expected, render nothing.
                     if !text.isEmpty {
-                        timeline.append(item(for: chunk, kind: .thinking(redacted: redacted)))
+                        timeline.append(TimelineItem(
+                            id: chunk.id, kind: .thinking(redacted: redacted),
+                            seq: chunk.seq, text: chunk.content ?? ""
+                        ))
                     }
                     continue
                 }
@@ -298,13 +379,17 @@ public struct TranscriptState: Equatable, Sendable {
                 // Content-less progress (api_retry etc.) renders nothing;
                 // content-ful unknown subtypes stay VISIBLE on purpose.
                 if let content = chunk.content, !content.isEmpty {
-                    timeline.append(item(for: chunk, kind: .system))
+                    timeline.append(TimelineItem(
+                        id: chunk.id, kind: .system, seq: chunk.seq, text: content
+                    ))
                 }
 
             case .error:
                 let text = chunk.content ?? "error"
                 errorText = text
-                timeline.append(item(for: chunk, kind: .error))
+                timeline.append(TimelineItem(
+                    id: chunk.id, kind: .error, seq: chunk.seq, text: text, isError: true
+                ))
 
             case .final:
                 if usage == nil {
@@ -318,7 +403,9 @@ public struct TranscriptState: Equatable, Sendable {
 
             case .unknown:
                 if let content = chunk.content, !content.isEmpty {
-                    timeline.append(item(for: chunk, kind: .system))
+                    timeline.append(TimelineItem(
+                        id: chunk.id, kind: .system, seq: chunk.seq, text: content
+                    ))
                 }
             }
         }
@@ -337,19 +424,6 @@ public struct TranscriptState: Equatable, Sendable {
             thinkingTokens: thinkingTokens,
             model: model,
             errorText: errorText
-        )
-    }
-
-    private func item(for chunk: ResultChunk, kind: TimelineItem.Kind) -> TimelineItem {
-        TimelineItem(
-            id: chunk.id,
-            kind: kind,
-            seq: chunk.seq,
-            text: chunk.content ?? "",
-            toolUseId: chunk.meta?["id"]?.string,
-            toolResultFor: chunk.meta?["toolResultFor"]?.string,
-            isDiff: chunk.meta?["isDiff"]?.bool ?? false,
-            filePath: chunk.meta?["filePath"]?.string
         )
     }
 
