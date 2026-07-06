@@ -11,7 +11,7 @@ struct MainSplitView: View {
 
     /// Bound so a collapsed sidebar can be revealed again — the system
     /// doesn't always surface a reveal control in the detail column.
-    @State private var columnVisibility: NavigationSplitViewColumnVisibility = .all
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
         @Bindable var app = app
