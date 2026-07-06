@@ -17,8 +17,11 @@ struct ActivityPill: View {
     private var lastToolSummary: String? {
         guard let last = turn.timeline.last(where: { $0.kind == .tool }) else { return nil }
         let display = ToolDisplay.make(name: last.toolName, input: last.toolInput)
-        if let arg = display.argument { return "\(display.verb) \(arg)" }
-        return display.verb
+        guard let arg = display.argument else { return display.verb }
+        let oneLine = arg
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+        return "\(display.verb) \(oneLine)"
     }
 
     var body: some View {
@@ -208,11 +211,14 @@ struct ToolPillCard: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if let arg = display.argument {
-                        Text(arg)
+                        // One line, trailing ellipsis (web parity): a long
+                        // bash command's tail must not read like a stray
+                        // description hanging past a mid-string "…".
+                        Text(arg.replacingOccurrences(of: "\n", with: " "))
                             .font(display.mono ? .caption2.monospaced() : .caption)
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
-                            .truncationMode(.middle)
+                            .truncationMode(.tail)
                     }
                     Spacer(minLength: 4)
                     if item.isError {
