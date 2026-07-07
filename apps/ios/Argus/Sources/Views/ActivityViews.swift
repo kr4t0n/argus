@@ -6,9 +6,12 @@ import MarkdownUI
 /// tool · elapsed" with live dots while running) that expands into a
 /// left-railed timeline of tool cards, output, and thinking rows. The
 /// iOS counterpart of the web's ActivityPill + ActivityPanel.
-struct ActivityPill: View {
+/// The tappable capsule ("N tools · last tool · elapsed"). Expansion
+/// state is owned by the parent (TurnCell) so the expanded timeline can
+/// render BELOW the to-do / sub-agent panels, matching the web order.
+struct ActivityCapsule: View {
     let turn: Turn
-    @State private var expanded = false
+    @Binding var expanded: Bool
 
     private var toolCount: Int {
         turn.timeline.filter { $0.kind == .tool }.count
@@ -25,15 +28,6 @@ struct ActivityPill: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            capsule
-            if expanded {
-                timeline
-            }
-        }
-    }
-
-    private var capsule: some View {
         Button {
             withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() }
         } label: {
@@ -69,10 +63,13 @@ struct ActivityPill: View {
                 .frame(maxWidth: 180, alignment: .leading)
         }
     }
+}
 
-    private var timeline: some View {
-        // Thoughts are interleaved rows now (web parity) — no separate
-        // narration block.
+/// The expanded left-railed timeline (interleaved thoughts + tool cards).
+struct ActivityTimeline: View {
+    let turn: Turn
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(turn.timeline) { item in
                 TimelineRowView(item: item)

@@ -562,6 +562,7 @@ private struct TurnCell: View {
     let turn: Turn
     let attachmentURL: (AttachmentDTO) -> URL?
     let onFork: () -> Void
+    @State private var activityExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -575,17 +576,22 @@ private struct TurnCell: View {
                 PromptBubble(text: turn.prompt)
             }
 
+            // Web order: the activity CAPSULE, then the to-do / sub-agent
+            // panels, then (when expanded) the activity timeline — so the
+            // panels stay on top of the expanded tool list.
             if !turn.timeline.isEmpty {
-                ActivityPill(turn: turn)
+                ActivityCapsule(turn: turn, expanded: $activityExpanded)
             }
 
-            // Dedicated panels — same order as the web (below the pill,
-            // above the answer).
             if let todos = turn.todos {
                 TodoWindow(todos: todos)
             }
             if !turn.subAgents.isEmpty {
                 SubAgentWindow(calls: turn.subAgents)
+            }
+
+            if !turn.timeline.isEmpty, activityExpanded {
+                ActivityTimeline(turn: turn)
             }
 
             if !turn.answer.isEmpty {

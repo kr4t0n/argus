@@ -67,7 +67,10 @@ private struct TodoRow: View {
     private var icon: some View {
         switch todo.status {
         case .completed:
-            Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
+            // Web parity: emerald-500 at 80%, not bright system green.
+            Image(systemName: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(Color(hex: 0x10B981).opacity(0.8))
         case .inProgress:
             ProgressView().controlSize(.mini)
         case .pending:
