@@ -122,36 +122,78 @@ final class SessionListStore {
         sessions[id] = session
     }
 
-    /// Group visible sessions by their agent's project, newest first —
-    /// the iOS counterpart of the web sidebar's derivation.
+    /// Group visible sessions into projects, matching the web sidebar's
+    /// ordering exactly: projects follow the global AGENT sort order
+    /// (`groupProjects` over `agentStore.order`), so each project sits at
+    /// its first agent's position — reachable machines first, grouped by
+    /// machine name, then agent type/name. Sessions within a project are
+    /// newest-first. (NOT recency-ordered — that was the divergence.)
     func projectGroups(fleet: FleetStore) -> [ProjectGroup] {
-        var groups: [String: ProjectGroup] = [:]
+        var sessionsByAgent: [String: [SessionDTO]] = [:]
         for session in sessions.values where session.archivedAt == nil {
-            let agent = fleet.agents[session.agentId]
-            let machineId = agent?.machineId ?? "unknown"
-            let workingDir = agent?.workingDir ?? ""
-            let key = FleetStore.projectKey(machineId: machineId, workingDir: workingDir)
-            let title = workingDir.isEmpty
-                ? "no project"
-                : (workingDir as NSString).lastPathComponent
-            let machineName = agent?.machineName
-                ?? fleet.machines[machineId]?.name
-                ?? ""
-            groups[key, default: ProjectGroup(
-                id: key,
-                title: title,
-                machineId: agent?.machineId,
-                workingDir: agent?.workingDir,
-                machineName: machineName,
-                sessions: []
-            )].sessions.append(session)
+            sessionsByAgent[session.agentId, default: []].append(session)
         }
-        var result = Array(groups.values)
-        for index in result.indices {
-            result[index].sessions.sort { $0.updatedAt > $1.updatedAt }
+
+        // Agents in the web's global sort order (agentStore.sortOrder).
+        let sortedAgents = fleet.agents.values.sorted(by: Self.agentSortsBefore)
+
+        var order: [String] = []
+        var groups: [String: ProjectGroup] = [:]
+        for agent in sortedAgents {
+            guard let agentSessions = sessionsByAgent[agent.id], !agentSessions.isEmpty else {
+                continue
+            }
+            let workingDir = agent.workingDir ?? ""
+            let key = FleetStore.projectKey(machineId: agent.machineId, workingDir: workingDir)
+            if groups[key] == nil {
+                order.append(key)
+                groups[key] = ProjectGroup(
+                    id: key,
+                    title: workingDir.isEmpty ? "no project" : (workingDir as NSString).lastPathComponent,
+                    machineId: agent.machineId,
+                    workingDir: agent.workingDir,
+                    machineName: agent.machineName,
+                    sessions: []
+                )
+            }
+            groups[key]?.sessions.append(contentsOf: agentSessions)
         }
-        // Most recently active project first.
-        result.sort { ($0.sessions.first?.updatedAt ?? "") > ($1.sessions.first?.updatedAt ?? "") }
-        return result
+
+        // Sessions whose agent is gone from the fleet — keep them
+        // reachable in a trailing "no project" bucket.
+        let known = Set(fleet.agents.keys)
+        let orphans = sessions.values
+            .filter { $0.archivedAt == nil && !known.contains($0.agentId) }
+        if !orphans.isEmpty {
+            let key = "__orphan__"
+            order.append(key)
+            groups[key] = ProjectGroup(
+                id: key, title: "no project", machineId: nil, workingDir: nil,
+                machineName: "", sessions: Array(orphans)
+            )
+        }
+
+        return order.compactMap { key -> ProjectGroup? in
+            guard var group = groups[key] else { return nil }
+            group.sessions.sort { $0.updatedAt > $1.updatedAt }
+            return group
+        }
+    }
+
+    /// Agent comparator ported from the web's `agentStore.sortOrder`:
+    /// archived sink, then offline sink, then machineName, type, name.
+    static func agentSortsBefore(_ a: AgentDTO, _ b: AgentDTO) -> Bool {
+        let aArchived = a.archivedAt != nil ? 1 : 0
+        let bArchived = b.archivedAt != nil ? 1 : 0
+        if aArchived != bArchived { return aArchived < bArchived }
+        // online/busy/error all count as reachable (0); offline sinks (1).
+        let aOffline = a.status == .offline ? 1 : 0
+        let bOffline = b.status == .offline ? 1 : 0
+        if aOffline != bOffline { return aOffline < bOffline }
+        let machine = a.machineName.localizedCompare(b.machineName)
+        if machine != .orderedSame { return machine == .orderedAscending }
+        let type = a.type.localizedCompare(b.type)
+        if type != .orderedSame { return type == .orderedAscending }
+        return a.name.localizedCompare(b.name) == .orderedAscending
     }
 }

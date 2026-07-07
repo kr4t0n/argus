@@ -133,9 +133,15 @@ struct SessionSidebar: View {
     }
 
     private var machines: [MachineDTO] {
+        // Web parity (machineStore.sortOrder): offline sinks, then name.
         app.fleet.machines.values
             .filter { $0.archivedAt == nil }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .sorted { a, b in
+                let aOffline = a.status == .offline ? 1 : 0
+                let bOffline = b.status == .offline ? 1 : 0
+                if aOffline != bOffline { return aOffline < bOffline }
+                return a.name.localizedCompare(b.name) == .orderedAscending
+            }
     }
 
     private var renameAlertBinding: Binding<Bool> {
