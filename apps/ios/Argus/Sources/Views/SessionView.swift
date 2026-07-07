@@ -689,9 +689,11 @@ private struct PromptBubble: View {
         HStack {
             Spacer(minLength: 40)
             Text(text)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .background(.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
+                // Neutral surface bubble (web: bg-surface-1 / surface-2),
+                // NOT blue.
+                .background(Color.surface2, in: RoundedRectangle(cornerRadius: 16))
                 .textSelection(.enabled)
         }
     }
