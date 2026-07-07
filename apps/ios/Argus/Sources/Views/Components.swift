@@ -91,13 +91,20 @@ enum AgentTypeStyle {
         }
     }
 
-    static func symbol(for type: AgentType) -> String {
+    /// Brand-glyph asset (Assets.xcassets, template-rendered so it takes
+    /// the agent's tint), matching the web's @lobehub agent marks. nil
+    /// for unknown adapters → SF-Symbol fallback.
+    static func assetName(for type: AgentType) -> String? {
         switch type {
-        case KnownAgentType.claudeCode: return "sparkle"
-        case KnownAgentType.codex: return "chevron.left.forwardslash.chevron.right"
-        case KnownAgentType.cursorCLI: return "cursorarrow.rays"
-        default: return "cpu"
+        case KnownAgentType.claudeCode: return "agent-claude-code"
+        case KnownAgentType.codex: return "agent-codex"
+        case KnownAgentType.cursorCLI: return "agent-cursor-cli"
+        default: return nil
         }
+    }
+
+    static func symbol(for type: AgentType) -> String {
+        "cpu" // fallback for custom adapters
     }
 }
 
@@ -106,9 +113,19 @@ struct AgentTypeIcon: View {
     var size: CGFloat = 14
 
     var body: some View {
-        Image(systemName: AgentTypeStyle.symbol(for: type))
-            .font(.system(size: size, weight: .semibold))
-            .foregroundStyle(AgentTypeStyle.color(for: type))
+        Group {
+            if let asset = AgentTypeStyle.assetName(for: type) {
+                Image(asset)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: size, height: size)
+            } else {
+                Image(systemName: AgentTypeStyle.symbol(for: type))
+                    .font(.system(size: size, weight: .semibold))
+            }
+        }
+        .foregroundStyle(AgentTypeStyle.color(for: type))
     }
 }
 
