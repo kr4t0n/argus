@@ -158,7 +158,9 @@ struct TimelineRowView: View {
             Markdown(item.text)
                 .markdownTextStyle(\.text) {
                     ForegroundColor(.secondary)
-                    FontSize(.em(0.9))
+                    // Web parity: activity-panel thoughts are text-xs (12px),
+                    // smaller than the final answer body.
+                    FontSize(12)
                 }
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -312,7 +314,7 @@ private struct ThinkingRow: View {
                 Markdown(text)
                     .markdownTextStyle(\.text) {
                         ForegroundColor(.secondary)
-                        FontSize(.em(0.85))
+                        FontSize(12)
                     }
                     .textSelection(.enabled)
             }
