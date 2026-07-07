@@ -91,9 +91,8 @@ enum AgentTypeStyle {
         }
     }
 
-    /// Brand-glyph asset (Assets.xcassets, template-rendered so it takes
-    /// the agent's tint), matching the web's @lobehub agent marks. nil
-    /// for unknown adapters → SF-Symbol fallback.
+    /// Brand-glyph asset (Assets.xcassets), the actual @lobehub marks the
+    /// web uses. nil for unknown adapters → SF-Symbol fallback.
     static func assetName(for type: AgentType) -> String? {
         switch type {
         case KnownAgentType.claudeCode: return "agent-claude-code"
@@ -103,8 +102,12 @@ enum AgentTypeStyle {
         }
     }
 
-    static func symbol(for type: AgentType) -> String {
-        "cpu" // fallback for custom adapters
+    /// Claude's mark carries its own brand orange (render as-is); Codex
+    /// and Cursor are mono glyphs tinted with the primary label color —
+    /// exactly how the web renders them (ClaudeCode.Color vs mono Codex/
+    /// Cursor inheriting text-fg-primary).
+    static func assetIsTinted(for type: AgentType) -> Bool {
+        type != KnownAgentType.claudeCode
     }
 }
 
@@ -113,19 +116,26 @@ struct AgentTypeIcon: View {
     var size: CGFloat = 14
 
     var body: some View {
-        Group {
-            if let asset = AgentTypeStyle.assetName(for: type) {
+        if let asset = AgentTypeStyle.assetName(for: type) {
+            if AgentTypeStyle.assetIsTinted(for: type) {
                 Image(asset)
                     .renderingMode(.template)
                     .resizable()
                     .scaledToFit()
                     .frame(width: size, height: size)
+                    .foregroundStyle(.primary)
             } else {
-                Image(systemName: AgentTypeStyle.symbol(for: type))
-                    .font(.system(size: size, weight: .semibold))
+                Image(asset)
+                    .renderingMode(.original)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: size, height: size)
             }
+        } else {
+            Image(systemName: "cpu")
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(.secondary)
         }
-        .foregroundStyle(AgentTypeStyle.color(for: type))
     }
 }
 
