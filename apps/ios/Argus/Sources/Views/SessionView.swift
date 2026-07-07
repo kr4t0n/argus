@@ -314,35 +314,27 @@ struct SessionView: View {
                 .disabled(model == nil)
 
                 if model?.isRunning == true {
+                    // Web order: add-to-queue (only when there's content)
+                    // on the LEFT, then the stop button on the RIGHT.
+                    if hasContent {
+                        primaryButton(symbol: "text.badge.plus")
+                    }
                     Button {
                         Task { await model?.cancelRunningTurn() }
                     } label: {
+                        // Subtle (surface-2) square, NOT red — matches the
+                        // web's `variant="subtle"` cancel button.
                         Image(systemName: "square.fill")
                             .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(.primary)
                             .frame(width: 32, height: 32)
                             .background(Circle().fill(Color.surface2))
                     }
                     .buttonStyle(.plain)
                     .keyboardShortcut(".", modifiers: .command)
+                } else {
+                    primaryButton(symbol: "arrow.up")
                 }
-
-                Button(action: send) {
-                    Group {
-                        if uploadsInFlight > 0 {
-                            ProgressView().controlSize(.small).tint(Color(.systemBackground))
-                        } else {
-                            Image(systemName: isBusy ? "text.badge.plus" : "arrow.up")
-                                .font(.system(size: 15, weight: .bold))
-                        }
-                    }
-                    .foregroundStyle(Color(.systemBackground))
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(canSend ? Color.primary : Color.secondary.opacity(0.3)))
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSend)
-                .keyboardShortcut(.return, modifiers: .command)
             }
         }
         .padding(.horizontal, 8)
@@ -408,10 +400,35 @@ struct SessionView: View {
         model?.isRunning == true || app.queue.head(for: sessionId) != nil
     }
 
+    /// Something to send/queue: text or a ready attachment.
+    private var hasContent: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !pendingAttachments.isEmpty
+    }
+
     private var canSend: Bool {
-        model != nil
-            && uploadsInFlight == 0
-            && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        model != nil && uploadsInFlight == 0 && hasContent
+    }
+
+    /// The primary circular action button (send when idle, add-to-queue
+    /// while running) — white on dark, disabled when there's nothing to
+    /// send.
+    private func primaryButton(symbol: String) -> some View {
+        Button(action: send) {
+            Group {
+                if uploadsInFlight > 0 {
+                    ProgressView().controlSize(.small).tint(Color(.systemBackground))
+                } else {
+                    Image(systemName: symbol).font(.system(size: 15, weight: .bold))
+                }
+            }
+            .foregroundStyle(Color(.systemBackground))
+            .frame(width: 32, height: 32)
+            .background(Circle().fill(canSend ? Color.primary : Color.secondary.opacity(0.3)))
+        }
+        .buttonStyle(.plain)
+        .disabled(!canSend)
+        .keyboardShortcut(.return, modifiers: .command)
     }
 
     private func send() {
