@@ -96,7 +96,7 @@ struct SubAgentWindow: View {
                 withAnimation(.easeOut(duration: 0.12)) { open.toggle() }
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "cpu").font(.caption).foregroundStyle(.toolAmber)
+                    Image(systemName: "cpu").font(.caption).foregroundStyle(Color.toolAmber)
                     Text("Sub-agents").font(.caption).foregroundStyle(.secondary)
                     Text("\(calls.count)")
                         .font(.caption2.monospacedDigit())
