@@ -579,6 +579,15 @@ private struct TurnCell: View {
                 ActivityPill(turn: turn)
             }
 
+            // Dedicated panels — same order as the web (below the pill,
+            // above the answer).
+            if let todos = turn.todos {
+                TodoWindow(todos: todos)
+            }
+            if !turn.subAgents.isEmpty {
+                SubAgentWindow(calls: turn.subAgents)
+            }
+
             if !turn.answer.isEmpty {
                 AnswerView(markdown: turn.answer, isStreaming: turn.isRunning)
                     .contextMenu {
@@ -589,9 +598,9 @@ private struct TurnCell: View {
                             onFork()
                         }
                     }
-            } else if turn.isRunning, turn.timeline.isEmpty {
-                // Only before any activity streams — once the pill has
-                // content (thoughts/tools), its running dots convey this.
+            } else if turn.isRunning, turn.timeline.isEmpty, turn.todos == nil, turn.subAgents.isEmpty {
+                // Only before ANY activity streams — once the pill or a
+                // panel has content, that conveys progress.
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
                     Text("Working…")

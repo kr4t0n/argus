@@ -324,7 +324,7 @@ private struct ThinkingRow: View {
 }
 
 /// Scrollable monospace block on a layered surface (tool output / input).
-private struct MonoBlock: View {
+struct MonoBlock: View {
     let text: String
     var isError = false
     var maxHeight: CGFloat = 200

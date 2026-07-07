@@ -111,6 +111,10 @@ public struct Turn: Identifiable, Equatable, Sendable {
     public let thinkingTokens: Int?
     public let model: String?
     public let errorText: String?
+    /// Latest to-do snapshot (TodoWindow), nil when the turn has none.
+    public let todos: [TodoItem]?
+    /// Sub-agent invocations (SubAgentWindow), empty when none.
+    public let subAgents: [SubAgentCall]
 }
 
 /// Session-header context ring inputs: live context of the latest
@@ -308,11 +312,17 @@ public struct TranscriptState: Equatable, Sendable {
         var answer = turnDone ? split.finalDeltas.compactMap(\.delta).joined() : ""
         let narration = split.intermediateDeltas.compactMap(\.delta).joined()
 
-        // Pass 1: index stdout/stderr results by the tool_use id they
-        // answer, so a tool row can fold in its output/diff (web parity —
-        // ActivityPill's resultByToolId).
+        // Dedicated panels (todos, sub-agents) render separately and are
+        // excluded from the main timeline below.
+        let todos = DedicatedPanels.extractTodos(chunks)
+        let subAgents = DedicatedPanels.extractSubAgents(chunks)
+
+        // Pass 1: index NON-nested stdout/stderr results by the tool_use
+        // id they answer, so a tool row can fold in its output/diff (web
+        // parity — ActivityPill's resultByToolId skips sub-agent results).
         var resultByToolId: [String: ResultChunk] = [:]
-        for chunk in chunks where chunk.kind == .stdout || chunk.kind == .stderr {
+        for chunk in chunks
+        where (chunk.kind == .stdout || chunk.kind == .stderr) && !DedicatedPanels.isNested(chunk) {
             if let toolId = chunk.meta?["toolResultFor"]?.string {
                 resultByToolId[toolId] = chunk
             }
@@ -364,27 +374,25 @@ public struct TranscriptState: Equatable, Sendable {
                 continue
 
             case .tool:
-                let name = chunk.meta?["tool"]?.string
-                    ?? firstLine(of: chunk.content) ?? "tool"
+                // Sub-agent inner tools render in SubAgentWindow only.
+                if DedicatedPanels.isNested(chunk) { continue }
                 let toolId = chunk.meta?["id"]?.string
-                let result = toolId.flatMap { resultByToolId[$0] }
-                if let result { consumedResultIds.insert(result.id) }
-                timeline.append(TimelineItem(
-                    id: chunk.id,
-                    kind: .tool,
-                    seq: chunk.seq,
-                    text: chunk.content ?? "",
-                    toolName: name,
-                    toolInput: chunk.meta?["input"]?.object,
-                    resultText: result?.content,
-                    isError: result?.kind == .stderr,
-                    isDiff: result?.meta?["isDiff"]?.bool ?? false,
-                    filePath: result?.meta?["filePath"]?.string
-                        ?? chunk.meta?["input"]?["file_path"]?.string,
-                    exitCode: result?.meta?["exitCode"]?.int
-                ))
+                // Todo/agent/task tools render in their dedicated panels —
+                // still consume their paired result so it doesn't orphan.
+                if DedicatedPanels.isDedicatedPanelTool(chunk) {
+                    if let toolId, let result = resultByToolId[toolId] {
+                        consumedResultIds.insert(result.id)
+                    }
+                    continue
+                }
+                if let toolId, let result = resultByToolId[toolId] {
+                    consumedResultIds.insert(result.id)
+                }
+                timeline.append(DedicatedPanels.toolItem(for: chunk, resultByToolId: resultByToolId))
 
             case .stdout, .stderr:
+                // Sub-agent output belongs to SubAgentWindow, not here.
+                if DedicatedPanels.isNested(chunk) { continue }
                 // Standalone output only — a result already folded into a
                 // tool row is skipped.
                 if consumedResultIds.contains(chunk.id) { continue }
@@ -400,6 +408,8 @@ public struct TranscriptState: Equatable, Sendable {
                 ))
 
             case .progress:
+                // Sub-agent progress/thinking is SubAgentWindow's concern.
+                if DedicatedPanels.isNested(chunk) { continue }
                 let contentType = chunk.meta?["contentType"]?.string
                 if contentType == "thinking" {
                     let redacted = chunk.meta?["redacted"]?.bool ?? false
@@ -476,14 +486,9 @@ public struct TranscriptState: Equatable, Sendable {
             usage: usage,
             thinkingTokens: thinkingTokens,
             model: model,
-            errorText: errorText
+            errorText: errorText,
+            todos: todos,
+            subAgents: subAgents
         )
-    }
-
-    private func firstLine(of text: String?) -> String? {
-        guard let text else { return nil }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return trimmed.split(separator: "\n", maxSplits: 1).first.map(String.init)
     }
 }

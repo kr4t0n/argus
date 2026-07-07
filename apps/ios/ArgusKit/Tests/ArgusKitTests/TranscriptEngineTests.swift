@@ -219,6 +219,88 @@ struct TranscriptEngineTests {
         #expect(turn.timeline.map(\.kind) == [.thought, .tool])
     }
 
+    @Test("todos extract latest-wins, normalize status, drop empty content")
+    func todoExtraction() throws {
+        var state = TranscriptState(sessionId: "sess-1")
+        state.upsert(command: TestSupport.command(status: .running))
+        // An older todo snapshot, then a newer one (latest wins).
+        state.mergeBackfill(commands: [], chunks: [
+            TestSupport.chunk(
+                id: "t1", seq: 1, kind: .tool, content: "TodoWrite",
+                meta: ["tool": .string("TodoWrite"), "input": .object([
+                    "todos": .array([.object(["content": .string("old"), "status": .string("pending")])]),
+                ])]
+            ),
+            TestSupport.chunk(
+                id: "t2", seq: 2, kind: .tool, content: "TodoWrite",
+                meta: ["tool": .string("TodoWrite"), "input": .object([
+                    "todos": .array([
+                        .object(["content": .string("write tests"), "status": .string("TODO_STATUS_IN_PROGRESS"),
+                                 "activeForm": .string("Writing tests")]),
+                        .object(["content": .string("ship"), "status": .string("completed")]),
+                        .object(["content": .string(""), "status": .string("pending")]), // dropped
+                    ]),
+                ])]
+            ),
+        ])
+        let turn = try #require(state.turns(agentType: KnownAgentType.claudeCode).first)
+        let todos = try #require(turn.todos)
+        #expect(todos.count == 2) // empty-content row dropped
+        #expect(todos[0].status == .inProgress)
+        #expect(todos[0].displayText == "Writing tests") // activeForm for in-progress
+        #expect(todos[1].status == .completed)
+        #expect(todos[1].displayText == "ship")
+        // The TodoWrite tool never shows in the main timeline.
+        #expect(!turn.timeline.contains { $0.kind == .tool })
+    }
+
+    @Test("sub-agent groups nested tools under the agent, out of the timeline")
+    func subAgentExtraction() throws {
+        var state = TranscriptState(sessionId: "sess-1")
+        state.upsert(command: TestSupport.command(status: .completed))
+        state.mergeBackfill(commands: [], chunks: [
+            TestSupport.chunk(
+                id: "a1", seq: 1, kind: .tool, content: "Agent",
+                meta: ["tool": .string("Agent"), "id": .string("agent-1"),
+                       "input": .object([
+                           "subagent_type": .string("explorer"),
+                           "description": .string("scan repo"),
+                           "prompt": .string("find bugs"),
+                       ])]
+            ),
+            // Nested tool inside the sub-agent.
+            TestSupport.chunk(
+                id: "n1", seq: 2, kind: .tool, content: "Read x",
+                meta: ["tool": .string("Read"), "id": .string("nested-1"),
+                       "parentToolUseId": .string("agent-1"),
+                       "input": .object(["file_path": .string("x.swift")])]
+            ),
+            TestSupport.chunk(
+                id: "nr1", seq: 3, kind: .stdout, content: "file body",
+                meta: ["toolResultFor": .string("nested-1"), "parentToolUseId": .string("agent-1")]
+            ),
+            // The Agent tool's own result.
+            TestSupport.chunk(
+                id: "ar1", seq: 4, kind: .stdout, content: "found 2 bugs",
+                meta: ["toolResultFor": .string("agent-1")]
+            ),
+            TestSupport.chunk(id: "f1", seq: 5, kind: .final, isFinal: true),
+        ])
+        let turn = try #require(state.turns(agentType: KnownAgentType.claudeCode).first)
+        #expect(turn.subAgents.count == 1)
+        let sub = turn.subAgents[0]
+        #expect(sub.subagentType == "explorer")
+        #expect(sub.description == "scan repo")
+        #expect(sub.prompt == "find bugs")
+        #expect(sub.result == "found 2 bugs")
+        #expect(!sub.isError)
+        #expect(sub.nested.count == 1)
+        #expect(sub.nested[0].toolName == "Read")
+        #expect(sub.nested[0].resultText == "file body")
+        // Nothing sub-agent-related leaks into the main timeline.
+        #expect(turn.timeline.isEmpty)
+    }
+
     @Test("stderr result marks the tool row as an error")
     func toolErrorPairing() throws {
         var state = TranscriptState(sessionId: "sess-1")
