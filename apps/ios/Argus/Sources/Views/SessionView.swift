@@ -589,7 +589,9 @@ private struct TurnCell: View {
                             onFork()
                         }
                     }
-            } else if turn.isRunning {
+            } else if turn.isRunning, turn.timeline.isEmpty {
+                // Only before any activity streams — once the pill has
+                // content (thoughts/tools), its running dots convey this.
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
                     Text("Working…")

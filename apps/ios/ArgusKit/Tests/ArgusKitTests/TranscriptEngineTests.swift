@@ -190,6 +190,35 @@ struct TranscriptEngineTests {
         #expect(!turn.timeline.contains { $0.kind == .system })
     }
 
+    @Test("live turn: trailing text folds into the pill, not the answer body")
+    func liveTextFoldsIntoPill() throws {
+        var state = TranscriptState(sessionId: "sess-1")
+        // Running turn: a thought, a tool, then trailing text still streaming.
+        state.upsert(command: TestSupport.command(status: .running))
+        state.mergeBackfill(commands: [], chunks: [
+            TestSupport.chunk(id: "d1", seq: 1, kind: .delta, delta: "let me check"),
+            TestSupport.chunk(
+                id: "t1", seq: 2, kind: .tool, content: "Read a",
+                meta: ["tool": .string("Read"), "id": .string("x1")]
+            ),
+            TestSupport.chunk(id: "d2", seq: 3, kind: .delta, delta: "here is the answer"),
+        ])
+        var turn = try #require(state.turns(agentType: "custom").first)
+        // While live, the trailing delta is a thought (in the pill) and the
+        // answer body stays empty — no flash.
+        #expect(turn.answer.isEmpty)
+        #expect(turn.timeline.map(\.kind) == [.thought, .tool, .thought])
+        #expect(turn.timeline.last?.text == "here is the answer")
+
+        // Turn settles: the trailing text drops out of the pill into the
+        // answer; only the pre-tool thought remains a timeline row.
+        state.upsert(command: TestSupport.command(status: .completed))
+        state.append(chunk: TestSupport.chunk(id: "f1", seq: 4, kind: .final, isFinal: true))
+        turn = try #require(state.turns(agentType: "custom").first)
+        #expect(turn.answer == "here is the answer")
+        #expect(turn.timeline.map(\.kind) == [.thought, .tool])
+    }
+
     @Test("stderr result marks the tool row as an error")
     func toolErrorPairing() throws {
         var state = TranscriptState(sessionId: "sess-1")

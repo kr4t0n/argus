@@ -294,7 +294,18 @@ public struct TranscriptState: Equatable, Sendable {
         let chunks = chunksByCommand[command.id] ?? []
         let split = DeltaSplit.split(chunks)
 
-        var answer = split.finalDeltas.compactMap(\.delta).joined()
+        // "Live turn text folds into the activity pill" (web parity, commit
+        // 0ca1129). While a turn is still running, the trailing deltas
+        // can't be classified yet — preamble if a tool follows, or the
+        // final answer if it ends. So we fold ALL streaming text into the
+        // timeline as thoughts and keep `answer` empty until the turn
+        // settles; the text is in the pill from the first token and never
+        // relocates when a tool lands (no flash). Once done, the trailing
+        // deltas drop out of the timeline into the answer body.
+        let turnDone = command.status.isTerminal
+            || chunks.contains { $0.kind == .final || $0.kind == .error }
+
+        var answer = turnDone ? split.finalDeltas.compactMap(\.delta).joined() : ""
         let narration = split.intermediateDeltas.compactMap(\.delta).joined()
 
         // Pass 1: index stdout/stderr results by the tool_use id they
@@ -336,7 +347,10 @@ public struct TranscriptState: Equatable, Sendable {
                 model = found
             }
             if chunk.kind == .delta {
-                if chunk.seq <= split.boundarySeq {
+                // Settled: only pre-boundary deltas are thoughts (trailing
+                // ones are the answer). Live: fold every delta in as a
+                // thought so nothing streams in the body then relocates.
+                if !turnDone || chunk.seq <= split.boundarySeq {
                     if thoughtStart == nil { thoughtStart = (chunk.id, chunk.seq) }
                     thoughtBuffer += chunk.delta ?? ""
                 }
