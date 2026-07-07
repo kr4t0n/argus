@@ -64,20 +64,34 @@ enum ToolStyle {
         }
     }
 
+    /// The web's `iconColorFor`: exact tailwind tool colors (light -600 /
+    /// dark -400) at 70% opacity — dimmer than full-saturation system
+    /// colors. Default (unknown tool) is the muted foreground.
     static func tint(for rawName: String?) -> Color {
+        let base: Color
         switch (rawName ?? "").lowercased() {
-        case "read", "cat", "open", "codebase", "symbols": return .blue
+        case "read", "cat", "open", "codebase", "symbols":
+            base = Color(light: 0x2563EB, dark: 0x60A5FA)  // blue
         case "write", "create", "edit", "patch", "multiedit",
-             "rename", "move", "mv": return .purple
-        case "delete", "remove", "rm": return .pink
-        case "grep", "search", "glob", "find", "ls": return .teal
-        case "bash", "shell", "exec", "run": return .green
-        case "fetch", "webfetch", "websearch": return .indigo
+             "rename", "move", "mv":
+            base = Color(light: 0x7C3AED, dark: 0xA78BFA)  // violet
+        case "delete", "remove", "rm":
+            base = Color(light: 0xE11D48, dark: 0xFB7185)  // rose
+        case "grep", "search", "glob", "find", "ls":
+            base = Color(light: 0x0D9488, dark: 0x2DD4BF)  // teal
+        case "bash", "shell", "exec", "run":
+            base = Color(light: 0x059669, dark: 0x34D399)  // emerald
+        case "fetch", "webfetch", "websearch":
+            base = Color(light: 0x4F46E5, dark: 0x818CF8)  // indigo
         case "task", "todo", "todowrite", "updatetodos",
-             "taskcreate", "taskupdate", "tasklist", "taskget": return .orange
-        case "agent": return .toolAmber
-        default: return .secondary
+             "taskcreate", "taskupdate", "tasklist", "taskget":
+            base = Color(light: 0xEA580C, dark: 0xFB923C)  // orange
+        case "agent":
+            base = Color(light: 0xD97706, dark: 0xFBBF24)  // amber
+        default:
+            return .secondary  // fg-muted, no /70
         }
+        return base.opacity(0.7)
     }
 }
 
