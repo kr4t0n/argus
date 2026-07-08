@@ -17,15 +17,26 @@ struct AnswerView: View {
 
     var body: some View {
         Markdown(markdown)
+            // Body ≈ web's text-sm (14px); a touch larger for mobile.
+            .markdownTextStyle(\.text) {
+                FontSize(15)
+            }
             .markdownTextStyle(\.code) {
                 FontFamilyVariant(.monospaced)
-                FontSize(.em(0.88))
+                FontSize(.em(0.85))
                 ForegroundColor(.codeInlineFg)
                 BackgroundColor(.surface2.opacity(0.5))
             }
             .markdownTextStyle(\.link) {
                 ForegroundColor(.mdLink)
             }
+            // The web's .markdown headings have NO font-size — they're
+            // just semibold at body size. Mirror that with a very modest
+            // hierarchy instead of MarkdownUI's large defaults.
+            .markdownBlockStyle(\.heading1) { heading($0, size: 18, top: 16) }
+            .markdownBlockStyle(\.heading2) { heading($0, size: 16, top: 14) }
+            .markdownBlockStyle(\.heading3) { heading($0, size: 15, top: 12) }
+            .markdownBlockStyle(\.heading4) { heading($0, size: 15, top: 10) }
             .markdownBlockStyle(\.codeBlock) { configuration in
                 if configuration.language?.lowercased() == "html", !isStreaming {
                     HtmlBlock(source: configuration.content)
@@ -36,6 +47,17 @@ struct AnswerView: View {
                 }
             }
             .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func heading(_ configuration: BlockConfiguration, size: CGFloat, top: CGFloat) -> some View {
+        configuration.label
+            .markdownTextStyle {
+                FontWeight(.semibold)
+                FontSize(size)
+            }
+            .padding(.top, top)
+            .padding(.bottom, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -55,7 +77,7 @@ struct CodeBlock: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             Text(trimmed)
-                .font(.system(.callout, design: .monospaced))
+                .font(.system(size: 13, design: .monospaced)) // web pre = text-sm
                 .textSelection(.enabled)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
