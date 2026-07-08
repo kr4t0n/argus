@@ -13,6 +13,20 @@ struct SessionSidebar: View {
     @State private var renameText = ""
     @State private var newSessionProject: ProjectGroup?
     @State private var showNewProject = false
+    /// Collapsed project keys, persisted like the web's uiStore.expanded
+    /// (default expanded — a key is present only when collapsed).
+    @State private var collapsed = SessionSidebar.loadCollapsed()
+
+    private static let collapsedKey = "argus.collapsedProjects"
+    private static func loadCollapsed() -> Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: collapsedKey) ?? [])
+    }
+    private func toggleCollapsed(_ key: String) {
+        withAnimation(.easeOut(duration: 0.15)) {
+            if collapsed.contains(key) { collapsed.remove(key) } else { collapsed.insert(key) }
+        }
+        UserDefaults.standard.set(Array(collapsed), forKey: Self.collapsedKey)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -63,37 +77,52 @@ struct SessionSidebar: View {
                 }
                 ForEach(groups) { group in
                     Section {
-                        ForEach(group.sessions) { session in
-                            SessionRow(
-                                session: session,
-                                agent: app.fleet.agents[session.agentId]
-                            )
-                            .tag(DetailRoute.session(session.id))
-                            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 12))
-                            .swipeActions(edge: .trailing) {
-                                Button("Archive", systemImage: "archivebox") {
-                                    archive(session)
+                        if !collapsed.contains(group.id) {
+                            ForEach(group.sessions) { session in
+                                SessionRow(
+                                    session: session,
+                                    agent: app.fleet.agents[session.agentId]
+                                )
+                                .tag(DetailRoute.session(session.id))
+                                .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 12))
+                                .swipeActions(edge: .trailing) {
+                                    Button("Archive", systemImage: "archivebox") {
+                                        archive(session)
+                                    }
+                                    .tint(.indigo)
                                 }
-                                .tint(.indigo)
-                            }
-                            .contextMenu {
-                                Button("Rename", systemImage: "pencil") {
-                                    renameText = session.title
-                                    renameTarget = session
-                                }
-                                Button("Archive", systemImage: "archivebox") {
-                                    archive(session)
+                                .contextMenu {
+                                    Button("Rename", systemImage: "pencil") {
+                                        renameText = session.title
+                                        renameTarget = session
+                                    }
+                                    Button("Archive", systemImage: "archivebox") {
+                                        archive(session)
+                                    }
                                 }
                             }
                         }
                     } header: {
                         HStack(spacing: 6) {
-                            Image(systemName: "folder").font(.caption2)
-                            Text(group.title).font(.caption).fontWeight(.medium)
+                            // Tap the label to collapse/expand the project.
+                            Button {
+                                toggleCollapsed(group.id)
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 8, weight: .bold))
+                                        .foregroundStyle(.tertiary)
+                                        .rotationEffect(.degrees(collapsed.contains(group.id) ? 0 : 90))
+                                    Image(systemName: "folder").font(.caption2)
+                                    Text(group.title).font(.caption).fontWeight(.medium)
+                                    Text("\(group.sessions.count)")
+                                        .font(.caption2.monospacedDigit())
+                                        .foregroundStyle(.tertiary)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
                             Spacer()
-                            Text("\(group.sessions.count)")
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.tertiary)
                             if group.machineId != nil {
                                 Button {
                                     newSessionProject = group
