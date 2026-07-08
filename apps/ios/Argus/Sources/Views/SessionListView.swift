@@ -7,7 +7,22 @@ import ArgusKit
 /// and user rows all drive the same detail column.
 struct SessionSidebar: View {
     @Environment(AppModel.self) private var app
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @Binding var selection: DetailRoute?
+
+    /// iPhone (compact) gets a little more row height for easier tapping;
+    /// iPad (regular) keeps the tighter density.
+    private var compact: Bool { sizeClass == .compact }
+    private var rowInsets: EdgeInsets {
+        EdgeInsets(top: compact ? 7 : 4, leading: 22, bottom: compact ? 7 : 4, trailing: 12)
+    }
+    private var machineRowInsets: EdgeInsets {
+        EdgeInsets(top: compact ? 7 : 4, leading: 14, bottom: compact ? 7 : 4, trailing: 12)
+    }
+    private var headerInsets: EdgeInsets {
+        EdgeInsets(top: compact ? 10 : 6, leading: 12, bottom: compact ? 6 : 4, trailing: 12)
+    }
+    private var minRowHeight: CGFloat { compact ? 40 : 30 }
 
     @State private var renameTarget: SessionDTO?
     @State private var renameText = ""
@@ -81,7 +96,7 @@ struct SessionSidebar: View {
                 Section {
                     ForEach(groups) { group in
                         projectHeader(group)
-                            .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 4, trailing: 12))
+                            .listRowInsets(headerInsets)
                         if !collapsed.contains(group.id) {
                             ForEach(group.sessions) { session in
                                 SessionRow(
@@ -89,7 +104,7 @@ struct SessionSidebar: View {
                                     agent: app.fleet.agents[session.agentId]
                                 )
                                 .tag(DetailRoute.session(session.id))
-                                .listRowInsets(EdgeInsets(top: 4, leading: 22, bottom: 4, trailing: 12))
+                                .listRowInsets(rowInsets)
                                 .swipeActions(edge: .trailing) {
                                     Button("Archive", systemImage: "archivebox") {
                                         archive(session)
@@ -114,7 +129,7 @@ struct SessionSidebar: View {
                     ForEach(machines) { machine in
                         MachineRow(machine: machine)
                             .tag(DetailRoute.machine(machine.id))
-                            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 12))
+                            .listRowInsets(machineRowInsets)
                     }
                 }
 
@@ -131,7 +146,7 @@ struct SessionSidebar: View {
             }
             .listStyle(.sidebar)
             .listSectionSpacing(.compact)
-            .environment(\.defaultMinListRowHeight, 30)
+            .environment(\.defaultMinListRowHeight, minRowHeight)
             .refreshable { await app.refreshAll() }
         }
     }
