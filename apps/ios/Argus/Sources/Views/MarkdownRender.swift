@@ -30,6 +30,21 @@ struct AnswerView: View {
             .markdownTextStyle(\.link) {
                 ForegroundColor(.mdLink)
             }
+            // Web uses font-bold for strong; MarkdownUI defaults to semibold.
+            .markdownTextStyle(\.strong) {
+                FontWeight(.bold)
+            }
+            // Tight list markers — plain "•"/"1." instead of the SF
+            // circle.fill symbol whose built-in padding over-indents the
+            // list vs the web's compact pl-5 bullets.
+            .markdownBlockStyle(\.bulletedListMarker) { _ in
+                Text("•").foregroundStyle(.secondary)
+            }
+            .markdownBlockStyle(\.numberedListMarker) { configuration in
+                Text("\(configuration.itemNumber).")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
             // The web's .markdown headings have NO font-size — they're
             // just semibold at body size. Mirror that with a very modest
             // hierarchy instead of MarkdownUI's large defaults.
