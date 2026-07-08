@@ -256,7 +256,14 @@ struct HtmlWebView: UIViewRepresentable {
         /// Inject a color-scheme hint + a self-measuring height reporter,
         /// mirroring the web's prepareDocument / HEIGHT_BOOTSTRAP.
         static func prepareDocument(_ content: String, dark: Bool) -> String {
+            // Unlike a browser iframe (which lays out at its own element
+            // width), WKWebView defaults to a 980px "desktop" viewport for
+            // pages with no viewport meta, then scales the canvas down to
+            // the view width. That inflates scrollHeight by 1/scale — mild
+            // on a wide iPad, huge on a narrow iPhone. Pin the layout to the
+            // device width so the measured height matches what's rendered.
             let head = """
+            <meta name="viewport" content="width=device-width, initial-scale=1">
             <style>:root{color-scheme:\(dark ? "dark" : "light")}</style>
             <script>
             (function(){
