@@ -97,6 +97,7 @@ struct SessionSidebar: View {
                     ForEach(groups) { group in
                         projectHeader(group)
                             .listRowInsets(headerInsets)
+                            .listRowSeparator(.hidden)
                         if !collapsed.contains(group.id) {
                             ForEach(group.sessions) { session in
                                 SessionRow(
@@ -105,6 +106,7 @@ struct SessionSidebar: View {
                                 )
                                 .tag(DetailRoute.session(session.id))
                                 .listRowInsets(rowInsets)
+                                .listRowSeparator(.hidden)
                                 .swipeActions(edge: .trailing) {
                                     Button("Archive", systemImage: "archivebox") {
                                         archive(session)
@@ -130,6 +132,7 @@ struct SessionSidebar: View {
                         MachineRow(machine: machine)
                             .tag(DetailRoute.machine(machine.id))
                             .listRowInsets(machineRowInsets)
+                            .listRowSeparator(.hidden)
                     }
                 }
 
@@ -142,6 +145,7 @@ struct SessionSidebar: View {
                         }
                     }
                     .tag(DetailRoute.user)
+                    .listRowSeparator(.hidden)
                 }
             }
             .listStyle(.sidebar)
