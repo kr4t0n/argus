@@ -198,6 +198,17 @@ enum RelativeTime {
         if abs(date.timeIntervalSinceNow) < 5 { return "now" }
         return formatter.localizedString(for: date, relativeTo: Date())
     }
+
+    /// Terse form for dense rows — "now", "5m", "18h", "16d" (web parity;
+    /// always days past a day, no "ago").
+    static func short(iso: String) -> String {
+        guard let date = ISO8601.parse(iso) else { return "" }
+        let seconds = max(0, -date.timeIntervalSinceNow)
+        if seconds < 60 { return "now" }
+        if seconds < 3600 { return "\(Int(seconds / 60))m" }
+        if seconds < 86_400 { return "\(Int(seconds / 3600))h" }
+        return "\(Int(seconds / 86_400))d"
+    }
 }
 
 /// Thin "reconnecting" strip shown while the socket is down but the app

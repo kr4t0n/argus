@@ -69,6 +69,7 @@ struct SessionSidebar: View {
                                 agent: app.fleet.agents[session.agentId]
                             )
                             .tag(DetailRoute.session(session.id))
+                            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 12))
                             .swipeActions(edge: .trailing) {
                                 Button("Archive", systemImage: "archivebox") {
                                     archive(session)
@@ -87,25 +88,22 @@ struct SessionSidebar: View {
                         }
                     } header: {
                         HStack(spacing: 6) {
-                            Image(systemName: "folder")
-                            Text(group.title)
-                            if !group.machineName.isEmpty {
-                                Text("· \(group.machineName)")
-                                    .foregroundStyle(.tertiary)
-                            }
+                            Image(systemName: "folder").font(.caption2)
+                            Text(group.title).font(.caption).fontWeight(.medium)
                             Spacer()
-                            // Project-scoped "+" — the web's project-row
-                            // hover action.
+                            Text("\(group.sessions.count)")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.tertiary)
                             if group.machineId != nil {
                                 Button {
                                     newSessionProject = group
                                 } label: {
-                                    Image(systemName: "plus")
+                                    Image(systemName: "plus").font(.caption2)
                                 }
                                 .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
                             }
                         }
-                        .font(.caption)
                     }
                 }
 
@@ -113,6 +111,7 @@ struct SessionSidebar: View {
                     ForEach(machines) { machine in
                         MachineRow(machine: machine)
                             .tag(DetailRoute.machine(machine.id))
+                            .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 12))
                     }
                 }
 
@@ -128,6 +127,8 @@ struct SessionSidebar: View {
                 }
             }
             .listStyle(.sidebar)
+            .listSectionSpacing(.compact)
+            .environment(\.defaultMinListRowHeight, 30)
             .refreshable { await app.refreshAll() }
         }
     }
@@ -183,20 +184,19 @@ private struct MachineRow: View {
     let machine: MachineDTO
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Image(systemName: "desktopcomputer")
+                .font(.caption)
                 .foregroundStyle(machine.status == .online ? Color.green : Color.secondary)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(machine.name).font(.callout).lineLimit(1)
-                Text("\(machine.agentCount) agent\(machine.agentCount == 1 ? "" : "s")")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
+                .frame(width: 16)
+            Text(machine.name).font(.subheadline).lineLimit(1)
+            Spacer(minLength: 6)
+            Text("\(machine.agentCount)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
             Circle()
                 .fill(machine.status == .online ? Color.green : Color.gray.opacity(0.4))
-                .frame(width: 7, height: 7)
+                .frame(width: 6, height: 6)
         }
     }
 }
@@ -206,30 +206,19 @@ private struct SessionRow: View {
     let agent: AgentDTO?
 
     var body: some View {
-        HStack(spacing: 10) {
-            AgentTypeIcon(type: agent?.type ?? "custom")
-                .frame(width: 18)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.title)
-                    .font(.body)
-                    .fontWeight(session.unread ? .semibold : .regular)
-                    .lineLimit(1)
-                HStack(spacing: 6) {
-                    if session.status == .active {
-                        Text("running")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                    }
-                    Text(RelativeTime.label(iso: session.updatedAt))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Spacer()
+        // Single compact line — icon · title · dot · time (web parity).
+        HStack(spacing: 8) {
+            AgentTypeIcon(type: agent?.type ?? "custom", size: 13)
+                .frame(width: 16)
+            Text(session.title)
+                .font(.subheadline)
+                .fontWeight(session.unread ? .semibold : .regular)
+                .lineLimit(1)
+            Spacer(minLength: 6)
             SessionStatusDot(session: session)
+            Text(RelativeTime.short(iso: session.updatedAt))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
         }
-        .padding(.vertical, 2)
     }
 }
