@@ -45,6 +45,24 @@ struct AnswerView: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
+            // Dimmed border (web `border-default`) + subtle zebra rows,
+            // instead of MarkdownUI's heavier default table border.
+            .markdownBlockStyle(\.table) { configuration in
+                configuration.label
+                    .fixedSize(horizontal: false, vertical: true)
+                    .markdownTableBorderStyle(.init(color: Color(light: 0xE8E8E8, dark: 0x1F1F1F)))
+                    .markdownTableBackgroundStyle(
+                        .alternatingRows(Color.clear, Color.surface1.opacity(0.3))
+                    )
+            }
+            .markdownBlockStyle(\.tableCell) { configuration in
+                configuration.label
+                    .markdownTextStyle {
+                        if configuration.row == 0 { FontWeight(.semibold) }
+                    }
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 12)
+            }
             // The web's .markdown headings have NO font-size — they're
             // just semibold at body size. Mirror that with a very modest
             // hierarchy instead of MarkdownUI's large defaults.
