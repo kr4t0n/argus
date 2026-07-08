@@ -75,8 +75,13 @@ struct SessionSidebar: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                ForEach(groups) { group in
-                    Section {
+                // Projects are flat rows (header + sessions) in ONE
+                // section — NOT per-project sections — so collapsed
+                // projects are just compact rows without section chrome.
+                Section {
+                    ForEach(groups) { group in
+                        projectHeader(group)
+                            .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 4, trailing: 12))
                         if !collapsed.contains(group.id) {
                             ForEach(group.sessions) { session in
                                 SessionRow(
@@ -84,7 +89,7 @@ struct SessionSidebar: View {
                                     agent: app.fleet.agents[session.agentId]
                                 )
                                 .tag(DetailRoute.session(session.id))
-                                .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 12))
+                                .listRowInsets(EdgeInsets(top: 4, leading: 22, bottom: 4, trailing: 12))
                                 .swipeActions(edge: .trailing) {
                                     Button("Archive", systemImage: "archivebox") {
                                         archive(session)
@@ -100,37 +105,6 @@ struct SessionSidebar: View {
                                         archive(session)
                                     }
                                 }
-                            }
-                        }
-                    } header: {
-                        HStack(spacing: 6) {
-                            // Tap the label to collapse/expand the project.
-                            Button {
-                                toggleCollapsed(group.id)
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 8, weight: .bold))
-                                        .foregroundStyle(.tertiary)
-                                        .rotationEffect(.degrees(collapsed.contains(group.id) ? 0 : 90))
-                                    Image(systemName: "folder").font(.caption2)
-                                    Text(group.title).font(.caption).fontWeight(.medium)
-                                    Text("\(group.sessions.count)")
-                                        .font(.caption2.monospacedDigit())
-                                        .foregroundStyle(.tertiary)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            Spacer()
-                            if group.machineId != nil {
-                                Button {
-                                    newSessionProject = group
-                                } label: {
-                                    Image(systemName: "plus").font(.caption2)
-                                }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -159,6 +133,41 @@ struct SessionSidebar: View {
             .listSectionSpacing(.compact)
             .environment(\.defaultMinListRowHeight, 30)
             .refreshable { await app.refreshAll() }
+        }
+    }
+
+    /// A compact, tappable project row (collapse toggle + `+`), rendered
+    /// as an ordinary list row rather than a section header.
+    @ViewBuilder
+    private func projectHeader(_ group: ProjectGroup) -> some View {
+        HStack(spacing: 6) {
+            Button {
+                toggleCollapsed(group.id)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(collapsed.contains(group.id) ? 0 : 90))
+                    Image(systemName: "folder").font(.caption2).foregroundStyle(.secondary)
+                    Text(group.title).font(.caption).fontWeight(.medium).foregroundStyle(.secondary)
+                    Text("\(group.sessions.count)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Spacer(minLength: 6)
+            if group.machineId != nil {
+                Button {
+                    newSessionProject = group
+                } label: {
+                    Image(systemName: "plus").font(.caption2)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
         }
     }
 
