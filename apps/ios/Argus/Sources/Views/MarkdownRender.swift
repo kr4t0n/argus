@@ -54,6 +54,7 @@ struct AnswerView: View {
                     .markdownTableBackgroundStyle(
                         .alternatingRows(Color.clear, Color.surface1.opacity(0.3))
                     )
+                    .markdownMargin(top: 12, bottom: 12) // web my-3
             }
             .markdownBlockStyle(\.tableCell) { configuration in
                 configuration.label
@@ -63,35 +64,40 @@ struct AnswerView: View {
                     .padding(.vertical, 6)
                     .padding(.horizontal, 12)
             }
+            // Block margins mirror the web's .markdown CSS (markdownMargin
+            // collapses adjacent margins like CSS, so gaps match exactly):
+            // p/ul/ol/table my-3 (12), pre my-4 (16), headings mt-5 mb-2.
+            .markdownBlockStyle(\.paragraph) { $0.label.markdownMargin(top: 12, bottom: 12) }
+            .markdownBlockStyle(\.list) { $0.label.markdownMargin(top: 12, bottom: 12) }
             // The web's .markdown headings have NO font-size — they're
             // just semibold at body size. Mirror that with a very modest
             // hierarchy instead of MarkdownUI's large defaults.
-            .markdownBlockStyle(\.heading1) { heading($0, size: 18, top: 16) }
-            .markdownBlockStyle(\.heading2) { heading($0, size: 16, top: 14) }
-            .markdownBlockStyle(\.heading3) { heading($0, size: 15, top: 12) }
-            .markdownBlockStyle(\.heading4) { heading($0, size: 15, top: 10) }
+            .markdownBlockStyle(\.heading1) { heading($0, size: 18) }
+            .markdownBlockStyle(\.heading2) { heading($0, size: 16) }
+            .markdownBlockStyle(\.heading3) { heading($0, size: 15) }
+            .markdownBlockStyle(\.heading4) { heading($0, size: 15, top: 16) }
             .markdownBlockStyle(\.codeBlock) { configuration in
-                if configuration.language?.lowercased() == "html", !isStreaming {
-                    HtmlBlock(source: configuration.content)
-                        .padding(.vertical, 4)
-                } else {
-                    CodeBlock(code: configuration.content, language: configuration.language)
-                        .padding(.vertical, 4)
+                Group {
+                    if configuration.language?.lowercased() == "html", !isStreaming {
+                        HtmlBlock(source: configuration.content)
+                    } else {
+                        CodeBlock(code: configuration.content, language: configuration.language)
+                    }
                 }
+                .markdownMargin(top: 16, bottom: 16) // web pre my-4
             }
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func heading(_ configuration: BlockConfiguration, size: CGFloat, top: CGFloat) -> some View {
+    private func heading(_ configuration: BlockConfiguration, size: CGFloat, top: CGFloat = 20) -> some View {
         configuration.label
             .markdownTextStyle {
                 FontWeight(.semibold)
                 FontSize(size)
             }
-            .padding(.top, top)
-            .padding(.bottom, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .markdownMargin(top: top, bottom: 8) // web mt-5 mb-2
     }
 }
 
