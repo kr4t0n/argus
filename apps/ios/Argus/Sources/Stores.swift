@@ -70,7 +70,14 @@ struct ProjectGroup: Identifiable {
     let machineId: String?
     let workingDir: String?
     let machineName: String
+    /// Active (non-archived) sessions, newest-first.
     var sessions: [SessionDTO]
+    /// Archived sessions, newest-first — rendered only when the
+    /// project's eye toggle is on (web's showArchived), but always
+    /// carried so the header can offer the toggle. A project whose
+    /// sessions are ALL archived still gets its header row; otherwise
+    /// the archive would be unreachable.
+    var archivedSessions: [SessionDTO]
 }
 
 /// All sessions the user owns, with the monotonic-updatedAt guard the web
@@ -90,7 +97,8 @@ final class SessionListStore {
         // Merge row-by-row through the staleness guard: a WS status may
         // have landed while the GET was in flight.
         for session in list { upsert(session) }
-        // Drop rows the server no longer returns (deleted/archived).
+        // Drop rows the server no longer returns (hard-deleted; archived
+        // rows ARE returned — lists load with includeArchived).
         let fresh = Set(list.map(\.id))
         for id in sessions.keys where !fresh.contains(id) {
             sessions[id] = nil
@@ -130,11 +138,14 @@ final class SessionListStore {
     /// newest-first. (NOT recency-ordered — that was the divergence.)
     func projectGroups(fleet: FleetStore) -> [ProjectGroup] {
         var sessionsByAgent: [String: [SessionDTO]] = [:]
-        for session in sessions.values where session.archivedAt == nil {
+        for session in sessions.values {
             sessionsByAgent[session.agentId, default: []].append(session)
         }
 
         // Agents in the web's global sort order (agentStore.sortOrder).
+        // fleet.agents includes archived agents (fetched with
+        // includeArchived) so their sessions group correctly; the
+        // comparator sinks them to the end.
         let sortedAgents = fleet.agents.values.sorted(by: Self.agentSortsBefore)
 
         var order: [String] = []
@@ -153,29 +164,33 @@ final class SessionListStore {
                     machineId: agent.machineId,
                     workingDir: agent.workingDir,
                     machineName: agent.machineName,
-                    sessions: []
+                    sessions: [],
+                    archivedSessions: []
                 )
             }
-            groups[key]?.sessions.append(contentsOf: agentSessions)
+            groups[key]?.sessions.append(contentsOf: agentSessions.filter { $0.archivedAt == nil })
+            groups[key]?.archivedSessions.append(contentsOf: agentSessions.filter { $0.archivedAt != nil })
         }
 
         // Sessions whose agent is gone from the fleet — keep them
         // reachable in a trailing "no project" bucket.
         let known = Set(fleet.agents.keys)
-        let orphans = sessions.values
-            .filter { $0.archivedAt == nil && !known.contains($0.agentId) }
+        let orphans = sessions.values.filter { !known.contains($0.agentId) }
         if !orphans.isEmpty {
             let key = "__orphan__"
             order.append(key)
             groups[key] = ProjectGroup(
                 id: key, title: "no project", machineId: nil, workingDir: nil,
-                machineName: "", sessions: Array(orphans)
+                machineName: "",
+                sessions: orphans.filter { $0.archivedAt == nil },
+                archivedSessions: orphans.filter { $0.archivedAt != nil }
             )
         }
 
         return order.compactMap { key -> ProjectGroup? in
             guard var group = groups[key] else { return nil }
             group.sessions.sort { $0.updatedAt > $1.updatedAt }
+            group.archivedSessions.sort { $0.updatedAt > $1.updatedAt }
             return group
         }
     }

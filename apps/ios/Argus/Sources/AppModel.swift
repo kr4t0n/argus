@@ -247,10 +247,14 @@ final class AppModel {
     func refreshAll() async {
         guard let client else { return }
         do {
-            async let agents = client.listAgents()
+            // includeArchived: archived sessions stay reachable (the
+            // sidebar's per-project eye toggle), and archived agents are
+            // needed so those sessions still group into their projects
+            // instead of falling into the orphan bucket.
+            async let agents = client.listAgents(includeArchived: true)
             async let machines = client.listMachines()
             async let projects = client.listProjects()
-            async let sessions = client.listSessions()
+            async let sessions = client.listSessions(includeArchived: true)
             async let userExtensions = client.getMyExtensions()
             fleet.setAgents(try await agents)
             fleet.setMachines(try await machines)

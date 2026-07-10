@@ -112,7 +112,11 @@ struct SessionView: View {
                         renameText = session?.title ?? ""
                         showRename = true
                     }
-                    Button("Archive", systemImage: "archivebox") { archive() }
+                    if session?.archivedAt != nil {
+                        Button("Unarchive", systemImage: "arrow.uturn.backward") { unarchive() }
+                    } else {
+                        Button("Archive", systemImage: "archivebox") { archive() }
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -156,6 +160,17 @@ struct SessionView: View {
             do {
                 app.sessionList.upsert(try await client.archiveSession(id: sessionId))
                 if app.route == .session(sessionId) { app.route = nil }
+            } catch {
+                app.handleAPIError(error)
+            }
+        }
+    }
+
+    private func unarchive() {
+        guard let client = app.client else { return }
+        Task {
+            do {
+                app.sessionList.upsert(try await client.unarchiveSession(id: sessionId))
             } catch {
                 app.handleAPIError(error)
             }

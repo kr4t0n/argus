@@ -31,6 +31,9 @@ struct SessionSidebar: View {
     /// Collapsed project keys, persisted like the web's uiStore.expanded
     /// (default expanded — a key is present only when collapsed).
     @State private var collapsed = SessionSidebar.loadCollapsed()
+    /// Projects with archived sessions revealed — the web's per-project
+    /// eye toggle (uiStore.showArchived). Present = shown.
+    @State private var showArchived = SessionSidebar.loadShowArchived()
 
     private static let collapsedKey = "argus.collapsedProjects"
     private static func loadCollapsed() -> Set<String> {
@@ -41,6 +44,21 @@ struct SessionSidebar: View {
             if collapsed.contains(key) { collapsed.remove(key) } else { collapsed.insert(key) }
         }
         UserDefaults.standard.set(Array(collapsed), forKey: Self.collapsedKey)
+    }
+
+    private static let showArchivedKey = "argus.showArchivedProjects"
+    private static func loadShowArchived() -> Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: showArchivedKey) ?? [])
+    }
+    private func toggleShowArchived(_ key: String) {
+        withAnimation(.easeOut(duration: 0.15)) {
+            if showArchived.contains(key) {
+                showArchived.remove(key)
+            } else {
+                showArchived.insert(key)
+            }
+        }
+        UserDefaults.standard.set(Array(showArchived), forKey: Self.showArchivedKey)
     }
 
     var body: some View {
@@ -100,27 +118,11 @@ struct SessionSidebar: View {
                             .listRowSeparator(.hidden)
                         if !collapsed.contains(group.id) {
                             ForEach(group.sessions) { session in
-                                SessionRow(
-                                    session: session,
-                                    agent: app.fleet.agents[session.agentId]
-                                )
-                                .tag(DetailRoute.session(session.id))
-                                .listRowInsets(rowInsets)
-                                .listRowSeparator(.hidden)
-                                .swipeActions(edge: .trailing) {
-                                    Button("Archive", systemImage: "archivebox") {
-                                        archive(session)
-                                    }
-                                    .tint(.indigo)
-                                }
-                                .contextMenu {
-                                    Button("Rename", systemImage: "pencil") {
-                                        renameText = session.title
-                                        renameTarget = session
-                                    }
-                                    Button("Archive", systemImage: "archivebox") {
-                                        archive(session)
-                                    }
+                                sessionRow(session, archived: false)
+                            }
+                            if showArchived.contains(group.id) {
+                                ForEach(group.archivedSessions) { session in
+                                    sessionRow(session, archived: true)
                                 }
                             }
                         }
@@ -155,8 +157,50 @@ struct SessionSidebar: View {
         }
     }
 
-    /// A compact, tappable project row (collapse toggle + `+`), rendered
-    /// as an ordinary list row rather than a section header.
+    /// One session line with its actions — active rows archive, archived
+    /// rows (dimmed) restore.
+    @ViewBuilder
+    private func sessionRow(_ session: SessionDTO, archived: Bool) -> some View {
+        SessionRow(
+            session: session,
+            agent: app.fleet.agents[session.agentId],
+            archived: archived
+        )
+        .tag(DetailRoute.session(session.id))
+        .listRowInsets(rowInsets)
+        .listRowSeparator(.hidden)
+        .swipeActions(edge: .trailing) {
+            if archived {
+                Button("Unarchive", systemImage: "arrow.uturn.backward") {
+                    unarchive(session)
+                }
+                .tint(.green)
+            } else {
+                Button("Archive", systemImage: "archivebox") {
+                    archive(session)
+                }
+                .tint(.indigo)
+            }
+        }
+        .contextMenu {
+            Button("Rename", systemImage: "pencil") {
+                renameText = session.title
+                renameTarget = session
+            }
+            if archived {
+                Button("Unarchive", systemImage: "arrow.uturn.backward") {
+                    unarchive(session)
+                }
+            } else {
+                Button("Archive", systemImage: "archivebox") {
+                    archive(session)
+                }
+            }
+        }
+    }
+
+    /// A compact, tappable project row (collapse toggle + eye + `+`),
+    /// rendered as an ordinary list row rather than a section header.
     @ViewBuilder
     private func projectHeader(_ group: ProjectGroup) -> some View {
         HStack(spacing: 6) {
@@ -178,6 +222,18 @@ struct SessionSidebar: View {
             }
             .buttonStyle(.plain)
             Spacer(minLength: 6)
+            // The web's per-project eye: only offered when there is an
+            // archive to reveal.
+            if !group.archivedSessions.isEmpty {
+                Button {
+                    toggleShowArchived(group.id)
+                } label: {
+                    Image(systemName: showArchived.contains(group.id) ? "eye.slash" : "eye")
+                        .font(.caption2)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tertiary)
+            }
             if group.machineId != nil {
                 Button {
                     newSessionProject = group
@@ -235,6 +291,17 @@ struct SessionSidebar: View {
             }
         }
     }
+
+    private func unarchive(_ session: SessionDTO) {
+        guard let client = app.client else { return }
+        Task {
+            do {
+                app.sessionList.upsert(try await client.unarchiveSession(id: session.id))
+            } catch {
+                app.handleAPIError(error)
+            }
+        }
+    }
 }
 
 private struct MachineRow: View {
@@ -261,18 +328,29 @@ private struct MachineRow: View {
 private struct SessionRow: View {
     let session: SessionDTO
     let agent: AgentDTO?
+    var archived = false
 
     var body: some View {
         // Single compact line — icon · title · dot · time (web parity).
+        // Archived rows render dimmed with an archivebox in the dot slot
+        // (no live status to show).
         HStack(spacing: 8) {
             AgentTypeIcon(type: agent?.type ?? "custom", size: 13)
                 .frame(width: 16)
+                .opacity(archived ? 0.5 : 1)
             Text(session.title)
                 .font(.subheadline)
-                .fontWeight(session.unread ? .semibold : .regular)
+                .fontWeight(!archived && session.unread ? .semibold : .regular)
+                .foregroundStyle(archived ? .secondary : .primary)
                 .lineLimit(1)
             Spacer(minLength: 6)
-            SessionStatusDot(session: session)
+            if archived {
+                Image(systemName: "archivebox")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            } else {
+                SessionStatusDot(session: session)
+            }
             Text(RelativeTime.short(iso: session.updatedAt))
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.tertiary)
