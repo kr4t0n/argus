@@ -48,12 +48,27 @@ struct SessionView: View {
             transcript
             composer
         }
+        // Opaque cover for the under-bar strip. Pinned section headers
+        // defeat the bar's scroll-edge appearance (and forcing
+        // toolbarBackground(.visible) proved unreliable in the split
+        // view's detail column), so scrolled content from previous
+        // turns was readable behind the title. This strip lives in the
+        // CONTENT layer: exactly safe-area-top tall, offset up over the
+        // bar region — scrolled content slides under it, while the bar's
+        // own chrome (title, buttons) draws above it.
+        .overlay(alignment: .top) {
+            GeometryReader { geo in
+                Color(.systemBackground)
+                    .frame(width: geo.size.width, height: geo.safeAreaInsets.top)
+                    .offset(y: -geo.safeAreaInsets.top)
+                    .allowsHitTesting(false)
+            }
+            .frame(height: 0)
+        }
         .navigationTitle(session?.title ?? "Session")
         .navigationBarTitleDisplayMode(.inline)
-        // Always-on bar material: with pinned section headers the
-        // automatic scroll-edge appearance doesn't reliably flip to the
-        // "scrolled" state, leaving the bar transparent — previous
-        // turns' content showed through above the pinned band.
+        // Keep the forced bar background too — over the opaque strip it
+        // contributes the standard hairline separator.
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar { toolbarContent }
         .sheet(isPresented: $showModelPicker) {
