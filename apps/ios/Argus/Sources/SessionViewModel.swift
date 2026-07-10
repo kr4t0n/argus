@@ -38,7 +38,9 @@ final class SessionViewModel {
     private var rebuildScheduled = false
 
     /// Initial-load page size — matches the web's DEFAULT_TAIL.
-    private static let tailWindow = 20
+    /// Deliberately small: open cost scales with chunks per turn, not
+    /// turn count; loadOlder pages the rest in on demand.
+    private static let tailWindow = 4
 
     init(
         sessionId: String,
