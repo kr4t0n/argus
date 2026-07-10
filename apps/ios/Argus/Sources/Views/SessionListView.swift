@@ -223,16 +223,18 @@ struct SessionSidebar: View {
             .buttonStyle(.plain)
             Spacer(minLength: 6)
             // The web's per-project eye: only offered when there is an
-            // archive to reveal.
+            // archive to reveal. Web semantics — showing = open eye in
+            // emerald, hidden = slashed eye in neutral gray.
             if !group.archivedSessions.isEmpty {
+                let showing = showArchived.contains(group.id)
                 Button {
                     toggleShowArchived(group.id)
                 } label: {
-                    Image(systemName: showArchived.contains(group.id) ? "eye.slash" : "eye")
+                    Image(systemName: showing ? "eye" : "eye.slash")
                         .font(.caption2)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(showing ? Color(hex: 0x10B981) : Color(.tertiaryLabel))
             }
             if group.machineId != nil {
                 Button {
