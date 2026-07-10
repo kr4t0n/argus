@@ -50,6 +50,11 @@ struct SessionView: View {
         }
         .navigationTitle(session?.title ?? "Session")
         .navigationBarTitleDisplayMode(.inline)
+        // Always-on bar material: with pinned section headers the
+        // automatic scroll-edge appearance doesn't reliably flip to the
+        // "scrolled" state, leaving the bar transparent — previous
+        // turns' content showed through above the pinned band.
+        .toolbarBackground(.visible, for: .navigationBar)
         .toolbar { toolbarContent }
         .sheet(isPresented: $showModelPicker) {
             if let session {
