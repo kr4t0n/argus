@@ -30,6 +30,8 @@ struct SessionView: View {
 
     /// File preview opened from a chip or a path:line answer link.
     @State private var filePreview: FilePreviewTarget?
+    /// Full-size viewer for a turn's uploaded attachment.
+    @State private var attachmentPreview: AttachmentDTO?
 
     private var session: SessionDTO? { app.sessionList.sessions[sessionId] }
     private var agent: AgentDTO? {
@@ -54,6 +56,12 @@ struct SessionView: View {
             if let agent {
                 FilePreviewSheet(agent: agent, target: previewTarget)
             }
+        }
+        .sheet(item: $attachmentPreview) { attachment in
+            AttachmentPreviewSheet(
+                attachment: attachment,
+                url: app.client?.absoluteURL(for: attachment.url)
+            )
         }
         .alert("Rename session", isPresented: $showRename) {
             TextField("Title", text: $renameText)
@@ -229,7 +237,8 @@ struct SessionView: View {
                                 workingDir: agent?.workingDir,
                                 attachmentURL: { app.client?.absoluteURL(for: $0.url) },
                                 onFork: { fork(from: turn) },
-                                onOpenFile: { path, line in openFilePreview(path, line: line) }
+                                onOpenFile: { path, line in openFilePreview(path, line: line) },
+                                onOpenAttachment: { attachmentPreview = $0 }
                             )
                             .id(turn.id)
                         }
@@ -622,6 +631,8 @@ private struct TurnCell: View {
     let onFork: () -> Void
     /// (raw path, optional line) — from FileChips or path:line links.
     let onOpenFile: (String, Int?) -> Void
+    /// Tap on an uploaded-attachment thumbnail/pill → full-size viewer.
+    let onOpenAttachment: (AttachmentDTO) -> Void
     @State private var activityExpanded = false
 
     var body: some View {
@@ -736,25 +747,30 @@ private struct TurnCell: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(turn.attachments) { attachment in
-                    if attachment.mime.hasPrefix("image/"), let url = attachmentURL(attachment) {
-                        AsyncImage(url: url) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image.resizable().scaledToFill()
-                            default:
-                                Color.gray.opacity(0.1)
+                    Button {
+                        onOpenAttachment(attachment)
+                    } label: {
+                        if attachment.mime.hasPrefix("image/"), let url = attachmentURL(attachment) {
+                            AsyncImage(url: url) { phase in
+                                switch phase {
+                                case .success(let image):
+                                    image.resizable().scaledToFill()
+                                default:
+                                    Color.gray.opacity(0.1)
+                                }
                             }
+                            .frame(width: 88, height: 88)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                        } else {
+                            Label(attachment.filename, systemImage: "doc")
+                                .font(.caption2)
+                                .lineLimit(1)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                                .background(.quaternary.opacity(0.5), in: Capsule())
                         }
-                        .frame(width: 88, height: 88)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                    } else {
-                        Label(attachment.filename, systemImage: "doc")
-                            .font(.caption2)
-                            .lineLimit(1)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
-                            .background(.quaternary.opacity(0.5), in: Capsule())
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.leading, 40)

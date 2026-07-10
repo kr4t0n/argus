@@ -139,6 +139,145 @@ private struct TextFileView: View {
     }
 }
 
+/// Full-size viewer for a turn's uploaded attachment (the bytes live in
+/// the object store, fetched via the DTO's tokenized URL — no agent
+/// round-trip). Images pinch-zoom / double-tap; anything else downloads
+/// and offers the system share sheet. Note the display token in
+/// `AttachmentDTO.url` lives ~1h from transcript load — a very stale
+/// session may need a pull-to-refresh before the fetch succeeds.
+struct AttachmentPreviewSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let attachment: AttachmentDTO
+    let url: URL?
+
+    /// Temp-file copy for non-image attachments, for ShareLink.
+    @State private var exportURL: URL?
+    @State private var loadError: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if attachment.mime.hasPrefix("image/"), let url {
+                    ZoomableAsyncImage(url: url)
+                } else {
+                    filePresentation
+                }
+            }
+            .navigationTitle(attachment.filename)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var filePresentation: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "doc")
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+            Text(attachment.filename).font(.headline)
+            Text("\(attachment.mime) · \(TokenFormat.bytes(attachment.size))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let exportURL {
+                ShareLink(item: exportURL) {
+                    Label("Share / save", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
+            } else if let loadError {
+                Text(loadError).font(.caption).foregroundStyle(.red)
+            } else {
+                ProgressView()
+            }
+        }
+        .task {
+            guard exportURL == nil, let url else { return }
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                let destination = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(attachment.filename)
+                try data.write(to: destination)
+                exportURL = destination
+            } catch {
+                loadError = error.localizedDescription
+            }
+        }
+    }
+}
+
+/// Pinch-to-zoom + drag + double-tap image — deliberately simple (no
+/// UIScrollView bridging) but enough to read a screenshot.
+private struct ZoomableAsyncImage: View {
+    let url: URL
+
+    @State private var scale: CGFloat = 1
+    @GestureState private var pinch: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @GestureState private var drag: CGSize = .zero
+
+    var body: some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case .success(let image):
+                image
+                    .resizable()
+                    .scaledToFit()
+                    .scaleEffect(scale * pinch)
+                    .offset(
+                        x: offset.width + drag.width,
+                        y: offset.height + drag.height
+                    )
+                    .gesture(
+                        MagnifyGesture()
+                            .updating($pinch) { value, state, _ in
+                                state = value.magnification
+                            }
+                            .onEnded { value in
+                                scale = min(6, max(1, scale * value.magnification))
+                                if scale == 1 { offset = .zero }
+                            }
+                    )
+                    .simultaneousGesture(
+                        DragGesture()
+                            .updating($drag) { value, state, _ in
+                                if scale > 1 { state = value.translation }
+                            }
+                            .onEnded { value in
+                                if scale > 1 {
+                                    offset.width += value.translation.width
+                                    offset.height += value.translation.height
+                                }
+                            }
+                    )
+                    .onTapGesture(count: 2) {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            if scale > 1 {
+                                scale = 1
+                                offset = .zero
+                            } else {
+                                scale = 2.5
+                            }
+                        }
+                    }
+            case .failure:
+                ContentUnavailableView(
+                    "Couldn't load image",
+                    systemImage: "photo",
+                    description: Text("The attachment link may have expired — pull the session to refresh.")
+                )
+            default:
+                ProgressView()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+    }
+}
+
 /// The per-turn "files the agent touched" strip — port of the web's
 /// FileChips. A chip opens the preview when the path resolves inside
 /// the agent's workspace; outside-workspace paths render inert (the
