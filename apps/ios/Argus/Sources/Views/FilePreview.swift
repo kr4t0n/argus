@@ -1,4 +1,6 @@
 import SwiftUI
+import WebKit
+import Highlightr
 import ArgusKit
 
 /// What to preview: an agent-relative path (the form fs/read accepts),
@@ -14,17 +16,33 @@ struct FilePreviewTarget: Identifiable, Equatable {
 
 /// The shared file viewer — used by the inspector's Files browser, the
 /// per-turn FileChips, and `path:line` links in answers. Text renders
-/// with a line-number gutter (and highlights/scrolls to the target
-/// line); images and binaries keep their simple presentations. Like the
-/// transcript's code blocks, no syntax highlighting yet.
+/// with a line-number gutter, syntax highlighting (Highlightr — the
+/// iOS stand-in for the web's shiki), and target-line scroll/highlight;
+/// `.html` files get a rendered preview with a Source toggle (strictly
+/// script-less, matching the web FileViewer's inert `sandbox=""`).
 struct FilePreviewSheet: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
+
     let agent: AgentDTO
     let target: FilePreviewTarget
 
+    private enum HtmlMode: String, CaseIterable {
+        case preview = "Preview"
+        case source = "Source"
+    }
+
     @State private var result: FSReadResult?
     @State private var loadError: String?
+    @State private var htmlMode: HtmlMode = .preview
+
+    private var fileExtension: String {
+        (target.path as NSString).pathExtension.lowercased()
+    }
+
+    private var isHTMLFile: Bool {
+        fileExtension == "html" || fileExtension == "htm"
+    }
 
     var body: some View {
         NavigationStack {
@@ -32,6 +50,22 @@ struct FilePreviewSheet: View {
                 .navigationTitle((target.path as NSString).lastPathComponent)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    if case .text(let content, _) = result {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Copy", systemImage: "doc.on.doc") {
+                                UIPasteboard.general.string = content
+                            }
+                        }
+                    }
+                    if isHTMLFile, case .text = result {
+                        ToolbarItem(placement: .principal) {
+                            Picker("Mode", selection: $htmlMode) {
+                                ForEach(HtmlMode.allCases, id: \.self) { Text($0.rawValue) }
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(maxWidth: 220)
+                        }
+                    }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Done") { dismiss() }
                     }
@@ -64,7 +98,16 @@ struct FilePreviewSheet: View {
                 ProgressView()
             }
         case .text(let content, _):
-            TextFileView(content: content, targetLine: target.line)
+            if isHTMLFile, htmlMode == .preview {
+                StaticHtmlView(html: content)
+                    .ignoresSafeArea(edges: .bottom)
+            } else {
+                TextFileView(
+                    content: content,
+                    language: CodeHighlighter.language(forExtension: fileExtension),
+                    targetLine: target.line
+                )
+            }
         case .image(_, let base64, _):
             if let data = Data(base64Encoded: base64),
                let image = UIImage(data: data) {
@@ -91,19 +134,27 @@ struct FilePreviewSheet: View {
     }
 }
 
-/// Monospaced text with a line-number gutter. Lines wrap (mobile beats
-/// horizontal scrolling); the target line gets the web viewer's
-/// amber-ish highlight and is centered on open.
+// MARK: - Text (line numbers + syntax highlighting)
+
+/// Monospaced text with a line-number gutter. Renders plain lines
+/// immediately, then swaps in Highlightr-colored lines when the
+/// off-main highlight pass completes. Lines wrap (mobile beats
+/// horizontal scrolling); the target line gets an amber highlight and
+/// is centered on open.
 private struct TextFileView: View {
     let content: String
+    let language: String?
     let targetLine: Int?
 
-    private var lines: [String] {
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var highlightedLines: [AttributedString]?
+
+    private var plainLines: [String] {
         content.components(separatedBy: "\n")
     }
 
     var body: some View {
-        let lines = self.lines
+        let lines = plainLines
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -113,8 +164,7 @@ private struct TextFileView: View {
                                 .font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(.tertiary)
                                 .frame(width: 42, alignment: .trailing)
-                            Text(lines[index].isEmpty ? " " : lines[index])
-                                .font(.system(size: 12, design: .monospaced))
+                            lineText(at: index, plain: lines)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -129,13 +179,178 @@ private struct TextFileView: View {
                 .padding(.trailing, 12)
             }
             .task {
+                highlightedLines = await CodeHighlighter.highlightLines(
+                    content,
+                    language: language,
+                    dark: colorScheme == .dark,
+                    expectedLineCount: lines.count
+                )
+            }
+            .task {
                 guard let targetLine, targetLine <= lines.count else { return }
                 // Give LazyVStack a beat to estimate heights before the
                 // long-distance jump.
                 try? await Task.sleep(for: .milliseconds(80))
                 proxy.scrollTo(targetLine, anchor: .center)
             }
+            .onChange(of: colorScheme) {
+                highlightedLines = nil
+                Task {
+                    highlightedLines = await CodeHighlighter.highlightLines(
+                        content,
+                        language: language,
+                        dark: colorScheme == .dark,
+                        expectedLineCount: lines.count
+                    )
+                }
+            }
         }
+    }
+
+    @ViewBuilder
+    private func lineText(at index: Int, plain: [String]) -> some View {
+        if let highlightedLines, index < highlightedLines.count {
+            Text(highlightedLines[index])
+        } else {
+            Text(plain[index].isEmpty ? " " : plain[index])
+                .font(.system(size: 12, design: .monospaced))
+        }
+    }
+}
+
+/// Highlightr wrapper — extension→language mapping, size caps, and the
+/// per-line split the gutter layout needs.
+enum CodeHighlighter {
+    /// Beyond this, highlight.js gets slow enough to hurt — plain text
+    /// is the better experience (fs/read itself caps files at 1 MiB).
+    private static let maxHighlightBytes = 300_000
+    private static let maxHighlightLines = 8_000
+
+    private static let extensionToLanguage: [String: String] = [
+        "swift": "swift", "ts": "typescript", "tsx": "typescript",
+        "js": "javascript", "jsx": "javascript", "mjs": "javascript",
+        "py": "python", "go": "go", "rs": "rust", "rb": "ruby",
+        "java": "java", "kt": "kotlin", "c": "c", "h": "c",
+        "cpp": "cpp", "cc": "cpp", "hpp": "cpp", "cs": "csharp",
+        "m": "objectivec", "mm": "objectivec",
+        "sh": "bash", "bash": "bash", "zsh": "bash",
+        "yml": "yaml", "yaml": "yaml", "json": "json", "toml": "ini",
+        "xml": "xml", "html": "xml", "htm": "xml", "svg": "xml",
+        "css": "css", "scss": "scss", "md": "markdown",
+        "sql": "sql", "prisma": "graphql", "proto": "protobuf",
+        "dockerfile": "dockerfile", "makefile": "makefile",
+    ]
+
+    static func language(forExtension ext: String) -> String? {
+        extensionToLanguage[ext]
+    }
+
+    /// Off-main highlight → one AttributedString per line (padded/
+    /// truncated to the plain split's count so indices always align).
+    /// nil = don't highlight (unknown language / too big / failure);
+    /// the view keeps its plain rendering.
+    static func highlightLines(
+        _ code: String,
+        language: String?,
+        dark: Bool,
+        expectedLineCount: Int
+    ) async -> [AttributedString]? {
+        guard let language,
+              code.utf8.count <= maxHighlightBytes,
+              expectedLineCount <= maxHighlightLines
+        else { return nil }
+
+        return await Task.detached(priority: .userInitiated) { () -> [AttributedString]? in
+            guard let highlightr = Highlightr() else { return nil }
+            highlightr.setTheme(to: dark ? "atom-one-dark" : "atom-one-light")
+            highlightr.theme.setCodeFont(
+                UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+            )
+            guard let highlighted = highlightr.highlight(code, as: language) else {
+                return nil
+            }
+
+            // Split the attributed run at newlines, preserving styling.
+            var lines: [AttributedString] = []
+            lines.reserveCapacity(expectedLineCount)
+            let full = highlighted.string as NSString
+            var location = 0
+            while location <= full.length {
+                let newline = full.range(
+                    of: "\n",
+                    range: NSRange(location: location, length: full.length - location)
+                )
+                let end = newline.location == NSNotFound ? full.length : newline.location
+                let lineRange = NSRange(location: location, length: end - location)
+                let attributed = highlighted.attributedSubstring(from: lineRange)
+                lines.append(AttributedString(attributed))
+                if newline.location == NSNotFound { break }
+                location = newline.location + 1
+            }
+            // Trailing "\n" yields one more visual line in the plain
+            // split; pad so indices align.
+            while lines.count < expectedLineCount {
+                lines.append(AttributedString(" "))
+            }
+            return lines
+        }.value
+    }
+}
+
+// MARK: - HTML preview (.html files)
+
+/// Rendered HTML for remote-tree files — strictly SCRIPT-LESS, the
+/// WKWebView analogue of the web FileViewer's `sandbox=""` posture:
+/// remote file content stays fully inert (no JS, no navigation). This
+/// is deliberately NOT the chat code-block preview (that one allows
+/// scripts for model-generated Chart.js etc.).
+private struct StaticHtmlView: UIViewRepresentable {
+    let html: String
+
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = context.coordinator
+        webView.isOpaque = false
+        webView.backgroundColor = .systemBackground
+        return webView
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        guard context.coordinator.loadedHTML != html else { return }
+        context.coordinator.loadedHTML = html
+        // baseURL nil = opaque origin; no app/file resources reachable.
+        webView.loadHTMLString(prepared(html), baseURL: nil)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        var loadedHTML: String?
+
+        /// Belt-and-braces with JS off: block every navigation except
+        /// the initial load, so links in the document go nowhere.
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            decisionHandler(navigationAction.navigationType == .other ? .allow : .cancel)
+        }
+    }
+
+    /// Inject a device-width viewport so WKWebView doesn't lay out at
+    /// its 980px desktop default (same fix as the chat HtmlWebView).
+    private func prepared(_ raw: String) -> String {
+        let viewport = "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        if let headStart = raw.range(of: "<head", options: .caseInsensitive),
+           let headClose = raw.range(of: ">", range: headStart.upperBound..<raw.endIndex) {
+            var copy = raw
+            copy.insert(contentsOf: viewport, at: headClose.upperBound)
+            return copy
+        }
+        return "<html><head>\(viewport)</head><body>\(raw)</body></html>"
     }
 }
 

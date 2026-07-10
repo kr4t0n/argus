@@ -17,6 +17,9 @@ packages:
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
     from: 1.2.0
+  Highlightr:
+    url: https://github.com/raspu/Highlightr
+    from: 2.1.0
 
 targets:
   Argus:
@@ -31,6 +34,8 @@ targets:
         product: MarkdownUI
       - package: SwiftTerm
         product: SwiftTerm
+      - package: Highlightr
+        product: Highlightr
     scheme: {}
     entitlements:
       path: Argus.entitlements
