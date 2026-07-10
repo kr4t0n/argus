@@ -115,6 +115,8 @@ public struct Turn: Identifiable, Equatable, Sendable {
     public let todos: [TodoItem]?
     /// Sub-agent invocations (SubAgentWindow), empty when none.
     public let subAgents: [SubAgentCall]
+    /// Files the agent touched this turn (FileChips), first-seen order.
+    public let touchedFiles: [String]
 }
 
 /// Session-header context ring inputs: live context of the latest
@@ -316,6 +318,7 @@ public struct TranscriptState: Equatable, Sendable {
         // excluded from the main timeline below.
         let todos = DedicatedPanels.extractTodos(chunks)
         let subAgents = DedicatedPanels.extractSubAgents(chunks)
+        let touchedFiles = FileReferences.extractFiles(chunks)
 
         // Pass 1: index NON-nested stdout/stderr results by the tool_use
         // id they answer, so a tool row can fold in its output/diff (web
@@ -488,7 +491,8 @@ public struct TranscriptState: Equatable, Sendable {
             model: model,
             errorText: errorText,
             todos: todos,
-            subAgents: subAgents
+            subAgents: subAgents,
+            touchedFiles: touchedFiles
         )
     }
 }
