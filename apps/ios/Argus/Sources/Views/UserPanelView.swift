@@ -217,6 +217,14 @@ private struct QuotaRowView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
                         Text(window.label).font(.caption2).foregroundStyle(.secondary)
+                        // Reset time inline — the web keeps this in a
+                        // tooltip, but there's no hover here. Future-
+                        // relative: "resets in 2 hr".
+                        if let resetsAt = window.resetsAt {
+                            Text("· resets \(RelativeTime.label(iso: resetsAt))")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
                         Spacer()
                         Text("\(Int(window.utilizationPercent))%")
                             .font(.caption2.monospacedDigit())
