@@ -280,19 +280,29 @@ private struct ActivityHeatmap: View {
     /// Gap as a fraction of cell size — scales with the fill.
     private let gapRatio: CGFloat = 0.22
 
+    /// Same container height as the Curve view, with the grid scaled to
+    /// FIT inside (cell = min of width/height budgets) and centered —
+    /// full-width canvas, no oversized cells on wide layouts.
+    private let containerHeight: CGFloat = 150
+
     var body: some View {
         let weeks = self.weeks
         let peak = maxCount
         let columns = CGFloat(max(1, weeks.count))
-        let ratio = (columns + (columns - 1) * gapRatio) / (7 + 6 * gapRatio)
         Canvas { context, size in
-            let cell = size.width / (columns + (columns - 1) * gapRatio)
+            let cellFromWidth = size.width / (columns + (columns - 1) * gapRatio)
+            let cellFromHeight = size.height / (7 + 6 * gapRatio)
+            let cell = min(cellFromWidth, cellFromHeight)
             let gap = cell * gapRatio
+            let gridWidth = columns * cell + (columns - 1) * gap
+            let gridHeight = 7 * cell + 6 * gap
+            let originX = (size.width - gridWidth) / 2
+            let originY = (size.height - gridHeight) / 2
             for (weekIndex, week) in weeks.enumerated() {
                 for (dayIndex, day) in week.enumerated() {
                     let rect = CGRect(
-                        x: CGFloat(weekIndex) * (cell + gap),
-                        y: CGFloat(dayIndex) * (cell + gap),
+                        x: originX + CGFloat(weekIndex) * (cell + gap),
+                        y: originY + CGFloat(dayIndex) * (cell + gap),
                         width: cell,
                         height: cell
                     )
@@ -301,7 +311,7 @@ private struct ActivityHeatmap: View {
                 }
             }
         }
-        .aspectRatio(ratio, contentMode: .fit)
+        .frame(height: containerHeight)
         .frame(maxWidth: .infinity)
     }
 
