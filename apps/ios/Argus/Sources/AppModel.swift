@@ -292,7 +292,8 @@ final class AppModel {
         machineId: String,
         workingDir: String?,
         adapterType: AgentType,
-        title: String?
+        title: String?,
+        modelSelection: ModelSelection? = nil
     ) async throws -> SessionDTO {
         guard let client else {
             throw APIError(status: 0, message: "Not connected")
@@ -319,7 +320,8 @@ final class AppModel {
         }
         let created = try await client.createSession(CreateSessionRequest(
             agentId: agent.id,
-            title: title?.isEmpty == false ? title : nil
+            title: title?.isEmpty == false ? title : nil,
+            modelSelection: modelSelection?.isEmpty == false ? modelSelection : nil
         ))
         sessionList.upsert(created.session)
         route = .session(created.session.id)

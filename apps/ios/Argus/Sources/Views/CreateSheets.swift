@@ -16,6 +16,7 @@ struct NewSessionSheet: View {
 
     @State private var adapterType: AgentType = ""
     @State private var title = ""
+    @State private var modelSelection = ModelSelection()
     @State private var busy = false
     @State private var errorMessage: String?
 
@@ -35,6 +36,11 @@ struct NewSessionSheet: View {
                 AdapterPickerSection(machine: machine, adapterType: $adapterType)
                 Section("Session") {
                     TextField("Title (optional)", text: $title)
+                    ModelRow(
+                        machineId: project.machineId,
+                        adapterType: adapterType,
+                        selection: $modelSelection
+                    )
                 }
                 if let errorMessage {
                     Section { Text(errorMessage).foregroundStyle(.red).font(.callout) }
@@ -57,6 +63,11 @@ struct NewSessionSheet: View {
                 adapterType = machine?.availableAdapters.first?.type ?? ""
             }
         }
+        .onChange(of: adapterType) {
+            // Catalogs are per-CLI — a selection from the previous
+            // adapter would be meaningless.
+            modelSelection = ModelSelection()
+        }
     }
 
     private func create() {
@@ -70,7 +81,8 @@ struct NewSessionSheet: View {
                     machineId: machineId,
                     workingDir: project.workingDir,
                     adapterType: adapterType,
-                    title: title
+                    title: title,
+                    modelSelection: modelSelection
                 )
                 dismiss()
             } catch {
@@ -92,6 +104,7 @@ struct NewProjectSheet: View {
     @State private var workingDir = ""
     @State private var adapterType: AgentType = ""
     @State private var title = ""
+    @State private var modelSelection = ModelSelection()
     @State private var busy = false
     @State private var errorMessage: String?
 
@@ -122,6 +135,11 @@ struct NewProjectSheet: View {
                 AdapterPickerSection(machine: machine, adapterType: $adapterType)
                 Section("First session") {
                     TextField("Title (optional)", text: $title)
+                    ModelRow(
+                        machineId: machineId.isEmpty ? nil : machineId,
+                        adapterType: adapterType,
+                        selection: $modelSelection
+                    )
                 }
                 if let errorMessage {
                     Section { Text(errorMessage).foregroundStyle(.red).font(.callout) }
@@ -144,6 +162,10 @@ struct NewProjectSheet: View {
         }
         .onChange(of: machineId) {
             adapterType = machine?.availableAdapters.first?.type ?? ""
+            modelSelection = ModelSelection()
+        }
+        .onChange(of: adapterType) {
+            modelSelection = ModelSelection()
         }
     }
 
@@ -161,7 +183,8 @@ struct NewProjectSheet: View {
                     machineId: machineId,
                     workingDir: trimmedDir,
                     adapterType: adapterType,
-                    title: title
+                    title: title,
+                    modelSelection: modelSelection
                 )
                 dismiss()
             } catch {
@@ -169,6 +192,39 @@ struct NewProjectSheet: View {
                 errorMessage = (error as? APIError)?.message ?? error.localizedDescription
             }
         }
+    }
+}
+
+/// The create sheets' "Model" row: current selection as a summary,
+/// pushing the shared catalog editor. The catalog is sourced from any
+/// existing same-type agent on the target machine (catalogs are per-CLI
+/// and stored per-agent; the session's own agent may not exist yet).
+struct ModelRow: View {
+    @Environment(AppModel.self) private var app
+    let machineId: String?
+    let adapterType: AgentType
+    @Binding var selection: ModelSelection
+
+    private var catalogAgentId: String? {
+        guard let machineId, !adapterType.isEmpty else { return nil }
+        return app.fleet.agents.values
+            .first {
+                $0.machineId == machineId && $0.type == adapterType && $0.archivedAt == nil
+            }?
+            .id
+    }
+
+    var body: some View {
+        NavigationLink {
+            ModelSelectionPage(catalogAgentId: catalogAgentId, selection: $selection)
+        } label: {
+            LabeledContent("Model") {
+                Text(selection.summary)
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .disabled(adapterType.isEmpty)
     }
 }
 
