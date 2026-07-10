@@ -276,29 +276,40 @@ private struct QuotaRowView: View {
 private struct ActivityHeatmap: View {
     let days: [ActivityDay]
 
-    private let weekCount = 22
+    /// Data allows up to a year of columns; the width decides how many
+    /// actually show.
+    private let weekCount = 52
     /// Gap as a fraction of cell size — scales with the fill.
     private let gapRatio: CGFloat = 0.22
 
-    /// Same container height as the Curve view, with the grid scaled to
-    /// FIT inside (cell = min of width/height budgets) and centered —
-    /// full-width canvas, no oversized cells on wide layouts.
+    /// Same container height as the Curve view.
     private let containerHeight: CGFloat = 150
 
     var body: some View {
         let weeks = self.weeks
         let peak = maxCount
-        let columns = CGFloat(max(1, weeks.count))
         Canvas { context, size in
-            let cellFromWidth = size.width / (columns + (columns - 1) * gapRatio)
+            // Cell size comes from the fixed HEIGHT (7 rows); the WIDTH
+            // decides how many trailing weeks show — as many as fill it
+            // edge to edge. ceil + re-derive from width so the fill is
+            // exact (cells end up a hair smaller, never taller).
             let cellFromHeight = size.height / (7 + 6 * gapRatio)
-            let cell = min(cellFromWidth, cellFromHeight)
+            let columnBudget = (size.width + cellFromHeight * gapRatio)
+                / (cellFromHeight * (1 + gapRatio))
+            let wanted = max(1, Int(columnBudget.rounded(.up)))
+            let shown = Array(weeks.suffix(wanted))
+            let columns = CGFloat(max(1, shown.count))
+            let cell = shown.count < wanted
+                // Not enough history to fill — keep height-sized cells.
+                ? cellFromHeight
+                // Enough columns: stretch to fill the width exactly.
+                : size.width / (columns + (columns - 1) * gapRatio)
             let gap = cell * gapRatio
             let gridWidth = columns * cell + (columns - 1) * gap
             let gridHeight = 7 * cell + 6 * gap
             let originX = (size.width - gridWidth) / 2
             let originY = (size.height - gridHeight) / 2
-            for (weekIndex, week) in weeks.enumerated() {
+            for (weekIndex, week) in shown.enumerated() {
                 for (dayIndex, day) in week.enumerated() {
                     let rect = CGRect(
                         x: originX + CGFloat(weekIndex) * (cell + gap),
@@ -315,8 +326,8 @@ private struct ActivityHeatmap: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// Chunk the trailing ~22 weeks into 7-day columns, phase-aligned so
-    /// the last (partial) week sits in the final column.
+    /// Chunk the trailing year into 7-day columns, phase-aligned so the
+    /// last (partial) week sits in the final column.
     private var weeks: [[ActivityDay?]] {
         let tail = Array(days.suffix(weekCount * 7))
         guard !tail.isEmpty else { return [] }
