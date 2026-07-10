@@ -18,6 +18,10 @@ struct SessionView: View {
     // Attachments being composed (already uploaded — server holds bytes).
     @State private var pendingAttachments: [UploadedAttachment] = []
     @State private var uploadsInFlight = 0
+    /// Composer pill highlighted as a drop target.
+    @State private var dropTargeted = false
+    /// Monotonic counter naming dropped payloads (they arrive nameless).
+    @State private var droppedCount = 0
     @State private var showAttachmentDialog = false
     @State private var showPhotoPicker = false
     @State private var showFileImporter = false
@@ -477,6 +481,18 @@ struct SessionView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(Color.surface1, in: RoundedRectangle(cornerRadius: 24))
+        // Drag a screenshot/file onto the pill (iPad Split View flow).
+        .dropDestination(for: Data.self) { items, _ in
+            handleDrop(items)
+        } isTargeted: { targeted in
+            dropTargeted = targeted
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 24)
+                .strokeBorder(Color.accentColor, lineWidth: 2)
+                .opacity(dropTargeted ? 1 : 0)
+        )
+        .animation(.easeOut(duration: 0.12), value: dropTargeted)
     }
 
     private var attachmentChips: some View {
@@ -507,7 +523,17 @@ struct SessionView: View {
         .buttonStyle(.plain)
         .offset(x: 6, y: -6)
 
-        if attachment.isImage, let url = attachment.url.flatMap({ app.client?.absoluteURL(for: $0) }) {
+        if let thumbnail = attachment.thumbnail {
+            // Instant local preview from the bytes we just uploaded —
+            // no server round-trip (web object-URL parity).
+            Image(uiImage: thumbnail)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(.separator)))
+                .overlay(alignment: .topTrailing) { remove }
+        } else if attachment.isImage, let url = attachment.url.flatMap({ app.client?.absoluteURL(for: $0) }) {
             AsyncImage(url: url) { phase in
                 if case .success(let image) = phase {
                     image.resizable().scaledToFill()
@@ -616,6 +642,10 @@ struct SessionView: View {
             defer { uploadsInFlight -= 1 }
             do {
                 guard let data = try await loadData() else { return }
+                // Local thumbnail from the bytes in hand (nil for
+                // non-images — UIImage init just fails).
+                let thumbnail = await UIImage(data: data)?
+                    .byPreparingThumbnail(ofSize: CGSize(width: 112, height: 112))
                 let attachment = try await client.uploadAttachment(
                     filename: name, mime: mime, data: data
                 )
@@ -623,13 +653,44 @@ struct SessionView: View {
                     id: attachment.id,
                     filename: attachment.filename,
                     isImage: attachment.mime.hasPrefix("image/"),
-                    url: attachment.url
+                    url: attachment.url,
+                    thumbnail: thumbnail
                 ))
             } catch {
                 app.handleAPIError(error)
                 model?.actionError = (error as? APIError)?.message ?? error.localizedDescription
             }
         }
+    }
+
+    // MARK: Drag & drop (iPad Split View: drag a screenshot straight in)
+
+    /// Raw dropped payloads arrive as Data with no filename — sniff the
+    /// type from magic bytes and synthesize a name.
+    private func handleDrop(_ items: [Data]) -> Bool {
+        guard model != nil, !items.isEmpty else { return false }
+        for data in items {
+            droppedCount += 1
+            let (ext, mime) = Self.sniffType(data)
+            upload(name: "dropped-\(droppedCount).\(ext)", mime: mime) { data }
+        }
+        return true
+    }
+
+    private static func sniffType(_ data: Data) -> (ext: String, mime: String) {
+        if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return ("png", "image/png") }
+        if data.starts(with: [0xFF, 0xD8, 0xFF]) { return ("jpg", "image/jpeg") }
+        if data.starts(with: [0x47, 0x49, 0x46, 0x38]) { return ("gif", "image/gif") }
+        if data.starts(with: [0x25, 0x50, 0x44, 0x46]) { return ("pdf", "application/pdf") }
+        // ISO-BMFF (HEIC/HEIF): "ftyphei*"/"ftypmif1" at offset 4.
+        if data.count > 12 {
+            let brand = data.subdata(in: 4..<12)
+            if let text = String(data: brand, encoding: .ascii),
+               text.hasPrefix("ftyphei") || text.hasPrefix("ftypmif") {
+                return ("heic", "image/heic")
+            }
+        }
+        return ("bin", "application/octet-stream")
     }
 }
 
@@ -639,6 +700,14 @@ private struct UploadedAttachment: Identifiable, Equatable {
     let isImage: Bool
     /// API-relative tokenized URL for the composer thumbnail preview.
     let url: String?
+    /// Local thumbnail generated from the picked/dropped bytes — instant
+    /// like the web's object-URL previews; `url`/AsyncImage is only the
+    /// fallback. Deliberately not part of what survives queueing.
+    let thumbnail: UIImage?
+
+    static func == (lhs: UploadedAttachment, rhs: UploadedAttachment) -> Bool {
+        lhs.id == rhs.id
+    }
 }
 
 // MARK: - Prompt queue strip
