@@ -719,6 +719,23 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   turn's thumbnails — both stores merge instead (web
   `sessionStore.upsertCommand`, iOS `TranscriptState.upsert`), keeping
   existing attachments when an update arrives without them.
+- **Session view-model cache (stale-while-revalidate).** `AppModel`
+  keeps `SessionViewModel`s alive across session switches (LRU, cap 8,
+  never evicts the on-screen one, cleared on logout), so re-opening a
+  recent session renders its transcript instantly instead of spinner +
+  full tail refetch. A cached transcript is always suspect — off-screen
+  sessions leave their WS room — so `SessionViewModel.start()` is
+  idempotent: cold VMs full-load, loaded VMs *revalidate*: refetch the
+  tail and MERGE it when the fresh window overlaps the cached commands
+  (ids stay stable, scrolled-in older pages survive); a disjoint window
+  (> 20 turns landed while away) falls back to wipe-and-replace, since
+  merging it would leave a hole mid-transcript. App-foreground reuses
+  the same path (`activeSession?.start()`), so foregrounding no longer
+  blanks the transcript and resets scroll. Gotcha: `agentType` is
+  frozen at VM init and keys the usage parsers, so the cache factory
+  replaces a VM cached with the `"custom"` fallback once the real agent
+  type is known (and conversely keeps a cached real type when the
+  caller only knows `"custom"`).
 
 ## Conventions
 

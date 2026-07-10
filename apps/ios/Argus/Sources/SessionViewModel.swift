@@ -37,6 +37,9 @@ final class SessionViewModel {
 
     private var rebuildScheduled = false
 
+    /// Initial-load page size — matches the web's DEFAULT_TAIL.
+    private static let tailWindow = 20
+
     init(
         sessionId: String,
         agentType: AgentType,
@@ -54,9 +57,19 @@ final class SessionViewModel {
 
     // MARK: Lifecycle
 
+    /// Idempotent open — runs on every appearance, cold or cached
+    /// (AppModel keeps view-models alive across session switches).
+    /// Cold: full snapshot load behind the spinner. Cached: the view
+    /// renders the existing transcript immediately and this refreshes
+    /// it in place (stale-while-revalidate) — off-screen sessions leave
+    /// their WS room, so anything that streamed while away was missed.
     func start() async {
         stream.joinSession(sessionId)
-        await reloadSnapshot()
+        if case .loaded = loadState {
+            await revalidate()
+        } else {
+            await reloadSnapshot()
+        }
         markSeen()
     }
 
@@ -64,12 +77,11 @@ final class SessionViewModel {
         stream.leaveSession(sessionId)
     }
 
-    /// Full snapshot reload — initial load, app-foreground, and the
-    /// robust half of reconnect catch-up (seq resets per command, so
-    /// afterSeq alone can miss whole new turns).
-    func reloadSnapshot() async {
+    /// Full snapshot reload — the cold-load path. External callers go
+    /// through start(), which picks this or the in-place revalidate.
+    private func reloadSnapshot() async {
         do {
-            let detail = try await client.getSession(id: sessionId, tailCommands: 20)
+            let detail = try await client.getSession(id: sessionId, tailCommands: Self.tailWindow)
             transcript.applySnapshot(
                 commands: detail.commands,
                 chunks: detail.chunks,
@@ -82,6 +94,34 @@ final class SessionViewModel {
             if case .loading = loadState {
                 loadState = .failed((error as? APIError)?.message ?? error.localizedDescription)
             }
+        }
+    }
+
+    /// Refresh a cached transcript without blanking it. When the fresh
+    /// tail overlaps what we hold, MERGE it — command ids stay stable
+    /// (no list jump) and older pages the user scrolled in survive.
+    /// A disjoint window (> tailWindow turns landed while away) would
+    /// leave a gap mid-transcript if merged, so that case falls back to
+    /// the wipe-and-replace snapshot. `hasMoreHistory` is kept on the
+    /// merge path: the response's flag describes its own 20-turn window,
+    /// while the cached transcript may already reach further back.
+    private func revalidate() async {
+        do {
+            let detail = try await client.getSession(id: sessionId, tailCommands: Self.tailWindow)
+            let known = Set(transcript.commands.map(\.id))
+            if detail.commands.contains(where: { known.contains($0.id) }) {
+                transcript.mergeBackfill(commands: detail.commands, chunks: detail.chunks)
+            } else {
+                transcript.applySnapshot(
+                    commands: detail.commands,
+                    chunks: detail.chunks,
+                    hasMore: detail.hasMore
+                )
+            }
+            rebuildNow()
+        } catch {
+            // Keep showing the cached transcript; 401s still funnel out.
+            onAuthError(error)
         }
     }
 

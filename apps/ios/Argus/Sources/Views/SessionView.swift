@@ -111,18 +111,20 @@ struct SessionView: View {
             Button("Files") { showFileImporter = true }
         }
         .task {
-            guard model == nil, let client = app.client, let stream = app.stream else { return }
-            let viewModel = SessionViewModel(
-                sessionId: sessionId,
-                agentType: agent?.type ?? "custom",
-                client: client,
-                stream: stream,
-                onAuthError: { [weak app] in app?.handleAPIError($0) }
-            )
-            model = viewModel
-            app.activeSession = viewModel
+            // Re-runs on every appearance, not just the first: start()
+            // is idempotent (re-join room + revalidate), which both
+            // serves cache re-opens and restores room membership after
+            // a disappear/reappear of the same view identity.
+            if model == nil {
+                model = app.sessionViewModel(
+                    for: sessionId,
+                    agentType: agent?.type ?? "custom"
+                )
+            }
+            guard let model else { return }
+            app.activeSession = model
             app.sessionList.markSeenLocally(id: sessionId)
-            await viewModel.start()
+            await model.start()
         }
         .onDisappear {
             model?.stop()
@@ -337,6 +339,18 @@ struct SessionView: View {
                 }
                 .onChange(of: model.turns.isEmpty) {
                     proxy.scrollTo("bottom", anchor: .bottom)
+                }
+                .onAppear {
+                    // Cache re-open: the transcript is populated on the
+                    // first frame, so the empty→non-empty trigger above
+                    // never fires — land at the live edge explicitly.
+                    // (Cold opens mount with zero turns and skip this.)
+                    guard !model.turns.isEmpty else { return }
+                    Task { @MainActor in
+                        // Let the LazyVStack lay out before scrolling.
+                        try? await Task.sleep(for: .milliseconds(60))
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
                 }
                 .overlay { emptyState(model) }
             }

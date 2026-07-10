@@ -70,6 +70,18 @@ final class AppModel {
     /// routed here. Set by SessionView on appear/disappear.
     @ObservationIgnored weak var activeSession: SessionViewModel?
 
+    /// Transcript cache: view-models outlive their views so switching
+    /// back to a recent session renders instantly from memory instead
+    /// of refetching behind a spinner. Stale-while-revalidate — the
+    /// cached transcript shows immediately and `SessionViewModel.start()`
+    /// refreshes the tail on every open (off-screen sessions leave their
+    /// WS room, so a cached transcript is always suspect). LRU-capped;
+    /// cleared on logout.
+    @ObservationIgnored private var sessionVMs: [String: SessionViewModel] = [:]
+    /// LRU order for the cache above, most recently opened last.
+    @ObservationIgnored private var sessionVMOrder: [String] = []
+    private static let sessionVMCacheLimit = 8
+
     /// The inspector's live PTY (if any) — terminal events route here.
     @ObservationIgnored weak var activeTerminal: TerminalController?
 
@@ -158,6 +170,8 @@ final class AppModel {
         user = nil
         client = nil
         activeSession = nil
+        sessionVMs = [:]
+        sessionVMOrder = []
         route = nil
         inspectorPresented = false
         drainInFlight = [:]
@@ -172,7 +186,10 @@ final class AppModel {
         guard phase == .ready else { return }
         Task {
             await refreshAll()
-            await activeSession?.reloadSnapshot()
+            // start(), not reloadSnapshot(): a loaded transcript is
+            // revalidated in place instead of blanked and refetched, so
+            // foregrounding doesn't reset the user's scroll position.
+            await activeSession?.start()
         }
     }
 
@@ -239,6 +256,55 @@ final class AppModel {
     func handleAPIError(_ error: Error) {
         if let apiError = error as? APIError, apiError.isUnauthorized {
             logOut()
+        }
+    }
+
+    // MARK: Session view-model cache
+
+    /// Cached-or-new view-model for a session. Reuses the cached one
+    /// when present so its transcript renders instantly; the caller
+    /// still runs `start()`, which revalidates a cached transcript.
+    /// Returns nil before the client/socket exist (mid-login teardown).
+    ///
+    /// `agentType` keys the usage/context parsers and is frozen at VM
+    /// init, so a cached VM built while the fleet list was still
+    /// loading (type fell back to "custom") is REPLACED once the real
+    /// type is known — otherwise the wrong parser would stick for the
+    /// cache's lifetime. The reverse (cached real type, caller passes
+    /// the "custom" fallback) keeps the cached VM: it knows more than
+    /// the caller.
+    func sessionViewModel(for sessionId: String, agentType: AgentType) -> SessionViewModel? {
+        guard let client, let stream else { return nil }
+        if let cached = sessionVMs[sessionId],
+           cached.agentType == agentType || agentType == "custom" {
+            touchSessionVM(sessionId)
+            return cached
+        }
+        let vm = SessionViewModel(
+            sessionId: sessionId,
+            agentType: agentType,
+            client: client,
+            stream: stream,
+            onAuthError: { [weak self] in self?.handleAPIError($0) }
+        )
+        sessionVMs[sessionId] = vm
+        touchSessionVM(sessionId)
+        evictSessionVMs()
+        return vm
+    }
+
+    private func touchSessionVM(_ sessionId: String) {
+        sessionVMOrder.removeAll { $0 == sessionId }
+        sessionVMOrder.append(sessionId)
+    }
+
+    private func evictSessionVMs() {
+        while sessionVMs.count > Self.sessionVMCacheLimit {
+            // Never evict the session on screen — live chunks route to it.
+            guard let victim = sessionVMOrder.first(where: { sessionVMs[$0] !== activeSession })
+            else { return }
+            sessionVMs[victim] = nil
+            sessionVMOrder.removeAll { $0 == victim }
         }
     }
 
