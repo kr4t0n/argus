@@ -772,6 +772,49 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Redis trims lazily on listpack boundaries, so actual stored length
   can briefly exceed N; that's the budget headroom, not slack to
   rely on.
+- **MAXLEN caps entry COUNT, not bytes — one fat chunk can blow the
+  whole budget**: the `streamMaxLen` caps above bound the *number* of
+  entries, so the memory model silently assumes each entry is small
+  (deltas, short tool output). It isn't always: a chunk that echoes a
+  large tool result — e.g. an MCP tool like Penpot's `generateMarkup`
+  returning ~1 MB of SVG per call, relayed whole as a
+  `progress`/`content=mcp_tool_call` chunk — can sit at ~1 MB/entry. At
+  500 entries that's a *half-gigabyte* budget on one `agent:{id}:result`
+  stream, well within the count cap. This is exactly what OOM'd the
+  30 MB prod Redis once (one Penpot session → a 10 MB result stream →
+  eviction → all sidecars dropped). Redis has **no byte-based MAXLEN**,
+  so the only real fix is at the producer: cap oversized `content`/`meta`
+  before `XADD`. **Deferred by decision** — a producer-side byte-cap
+  (truncate a chunk's payload past ~128 KB with a marker) is lossy for
+  the *display copy* of huge tool blobs (the answer `delta`s are never
+  touched, and the CLI keeps the full result in its own model context,
+  so it's a transcript-fidelity tradeoff, not a correctness one). Revisit
+  if MCP/tool-heavy sessions keep pressuring Redis. Emergency reclaim
+  while it's unfixed: `XTRIM <big>:result MAXLEN <small>` (safe — the read
+  path is Postgres, not Redis).
+- **Destroyed agents' streams are reclaimed, don't leak**: Redis streams
+  have no TTL, so a hard-destroyed agent's `agent:{id}:cmd` /
+  `agent:{id}:result` would otherwise linger forever (empty but present,
+  plus their consumer groups), monotonically bloating a bridge that is
+  meant to hold no permanent data. `MachineService.deleteAgentStreams`
+  `DEL`s both at destroy time (covers a sidecar-offline destroy) and
+  again on the `agent-destroyed` ack (the DEL that *sticks* — the
+  supervisor is torn down by then, so no self-heal can resurrect them).
+  DEL takes the consumer groups with it; the result-ingestor
+  (`NOGROUP` branch → immediate `refreshStreams`) and the sidecar's
+  machine-wide command reader both self-heal from the transient
+  `NOGROUP`, so a destroy never stalls live streaming for other sessions.
+- **Lifecycle PEL is reclaimed on boot, not leaked across restarts**:
+  the `server-lifecycle` consumer reads with `'>'` under a fixed name
+  (`server-1`), so entries delivered-but-unacked when the server
+  crashes/OOMs are never redelivered and pile up in the PEL forever (seen
+  live: 3,200+ phantom pending after an OOM, unreclaimable once MAXLEN
+  trimmed the underlying entries). `MachineService.reclaimStalePending`
+  runs before the consume loop starts, draining this consumer's own
+  pending list (`XREADGROUP … 0` → `XACK`) — it drops them rather than
+  replaying (replaying stale heartbeats would flap dead machines online;
+  the sidecar re-sends every 5s anyway). The steady-state loop already
+  acks every entry, so the leak was purely the restart path.
 - **stream-json drift**: each CLI's NDJSON event shape changes between
   versions. The mappers (`mapClaudeLine`, `mapCodexLine`) are
   defensive — unknown events fall through as `progress` chunks rather than

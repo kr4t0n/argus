@@ -68,9 +68,65 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     await this.redis.ensureGroup(streamKeys.lifecycle, consumerGroups.lifecycle);
+    await this.reclaimStalePending();
     this.running = true;
     this.loopPromise = this.consumeLoop();
     this.sweepTimer = setInterval(() => this.sweepStale(), SWEEP_INTERVAL_MS);
+  }
+
+  /**
+   * Clear this consumer's leftover pending-entries backlog from a prior
+   * run before the main loop starts.
+   *
+   * The lifecycle loop reads with '>' (new messages only) under a fixed
+   * consumer name (`server-1`), so any entries delivered to that consumer
+   * but not acked before a crash / restart / OOM are never redelivered —
+   * '>' skips them. They sit in the PEL, and once MAXLEN trims the
+   * underlying stream entries those PEL references become unreclaimable
+   * phantoms that grow without bound across restarts (observed live:
+   * 3,200+ stuck pending on `server-lifecycle` after an OOM).
+   *
+   * We read our own pending list with ID '0' and XACK it. Entries that
+   * still exist are stale by definition — the sidecar re-sends
+   * register/heartbeat every 5s and the '>' loop already applied anything
+   * current — and trimmed entries are phantoms; either way the correct
+   * action is to drop them, not replay (replaying stale heartbeats would
+   * briefly mark dead machines online). Runs before consumeLoop starts, so
+   * the dedicated blocking `read` connection is exclusively ours here.
+   */
+  private async reclaimStalePending(): Promise<void> {
+    try {
+      let cleared = 0;
+      // XACK removes acked ids from the PEL, so each '0' read returns the
+      // next pending batch and the loop drains it. The iteration cap is a
+      // belt-and-suspenders backstop against a non-terminating read.
+      for (let i = 0; i < 10_000; i++) {
+        const res = (await this.redis.read.xreadgroup(
+          'GROUP',
+          consumerGroups.lifecycle,
+          CONSUMER,
+          'COUNT',
+          500,
+          'STREAMS',
+          streamKeys.lifecycle,
+          '0',
+        )) as Array<[string, Array<[string, string[]]>]> | null;
+        const entries = res?.[0]?.[1] ?? [];
+        if (entries.length === 0) break;
+        await this.redis.cmd.xack(
+          streamKeys.lifecycle,
+          consumerGroups.lifecycle,
+          ...entries.map(([id]) => id),
+        );
+        cleared += entries.length;
+        if (entries.length < 500) break;
+      }
+      if (cleared > 0) {
+        this.logger.log(`lifecycle: cleared ${cleared} stale pending entr(ies) from a prior run`);
+      }
+    } catch (err) {
+      this.logger.warn(`lifecycle: reclaim of stale pending failed: ${(err as Error).message}`);
+    }
   }
 
   async onModuleDestroy() {
@@ -233,7 +289,45 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
       ts: Date.now(),
     });
     await this.prisma.agent.delete({ where: { id: agentId } });
+    // Reclaim the agent's Redis streams now. This covers the
+    // sidecar-offline case (no `agent-destroyed` ack will come); if the
+    // sidecar is online, its ack path DELs again once the supervisor is
+    // torn down, cleaning up any stream a late supervisor write recreated
+    // in the gap. See `deleteAgentStreams`.
+    await this.deleteAgentStreams(agentId);
     this.gateway.emitAgentRemoved(agentId);
+  }
+
+  /**
+   * Best-effort removal of a destroyed agent's Redis streams (command +
+   * result). Redis streams have no TTL, so without this every agent ever
+   * destroyed leaves its `agent:{id}:cmd` / `agent:{id}:result` streams —
+   * and their consumer groups, which DEL takes with them — in Redis
+   * forever, monotonically growing the footprint on a bridge that is
+   * supposed to hold no permanent data.
+   *
+   * Safe because Redis is only a transient bridge: the read path is
+   * Postgres, and a destroyed agent's sessions/commands/chunks are
+   * cascade-deleted with the row, so nothing downstream needs these
+   * entries. Both readers self-heal from the resulting NOGROUP — the
+   * sidecar's machine-wide command reader re-ensures groups + re-snapshots
+   * its agent set, and the result-ingestor re-syncs its stream list (see
+   * its NOGROUP branch).
+   */
+  private async deleteAgentStreams(agentId: string): Promise<void> {
+    try {
+      const removed = await this.redis.cmd.del(
+        streamKeys.command(agentId),
+        streamKeys.result(agentId),
+      );
+      if (removed > 0) {
+        this.logger.log(`deleted ${removed} Redis stream(s) for destroyed agent ${agentId}`);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `failed to delete Redis streams for agent ${agentId}: ${(err as Error).message}`,
+      );
+    }
   }
 
   /**
@@ -396,7 +490,16 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         }
       } catch (err) {
         if (this.running) {
-          this.logger.error(`lifecycle loop error: ${(err as Error).message}`);
+          const msg = (err as Error).message;
+          // Self-heal after a Redis flush (OOM recovery / manual FLUSHDB):
+          // the group vanishes and every '>' read fails NOGROUP forever
+          // until a restart. Re-create it and keep going.
+          if (msg.includes('NOGROUP')) {
+            await this.redis
+              .ensureGroup(streamKeys.lifecycle, consumerGroups.lifecycle)
+              .catch(() => {});
+          }
+          this.logger.error(`lifecycle loop error: ${msg}`);
           await new Promise((r) => setTimeout(r, 1_000));
         }
       }
@@ -566,9 +669,13 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         break;
       }
       case 'agent-destroyed': {
-        // Sidecar acked the destroy. The row was already deleted by
-        // destroyAgent; nothing more to do.
+        // Sidecar acked the destroy: the supervisor is torn down and the
+        // machine-wide command reader has dropped this agent from its
+        // snapshot, so a DEL now sticks — no self-heal can resurrect the
+        // streams. This is the authoritative cleanup; destroyAgent's
+        // earlier DEL covers the case where this ack never arrives.
         this.logger.log(`agent-destroyed ${ev.agentId} on ${ev.machineId}`);
+        await this.deleteAgentStreams(ev.agentId);
         break;
       }
       case 'fs-list-response': {
