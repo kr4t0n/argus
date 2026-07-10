@@ -159,7 +159,10 @@ private struct FileBrowserPanel: View {
             }
         }
         .sheet(item: fileSheetBinding) { box in
-            FileViewerSheet(agent: agent, path: box.value)
+            FilePreviewSheet(
+                agent: agent,
+                target: FilePreviewTarget(path: box.value, displayPath: box.value, line: nil)
+            )
         }
     }
 
@@ -286,80 +289,8 @@ private struct StringBox: Identifiable {
     var id: String { value }
 }
 
-private struct FileViewerSheet: View {
-    @Environment(AppModel.self) private var app
-    @Environment(\.dismiss) private var dismiss
-    let agent: AgentDTO
-    let path: String
-
-    @State private var result: FSReadResult?
-    @State private var loadError: String?
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                switch result {
-                case .none:
-                    if let loadError {
-                        ContentUnavailableView(
-                            "Couldn't read file",
-                            systemImage: "exclamationmark.triangle",
-                            description: Text(loadError)
-                        )
-                    } else {
-                        ProgressView()
-                    }
-                case .text(let content, _):
-                    ScrollView([.vertical, .horizontal]) {
-                        Text(content)
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
-                            .padding()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                case .image(_, let base64, _):
-                    if let data = Data(base64Encoded: base64),
-                       let image = UIImage(data: data) {
-                        ScrollView {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFit()
-                        }
-                    } else {
-                        ContentUnavailableView("Couldn't decode image", systemImage: "photo")
-                    }
-                case .binary(let size):
-                    ContentUnavailableView(
-                        "Binary file",
-                        systemImage: "doc.zipper",
-                        description: Text(TokenFormat.bytes(size))
-                    )
-                case .unsupported(let kind):
-                    ContentUnavailableView(
-                        "Unsupported viewer (\(kind))",
-                        systemImage: "doc.questionmark"
-                    )
-                }
-            }
-            .navigationTitle((path as NSString).lastPathComponent)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .task {
-                guard let client = app.client else { return }
-                do {
-                    result = try await client.readAgentFile(agentId: agent.id, path: path).result
-                } catch {
-                    app.handleAPIError(error)
-                    loadError = (error as? APIError)?.message ?? error.localizedDescription
-                }
-            }
-        }
-    }
-}
+// The file viewer itself is the shared FilePreviewSheet (FilePreview.swift)
+// — the same one FileChips and path:line answer links open.
 
 // MARK: - Commits
 

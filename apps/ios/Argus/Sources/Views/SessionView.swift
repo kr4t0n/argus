@@ -28,6 +28,9 @@ struct SessionView: View {
     @State private var showRename = false
     @State private var renameText = ""
 
+    /// File preview opened from a chip or a path:line answer link.
+    @State private var filePreview: FilePreviewTarget?
+
     private var session: SessionDTO? { app.sessionList.sessions[sessionId] }
     private var agent: AgentDTO? {
         session.flatMap { app.fleet.agents[$0.agentId] }
@@ -45,6 +48,11 @@ struct SessionView: View {
         .sheet(isPresented: $showModelPicker) {
             if let session {
                 ModelPickerSheet(session: session, agent: agent)
+            }
+        }
+        .sheet(item: $filePreview) { previewTarget in
+            if let agent {
+                FilePreviewSheet(agent: agent, target: previewTarget)
             }
         }
         .alert("Rename session", isPresented: $showRename) {
@@ -177,6 +185,21 @@ struct SessionView: View {
         }
     }
 
+    /// Open a preview for a raw tool/citation path — only when it
+    /// resolves inside the agent's workspace (the sidecar rejects reads
+    /// outside its jail).
+    private func openFilePreview(_ rawPath: String, line: Int?) {
+        let workingDir = agent?.workingDir
+        guard let relative = FileReferences.toAgentRelative(rawPath, workingDir: workingDir) else {
+            return
+        }
+        filePreview = FilePreviewTarget(
+            path: relative,
+            displayPath: FileReferences.displayPath(rawPath, workingDir: workingDir),
+            line: line
+        )
+    }
+
     private func fork(from turn: Turn) {
         guard let client = app.client else { return }
         Task {
@@ -203,8 +226,10 @@ struct SessionView: View {
                         ForEach(model.turns) { turn in
                             TurnCell(
                                 turn: turn,
+                                workingDir: agent?.workingDir,
                                 attachmentURL: { app.client?.absoluteURL(for: $0.url) },
-                                onFork: { fork(from: turn) }
+                                onFork: { fork(from: turn) },
+                                onOpenFile: { path, line in openFilePreview(path, line: line) }
                             )
                             .id(turn.id)
                         }
@@ -592,8 +617,11 @@ private struct PromptQueueList: View {
 
 private struct TurnCell: View {
     let turn: Turn
+    let workingDir: String?
     let attachmentURL: (AttachmentDTO) -> URL?
     let onFork: () -> Void
+    /// (raw path, optional line) — from FileChips or path:line links.
+    let onOpenFile: (String, Int?) -> Void
     @State private var activityExpanded = false
 
     var body: some View {
@@ -628,6 +656,13 @@ private struct TurnCell: View {
 
             if !turn.answer.isEmpty {
                 AnswerView(markdown: turn.answer, isStreaming: turn.isRunning)
+                    // Route `path:line` citations (and plain file-path
+                    // links) into the file preview; real URLs pass
+                    // through to the system. Mirrors the web's
+                    // fileLinkUrlTransform + a-renderer gotcha pair.
+                    .environment(\.openURL, OpenURLAction { url in
+                        handleAnswerLink(url)
+                    })
                     .contextMenu {
                         Button("Copy answer", systemImage: "doc.on.doc") {
                             UIPasteboard.general.string = turn.answer
@@ -647,6 +682,15 @@ private struct TurnCell: View {
                 }
             }
 
+            // Files the agent touched — after the answer, like the web.
+            if !turn.touchedFiles.isEmpty {
+                FileChipsRow(
+                    files: turn.touchedFiles,
+                    workingDir: workingDir,
+                    onOpen: onOpenFile
+                )
+            }
+
             if let errorText = turn.errorText {
                 Text(errorText)
                     .font(.system(.footnote, design: .monospaced))
@@ -659,6 +703,28 @@ private struct TurnCell: View {
         .contextMenu {
             Button("Fork from this turn", systemImage: "arrow.branch") { onFork() }
         }
+    }
+
+    /// The web's two-layer gotcha, in OpenURLAction form: (1) a real
+    /// scheme (http/https/mailto) goes to the system — this keeps
+    /// `http://localhost:3000` a browser link; (2) anything else is
+    /// tried as a `path[:line[:col]]` citation — note `xxx.txt:1`
+    /// parses as URL scheme "xxx.txt", which is exactly why the check
+    /// can't just be "has a scheme".
+    private func handleAnswerLink(_ url: URL) -> OpenURLAction.Result {
+        let scheme = url.scheme?.lowercased()
+        if scheme == "http" || scheme == "https" || scheme == "mailto" {
+            return .systemAction
+        }
+        let raw = url.absoluteString.removingPercentEncoding ?? url.absoluteString
+        let split = FileReferences.splitLineSuffix(raw)
+        // File-ish only (contains . or /) — bare words stay inert
+        // rather than opening a garbage preview.
+        guard split.path.contains("/") || split.path.contains(".") else {
+            return .discarded
+        }
+        onOpenFile(split.path, split.line)
+        return .handled
     }
 
     private var attachmentRow: some View {
