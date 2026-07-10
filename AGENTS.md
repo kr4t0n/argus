@@ -125,6 +125,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `modelSelection`, `PATCH /sessions/:id/model` replaces/clears it
   (null = back to CLI default), both deliberately without deep
   validation — selections pass through to the CLI opaquely.
+  Transcript loads page by TURN (`tailCommands` / `history?before=`),
+  not by byte — a turn's chunk payload (tool meta, diffs, thinking
+  text) dwarfs its count, which is why the API gzips responses
+  (`compression()` in `main.ts`; nothing else fronts :4000 to do it)
+  and the web opens with a 4-turn tail, paging 20 per scroll-up.
 - `command/` — persists commands, `XADD`s to `agent:{id}:cmd`, handles cancel.
   `dispatch` merges `Session.modelSelection` under per-turn `options`
   and records the merged map on `Command.options`.
