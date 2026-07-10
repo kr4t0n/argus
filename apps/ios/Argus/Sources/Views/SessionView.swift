@@ -32,6 +32,10 @@ struct SessionView: View {
     @State private var filePreview: FilePreviewTarget?
     /// Full-size viewer for a turn's uploaded attachment.
     @State private var attachmentPreview: AttachmentDTO?
+    /// Turns with their activity timeline expanded — lifted out of the
+    /// cells because the pinned band (capsule) and the scrolling body
+    /// (timeline) are separate views of the same turn.
+    @State private var expandedActivity: Set<String> = []
 
     private var session: SessionDTO? { app.sessionList.sessions[sessionId] }
     private var agent: AgentDTO? {
@@ -222,6 +226,40 @@ struct SessionView: View {
         }
     }
 
+    // MARK: Activity expansion (sticky-band scroll snap)
+
+    private func bandAnchor(_ turnId: String) -> String {
+        "band-" + turnId
+    }
+
+    private func activityToggleBinding(_ turnId: String, proxy: ScrollViewProxy) -> Binding<Bool> {
+        Binding(
+            get: { expandedActivity.contains(turnId) },
+            set: { _ in toggleActivity(turnId, proxy: proxy) }
+        )
+    }
+
+    /// Web parity (StreamViewer's handleActivityToggle): on toggle, snap
+    /// this turn's band to the top of the scrollport — expanding lands
+    /// you at the tool list, collapsing doesn't strand you mid-body.
+    /// Skipped while browsing history (not near the live edge), where a
+    /// snap would yank the view to a turn the user didn't ask for.
+    private func toggleActivity(_ turnId: String, proxy: ScrollViewProxy) {
+        if expandedActivity.contains(turnId) {
+            expandedActivity.remove(turnId)
+        } else {
+            expandedActivity.insert(turnId)
+        }
+        guard nearBottom else { return }
+        Task { @MainActor in
+            // Let the timeline mount/unmount commit before scrolling.
+            try? await Task.sleep(for: .milliseconds(60))
+            withAnimation(.easeOut(duration: 0.15)) {
+                proxy.scrollTo(bandAnchor(turnId), anchor: .top)
+            }
+        }
+    }
+
     // MARK: Transcript
 
     @ViewBuilder
@@ -229,18 +267,33 @@ struct SessionView: View {
         if let model {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 24) {
+                    // Sticky turn bands (web parity): each turn is a
+                    // Section whose pinned header carries the user
+                    // message + activity capsule, so scrolling through a
+                    // long turn keeps "what is the agent doing" visible.
+                    // Spacing is 0 — the inter-turn gap lives inside the
+                    // band's opaque background.
+                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                         historyHeader(model)
                         ForEach(model.turns) { turn in
-                            TurnCell(
-                                turn: turn,
-                                workingDir: agent?.workingDir,
-                                attachmentURL: { app.client?.absoluteURL(for: $0.url) },
-                                onFork: { fork(from: turn) },
-                                onOpenFile: { path, line in openFilePreview(path, line: line) },
-                                onOpenAttachment: { attachmentPreview = $0 }
-                            )
-                            .id(turn.id)
+                            Section {
+                                TurnBody(
+                                    turn: turn,
+                                    workingDir: agent?.workingDir,
+                                    timelineExpanded: expandedActivity.contains(turn.id),
+                                    onFork: { fork(from: turn) },
+                                    onOpenFile: { path, line in openFilePreview(path, line: line) }
+                                )
+                            } header: {
+                                TurnBand(
+                                    turn: turn,
+                                    attachmentURL: { app.client?.absoluteURL(for: $0.url) },
+                                    expanded: activityToggleBinding(turn.id, proxy: proxy),
+                                    onFork: { fork(from: turn) },
+                                    onOpenAttachment: { attachmentPreview = $0 }
+                                )
+                                .id(bandAnchor(turn.id))
+                            }
                         }
                         // Bottom sentinel: its visibility IS the
                         // "pinned to bottom" signal for stickiness.
@@ -250,7 +303,8 @@ struct SessionView: View {
                             .onAppear { nearBottom = true }
                             .onDisappear { nearBottom = false }
                     }
-                    .padding()
+                    .padding(.horizontal)
+                    .padding(.bottom)
                     .frame(maxWidth: 720)
                     .frame(maxWidth: .infinity)
                 }
@@ -624,16 +678,18 @@ private struct PromptQueueList: View {
 
 // MARK: - Turn rendering
 
-private struct TurnCell: View {
+/// The pinned per-turn band — user message (attachments + prompt) and
+/// the activity capsule, i.e. the web's sticky band. Rendered as a
+/// pinned section header; inter-turn spacing lives INSIDE its opaque
+/// background so no uncovered sliver shows while body content slides
+/// beneath it.
+private struct TurnBand: View {
     let turn: Turn
-    let workingDir: String?
     let attachmentURL: (AttachmentDTO) -> URL?
+    @Binding var expanded: Bool
     let onFork: () -> Void
-    /// (raw path, optional line) — from FileChips or path:line links.
-    let onOpenFile: (String, Int?) -> Void
     /// Tap on an uploaded-attachment thumbnail/pill → full-size viewer.
     let onOpenAttachment: (AttachmentDTO) -> Void
-    @State private var activityExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -647,13 +703,74 @@ private struct TurnCell: View {
                 PromptBubble(text: turn.prompt)
             }
 
-            // Web order: the activity CAPSULE, then the to-do / sub-agent
-            // panels, then (when expanded) the activity timeline — so the
-            // panels stay on top of the expanded tool list.
             if !turn.timeline.isEmpty {
-                ActivityCapsule(turn: turn, expanded: $activityExpanded)
+                ActivityCapsule(turn: turn, expanded: $expanded)
             }
+        }
+        .padding(.top, 20)
+        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemBackground))
+        .contextMenu {
+            Button("Fork from this turn", systemImage: "arrow.branch") { onFork() }
+        }
+    }
 
+    private var attachmentRow: some View {
+        // Attachments are part of the USER's message — right-aligned
+        // under the prompt bubble, like the web. A plain trailing frame
+        // doesn't cut it: the horizontal ScrollView fills the row and
+        // pins content leading; the trailing default anchor both aligns
+        // fitting content right and starts overflow scrolled to the end.
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(turn.attachments) { attachment in
+                    Button {
+                        onOpenAttachment(attachment)
+                    } label: {
+                        if attachment.mime.hasPrefix("image/"), let url = attachmentURL(attachment) {
+                            AsyncImage(url: url) { phase in
+                                switch phase {
+                                case .success(let image):
+                                    image.resizable().scaledToFill()
+                                default:
+                                    Color.gray.opacity(0.1)
+                                }
+                            }
+                            .frame(width: 88, height: 88)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                        } else {
+                            Label(attachment.filename, systemImage: "doc")
+                                .font(.caption2)
+                                .lineLimit(1)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                                .background(.quaternary.opacity(0.5), in: Capsule())
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.leading, 40)
+        }
+        .defaultScrollAnchor(.trailing)
+    }
+}
+
+/// The scrolling remainder of a turn — panels, expanded timeline,
+/// answer, file chips, error — the section content that slides under
+/// the pinned band. Web order: panels stay on top of the expanded
+/// tool list.
+private struct TurnBody: View {
+    let turn: Turn
+    let workingDir: String?
+    let timelineExpanded: Bool
+    let onFork: () -> Void
+    /// (raw path, optional line) — from FileChips or path:line links.
+    let onOpenFile: (String, Int?) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
             if let todos = turn.todos {
                 TodoWindow(todos: todos)
             }
@@ -661,7 +778,7 @@ private struct TurnCell: View {
                 SubAgentWindow(calls: turn.subAgents)
             }
 
-            if !turn.timeline.isEmpty, activityExpanded {
+            if !turn.timeline.isEmpty, timelineExpanded {
                 ActivityTimeline(turn: turn)
             }
 
@@ -711,9 +828,7 @@ private struct TurnCell: View {
                     .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             }
         }
-        .contextMenu {
-            Button("Fork from this turn", systemImage: "arrow.branch") { onFork() }
-        }
+        .padding(.top, 4)
     }
 
     /// The web's two-layer gotcha, in OpenURLAction form: (1) a real
@@ -736,46 +851,6 @@ private struct TurnCell: View {
         }
         onOpenFile(split.path, split.line)
         return .handled
-    }
-
-    private var attachmentRow: some View {
-        // Attachments are part of the USER's message — right-aligned
-        // under the prompt bubble, like the web. A plain trailing frame
-        // doesn't cut it: the horizontal ScrollView fills the row and
-        // pins content leading; the trailing default anchor both aligns
-        // fitting content right and starts overflow scrolled to the end.
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(turn.attachments) { attachment in
-                    Button {
-                        onOpenAttachment(attachment)
-                    } label: {
-                        if attachment.mime.hasPrefix("image/"), let url = attachmentURL(attachment) {
-                            AsyncImage(url: url) { phase in
-                                switch phase {
-                                case .success(let image):
-                                    image.resizable().scaledToFill()
-                                default:
-                                    Color.gray.opacity(0.1)
-                                }
-                            }
-                            .frame(width: 88, height: 88)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                        } else {
-                            Label(attachment.filename, systemImage: "doc")
-                                .font(.caption2)
-                                .lineLimit(1)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
-                                .background(.quaternary.opacity(0.5), in: Capsule())
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.leading, 40)
-        }
-        .defaultScrollAnchor(.trailing)
     }
 }
 
