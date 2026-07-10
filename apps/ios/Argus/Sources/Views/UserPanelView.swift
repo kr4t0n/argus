@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 import ArgusKit
 
 /// The account screen — the iOS counterpart of the web's /user page:
@@ -56,13 +57,33 @@ struct UserPanelView: View {
         }
     }
 
+    private enum ActivityMode: String, CaseIterable {
+        case grid = "Grid"
+        case curve = "Curve"
+    }
+
+    @State private var activityMode: ActivityMode = .grid
+
     private var activitySection: some View {
         Section("Activity") {
             if activity.isEmpty {
                 Text("No activity yet.").font(.callout).foregroundStyle(.secondary)
             } else {
-                ActivityHeatmap(days: activity)
-                    .listRowInsets(EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12))
+                // Web parity: Grid/Curve segmented toggle over the same
+                // /me/activity payload — pure client-side view swap.
+                Picker("View", selection: $activityMode) {
+                    ForEach(ActivityMode.allCases, id: \.self) { Text($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+
+                switch activityMode {
+                case .grid:
+                    ActivityHeatmap(days: activity)
+                        .listRowInsets(EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12))
+                case .curve:
+                    ActivityCurve(days: activity)
+                        .listRowInsets(EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12))
+                }
             }
         }
     }
@@ -247,36 +268,47 @@ private struct QuotaRowView: View {
 
 // MARK: - Activity heatmap
 
-/// GitHub-style contribution grid: 7 rows (Sun–Sat), one column per
-/// week, last ~5 months, scrolled to today. Data is dense (zero-days
-/// included) and ascending, so columns chunk directly.
+/// GitHub-style contribution grid: 7 rows, one column per week, last
+/// ~5 months. Cells SIZE TO FILL the container width (web parity — no
+/// fixed-size cells leaving blank space), drawn in a Canvas whose
+/// aspect ratio is derived from the column count so height follows
+/// width automatically.
 private struct ActivityHeatmap: View {
     let days: [ActivityDay]
 
-    private let cell: CGFloat = 11
-    private let gap: CGFloat = 2
+    private let weekCount = 22
+    /// Gap as a fraction of cell size — scales with the fill.
+    private let gapRatio: CGFloat = 0.22
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: gap) {
-                ForEach(weeks.indices, id: \.self) { weekIndex in
-                    VStack(spacing: gap) {
-                        ForEach(weeks[weekIndex].indices, id: \.self) { dayIndex in
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(color(for: weeks[weekIndex][dayIndex]))
-                                .frame(width: cell, height: cell)
-                        }
-                    }
+        let weeks = self.weeks
+        let peak = maxCount
+        let columns = CGFloat(max(1, weeks.count))
+        let ratio = (columns + (columns - 1) * gapRatio) / (7 + 6 * gapRatio)
+        Canvas { context, size in
+            let cell = size.width / (columns + (columns - 1) * gapRatio)
+            let gap = cell * gapRatio
+            for (weekIndex, week) in weeks.enumerated() {
+                for (dayIndex, day) in week.enumerated() {
+                    let rect = CGRect(
+                        x: CGFloat(weekIndex) * (cell + gap),
+                        y: CGFloat(dayIndex) * (cell + gap),
+                        width: cell,
+                        height: cell
+                    )
+                    let path = Path(roundedRect: rect, cornerRadius: cell * 0.2)
+                    context.fill(path, with: .color(color(for: day, peak: peak)))
                 }
             }
         }
-        .defaultScrollAnchor(.trailing)
+        .aspectRatio(ratio, contentMode: .fit)
+        .frame(maxWidth: .infinity)
     }
 
     /// Chunk the trailing ~22 weeks into 7-day columns, phase-aligned so
     /// the last (partial) week sits in the final column.
     private var weeks: [[ActivityDay?]] {
-        let tail = Array(days.suffix(22 * 7))
+        let tail = Array(days.suffix(weekCount * 7))
         guard !tail.isEmpty else { return [] }
         var columns: [[ActivityDay?]] = []
         var column: [ActivityDay?] = []
@@ -300,11 +332,65 @@ private struct ActivityHeatmap: View {
         max(1, days.map(\.count).max() ?? 1)
     }
 
-    private func color(for day: ActivityDay?) -> Color {
+    private func color(for day: ActivityDay?, peak: Int) -> Color {
         guard let day, day.count > 0 else {
             return Color.gray.opacity(day == nil ? 0 : 0.12)
         }
-        let intensity = 0.25 + 0.75 * min(1, Double(day.count) / Double(maxCount))
+        let intensity = 0.25 + 0.75 * min(1, Double(day.count) / Double(peak))
         return Color.green.opacity(intensity)
+    }
+}
+
+// MARK: - Activity curve
+
+/// The web's ActivityLineChart: commands per day as a smoothed line
+/// with a soft area fill, over the same dense /me/activity payload.
+private struct ActivityCurve: View {
+    let days: [ActivityDay]
+
+    private static let dayParser: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter
+    }()
+
+    private var points: [(date: Date, count: Int)] {
+        days.compactMap { day in
+            Self.dayParser.date(from: day.date).map { ($0, day.count) }
+        }
+    }
+
+    private var emerald: Color { Color(hex: 0x10B981) }
+
+    var body: some View {
+        Chart(points, id: \.date) { point in
+            AreaMark(
+                x: .value("Day", point.date),
+                y: .value("Commands", point.count)
+            )
+            .interpolationMethod(.monotone)
+            .foregroundStyle(
+                .linearGradient(
+                    colors: [emerald.opacity(0.25), emerald.opacity(0.02)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            LineMark(
+                x: .value("Day", point.date),
+                y: .value("Commands", point.count)
+            )
+            .interpolationMethod(.monotone)
+            .foregroundStyle(emerald)
+            .lineStyle(StrokeStyle(lineWidth: 1.5))
+        }
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 4)) {
+                AxisGridLine()
+                AxisValueLabel(format: .dateTime.month(.abbreviated))
+            }
+        }
+        .frame(height: 150)
     }
 }
