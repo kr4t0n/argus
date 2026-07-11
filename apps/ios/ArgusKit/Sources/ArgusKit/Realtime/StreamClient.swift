@@ -107,6 +107,10 @@ public enum ServerEvent: Sendable {
     case terminalUpdated(TerminalDTO)
     case terminalOutput(TerminalOutputPayload)
     case terminalClosed(TerminalClosedPayload)
+
+    /// Bulk sidecar update: one event per per-machine state transition,
+    /// carrying the whole plan (same shape as the 202 body).
+    case sidecarUpdateBatchProgress(SidecarUpdateBatchAccepted)
 }
 
 /// Owns the Socket.IO connection and surfaces typed events as an
@@ -229,6 +233,7 @@ public final class StreamClient {
         on(socket, "terminal:updated", ServerEvent.terminalUpdated)
         on(socket, "terminal:output", ServerEvent.terminalOutput)
         on(socket, "terminal:closed", ServerEvent.terminalClosed)
+        on(socket, "sidecar-update:batch-progress", ServerEvent.sidecarUpdateBatchProgress)
     }
 
     /// Register a typed handler: decode the event's first argument into

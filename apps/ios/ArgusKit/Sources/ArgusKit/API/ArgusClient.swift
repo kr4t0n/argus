@@ -241,6 +241,37 @@ public final class ArgusClient: @unchecked Sendable {
         try await send("GET", "/projects")
     }
 
+    /// Set (or, with nil, reset) a project's icon glyph — workspace-
+    /// shared metadata; the server broadcasts project:upsert so every
+    /// dashboard converges. The reset must be an explicit JSON null.
+    public func setProjectIcon(
+        machineId: String,
+        workingDir: String,
+        iconKey: String?
+    ) async throws -> ProjectDTO {
+        struct Body: Encodable {
+            let machineId: String
+            let workingDir: String
+            let iconKey: String?
+
+            private enum CodingKeys: String, CodingKey {
+                case machineId, workingDir, iconKey
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(machineId, forKey: .machineId)
+                try container.encode(workingDir, forKey: .workingDir)
+                // Unconditional encode: nil → explicit null (reset).
+                try container.encode(iconKey, forKey: .iconKey)
+            }
+        }
+        return try await send(
+            "PATCH", "/projects/icon",
+            body: Body(machineId: machineId, workingDir: workingDir, iconKey: iconKey)
+        )
+    }
+
     // MARK: Files / git (right-pane data)
 
     public func listAgentDir(
