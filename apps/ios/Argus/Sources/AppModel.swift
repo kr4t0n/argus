@@ -157,6 +157,7 @@ final class AppModel {
     }
 
     func logOut() {
+        LiveActivityManager.shared.endAll()
         unregisterDeviceForLogout()
         if let config = serverConfig {
             TokenStore.clear(server: config.displayName)
@@ -190,6 +191,12 @@ final class AppModel {
             // revalidated in place instead of blanked and refetched, so
             // foregrounding doesn't reset the user's scroll position.
             await activeSession?.start()
+            // Adopt/resolve any lock-screen cards that outlived their
+            // turn (the server's end push handles this when APNs is
+            // configured; this is the fallback).
+            LiveActivityManager.shared.reconcile { [weak self] sessionId in
+                self?.sessionList.sessions[sessionId]?.status
+            }
         }
     }
 
@@ -221,6 +228,26 @@ final class AppModel {
             // possibly-rotated APNs token (registration is idempotent).
             Task { _ = await PushManager.shared.requestAndRegister() }
         }
+
+        // Live Activities: stream each activity's push token to the
+        // server so it can drive the lock-screen card while we're
+        // backgrounded.
+        LiveActivityManager.shared.register = { [weak self] sessionId, tokenHex in
+            guard let client = self?.client else { return }
+            try? await client.registerLiveActivity(token: tokenHex, sessionId: sessionId)
+        }
+        LiveActivityManager.shared.unregister = { [weak self] tokenHex in
+            guard let client = self?.client else { return }
+            try? await client.unregisterLiveActivity(token: tokenHex)
+        }
+    }
+
+    /// Put a turn on the lock screen (idempotent; no-ops when Live
+    /// Activities are off system-side).
+    private func startLiveActivity(sessionId: String) {
+        guard let session = sessionList.sessions[sessionId] else { return }
+        let agentType = fleet.agents[session.agentId]?.type ?? "custom"
+        LiveActivityManager.shared.start(session: session, agentType: agentType)
     }
 
     /// Toggle handler. Returns false when the user denied the system
@@ -435,6 +462,10 @@ final class AppModel {
                 )
                 queue.remove(id: head.id)
                 activeSession?.ingest(command: command)
+                // Turns submitted from THIS device get a lock-screen
+                // card immediately (ActivityKit needs foreground — this
+                // is the natural moment).
+                startLiveActivity(sessionId: sessionId)
                 // drainInFlight stays set until the session goes active
                 // (or the 30s bridge expires) — that's the guard window.
             } catch {
@@ -489,6 +520,9 @@ final class AppModel {
 
         case .chunk(let chunk):
             activeSession?.ingestLive(chunk: chunk)
+            if let sessionId = chunk.sessionId {
+                LiveActivityManager.shared.noteChunk(sessionId: sessionId, chunk: chunk)
+            }
         case .commandCreated(let command), .commandUpdated(let command):
             activeSession?.ingest(command: command)
 
@@ -501,7 +535,17 @@ final class AppModel {
                 // Dispatch→active bridge closed; the queue stays parked
                 // until this turn finishes.
                 drainInFlight[status.id] = nil
+                // A turn started in the session on screen → lock-screen
+                // card (turns submitted from this device start theirs in
+                // the drainer; this covers e.g. queued follow-ups too).
+                if status.id == activeSession?.sessionId {
+                    startLiveActivity(sessionId: status.id)
+                }
             } else {
+                LiveActivityManager.shared.end(
+                    sessionId: status.id,
+                    failed: status.status == .failed
+                )
                 maybeDrain(sessionId: status.id)
             }
         case .sessionCloneFailed:

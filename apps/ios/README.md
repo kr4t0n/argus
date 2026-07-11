@@ -205,5 +205,14 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
 - **Post-Phase-4 (this):** inspector parity (Note + Progress tabs, web
   tab order/gating) and the interactive terminal (SwiftTerm over the
   `terminal:*` socket events, lazy-opened per inspector).
-- **Later:** Live Activity for a running turn (needs a widget extension
-  + push-to-update tokens).
+- **Live Activity (done):** a lock-screen / Dynamic Island card for a
+  running turn — session title, live tool count + last tool, on-device
+  elapsed timer, resolving to ✓/✗. Starts when a turn begins in the
+  viewed session or is submitted from the device; updates locally while
+  the app is foregrounded, and via APNs `liveactivity` pushes (throttled
+  server-side in the result-ingestor) once backgrounded. The UI lives in
+  the `ArgusWidgets` extension; `Shared/TurnActivityAttributes.swift` is
+  the content-state wire contract with the server — field names must
+  match `push.service.ts`. Without `APNS_*` configured the card still
+  works while the app is open (plus a foreground reconcile fallback);
+  locked-screen updates need the push credentials.

@@ -28,6 +28,8 @@ targets:
     deploymentTarget: '17.0'
     sources:
       - Sources
+      # Shared with the widget extension (Live Activity attributes).
+      - Shared
     dependencies:
       - package: ArgusKit
       - package: MarkdownUI
@@ -36,6 +38,8 @@ targets:
         product: SwiftTerm
       - package: Highlightr
         product: Highlightr
+      - target: ArgusWidgets
+        embed: true
     scheme: {}
     entitlements:
       path: Argus.entitlements
@@ -50,6 +54,8 @@ targets:
         # Self-hosted Argus servers on LAN/localhost are plain http.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        # Lock-screen / Dynamic Island cards for running turns.
+        NSSupportsLiveActivities: true
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -69,5 +75,30 @@ targets:
         SWIFT_VERSION: '5.10'
         # Simulator needs no signing team. For a physical device, delete
         # these two lines and set a team in Signing & Capabilities.
+        CODE_SIGNING_ALLOWED: 'NO'
+        CODE_SIGN_IDENTITY: ''
+
+  # Live Activity UI must live in a WidgetKit extension. Depends only on
+  # the Shared attributes — no ArgusKit, no app assets.
+  ArgusWidgets:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: '17.0'
+    sources:
+      - Widgets
+      - Shared
+    info:
+      path: Widgets-Info.plist
+      properties:
+        CFBundleDisplayName: Argus Widgets
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.argus.ios.widgets
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        TARGETED_DEVICE_FAMILY: '1,2'
+        SWIFT_VERSION: '5.10'
         CODE_SIGNING_ALLOWED: 'NO'
         CODE_SIGN_IDENTITY: ''

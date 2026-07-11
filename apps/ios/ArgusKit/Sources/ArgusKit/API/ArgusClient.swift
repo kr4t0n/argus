@@ -302,6 +302,25 @@ public final class ArgusClient: @unchecked Sendable {
         try await sendVoid("DELETE", "/me/devices/\(token)")
     }
 
+    /// Register a Live Activity's per-activity push token so the server
+    /// can drive the lock-screen card while the app is backgrounded.
+    @discardableResult
+    public func registerLiveActivity(token: String, sessionId: String) async throws -> LiveActivityDTO {
+        struct Body: Encodable {
+            let token: String
+            let sessionId: String
+        }
+        return try await send(
+            "POST", "/me/live-activities",
+            body: Body(token: token, sessionId: sessionId)
+        )
+    }
+
+    /// Fire-and-forget when the activity ends (APNs 410 prunes strays).
+    public func unregisterLiveActivity(token: String) async throws {
+        try await sendVoid("DELETE", "/me/live-activities/\(token)")
+    }
+
     public func getMyExtensions() async throws -> UserExtensions {
         try await send("GET", "/me/extensions")
     }

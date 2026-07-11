@@ -136,3 +136,14 @@ public struct DeviceDTO: Codable, Equatable, Sendable, Identifiable {
     public var platform: String
     public var createdAt: String
 }
+
+/// One registered ActivityKit push token (`POST /me/live-activities`) —
+/// per-activity, bound to the session whose turn the Live Activity
+/// tracks. The server pushes content-state updates to it while the app
+/// is backgrounded.
+public struct LiveActivityDTO: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var token: String
+    public var sessionId: String
+    public var createdAt: String
+}
