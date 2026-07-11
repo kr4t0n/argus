@@ -28,36 +28,6 @@ struct SessionSidebar: View {
     @State private var renameText = ""
     @State private var newSessionProject: ProjectGroup?
     @State private var showNewProject = false
-
-    // Project management (web project-row hover actions).
-    @State private var projectRenameTarget: ProjectGroup?
-    @State private var projectRenameText = ""
-    @State private var projectIconTarget: ProjectGroup?
-    @State private var projectArchiveTarget: ProjectGroup?
-    /// Local project-name overrides — web parity: project renames live
-    /// client-side (localStorage placeholders there), never on the
-    /// server (ProjectDTO carries only the icon).
-    @State private var projectNames = SessionSidebar.loadProjectNames()
-
-    // Fleet-wide sidecar update.
-    @State private var showBulkUpdate = false
-
-    private static let projectNamesKey = "argus.projectNames"
-    private static func loadProjectNames() -> [String: String] {
-        UserDefaults.standard.dictionary(forKey: projectNamesKey) as? [String: String] ?? [:]
-    }
-    private func setProjectName(_ key: String, _ name: String?) {
-        if let name, !name.isEmpty {
-            projectNames[key] = name
-        } else {
-            projectNames[key] = nil
-        }
-        UserDefaults.standard.set(projectNames, forKey: Self.projectNamesKey)
-    }
-
-    private func displayTitle(_ group: ProjectGroup) -> String {
-        projectNames[group.id] ?? group.title
-    }
     /// Collapsed project keys, persisted like the web's uiStore.expanded
     /// (default expanded — a key is present only when collapsed).
     @State private var collapsed = SessionSidebar.loadCollapsed()
@@ -114,31 +84,11 @@ struct SessionSidebar: View {
             Button("Cancel", role: .cancel) { renameTarget = nil }
             Button("Rename") { commitRename() }
         }
-        .alert("Rename project", isPresented: projectRenameAlertBinding) {
-            TextField("Name (empty resets)", text: $projectRenameText)
-            Button("Cancel", role: .cancel) { projectRenameTarget = nil }
-            Button("Rename") { commitProjectRename() }
-        } message: {
-            Text("Project names are per-device, like on the web.")
-        }
-        .confirmationDialog(
-            "Archive every session in \(projectArchiveTarget.map(displayTitle) ?? "this project")? Each one can be restored individually via the project's eye toggle.",
-            isPresented: projectArchiveDialogBinding,
-            titleVisibility: .visible
-        ) {
-            Button("Archive all sessions", role: .destructive) { commitProjectArchive() }
-        }
         .sheet(item: $newSessionProject) { project in
             NewSessionSheet(project: project)
         }
         .sheet(isPresented: $showNewProject) {
             NewProjectSheet()
-        }
-        .sheet(item: $projectIconTarget) { project in
-            ProjectIconSheet(project: project)
-        }
-        .sheet(isPresented: $showBulkUpdate) {
-            BulkUpdateSheet()
         }
     }
 
@@ -179,28 +129,12 @@ struct SessionSidebar: View {
                     }
                 }
 
-                Section {
+                Section("Machines") {
                     ForEach(machines) { machine in
                         MachineRow(machine: machine)
                             .tag(DetailRoute.machine(machine.id))
                             .listRowInsets(machineRowInsets)
                             .listRowSeparator(.hidden)
-                    }
-                } header: {
-                    HStack {
-                        Text("Machines")
-                        Spacer()
-                        // Web parity: the machines-list kebab's
-                        // "Update all sidecars…".
-                        Menu {
-                            Button("Update all sidecars…", systemImage: "arrow.down.circle") {
-                                showBulkUpdate = true
-                            }
-                        } label: {
-                            Image(systemName: "ellipsis")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
                     }
                 }
 
@@ -267,8 +201,6 @@ struct SessionSidebar: View {
 
     /// A compact, tappable project row (collapse toggle + eye + `+`),
     /// rendered as an ordinary list row rather than a section header.
-    /// Long-press for management: rename (device-local), icon glyph
-    /// (server-synced), archive-all-sessions.
     @ViewBuilder
     private func projectHeader(_ group: ProjectGroup) -> some View {
         HStack(spacing: 6) {
@@ -280,9 +212,8 @@ struct SessionSidebar: View {
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(collapsed.contains(group.id) ? 0 : 90))
-                    projectGlyph(group)
-                    Text(displayTitle(group))
-                        .font(.caption).fontWeight(.medium).foregroundStyle(.secondary)
+                    Image(systemName: "folder").font(.caption2).foregroundStyle(.secondary)
+                    Text(group.title).font(.caption).fontWeight(.medium).foregroundStyle(.secondary)
                     Text("\(group.sessions.count)")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.tertiary)
@@ -290,22 +221,6 @@ struct SessionSidebar: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .contextMenu {
-                Button("Rename…", systemImage: "pencil") {
-                    projectRenameText = projectNames[group.id] ?? ""
-                    projectRenameTarget = group
-                }
-                if group.machineId != nil {
-                    Button("Icon…", systemImage: "textformat") {
-                        projectIconTarget = group
-                    }
-                }
-                if !group.sessions.isEmpty {
-                    Button("Archive all sessions…", systemImage: "archivebox", role: .destructive) {
-                        projectArchiveTarget = group
-                    }
-                }
-            }
             Spacer(minLength: 6)
             // The web's per-project eye: only offered when there is an
             // archive to reveal. Web semantics — showing = open eye in
@@ -345,67 +260,11 @@ struct SessionSidebar: View {
             }
     }
 
-    /// The project's synced A–Z glyph (ProjectDTO.iconKey), or the
-    /// default folder. Machine iconKeys are web-lucide names with no SF
-    /// mapping — machines keep their computer glyph.
-    @ViewBuilder
-    private func projectGlyph(_ group: ProjectGroup) -> some View {
-        if let letter = app.fleet.projects[group.id]?.iconKey, !letter.isEmpty {
-            Text(letter.prefix(1).uppercased())
-                .font(.system(size: 8, weight: .bold, design: .rounded))
-                .frame(width: 13, height: 13)
-                .background(Color.surface2, in: RoundedRectangle(cornerRadius: 3.5))
-                .foregroundStyle(.secondary)
-        } else {
-            Image(systemName: "folder").font(.caption2).foregroundStyle(.secondary)
-        }
-    }
-
     private var renameAlertBinding: Binding<Bool> {
         Binding(
             get: { renameTarget != nil },
             set: { if !$0 { renameTarget = nil } }
         )
-    }
-
-    private var projectRenameAlertBinding: Binding<Bool> {
-        Binding(
-            get: { projectRenameTarget != nil },
-            set: { if !$0 { projectRenameTarget = nil } }
-        )
-    }
-
-    private var projectArchiveDialogBinding: Binding<Bool> {
-        Binding(
-            get: { projectArchiveTarget != nil },
-            set: { if !$0 { projectArchiveTarget = nil } }
-        )
-    }
-
-    private func commitProjectRename() {
-        guard let target = projectRenameTarget else { return }
-        projectRenameTarget = nil
-        setProjectName(target.id, projectRenameText.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
-
-    /// Cascade-archive the project's active sessions (web parity, minus
-    /// agent archival — agents are invisible in this sidebar, and
-    /// per-session unarchive keeps everything reversible).
-    private func commitProjectArchive() {
-        guard let target = projectArchiveTarget, let client = app.client else { return }
-        projectArchiveTarget = nil
-        let sessions = target.sessions
-        Task {
-            // Per-item, failure-tolerant, like the web's allSettled.
-            for session in sessions {
-                do {
-                    app.sessionList.upsert(try await client.archiveSession(id: session.id))
-                    if selection == .session(session.id) { selection = nil }
-                } catch {
-                    app.handleAPIError(error)
-                }
-            }
-        }
     }
 
     private func commitRename() {
@@ -442,210 +301,6 @@ struct SessionSidebar: View {
                 app.sessionList.upsert(try await client.unarchiveSession(id: session.id))
             } catch {
                 app.handleAPIError(error)
-            }
-        }
-    }
-}
-
-/// A–Z glyph picker for a project (web's 6×5 letter grid + reset).
-/// Server-synced via PATCH /projects/icon; every dashboard converges on
-/// the project:upsert broadcast.
-private struct ProjectIconSheet: View {
-    @Environment(AppModel.self) private var app
-    @Environment(\.dismiss) private var dismiss
-    let project: ProjectGroup
-
-    @State private var busy = false
-    @State private var errorMessage: String?
-
-    private let letters = (65...90).map { String(UnicodeScalar($0)!) }
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 16) {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 10) {
-                    ForEach(letters, id: \.self) { letter in
-                        Button {
-                            save(letter)
-                        } label: {
-                            Text(letter)
-                                .font(.system(.body, design: .rounded).weight(.semibold))
-                                .frame(maxWidth: .infinity, minHeight: 40)
-                                .background(
-                                    isCurrent(letter) ? Color.accentColor.opacity(0.2) : Color.surface1,
-                                    in: RoundedRectangle(cornerRadius: 8)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                Button("Reset to folder") { save(nil) }
-                    .font(.callout)
-                if let errorMessage {
-                    Text(errorMessage).font(.caption).foregroundStyle(.red)
-                }
-                Spacer()
-            }
-            .padding()
-            .navigationTitle("Project icon")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
-            .disabled(busy)
-        }
-        .presentationDetents([.medium])
-    }
-
-    private func isCurrent(_ letter: String) -> Bool {
-        app.fleet.projects[project.id]?.iconKey?.uppercased() == letter
-    }
-
-    private func save(_ letter: String?) {
-        guard let client = app.client,
-              let machineId = project.machineId,
-              let workingDir = project.workingDir
-        else { return }
-        busy = true
-        Task {
-            defer { busy = false }
-            do {
-                let dto = try await client.setProjectIcon(
-                    machineId: machineId, workingDir: workingDir, iconKey: letter
-                )
-                app.fleet.upsert(project: dto)
-                dismiss()
-            } catch {
-                app.handleAPIError(error)
-                errorMessage = (error as? APIError)?.message ?? error.localizedDescription
-            }
-        }
-    }
-}
-
-/// Fleet-wide sidecar update — the web's BulkUpdateModal: machine list
-/// with per-row status, kicked off here, kept live by the
-/// sidecar-update:batch-progress events.
-private struct BulkUpdateSheet: View {
-    @Environment(AppModel.self) private var app
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var batchId: String?
-    @State private var plan: [SidecarUpdatePlanEntry] = []
-    @State private var starting = false
-    @State private var errorMessage: String?
-
-    private var machines: [MachineDTO] {
-        app.fleet.machines.values
-            .filter { $0.archivedAt == nil }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                if plan.isEmpty {
-                    Section {
-                        ForEach(machines) { machine in
-                            HStack {
-                                Text(machine.name)
-                                Spacer()
-                                Text(machine.status == .online ? machine.sidecarVersion : "offline")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    } footer: {
-                        Text("Each online machine downloads the latest sidecar release, verifies it, and restarts itself. Offline machines are skipped.")
-                    }
-                } else {
-                    Section("Plan") {
-                        ForEach(plan, id: \.machineId) { entry in
-                            planRow(entry)
-                        }
-                    }
-                }
-                if let errorMessage {
-                    Section { Text(errorMessage).font(.callout).foregroundStyle(.red) }
-                }
-            }
-            .navigationTitle("Update all sidecars")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(plan.isEmpty ? "Cancel" : "Close") { dismiss() }
-                }
-                if plan.isEmpty {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Update all") { start() }
-                            .disabled(starting || machines.isEmpty)
-                    }
-                }
-            }
-            .onChange(of: app.lastSidecarBatchProgress) {
-                guard let progress = app.lastSidecarBatchProgress,
-                      progress.batchId == batchId
-                else { return }
-                plan = progress.plan
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func planRow(_ entry: SidecarUpdatePlanEntry) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.machineName)
-                HStack(spacing: 4) {
-                    Text(entry.fromVersion)
-                    if let toVersion = entry.toVersion {
-                        Text("→ \(toVersion)")
-                    }
-                    if let error = entry.error {
-                        Text(error).foregroundStyle(.red)
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            Spacer()
-            statusBadge(entry.status)
-        }
-    }
-
-    @ViewBuilder
-    private func statusBadge(_ status: String) -> some View {
-        switch status {
-        case "in-progress":
-            ProgressView().controlSize(.small)
-        case "completed":
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case "failed":
-            Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
-        case "skipped-offline", "skipped-already-current":
-            Text(status.replacingOccurrences(of: "skipped-", with: ""))
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-        default: // queued (or a future status — stays visible)
-            Text(status).font(.caption2).foregroundStyle(.secondary)
-        }
-    }
-
-    private func start() {
-        guard let client = app.client else { return }
-        starting = true
-        errorMessage = nil
-        Task {
-            defer { starting = false }
-            do {
-                let accepted = try await client.updateAllSidecars()
-                batchId = accepted.batchId
-                plan = accepted.plan
-            } catch {
-                app.handleAPIError(error)
-                errorMessage = (error as? APIError)?.message ?? error.localizedDescription
             }
         }
     }
