@@ -45,6 +45,10 @@ final class AppModel {
     private(set) var lastBackgroundTaskUpdate: BackgroundTaskDTO?
     private(set) var lastBackgroundTaskRemoval: BackgroundTaskRemovedPayload?
 
+    /// Latest bulk sidecar-update plan — the update-all sheet watches
+    /// this and filters by its batchId.
+    private(set) var lastSidecarBatchProgress: SidecarUpdateBatchAccepted?
+
     /// Account-level extension opt-ins — gate the inspector's Note /
     /// Progress / Diff tabs, exactly like the web's ContextPane.
     private(set) var extensions = UserExtensions()
@@ -540,6 +544,9 @@ final class AppModel {
             activeTerminal?.handle(event)
         case .terminalCreated, .terminalUpdated:
             break
+
+        case .sidecarUpdateBatchProgress(let progress):
+            lastSidecarBatchProgress = progress
         }
     }
 }
