@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
-import { DeviceController } from './device.controller';
+import { DeviceController, LiveActivityController } from './device.controller';
 import { PushService } from './push.service';
 
 @Module({
-  controllers: [DeviceController],
+  controllers: [DeviceController, LiveActivityController],
   providers: [PushService],
   exports: [PushService],
 })

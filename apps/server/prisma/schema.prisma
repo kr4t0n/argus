@@ -36,6 +36,7 @@ model User {
   attachments  Attachment[]
   apiKeys      ApiKey[]
   deviceTokens DeviceToken[]
+  liveActivityTokens LiveActivityToken[]
 }
 
 // One push-notification endpoint (an APNs device token today) owned by
@@ -56,6 +57,24 @@ model DeviceToken {
   lastSeenAt DateTime @updatedAt
 
   @@index([userId])
+}
+
+// One ActivityKit push token — PER-ACTIVITY, not per-device: the iOS
+// client starts a Live Activity for a running turn and registers the
+// activity's token against the session so the result-ingestor can push
+// content-state updates ('liveactivity' APNs type) while the phone is
+// locked. Rows die with the activity: the client deletes on end, and
+// APNs 410/BadDeviceToken feedback prunes strays (an ended activity's
+// token starts rejecting).
+model LiveActivityToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId String
+  token     String   @unique
+  createdAt DateTime @default(now())
+
+  @@index([sessionId])
 }
 
 // Long-lived, revocable credential for machine-to-machine callers

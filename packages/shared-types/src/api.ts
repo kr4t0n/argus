@@ -620,3 +620,20 @@ export interface DeviceDTO {
   platform: string;
   createdAt: string;
 }
+
+/** Request body for `POST /me/live-activities` — register an ActivityKit
+ *  push token for a running turn's Live Activity. Tokens are
+ *  PER-ACTIVITY (ActivityKit mints one per started activity), so the
+ *  client re-registers for every turn it puts on the lock screen. */
+export interface RegisterLiveActivityRequest {
+  token: string;
+  sessionId: string;
+}
+
+/** One registered Live Activity token. */
+export interface LiveActivityDTO {
+  id: string;
+  token: string;
+  sessionId: string;
+  createdAt: string;
+}

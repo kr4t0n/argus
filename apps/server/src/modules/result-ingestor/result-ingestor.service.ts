@@ -182,6 +182,10 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
     const dto: ResultChunkDTO = { ...chunk };
     this.gateway.emitChunk(dto);
 
+    // Lock-screen Live Activity upkeep (no-op without registered
+    // activity tokens; throttled internally).
+    this.push.noteLiveActivityChunk(chunk);
+
     if (chunk.isFinal || chunk.kind === 'final' || chunk.kind === 'error') {
       const status = chunk.kind === 'error' ? 'failed' : 'completed';
       // Denormalize parsed token usage onto the Command row so /me/usage
@@ -213,6 +217,8 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
       // reached a terminal state. Fire-and-forget — a push failure must
       // never affect ingestion.
       void this.push.notifySessionFinished(dto, status === 'failed');
+      // Resolve any lock-screen card immediately (✓/✗).
+      void this.push.endLiveActivity(chunk.sessionId, status === 'failed');
     } else {
       // A fresh turn is running: clear any prior unread result so the
       // dot doesn't linger while the amber "active" indicator shows.

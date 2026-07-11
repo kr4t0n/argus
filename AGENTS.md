@@ -783,6 +783,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - **Prisma + workspace import**: the server can only typecheck if `rootDir`
   is unset, because `@argus/shared-types` lives outside `apps/server/src`.
   `nest build` is fine because it only compiles `src/`.
+- **Prisma migration NAMES are replay ORDER**: migrations replay in
+  lexicographic directory-name order, and this repo's numeric prefixes
+  (`0_init` … `16_api_keys`) make that order non-obvious (`10_` sorts
+  before `2_`). A default timestamp-named migration sorts mid-history —
+  `20260706054229_add_device_tokens` landed with a folded-in drift fix
+  referencing a table created by `3_…` and broke every FRESH-database
+  replay (existing DBs were fine; they applied in creation order). Fixed
+  by making the stray statement `IF EXISTS` and re-homing the real fix
+  as `5a_…` (sorts after its dependency; idempotent for DBs that already
+  ran the original). When adding migrations: keep statements independent
+  of later-sorting migrations, or name them to sort after their
+  dependencies; verify with `prisma migrate diff --from-migrations
+  --to-schema-datamodel` (must be "No difference detected").
 - **Adapter `init()`**: an adapter only registers itself if its file is
   *imported*. The blank `_ "..."` trick isn't needed today because they're
   all under the same package, but keep it in mind when adding adapters in a

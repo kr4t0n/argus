@@ -121,7 +121,172 @@ export class PushService {
     return token;
   }
 
-  private send(deviceToken: string, payload: string): Promise<void> {
+  // ── Live Activities ──────────────────────────────────────────────
+  //
+  // The iOS client starts an ActivityKit activity for a running turn
+  // and registers its per-activity push token against the session.
+  // While the app is backgrounded, WE are the only thing that can move
+  // the lock-screen card: throttled 'update' events as tool chunks
+  // stream, and an immediate 'end' when the turn settles. The Swift
+  // ContentState is `{state, toolCount, lastTool}` — key names here
+  // must match it EXACTLY (ActivityKit decodes content-state with the
+  // struct's Codable).
+
+  /** Per-session live-turn bookkeeping: tool counters + push throttle +
+   *  a short token-existence cache so chunk ingestion never queries
+   *  Postgres more than once per window. */
+  private liveTurns = new Map<
+    string,
+    {
+      commandId: string;
+      toolCount: number;
+      lastTool: string;
+      lastPushAt: number;
+      tokens: string[];
+      tokensFetchedAt: number;
+    }
+  >();
+
+  private static readonly LIVE_UPDATE_MIN_MS = 15_000;
+  private static readonly LIVE_TOKEN_CACHE_MS = 60_000;
+
+  private get liveActivityTopic(): string {
+    return `${this.topic}.push-type.liveactivity`;
+  }
+
+  /** Drop the token cache for a session (called on register/unregister
+   *  so a fresh activity gets its first update promptly). */
+  invalidateLiveTokens(sessionId: string): void {
+    const entry = this.liveTurns.get(sessionId);
+    if (entry) entry.tokensFetchedAt = 0;
+  }
+
+  /**
+   * Called by the result-ingestor for every persisted chunk. Cheap when
+   * the session has no registered activity; otherwise maintains the
+   * turn's counters and pushes a throttled content-state update.
+   */
+  noteLiveActivityChunk(chunk: {
+    sessionId: string;
+    commandId: string;
+    kind: string;
+    content?: string;
+    meta?: Record<string, unknown>;
+  }): void {
+    if (!this.enabled) return;
+    if (chunk.kind !== 'tool') return;
+
+    let entry = this.liveTurns.get(chunk.sessionId);
+    if (!entry) {
+      entry = {
+        commandId: chunk.commandId,
+        toolCount: 0,
+        lastTool: '',
+        lastPushAt: 0,
+        tokens: [],
+        tokensFetchedAt: 0,
+      };
+      this.liveTurns.set(chunk.sessionId, entry);
+    }
+    // New turn on the same session → counters restart.
+    if (entry.commandId !== chunk.commandId) {
+      entry.commandId = chunk.commandId;
+      entry.toolCount = 0;
+      entry.lastTool = '';
+    }
+    entry.toolCount += 1;
+    const firstLine = (chunk.content ?? '').trim().split('\n')[0];
+    entry.lastTool =
+      firstLine || String((chunk.meta as { tool?: string } | undefined)?.tool ?? 'tool');
+
+    const now = Date.now();
+    if (now - entry.lastPushAt < PushService.LIVE_UPDATE_MIN_MS) return;
+    entry.lastPushAt = now;
+    void this.pushLiveActivity(chunk.sessionId, 'update', {
+      state: 'running',
+      toolCount: entry.toolCount,
+      lastTool: entry.lastTool,
+    });
+  }
+
+  /** Resolve the card when the turn settles — always immediate. */
+  async endLiveActivity(sessionId: string, failed: boolean): Promise<void> {
+    if (!this.enabled) return;
+    const entry = this.liveTurns.get(sessionId);
+    await this.pushLiveActivity(sessionId, 'end', {
+      state: failed ? 'failed' : 'completed',
+      toolCount: entry?.toolCount ?? 0,
+      lastTool: entry?.lastTool ?? '',
+    });
+    this.liveTurns.delete(sessionId);
+  }
+
+  private async pushLiveActivity(
+    sessionId: string,
+    event: 'update' | 'end',
+    contentState: { state: string; toolCount: number; lastTool: string },
+  ): Promise<void> {
+    try {
+      const tokens = await this.liveTokens(sessionId);
+      if (tokens.length === 0) return;
+
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const payload = JSON.stringify({
+        aps: {
+          timestamp: nowSeconds,
+          event,
+          'content-state': contentState,
+          // Updates go stale if nothing arrives for a while (the card
+          // dims); an ended card dismisses itself after a few minutes.
+          ...(event === 'update'
+            ? { 'stale-date': nowSeconds + 600 }
+            : { 'dismissal-date': nowSeconds + 240 }),
+        },
+      });
+
+      await Promise.allSettled(
+        tokens.map((token) =>
+          this.send(token, payload, {
+            topic: this.liveActivityTopic,
+            pushType: 'liveactivity',
+            kind: 'live-activity',
+          }),
+        ),
+      );
+    } catch (err) {
+      this.logger.warn(`live-activity push failed: ${String(err)}`);
+    }
+  }
+
+  private async liveTokens(sessionId: string): Promise<string[]> {
+    const entry = this.liveTurns.get(sessionId);
+    const now = Date.now();
+    if (entry && now - entry.tokensFetchedAt < PushService.LIVE_TOKEN_CACHE_MS) {
+      return entry.tokens;
+    }
+    const rows = await this.prisma.liveActivityToken.findMany({
+      where: { sessionId },
+      select: { token: true },
+    });
+    const tokens = rows.map((row) => row.token);
+    if (entry) {
+      entry.tokens = tokens;
+      entry.tokensFetchedAt = now;
+    }
+    return tokens;
+  }
+
+  // ── Transport ────────────────────────────────────────────────────
+
+  private send(
+    deviceToken: string,
+    payload: string,
+    opts: {
+      topic: string;
+      pushType: 'alert' | 'liveactivity';
+      kind: 'device' | 'live-activity';
+    } = { topic: this.topic, pushType: 'alert', kind: 'device' },
+  ): Promise<void> {
     return new Promise((resolve) => {
       const session = http2.connect(this.host);
       const finish = () => {
@@ -137,8 +302,8 @@ export class PushService {
         ':method': 'POST',
         ':path': `/3/device/${deviceToken}`,
         authorization: `bearer ${this.providerJwt()}`,
-        'apns-topic': this.topic,
-        'apns-push-type': 'alert',
+        'apns-topic': opts.topic,
+        'apns-push-type': opts.pushType,
         'apns-priority': '10',
         'content-type': 'application/json',
       });
@@ -154,7 +319,7 @@ export class PushService {
       });
       req.on('end', () => {
         if (status !== 200) {
-          this.handleFailure(deviceToken, status, body);
+          this.handleFailure(deviceToken, status, body, opts.kind);
         }
         finish();
       });
@@ -166,19 +331,30 @@ export class PushService {
     });
   }
 
-  /** APNs feedback: dead tokens are pruned so we stop paying for them. */
-  private handleFailure(deviceToken: string, status: number, body: string): void {
+  /** APNs feedback: dead tokens are pruned so we stop paying for them.
+   *  Live-activity tokens die naturally when their activity ends — the
+   *  410 here is the expected cleanup path, not an error. */
+  private handleFailure(
+    deviceToken: string,
+    status: number,
+    body: string,
+    kind: 'device' | 'live-activity',
+  ): void {
     let reason = '';
     try {
       reason = (JSON.parse(body) as { reason?: string }).reason ?? '';
     } catch {
       /* non-JSON error body */
     }
-    this.logger.warn(`APNs ${status} ${reason} for token ${deviceToken.slice(0, 8)}…`);
+    this.logger.warn(`APNs ${status} ${reason} (${kind}) for token ${deviceToken.slice(0, 8)}…`);
     if (status === 410 || reason === 'BadDeviceToken' || reason === 'Unregistered') {
-      void this.prisma.deviceToken
-        .delete({ where: { token: deviceToken } })
-        .catch(() => {});
+      if (kind === 'device') {
+        void this.prisma.deviceToken.delete({ where: { token: deviceToken } }).catch(() => {});
+      } else {
+        void this.prisma.liveActivityToken
+          .delete({ where: { token: deviceToken } })
+          .catch(() => {});
+      }
     }
   }
 }

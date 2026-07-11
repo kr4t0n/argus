@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE "MachineAgentQuota" ALTER COLUMN "fingerprint" DROP DEFAULT;
+ALTER TABLE IF EXISTS "MachineAgentQuota" ALTER COLUMN "fingerprint" DROP DEFAULT;
 
 -- CreateTable
 CREATE TABLE "DeviceToken" (
