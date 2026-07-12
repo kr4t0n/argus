@@ -23,6 +23,12 @@ Argus has **four** moving parts and one wire format:
    - **Redis Streams** (durable, at-least-once) for control-plane traffic:
      - `agent:lifecycle`        — machines announce/heartbeat themselves;
        sidecars also publish per-agent spawn/destroy acknowledgments here.
+     - `agent:notify`           — fs-changed / git-changed watcher nudges.
+       Split off from `lifecycle` so a build-burst of fs events can't
+       MAXLEN-trim unread heartbeats (which flips healthy agents offline).
+       Drained by the same MachineService XREADGROUP as `lifecycle`.
+     - `agent:background`       — `argus-bg` task progress (see the
+       background-task service note under Server modules).
      - `machine:{mid}:control`  — server → sidecar daemon
        (`create-agent`, `destroy-agent`, `sync-agents`).
      - `agent:{id}:cmd`         — server → that agent's supervisor.
@@ -98,7 +104,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   reveal + copy + live "test" call, and inline-confirm revoke.
 - `machine/` — owns the `Machine` table and the agent control plane.
   Consumes `agent:lifecycle` (`machine-register`, `machine-heartbeat`,
-  `agent-spawned`, `agent-spawn-failed`, `agent-destroyed`), upserts
+  `agent-spawned`, `agent-spawn-failed`, `agent-destroyed`) plus
+  `agent:notify` (`fs-changed` / `git-changed`) in one XREADGROUP —
+  same group name registered on both streams, shared handler switch,
+  so nudges from pre-notify sidecars that still arrive on `lifecycle`
+  are handled identically. Upserts
   `Machine` rows, replies with a `sync-agents` reconcile so the
   sidecar's cached agent set converges with the server's. Exposes
   REST (`GET /machines`, `POST /machines/:id/agents`,
@@ -125,6 +135,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `modelSelection`, `PATCH /sessions/:id/model` replaces/clears it
   (null = back to CLI default), both deliberately without deep
   validation — selections pass through to the CLI opaquely.
+  Transcript loads page by TURN (`tailCommands` / `history?before=`),
+  not by byte — a turn's chunk payload (tool meta, diffs, thinking
+  text) dwarfs its count, which is why the API gzips responses
+  (`compression()` in `main.ts`; nothing else fronts :4000 to do it)
+  and the web opens with a 4-turn tail, paging 20 per scroll-up.
 - `command/` — persists commands, `XADD`s to `agent:{id}:cmd`, handles cancel.
   `dispatch` merges `Session.modelSelection` under per-turn `options`
   and records the merged map on `Command.options`.
@@ -173,8 +188,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   service's own XREADGROUP loop on `streamKeys.background` (the
   dedicated `agent:background` stream; deliberately separate from
   `agent:lifecycle` because a fast tqdm bar emits 20+ events/sec and
-  would otherwise trim heartbeats / fs-changed / sidecar-update
-  progress out via MAXLEN). Keyed by `(machineId, workingDir,
+  would otherwise trim heartbeats / sidecar-update progress out via
+  MAXLEN — the same reasoning later moved the fs/git watcher nudges
+  onto `agent:notify`). Keyed by `(machineId, workingDir,
   taskId)` — workingDir is the project identity, matching how notes
   scope. Each upsert fans out as `background-task:updated` on the
   per-project Socket.IO room (`project:<machineId>:<workingDir>`).
@@ -292,7 +308,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     agent's workingDir, always strip `.git` AND `.argus/`, and
     respect gitignore. `fsWatcher` registers one fsnotify watch per
     non-ignored dir and coalesces events into 250 ms-debounced
-    fs-changed emits. `git.go` reads `.git/HEAD` (and resolves the
+    fs-changed emits (published on `agent:notify`, not `lifecycle` —
+    one event per dirty dir per window still bursts on big builds). `git.go` reads `.git/HEAD` (and resolves the
     worktree-pointer file form) without shelling out to `git` or
     pulling in a Go git lib — its output is attached to every
     fs-list response so the dashboard's branch badge refreshes for
@@ -834,14 +851,76 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   ID but `XREADGROUP` can never replay it. Symptoms: missing result
   chunks mid-command, a sidecar that "didn't get" a control message,
   unrecoverable PEL growth. Current caps are sized for a ~30 MB Redis
-  with ~10 agents: `agent:lifecycle`=500, `agent:{id}:cmd`=200,
+  with ~10 agents: `agent:lifecycle`=500, `agent:notify`=2000,
+  `agent:background`=5000, `agent:{id}:cmd`=200,
   `agent:{id}:result`=500, `machine:{id}:control`=200. If you scale
   past that — more agents, chunkier terminal output, longer expected
   consumer outages — bump the relevant entry in *both* helpers and
-  re-budget against your Redis `maxmemory`. The `~` operator means
+  re-budget against your Redis `maxmemory`. Related trap when deciding
+  which stream an event belongs on: `MAXLEN ~` only trims on `XADD`,
+  so a *quiet* stream retains whatever it holds indefinitely. That's
+  why the few-but-fat fs-list / fs-read / git-log responses stay on
+  busy `lifecycle` (heartbeat churn evicts them within seconds) while
+  only the tiny-but-bursty fs-changed / git-changed nudges moved to
+  `agent:notify` — parking fat payloads on a quiet stream would hold
+  those bytes hostage until enough later entries evict them. The `~` operator means
   Redis trims lazily on listpack boundaries, so actual stored length
   can briefly exceed N; that's the budget headroom, not slack to
   rely on.
+- **MAXLEN caps entry COUNT, not bytes — one fat chunk can blow the
+  whole budget**: the `streamMaxLen` caps above bound the *number* of
+  entries, so the memory model silently assumes each entry is small
+  (deltas, short tool output). It isn't always: a chunk that echoes a
+  large tool result — e.g. an MCP tool like Penpot's `generateMarkup`
+  returning ~1 MB of SVG per call, relayed whole as a
+  `progress`/`content=mcp_tool_call` chunk — can sit at ~1 MB/entry. At
+  500 entries that's a *half-gigabyte* budget on one `agent:{id}:result`
+  stream, well within the count cap. This is exactly what OOM'd the
+  30 MB prod Redis once (one Penpot session → a 10 MB result stream →
+  eviction → all sidecars dropped). Redis has **no byte-based MAXLEN**,
+  so the only real fix is at the producer: cap oversized `content`/`meta`
+  before `XADD`. **Deferred by decision** — a producer-side byte-cap
+  (truncate a chunk's payload past ~128 KB with a marker) is lossy for
+  the *display copy* of huge tool blobs (the answer `delta`s are never
+  touched, and the CLI keeps the full result in its own model context,
+  so it's a transcript-fidelity tradeoff, not a correctness one). Revisit
+  if MCP/tool-heavy sessions keep pressuring Redis. Emergency reclaim
+  while it's unfixed: `XTRIM <big>:result MAXLEN <small>` (safe — the read
+  path is Postgres, not Redis).
+- **Destroyed agents' streams are reclaimed, don't leak**: Redis streams
+  have no TTL, so a hard-destroyed agent's `agent:{id}:cmd` /
+  `agent:{id}:result` would otherwise linger forever (empty but present,
+  plus their consumer groups), monotonically bloating a bridge that is
+  meant to hold no permanent data. `MachineService.deleteAgentStreams`
+  `DEL`s both at destroy time (covers a sidecar-offline destroy) and
+  again on the `agent-destroyed` ack (the DEL that *sticks* — the
+  supervisor is torn down by then, so no self-heal can resurrect them).
+  DEL takes the consumer groups with it; the result-ingestor
+  (`NOGROUP` branch → immediate `refreshStreams`) and the sidecar's
+  machine-wide command reader both self-heal from the transient
+  `NOGROUP`, so a destroy never stalls live streaming for other sessions.
+- **Lifecycle PEL is reclaimed on boot, not leaked across restarts**:
+  the `server-lifecycle` consumer reads with `'>'` under a fixed name
+  (`server-1`), so entries delivered-but-unacked when the server
+  crashes/OOMs are never redelivered and pile up in the PEL forever (seen
+  live: 3,200+ phantom pending after an OOM, unreclaimable once MAXLEN
+  trimmed the underlying entries). `MachineService.reclaimStalePending`
+  runs before the consume loop starts, draining this consumer's own
+  pending list (`XREADGROUP … 0` → `XACK`) — it drops them rather than
+  replaying (replaying stale heartbeats would flap dead machines online;
+  the sidecar re-sends every 5s anyway). The steady-state loop already
+  acks every entry, so the leak was purely the restart path. The group
+  spans both `agent:lifecycle` and `agent:notify`, so the reclaim
+  drains both streams' PELs.
+- **`agent:notify` rollout order is server-first**: the server keeps
+  accepting `fs-changed` / `git-changed` on `lifecycle` (shared handler
+  switch), so old sidecars work against a new server indefinitely. The
+  reverse skew degrades: a new sidecar publishing nudges to
+  `agent:notify` against an old server finds no consumer group there,
+  so nudges are silently dropped (file tree / commit panel fall back to
+  manual refresh) and the orphan stream idles at its 2000-entry cap
+  (~300 KB) until the server upgrade creates the group. Nothing
+  breaks, but deploy the server before triggering sidecar updates.
 - **stream-json drift**: each CLI's NDJSON event shape changes between
   versions. The mappers (`mapClaudeLine`, `mapCodexLine`) are
   defensive — unknown events fall through as `progress` chunks rather than

@@ -102,7 +102,24 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
         }
       } catch (err) {
         if (this.running) {
-          this.logger.error(`result loop error: ${(err as Error).message}`);
+          const msg = (err as Error).message;
+          // A destroyed agent has its result stream DELed (MachineService
+          // .deleteAgentStreams), and a Redis flush drops every group. Either
+          // leaves a stream in our read set with no consumer group, and a
+          // single NOGROUP fails the *whole* multi-stream XREADGROUP — so
+          // one destroyed agent would otherwise stall live streaming for
+          // every session until the 5s timed refresh. Re-sync the stream
+          // list immediately (drops deleted agents, re-ensures groups for
+          // survivors) and retry now instead of backing off.
+          if (msg.includes('NOGROUP')) {
+            try {
+              await this.refreshStreams();
+              continue;
+            } catch {
+              // refresh failed too — fall through to the backoff sleep.
+            }
+          }
+          this.logger.error(`result loop error: ${msg}`);
           await new Promise((r) => setTimeout(r, 1_000));
         }
       }
