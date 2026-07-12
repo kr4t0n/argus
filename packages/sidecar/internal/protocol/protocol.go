@@ -746,10 +746,23 @@ func LifecycleStream() string { return "agent:lifecycle" }
 // (start / progress / ended) — high-volume relative to the other
 // lifecycle events that share `agent:lifecycle`. We split them off
 // onto a dedicated stream so a chatty tqdm bar can't trim heartbeats
-// / fs-changed / sidecar-update progress out of the shared stream via
-// the MAXLEN cap, and so the server's progress consumer doesn't have
-// to elbow past every other lifecycle event to find its work.
-func BackgroundTaskStream() string                 { return "agent:background" }
+// / sidecar-update progress out of the shared stream via the MAXLEN
+// cap, and so the server's progress consumer doesn't have to elbow
+// past every other lifecycle event to find its work.
+func BackgroundTaskStream() string { return "agent:background" }
+
+// NotifyStream carries the watcher nudges (fs-changed / git-changed).
+// Split off from `agent:lifecycle` for the same reason as background:
+// fs-changed emits one event per dirty directory per debounce window,
+// so a build across several agents' workingDirs can burst hundreds of
+// entries and trim unread heartbeats out of the 500-cap lifecycle
+// stream — flipping healthy agents offline. Nudges are idempotent
+// "something changed, refetch" hints; losing one under extreme burst
+// degrades to manual refresh. The few-but-fat fs-list / fs-read /
+// git-log responses deliberately stay on lifecycle — see
+// streamKeys.notify in packages/shared-types/src/protocol.ts for the
+// byte-retention gotcha.
+func NotifyStream() string                         { return "agent:notify" }
 func CommandStream(id string) string               { return "agent:" + id + ":cmd" }
 func ResultStream(id string) string                { return "agent:" + id + ":result" }
 func MachineControlStream(machineID string) string { return "machine:" + machineID + ":control" }
@@ -770,6 +783,11 @@ func StreamMaxLen(streamKey string) int64 {
 		// itself out within a minute. 5000 buys ~4 min of headroom
 		// for a single chatty task or several quieter ones.
 		return 5000
+	case streamKey == NotifyStream():
+		// Nudge entries are ~150 bytes, so 2000 costs well under
+		// 1 MB while absorbing a multi-agent build burst without
+		// evicting unread git nudges.
+		return 2000
 	case strings.HasSuffix(streamKey, ":cmd"):
 		return 200
 	case strings.HasSuffix(streamKey, ":result"):

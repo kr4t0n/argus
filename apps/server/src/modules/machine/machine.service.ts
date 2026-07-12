@@ -36,7 +36,10 @@ const SWEEP_INTERVAL_MS = 15_000;
  *   - The lifecycle Redis stream consumer that ingests
  *     machine-register / machine-heartbeat / agent-spawned /
  *     agent-spawn-failed / agent-destroyed events (plus the per-agent
- *     register / heartbeat / deregister events).
+ *     register / heartbeat / deregister events). The same blocking
+ *     read also drains `agent:notify`, the watcher-nudge stream
+ *     (fs-changed / git-changed) — split off so nudge bursts can't
+ *     MAXLEN-trim unread heartbeats.
  *   - The reverse channel: REST endpoints for the dashboard land here
  *     (createAgent / destroyAgent), and we publish CreateAgent /
  *     DestroyAgent commands onto each machine's machine:M:control
@@ -68,6 +71,9 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     await this.redis.ensureGroup(streamKeys.lifecycle, consumerGroups.lifecycle);
+    // Same group name on the notify stream so one XREADGROUP drains
+    // both — see the consumerGroups.lifecycle comment in shared-types.
+    await this.redis.ensureGroup(streamKeys.notify, consumerGroups.lifecycle);
     this.running = true;
     this.loopPromise = this.consumeLoop();
     this.sweepTimer = setInterval(() => this.sweepStale(), SWEEP_INTERVAL_MS);
@@ -369,6 +375,13 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
   private async consumeLoop() {
     while (this.running) {
       try {
+        // One blocking read covers both the lifecycle stream and the
+        // notify stream (fs-changed / git-changed nudges). The split
+        // is about MAXLEN buffer isolation — a nudge burst trimming
+        // unread heartbeats — not consumer isolation, so the handler
+        // switch is shared and the ack just targets whichever stream
+        // the entry came from. Old sidecars that still publish nudges
+        // on lifecycle keep working: `handle` routes by event kind.
         const res = (await this.redis.read.xreadgroup(
           'GROUP',
           consumerGroups.lifecycle,
@@ -379,11 +392,13 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
           5_000,
           'STREAMS',
           streamKeys.lifecycle,
+          streamKeys.notify,
+          '>',
           '>',
         )) as Array<[string, Array<[string, string[]]>]> | null;
 
         if (!res) continue;
-        for (const [, entries] of res) {
+        for (const [stream, entries] of res) {
           for (const [msgId, fields] of entries) {
             try {
               const data = parseData(fields);
@@ -391,7 +406,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
             } catch (err) {
               this.logger.error(`failed to handle lifecycle event: ${(err as Error).message}`);
             }
-            await this.redis.cmd.xack(streamKeys.lifecycle, consumerGroups.lifecycle, msgId);
+            await this.redis.cmd.xack(stream, consumerGroups.lifecycle, msgId);
           }
         }
       } catch (err) {

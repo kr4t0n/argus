@@ -487,7 +487,7 @@ func (s *supervisor) startFSWatcher(ctx context.Context) {
 		return
 	}
 	w, err := newFSWatcher(ctx, s.spec.WorkingDir, func(relDir string) {
-		_ = s.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSChangedEvent{
+		_ = s.bus.Publish(ctx, protocol.NotifyStream(), protocol.FSChangedEvent{
 			Kind:      "fs-changed",
 			MachineID: s.machine,
 			AgentID:   s.spec.AgentID,
@@ -511,7 +511,7 @@ func (s *supervisor) startGitWatcher(ctx context.Context) {
 		return
 	}
 	w, err := newGitWatcher(ctx, s.spec.WorkingDir, func() {
-		_ = s.bus.Publish(ctx, protocol.LifecycleStream(), protocol.GitChangedEvent{
+		_ = s.bus.Publish(ctx, protocol.NotifyStream(), protocol.GitChangedEvent{
 			Kind:      "git-changed",
 			MachineID: s.machine,
 			AgentID:   s.spec.AgentID,
