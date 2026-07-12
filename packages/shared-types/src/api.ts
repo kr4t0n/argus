@@ -597,3 +597,43 @@ export interface BackgroundTaskDTO {
 export interface BackgroundTasksResponse {
   tasks: BackgroundTaskDTO[];
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Push devices (native clients)
+// ─────────────────────────────────────────────────────────────────────
+
+/** Request body for `POST /me/devices` — register (or refresh) a push
+ *  token for the calling user. Tokens are globally unique; re-posting a
+ *  token that moved to another account re-homes it (a device has one
+ *  owner). `platform` is open for future clients; only 'ios' today. */
+export interface RegisterDeviceRequest {
+  token: string;
+  platform?: 'ios' | (string & {});
+}
+
+/** One registered push device, as returned by `POST /me/devices`.
+ *  The token is echoed so clients can confirm what the server stored;
+ *  it is not secret (it's useless without the APNs signing key). */
+export interface DeviceDTO {
+  id: string;
+  token: string;
+  platform: string;
+  createdAt: string;
+}
+
+/** Request body for `POST /me/live-activities` — register an ActivityKit
+ *  push token for a running turn's Live Activity. Tokens are
+ *  PER-ACTIVITY (ActivityKit mints one per started activity), so the
+ *  client re-registers for every turn it puts on the lock screen. */
+export interface RegisterLiveActivityRequest {
+  token: string;
+  sessionId: string;
+}
+
+/** One registered Live Activity token. */
+export interface LiveActivityDTO {
+  id: string;
+  token: string;
+  sessionId: string;
+  createdAt: string;
+}

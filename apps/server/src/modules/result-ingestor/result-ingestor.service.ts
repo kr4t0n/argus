@@ -13,6 +13,7 @@ import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 import { SessionService } from '../session/session.service';
 import { CommandService } from '../command/command.service';
+import { PushService } from '../push/push.service';
 
 const CONSUMER = 'server-1';
 const REFRESH_AGENT_STREAMS_MS = 5_000;
@@ -40,6 +41,7 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
     private readonly redis: RedisService,
     private readonly gateway: StreamGateway,
     private readonly sessions: SessionService,
+    private readonly push: PushService,
   ) {}
 
   async onModuleInit() {
@@ -197,6 +199,10 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
     const dto: ResultChunkDTO = { ...chunk };
     this.gateway.emitChunk(dto);
 
+    // Lock-screen Live Activity upkeep (no-op without registered
+    // activity tokens; throttled internally).
+    this.push.noteLiveActivityChunk(chunk);
+
     if (chunk.isFinal || chunk.kind === 'final' || chunk.kind === 'error') {
       const status = chunk.kind === 'error' ? 'failed' : 'completed';
       // Denormalize parsed token usage onto the Command row so /me/usage
@@ -219,9 +225,17 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
       // Terminal: success lands lifecycle-`idle`, error lands `failed`,
       // and either way the result is unread until the user opens it —
       // that `unread` flag is what surfaces the sidebar dot.
-      await this.sessions.setStatus(chunk.sessionId, status === 'failed' ? 'failed' : 'idle', {
-        unread: true,
-      });
+      const dto = await this.sessions.setStatus(
+        chunk.sessionId,
+        status === 'failed' ? 'failed' : 'idle',
+        { unread: true },
+      );
+      // Same trigger point as the web's desktop notification: a turn
+      // reached a terminal state. Fire-and-forget — a push failure must
+      // never affect ingestion.
+      void this.push.notifySessionFinished(dto, status === 'failed');
+      // Resolve any lock-screen card immediately (✓/✗).
+      void this.push.endLiveActivity(chunk.sessionId, status === 'failed');
     } else {
       // A fresh turn is running: clear any prior unread result so the
       // dot doesn't linger while the amber "active" indicator shows.

@@ -203,6 +203,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   background-tasks?workingDir=...` hydrates a tab opening mid-run.
   No DB persistence — JSONL on the agent's disk is authoritative if
   you need history.
+- `push/` — APNs sender for native clients. `DeviceController`
+  (`POST /me/devices` upsert-by-token — re-homing a token that moved
+  accounts — and idempotent `DELETE /me/devices/:token`) plus
+  `PushService`: env-gated (all `APNS_*` unset = silent no-op),
+  provider JWT (ES256 via jsonwebtoken, cached ~45 min), transport is
+  raw `node:http2` because APNs requires HTTP/2 and Node's fetch can't
+  speak it. Fired from `result-ingestor` at the exact point a session
+  flips to `idle`/`failed` + unread (the same trigger as the web's
+  desktop notifications); payload carries only the session title +
+  "Turn completed/failed" (no prompt text on lock screens) and a
+  `sessionId` for the client deep link. 410/`BadDeviceToken`/
+  `Unregistered` feedback prunes the `DeviceToken` row.
 - `sidecar-link/` — raw WebSocket server on path `/sidecar-link`
   attached to the same `http.Server` as NestJS (via `HttpAdapterHost`,
   `noServer` pattern). Owns one connection per sidecar, validates a
@@ -692,6 +704,56 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     queue is independent), so the same session queued in two tabs could
     double-send.
 
+### `apps/ios/` (native client — WIP)
+
+- `ArgusKit/` — SwiftPM package holding everything except UI: Codable
+  DTO mirrors of shared-types, `ArgusClient` (REST), `StreamClient`
+  (Socket.IO `/stream` → `AsyncStream`), and a pure transcript engine
+  (`TranscriptState` + ports of `deltaSplit` / `parseUsage` /
+  `contextWindow`). The SwiftUI app target arrives in Phase 1
+  (XcodeGen-generated, never committed). See `apps/ios/README.md`.
+- **No codegen, by decision.** An earlier OpenAPI-pipeline attempt
+  (`feat/ios-native-client`, deprecated) fought swift-openapi-generator
+  constantly. Instead the Swift models are hand-written and
+  decode-tolerant (unknown fields ignored, open enums fall back to
+  `.unknown`), and contract confidence comes from
+  `scripts/capture-ios-fixtures.sh`: it captures sanitized live-server
+  responses into the package's test fixtures, which CI decodes.
+  **If you change a shared-types DTO, update the Swift mirror and
+  re-capture the fixtures in the same PR.**
+- Swift is authored on Linux but only compiles on macOS —
+  `.github/workflows/ios.yml` (macOS runner, `swift build` + `swift
+  test`) is the primary verifier, not the dev box.
+- Wire gotcha the fixtures encode: REST-served chunks drop
+  `agentId`/`sessionId`/`isFinal` and serialize `ts` as an ISO string,
+  while the WS `chunk` event relays the full wire shape with numeric
+  millis; command rows carry a denormalized `usage` field shared-types
+  omits. `ResultChunk`'s custom decoder + Codable's ignore-unknown
+  default absorb all of this — don't add strict decoding.
+- Same family: the finalize/cancel `command:updated` events carry a
+  CommandDTO **without `attachments`** (bare `CommandService.toDto`).
+  Any client that replaces its command row on that event wipes the
+  turn's thumbnails — both stores merge instead (web
+  `sessionStore.upsertCommand`, iOS `TranscriptState.upsert`), keeping
+  existing attachments when an update arrives without them.
+- **Session view-model cache (stale-while-revalidate).** `AppModel`
+  keeps `SessionViewModel`s alive across session switches (LRU, cap 8,
+  never evicts the on-screen one, cleared on logout), so re-opening a
+  recent session renders its transcript instantly instead of spinner +
+  full tail refetch. A cached transcript is always suspect — off-screen
+  sessions leave their WS room — so `SessionViewModel.start()` is
+  idempotent: cold VMs full-load, loaded VMs *revalidate*: refetch the
+  tail and MERGE it when the fresh window overlaps the cached commands
+  (ids stay stable, scrolled-in older pages survive); a disjoint window
+  (> 20 turns landed while away) falls back to wipe-and-replace, since
+  merging it would leave a hole mid-transcript. App-foreground reuses
+  the same path (`activeSession?.start()`), so foregrounding no longer
+  blanks the transcript and resets scroll. Gotcha: `agentType` is
+  frozen at VM init and keys the usage parsers, so the cache factory
+  replaces a VM cached with the `"custom"` fallback once the real agent
+  type is known (and conversely keeps a cached real type when the
+  caller only knows `"custom"`).
+
 ## Conventions
 
 - **Path alias**: `@argus/shared-types` resolves to the package's source
@@ -738,6 +800,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - **Prisma + workspace import**: the server can only typecheck if `rootDir`
   is unset, because `@argus/shared-types` lives outside `apps/server/src`.
   `nest build` is fine because it only compiles `src/`.
+- **Prisma migration NAMES are replay ORDER**: migrations replay in
+  lexicographic directory-name order, and this repo's numeric prefixes
+  (`0_init` … `16_api_keys`) make that order non-obvious (`10_` sorts
+  before `2_`). A default timestamp-named migration sorts mid-history —
+  `20260706054229_add_device_tokens` landed with a folded-in drift fix
+  referencing a table created by `3_…` and broke every FRESH-database
+  replay (existing DBs were fine; they applied in creation order). Fixed
+  by making the stray statement `IF EXISTS` and re-homing the real fix
+  as `5a_…` (sorts after its dependency; idempotent for DBs that already
+  ran the original). When adding migrations: keep statements independent
+  of later-sorting migrations, or name them to sort after their
+  dependencies; verify with `prisma migrate diff --from-migrations
+  --to-schema-datamodel` (must be "No difference detected").
 - **Adapter `init()`**: an adapter only registers itself if its file is
   *imported*. The blank `_ "..."` trick isn't needed today because they're
   all under the same package, but keep it in mind when adding adapters in a
