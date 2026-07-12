@@ -36,7 +36,10 @@ const SWEEP_INTERVAL_MS = 15_000;
  *   - The lifecycle Redis stream consumer that ingests
  *     machine-register / machine-heartbeat / agent-spawned /
  *     agent-spawn-failed / agent-destroyed events (plus the per-agent
- *     register / heartbeat / deregister events).
+ *     register / heartbeat / deregister events). The same blocking
+ *     read also drains `agent:notify`, the watcher-nudge stream
+ *     (fs-changed / git-changed) — split off so nudge bursts can't
+ *     MAXLEN-trim unread heartbeats.
  *   - The reverse channel: REST endpoints for the dashboard land here
  *     (createAgent / destroyAgent), and we publish CreateAgent /
  *     DestroyAgent commands onto each machine's machine:M:control
@@ -68,6 +71,9 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     await this.redis.ensureGroup(streamKeys.lifecycle, consumerGroups.lifecycle);
+    // Same group name on the notify stream so one XREADGROUP drains
+    // both — see the consumerGroups.lifecycle comment in shared-types.
+    await this.redis.ensureGroup(streamKeys.notify, consumerGroups.lifecycle);
     await this.reclaimStalePending();
     this.running = true;
     this.loopPromise = this.consumeLoop();
@@ -93,39 +99,42 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
    * action is to drop them, not replay (replaying stale heartbeats would
    * briefly mark dead machines online). Runs before consumeLoop starts, so
    * the dedicated blocking `read` connection is exclusively ours here.
+   *
+   * Covers every stream the group is registered on — the notify stream
+   * has the same fixed-consumer '>' exposure as lifecycle, and its
+   * nudges are even more clearly drop-not-replay (a stale "something
+   * changed" is refreshed by the next real one).
    */
   private async reclaimStalePending(): Promise<void> {
-    try {
-      let cleared = 0;
-      // XACK removes acked ids from the PEL, so each '0' read returns the
-      // next pending batch and the loop drains it. The iteration cap is a
-      // belt-and-suspenders backstop against a non-terminating read.
-      for (let i = 0; i < 10_000; i++) {
-        const res = (await this.redis.read.xreadgroup(
-          'GROUP',
-          consumerGroups.lifecycle,
-          CONSUMER,
-          'COUNT',
-          500,
-          'STREAMS',
-          streamKeys.lifecycle,
-          '0',
-        )) as Array<[string, Array<[string, string[]]>]> | null;
-        const entries = res?.[0]?.[1] ?? [];
-        if (entries.length === 0) break;
-        await this.redis.cmd.xack(
-          streamKeys.lifecycle,
-          consumerGroups.lifecycle,
-          ...entries.map(([id]) => id),
-        );
-        cleared += entries.length;
-        if (entries.length < 500) break;
+    for (const stream of [streamKeys.lifecycle, streamKeys.notify]) {
+      try {
+        let cleared = 0;
+        // XACK removes acked ids from the PEL, so each '0' read returns the
+        // next pending batch and the loop drains it. The iteration cap is a
+        // belt-and-suspenders backstop against a non-terminating read.
+        for (let i = 0; i < 10_000; i++) {
+          const res = (await this.redis.read.xreadgroup(
+            'GROUP',
+            consumerGroups.lifecycle,
+            CONSUMER,
+            'COUNT',
+            500,
+            'STREAMS',
+            stream,
+            '0',
+          )) as Array<[string, Array<[string, string[]]>]> | null;
+          const entries = res?.[0]?.[1] ?? [];
+          if (entries.length === 0) break;
+          await this.redis.cmd.xack(stream, consumerGroups.lifecycle, ...entries.map(([id]) => id));
+          cleared += entries.length;
+          if (entries.length < 500) break;
+        }
+        if (cleared > 0) {
+          this.logger.log(`${stream}: cleared ${cleared} stale pending entr(ies) from a prior run`);
+        }
+      } catch (err) {
+        this.logger.warn(`${stream}: reclaim of stale pending failed: ${(err as Error).message}`);
       }
-      if (cleared > 0) {
-        this.logger.log(`lifecycle: cleared ${cleared} stale pending entr(ies) from a prior run`);
-      }
-    } catch (err) {
-      this.logger.warn(`lifecycle: reclaim of stale pending failed: ${(err as Error).message}`);
     }
   }
 
@@ -463,6 +472,13 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
   private async consumeLoop() {
     while (this.running) {
       try {
+        // One blocking read covers both the lifecycle stream and the
+        // notify stream (fs-changed / git-changed nudges). The split
+        // is about MAXLEN buffer isolation — a nudge burst trimming
+        // unread heartbeats — not consumer isolation, so the handler
+        // switch is shared and the ack just targets whichever stream
+        // the entry came from. Old sidecars that still publish nudges
+        // on lifecycle keep working: `handle` routes by event kind.
         const res = (await this.redis.read.xreadgroup(
           'GROUP',
           consumerGroups.lifecycle,
@@ -473,11 +489,13 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
           5_000,
           'STREAMS',
           streamKeys.lifecycle,
+          streamKeys.notify,
+          '>',
           '>',
         )) as Array<[string, Array<[string, string[]]>]> | null;
 
         if (!res) continue;
-        for (const [, entries] of res) {
+        for (const [stream, entries] of res) {
           for (const [msgId, fields] of entries) {
             try {
               const data = parseData(fields);
@@ -485,7 +503,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
             } catch (err) {
               this.logger.error(`failed to handle lifecycle event: ${(err as Error).message}`);
             }
-            await this.redis.cmd.xack(streamKeys.lifecycle, consumerGroups.lifecycle, msgId);
+            await this.redis.cmd.xack(stream, consumerGroups.lifecycle, msgId);
           }
         }
       } catch (err) {

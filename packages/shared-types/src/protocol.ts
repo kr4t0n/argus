@@ -407,6 +407,8 @@ export interface GitLogResponseEvent {
  * branch tip moved (commit, checkout, reset). Debounced on the
  * sidecar so a rebase collapses into one event. The dashboard's
  * GitLogPanel listens for this and re-fetches the log + branch.
+ * Rides `agent:notify` (see streamKeys.notify); pre-notify sidecars
+ * publish it on `lifecycle` and the server still accepts that.
  */
 export interface GitChangedEvent {
   kind: 'git-changed';
@@ -744,7 +746,9 @@ export interface FSReadResponseEvent {
  *  fsnotify watcher. `path` is the directory whose contents changed;
  *  the dashboard invalidates that level in the tree if it's currently
  *  expanded. Coalesced on the sidecar side with a ~250ms debounce so a
- *  noisy build doesn't flood the stream. */
+ *  noisy build doesn't flood the stream. Rides `agent:notify` (see
+ *  streamKeys.notify); pre-notify sidecars publish it on `lifecycle`
+ *  and the server still accepts that. */
 export interface FSChangedEvent {
   kind: 'fs-changed';
   machineId: string;
@@ -1082,9 +1086,22 @@ export const streamKeys = {
   /** Background-task progress events from `argus-bg` (start / progress /
    *  ended). Split off from `lifecycle` because a fast tqdm bar emits
    *  20+ events/sec — at 500 MAXLEN those bursts would silently trim
-   *  heartbeats / fs-changed / sidecar-update events. Higher MAXLEN +
-   *  its own consumer keep both planes fast. */
+   *  heartbeats / sidecar-update events. Higher MAXLEN + its own
+   *  consumer keep both planes fast. */
   background: 'agent:background',
+  /** Watcher nudges (`fs-changed` / `git-changed`). Split off from
+   *  `lifecycle` for the same reason as `background`: fs-changed emits
+   *  one event per dirty directory per 250ms window, so a build across
+   *  N agents' workingDirs can burst hundreds of entries and trim
+   *  unread heartbeats out of the 500-cap lifecycle stream. Nudges are
+   *  idempotent "something changed, refetch" hints — losing one under
+   *  extreme burst degrades to manual refresh, so they get the cheap
+   *  seat. Deliberately NOT a home for the fs-list/fs-read/git-log
+   *  responses: those are few-but-fat, and a fat entry on this quiet
+   *  stream would linger until 2000 later nudges evict it (MAXLEN only
+   *  trims on XADD). They stay on `lifecycle`, where heartbeat churn
+   *  self-cleans them within seconds. */
+  notify: 'agent:notify',
   command: (agentId: string) => `agent:${agentId}:cmd`,
   result: (agentId: string) => `agent:${agentId}:result`,
   /** Per-machine control plane: server publishes Create/Destroy/Sync
@@ -1104,6 +1121,11 @@ export const streamMaxLen = (streamKey: string): number => {
   // See the streamKeys.background comment for why this is much larger
   // than lifecycle: a single chatty tqdm bar would otherwise self-trim.
   if (streamKey === streamKeys.background) return 5000;
+  // Nudge entries are ~150 bytes, so 2000 costs well under 1 MB while
+  // absorbing a multi-agent build burst without evicting unread git
+  // nudges (fs and git share this stream and burst at correlated
+  // moments — a rebase is both).
+  if (streamKey === streamKeys.notify) return 2000;
   if (streamKey.endsWith(':cmd')) return 200;
   if (streamKey.endsWith(':result')) return 500;
   if (streamKey.endsWith(':control')) return 200;
@@ -1113,7 +1135,14 @@ export const streamMaxLen = (streamKey: string): number => {
 export const consumerGroups = {
   /** server-side consumer group reading result streams */
   server: 'server',
-  /** server-side consumer group reading lifecycle events */
+  /** server-side consumer group reading lifecycle events. Also created
+   *  on `agent:notify`: MachineService drains both streams with a
+   *  single XREADGROUP (one blocking call needs one group *name*, and
+   *  groups are per-stream, so the same name is registered on each).
+   *  Unlike `background` there's no separate consumer service — the
+   *  split exists for MAXLEN buffer isolation, not consumer isolation,
+   *  and a third blocking loop would add up to 5s of round-robin
+   *  latency on the shared `read` connection. */
   lifecycle: 'server-lifecycle',
   /** server-side consumer group reading background-task events.
    *  Separate group (not just stream) because the consumer is a
