@@ -126,7 +126,7 @@ sidecar is upgraded (it already handles pre-notify sidecars this way).
 
 Each phase ships independently and is individually revertable.
 
-### Phase 0 — lifecycle consumer fix (ships first, independent of refactor)
+### Phase 0 — lifecycle consumer fix ✅ SHIPPED (dev @ 4a7b8e7, verified in prod)
 
 In `machine.service.ts` consume loop: batch XACKs (one variadic call per
 stream per batch), handle RPC responses (`fs-*-response`, `git-log-response`,
@@ -137,19 +137,31 @@ the group on BOTH `agent:lifecycle` and `agent:notify`. Also mirror the
 NOGROUP fix anywhere a multi-stream XREADGROUP self-heals. Coalescing becomes
 mostly moot after Phase 3 but is correct and cheap insurance meanwhile.
 
-### Phase 1 — promote Project; Session absorbs workdir + cliType (server + web, no wire change)
+### Phase 1 — promote Project; Session absorbs workdir + cliType ✅ IMPLEMENTED (branch refactor/runners-phase1-projects)
 
-- Schema: `Session.projectId` (FK → Project) + `Session.cliType`; backfill
-  from `session.agent.{machineId,workingDir,type}`; agents with NULL
-  workingDir map to a per-machine synthetic "no project" row (mirrors the
-  sidebar bucket). Keep `Session.agentId` populated and authoritative for
-  dispatch — this phase is additive only.
-- Server: session create accepts `{projectId, cliType}` and auto-vivifies the
-  agent internally (move the logic out of `CreateAgentPopover.tsx:194-221`);
-  keep accepting `{agentId}` for iOS until it migrates.
-- Web: create sessions via the new shape; migrate `projectStore` client-only
-  placeholders to server Project rows (the documented "next step").
-- Docs: AGENTS.md architecture section updated (this file referenced).
+- Schema: `Session.projectId` (FK → Project, SetNull) + `Session.cliType`;
+  migration `20260713164250_session_project_clitype` backfills both from
+  `session.agent.{machineId,workingDir,type}` and reuses icon-path Project
+  rows via ON CONFLICT. Deviation from the original sketch: sessions on
+  workdir-less agents keep `projectId` NULL (the sidebar already renders a
+  synthetic per-machine bucket client-side) instead of a synthetic Project
+  row — one less sentinel to special-case. `Session.agentId` stays
+  populated and authoritative for dispatch — this phase is additive only.
+- Server: session create accepts `{machineId, workingDir, cliType,
+  supportsTerminal}` (not `{projectId}` — the client often doesn't have a
+  row id yet; the server upserts the Project row from the pair) and
+  auto-vivifies the agent internally (logic moved out of
+  `CreateAgentPopover.tsx`); the vivified AgentDTO rides the response so
+  the client seeds its store without racing `agent:upsert`. Legacy
+  `{agentId}` accepted for iOS — and it ALSO pins projectId/cliType.
+  Forks copy `projectId`/`cliType` from the source session.
+- Web: `CreateAgentPopover` asSession path posts the new shape.
+- DEFERRED to a Phase-1b follow-up: promoting `projectStore` placeholders
+  (names, archive-cascade snapshots, terminal defaults) to server rows —
+  it's UI-metadata roaming, off the critical path to retiring agents, and
+  carries its own product decisions (server-side archive cascade
+  semantics). Project rows meanwhile need no `archivedAt`.
+- Docs: AGENTS.md `project/` module + sidebar sections updated.
 
 ### Phase 2 — re-key read paths: fs/git/models RPC + WS rooms (server + web + sidecar-tolerant)
 

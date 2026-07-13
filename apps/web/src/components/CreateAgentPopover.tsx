@@ -192,31 +192,25 @@ export function CreateAgentPopover({
     setErr(null);
     try {
       if (asSession) {
-        // Auto-vivify: reuse an existing same-type agent in this
-        // project if one's there, otherwise stand a new one up with
-        // an auto-generated name (the user named the session, not
-        // the agent — the agent is hidden in this flow).
-        const reuse = (existingAgents ?? []).find((a) => a.type === type);
-        let agentId: string;
-        if (reuse) {
-          agentId = reuse.id;
-        } else {
-          const created = await api.createAgent(machine.id, {
-            name: `${type}-${Math.random().toString(16).slice(2, 8)}`,
-            type,
-            workingDir: defaults?.workingDir,
-            supportsTerminal: defaults?.supportsTerminal ?? false,
-          });
-          upsertAgent(created);
-          agentId = created.id;
-        }
-        // Empty custom input ({model: ''}) normalizes to "Default".
+        // Project-first create (Phase 1 of the agent→runner refactor):
+        // the server reuses a same-type agent under this (machine,
+        // workingDir) or auto-vivifies one — the vivify logic that
+        // used to live here. The user names the session, never the
+        // agent. Empty custom input ({model: ''}) normalizes to
+        // "Default".
         const selection = modelSelection?.model ? modelSelection : undefined;
-        const { session } = await api.createSession({
-          agentId,
+        const { session, agent } = await api.createSession({
+          machineId: machine.id,
+          workingDir: defaults?.workingDir,
+          cliType: type as AgentDTO['type'],
+          supportsTerminal: defaults?.supportsTerminal ?? false,
           title: name.trim(),
           modelSelection: selection,
         });
+        // Seed the store with a vivified agent immediately — the
+        // session row groups under its project via the agent, and
+        // waiting on the agent:upsert WS event would blank the row.
+        if (agent) upsertAgent(agent);
         upsertSession(session);
         nav(`/sessions/${session.id}`);
         onClose();

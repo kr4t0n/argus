@@ -30,9 +30,34 @@ import { CommandService } from '../command/command.service';
 type AuthedRequest = Request & { user: { id: string } };
 
 class CreateSessionDto {
+  /** Legacy addressing — an explicit agent. Either this or the
+   *  project shape (machineId + cliType) is required; the service
+   *  enforces the disjunction since class-validator can't express
+   *  XOR cleanly. */
+  @IsOptional()
   @IsString()
   @MinLength(1)
-  agentId!: string;
+  agentId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  machineId?: string;
+
+  /** Project anchor; empty/absent = the machine's "no project" bucket. */
+  @IsOptional()
+  @IsString()
+  workingDir?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  cliType?: string;
+
+  /** Capability flag for an auto-vivified agent; ignored on reuse. */
+  @IsOptional()
+  @IsBoolean()
+  supportsTerminal?: boolean;
 
   @IsOptional()
   @IsString()
@@ -142,17 +167,23 @@ export class SessionController {
   @Post()
   async create(@Req() req: AuthedRequest, @Body() body: CreateSessionDto) {
     const title = body.title ?? body.prompt?.slice(0, 60) ?? 'New session';
-    const session = await this.sessions.create(
-      req.user.id,
-      body.agentId,
+    const { session, agent } = await this.sessions.create(req.user.id, {
+      agentId: body.agentId,
+      machineId: body.machineId,
+      workingDir: body.workingDir,
+      cliType: body.cliType,
+      supportsTerminal: body.supportsTerminal,
       title,
-      body.modelSelection,
-    );
+      modelSelection: body.modelSelection,
+    });
     let command = null;
     if (body.prompt) {
       command = await this.commands.dispatch(req.user.id, session.id, body.prompt);
     }
-    return { session, command };
+    // `agent` is non-null only when this create auto-vivified one —
+    // returned so the client can seed its store without racing the
+    // agent:upsert WS event.
+    return { session, command, agent };
   }
 
   @Get(':id')

@@ -123,14 +123,17 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `machine:{mid}:control`.
 - `project/` — server-side metadata for "projects" (the
   `(machineId, workingDir)` pair the sidebar groups sessions
-  under). Projects still have no first-class lifecycle — the
-  `Project` table exists for metadata that must roam across
-  browsers, today just the user-picked icon glyph (workspace-
-  shared like `Machine.iconKey`). `GET /projects` hydrates the
-  dashboard's icon map; `PATCH /projects/icon` upserts by
-  `(machineId, workingDir)` (404s for deleted machines, keeps the
-  row with `iconKey` NULL on reset) and broadcasts the DTO via
-  the global `project:upsert` WS event.
+  under). Since Phase 1 of the agent→runner refactor
+  (docs/plan-agent-to-runners.md) the `Project` row is the anchor
+  sessions pin to: `Session.projectId` + `Session.cliType` are set
+  at creation (rows upserted lazily by session-create and by the
+  icon path) and backfilled for pre-existing sessions. Sidebar
+  *placeholders* are still client-only (`useProjectStore`) — that
+  promotion is deferred, see the plan's Phase 1 note. `GET
+  /projects` hydrates the dashboard's icon map; `PATCH
+  /projects/icon` upserts by `(machineId, workingDir)` (404s for
+  deleted machines, keeps the row with `iconKey` NULL on reset)
+  and broadcasts the DTO via the global `project:upsert` WS event.
 - `agent-registry/` — `Agent` CRUD: list, get, archive/unarchive, plus
   the shared `agentToDto` mapper. Lifecycle ingestion lives in
   `machine/`; this module is purely about the persisted Agent row.
@@ -512,12 +515,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   (name + workingDir + terminal default — no adapter), which writes
   a placeholder into `useProjectStore`; the project row's hover `+`
   opens `CreateAgentPopover` in `asSession` mode, which collects
-  adapter + session name only, then **auto-vivifies** the agent —
-  reuses an `existingAgents` entry of the chosen type within the
-  project if there is one, otherwise creates a new agent with an
-  auto-generated `${type}-${randomHex}` name in the background,
-  then creates a session titled with the user's input and navigates
-  to it. The agent layer is implementation detail in the sidebar:
+  adapter + session name only and POSTs the project-first
+  CreateSessionRequest shape (`machineId` + `workingDir` +
+  `cliType`); the **auto-vivify** now lives server-side in
+  `SessionService.create` — reuse the oldest live same-type agent
+  under the `(machineId, workingDir)`, else create one with an
+  auto-generated `${type}-${randomHex}` name (returned in the
+  response so the store seeds without racing the `agent:upsert`
+  WS event) — then navigates to the new session. Sessions are
+  pinned to `projectId` + `cliType` at creation on BOTH request
+  shapes; the workingDir can never change afterwards (claude-code
+  and cursor keep resume state on disk keyed by the cwd). The
+  agent layer is implementation detail in the sidebar:
   multiple sessions of the same type in one project share a single
   supervisor process. Projects are derived in two passes by
   `groupProjects()`: first from `agentStore.order` (so any agent's

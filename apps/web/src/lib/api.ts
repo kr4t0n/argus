@@ -161,7 +161,13 @@ export const api = {
     }>(`/sessions/${id}/history?${q.toString()}`);
   },
   createSession: (body: CreateSessionRequest) =>
-    http<{ session: SessionDTO; command: CommandDTO | null }>(`/sessions`, {
+    http<{
+      session: SessionDTO;
+      command: CommandDTO | null;
+      /** Present only when this create auto-vivified an agent
+       *  (project-first shape, no reusable same-type agent). */
+      agent?: AgentDTO | null;
+    }>(`/sessions`, {
       method: 'POST',
       body: JSON.stringify(body),
     }),

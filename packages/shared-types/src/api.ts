@@ -115,6 +115,16 @@ export interface SessionDTO {
   id: string;
   userId: string;
   agentId: string;
+  /** The (machineId, workingDir) Project row this session is pinned
+   *  to. Null for pre-backfill rows on workdir-less agents (the
+   *  per-machine "no project" bucket). Pinned at creation — claude-code
+   *  and cursor keep resume state on disk keyed by the cwd, so a
+   *  session can never move to another workingDir. */
+  projectId: string | null;
+  /** CLI adapter type this session runs on (denormalized from the
+   *  agent at creation). Null only for pre-backfill rows whose agent
+   *  vanished before the migration ran. */
+  cliType: AgentType | null;
   title: string;
   externalId: string | null;
   status: SessionStatus;
@@ -190,7 +200,24 @@ export interface CommandDTO {
 export interface ResultChunkDTO extends ResultChunk {}
 
 export interface CreateSessionRequest {
-  agentId: string;
+  /** Legacy addressing: an explicit agent. Either this or the
+   *  project shape (`machineId` + `cliType`) must be present; when
+   *  both are sent, `agentId` wins. Kept until every client (web,
+   *  iOS) creates sessions project-first — see
+   *  docs/plan-agent-to-runners.md Phase 1/4. */
+  agentId?: string;
+  /** Project-first addressing: the server upserts the Project row for
+   *  (machineId, workingDir), reuses a live same-type agent under it,
+   *  or auto-vivifies one (random name — the user names the session,
+   *  never the agent). */
+  machineId?: string;
+  /** Project anchor. Empty/absent = the machine's "no project"
+   *  bucket: the agent is created without a workingDir. */
+  workingDir?: string;
+  cliType?: AgentType;
+  /** Capability flag for an auto-vivified agent; ignored when an
+   *  existing agent is reused. Mirrors CreateAgentRequest. */
+  supportsTerminal?: boolean;
   title?: string;
   prompt?: string;
   /** Session-default model choice from the new-session dialog. */

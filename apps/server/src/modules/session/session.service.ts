@@ -1,13 +1,32 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import type { Session as PSession } from '@prisma/client';
-import type { Command as WireCommand, ModelSelection, SessionDTO } from '@argus/shared-types';
+import type { Agent as PAgent, Session as PSession } from '@prisma/client';
+import type {
+  AgentDTO,
+  AgentType,
+  Command as WireCommand,
+  ModelSelection,
+  SessionDTO,
+} from '@argus/shared-types';
 import { streamKeys } from '@argus/shared-types';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 import { AttachmentService } from '../attachment/attachment.service';
+import { MachineService } from '../machine/machine.service';
+
+/** Internal shape of `create` — mirrors CreateSessionRequest minus the
+ *  controller-level concerns (title derivation from prompt, dispatch). */
+export interface CreateSessionInput {
+  agentId?: string;
+  machineId?: string;
+  workingDir?: string;
+  cliType?: string;
+  supportsTerminal?: boolean;
+  title?: string;
+  modelSelection?: ModelSelection;
+}
 
 @Injectable()
 export class SessionService {
@@ -16,6 +35,7 @@ export class SessionService {
     private readonly redis: RedisService,
     private readonly gateway: StreamGateway,
     private readonly attachments: AttachmentService,
+    private readonly machines: MachineService,
   ) {}
 
   /** Decorate raw command rows with their linked attachments (one batch
@@ -35,6 +55,8 @@ export class SessionService {
       id: s.id,
       userId: s.userId,
       agentId: s.agentId,
+      projectId: s.projectId ?? null,
+      cliType: (s.cliType as AgentType | null) ?? null,
       title: s.title,
       externalId: s.externalId,
       status: s.status as SessionDTO['status'],
@@ -68,14 +90,82 @@ export class SessionService {
     return s;
   }
 
-  async create(userId: string, agentId: string, title?: string, modelSelection?: ModelSelection) {
-    const agent = await this.prisma.agent.findUnique({ where: { id: agentId } });
-    if (!agent) throw new BadRequestException('unknown agent');
+  /**
+   * Create a session, addressed either at an explicit agent (legacy
+   * shape, kept until iOS goes project-first) or at a project —
+   * `machineId` + `cliType` + optional `workingDir` — in which case the
+   * server reuses a live same-type agent under that (machine, workdir)
+   * or auto-vivifies one with a random name. This is the Phase-1 home
+   * of the vivify logic that used to live in the web's
+   * CreateAgentPopover: the user names the session, never the agent.
+   *
+   * Both paths pin `projectId` (upserting the Project row for the
+   * pair) and `cliType` on the session — the workdir is per-session
+   * state because claude-code/cursor keep resume data on disk keyed by
+   * the cwd (see docs/plan-agent-to-runners.md §4.1).
+   *
+   * Returns the vivified agent alongside the session so the creating
+   * client can seed its store without waiting for the `agent:upsert`
+   * WS event (`null` when an existing agent was reused).
+   */
+  async create(
+    userId: string,
+    input: CreateSessionInput,
+  ): Promise<{ session: SessionDTO; agent: AgentDTO | null }> {
+    let agent: Pick<PAgent, 'id' | 'machineId' | 'type' | 'workingDir'>;
+    let vivified: AgentDTO | null = null;
+
+    if (input.agentId) {
+      const row = await this.prisma.agent.findUnique({ where: { id: input.agentId } });
+      if (!row) throw new BadRequestException('unknown agent');
+      agent = row;
+    } else if (input.machineId && input.cliType?.trim()) {
+      const workingDir = input.workingDir?.trim() || null;
+      const reuse = await this.prisma.agent.findFirst({
+        where: {
+          machineId: input.machineId,
+          type: input.cliType,
+          workingDir,
+          archivedAt: null,
+        },
+        // Oldest first: stable reuse target no matter how many
+        // same-type agents accumulated under the project.
+        orderBy: { registeredAt: 'asc' },
+      });
+      if (reuse) {
+        agent = reuse;
+      } else {
+        // createAgent validates the machine (exists / not deleted /
+        // not archived) and the cliType against availableAdapters,
+        // publishes the create-agent control command, and emits
+        // agent:upsert — exactly what the popover's client-side
+        // vivify did.
+        vivified = await this.machines.createAgent(input.machineId, {
+          name: `${input.cliType}-${randomUUID().slice(0, 6)}`,
+          type: input.cliType as AgentType,
+          workingDir: workingDir ?? undefined,
+          supportsTerminal: input.supportsTerminal ?? false,
+        });
+        agent = {
+          id: vivified.id,
+          machineId: input.machineId,
+          type: input.cliType,
+          workingDir,
+        };
+      }
+    } else {
+      throw new BadRequestException('agentId or machineId+cliType is required');
+    }
+
+    const projectId = await this.ensureProject(agent.machineId, agent.workingDir);
+
     const s = await this.prisma.session.create({
       data: {
         userId,
-        agentId,
-        title: title?.trim() || 'New session',
+        agentId: agent.id,
+        projectId,
+        cliType: agent.type,
+        title: input.title?.trim() || 'New session',
         // Empty sessions start `'idle'`, not `'active'`. The sidebar's
         // amber dot tracks `status === 'active'`, and a fresh row has
         // no command in flight yet — `result-ingestor` flips status to
@@ -83,12 +173,34 @@ export class SessionService {
         // exactly when something is actually running. Forks already
         // use the same initial value (see `fork`).
         status: 'idle',
-        modelSelection: modelSelection ? (modelSelection as Prisma.InputJsonValue) : undefined,
+        modelSelection: input.modelSelection
+          ? (input.modelSelection as Prisma.InputJsonValue)
+          : undefined,
       },
     });
     const dto = SessionService.toDto(s);
     this.gateway.emitSessionCreated(dto);
-    return dto;
+    return { session: dto, agent: vivified };
+  }
+
+  /**
+   * Resolve the Project row a session should pin to, creating it if
+   * this is the first session under the (machineId, workingDir) pair.
+   * Null workingDir (workdir-less agents) means the per-machine
+   * "no project" bucket — no row, projectId stays NULL.
+   */
+  private async ensureProject(
+    machineId: string,
+    workingDir: string | null,
+  ): Promise<string | null> {
+    const wd = workingDir?.trim();
+    if (!wd) return null;
+    const row = await this.prisma.project.upsert({
+      where: { machineId_workingDir: { machineId, workingDir: wd } },
+      create: { machineId, workingDir: wd },
+      update: {},
+    });
+    return row.id;
   }
 
   /**
@@ -210,6 +322,12 @@ export class SessionService {
         data: {
           userId,
           agentId: src.agentId,
+          // A fork lives in the same project on the same CLI by
+          // construction — the on-disk clone the sidecar performs is
+          // only valid under the source's workingDir (cwd-keyed
+          // resume state, see docs/plan-agent-to-runners.md §4.1).
+          projectId: src.projectId,
+          cliType: src.cliType,
           title: forkTitle,
           status: 'idle',
         },
