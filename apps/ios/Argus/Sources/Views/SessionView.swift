@@ -960,17 +960,71 @@ private struct TurnBody: View {
 private struct PromptBubble: View {
     let text: String
 
+    /// Web parity (UserMessage's max-h-24 + inner scroll + fade): long
+    /// pasted prompts cap instead of dominating the transcript — extra
+    /// important here because the bubble lives in the PINNED band, so
+    /// an uncapped prompt would pin itself over everything.
+    private let maxHeight: CGFloat = 116
+    @State private var textHeight: CGFloat = 0
+
+    private var overflows: Bool { textHeight > maxHeight }
+
     var body: some View {
         HStack {
             Spacer(minLength: 40)
-            Text(text)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
+            bubble
                 // Neutral surface bubble (web: bg-surface-1 / surface-2),
-                // NOT blue.
+                // NOT blue. Applied OUTSIDE the fade mask so only the
+                // text fades, not the bubble itself.
                 .background(Color.surface2, in: RoundedRectangle(cornerRadius: 16))
-                .textSelection(.enabled)
         }
+        .onPreferenceChange(PromptHeightKey.self) { textHeight = $0 }
+    }
+
+    @ViewBuilder
+    private var bubble: some View {
+        if overflows {
+            ScrollView {
+                innerText
+            }
+            .frame(height: maxHeight)
+            .mask(fadeMask)
+        } else {
+            innerText
+        }
+    }
+
+    private var innerText: some View {
+        Text(text)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .textSelection(.enabled)
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(key: PromptHeightKey.self, value: geo.size.height)
+                }
+            )
+    }
+
+    /// Solid through the body, fading out over the last ~22pt — the
+    /// web's "there's more, scroll" affordance.
+    private var fadeMask: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+            LinearGradient(
+                colors: [.black, .clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 22)
+        }
+    }
+}
+
+private struct PromptHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
