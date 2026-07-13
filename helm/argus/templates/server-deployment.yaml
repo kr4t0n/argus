@@ -133,14 +133,28 @@ spec:
                   key: S3_SECRET_KEY
                   {{- end }}
             {{- end }}
-            {{- if and .Values.apns.teamId .Values.apns.keyId }}
+            {{- if or .Values.apns.existingSecret (and .Values.apns.teamId .Values.apns.keyId) }}
             # APNs push for the native iOS client (alerts + Live
             # Activity updates). The server enables itself only when the
             # full trio is present.
             - name: APNS_TEAM_ID
+              {{- if .Values.apns.teamId }}
               value: {{ .Values.apns.teamId | quote }}
+              {{- else }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.apns.existingSecret }}
+                  key: {{ .Values.apns.existingSecretTeamIdKey }}
+              {{- end }}
             - name: APNS_KEY_ID
+              {{- if .Values.apns.keyId }}
               value: {{ .Values.apns.keyId | quote }}
+              {{- else }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.apns.existingSecret }}
+                  key: {{ .Values.apns.existingSecretKeyIdKey }}
+              {{- end }}
             - name: APNS_KEY_BASE64
               valueFrom:
                 secretKeyRef:

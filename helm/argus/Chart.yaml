@@ -11,11 +11,17 @@ type: application
 # changes. Releasing a new chart version only requires bumping this
 # field — see helm-publish.yml. Prerelease versions (-rc.N) are hidden
 # from plain `helm search`/`helm upgrade`; install them with
-# `--version 0.2.7-rc.1` (or `--devel`).
-version: 0.2.7-rc.1
+# `--version 0.2.7-rc.2` (or `--devel`).
+version: 0.2.7-rc.2
 # App version tracks the Docker image tags pulled by default. Bump in
 # lockstep with `version` whenever the chart starts requiring features
 # only present in newer images; otherwise it can lag.
+#
+# 0.2.7-rc.2 lets `apns.existingSecret` supply the WHOLE trio — with it
+# set, teamId/keyId may be left empty and are read from the Secret
+# (keys APNS_TEAM_ID / APNS_KEY_ID, renamable via
+# existingSecretTeamIdKey / existingSecretKeyIdKey); inline values
+# still win. Same app image as rc.1.
 #
 # 0.2.7-rc.1 is a prerelease cut from `dev` for the native iOS/iPadOS
 # client: the chart grows an `apns` values block (APNS_TEAM_ID /

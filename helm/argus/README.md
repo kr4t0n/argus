@@ -197,21 +197,24 @@ apns:
   # environment: production              # sandbox (default) = Xcode installs; production = TestFlight/App Store
 ```
 
-Or keep the key material in a Secret you manage:
+Or keep everything in a Secret you manage — with `existingSecret` set,
+`teamId`/`keyId` may be omitted and read from the Secret too:
 
 ```yaml
 apns:
-  teamId: "AB12CD34EF"
-  keyId: "XY98ZW76VU"
-  existingSecret: my-apns-key            # key: APNS_KEY_BASE64
-  # existingSecretKey to rename it
+  existingSecret: my-apns                # keys: APNS_TEAM_ID, APNS_KEY_ID, APNS_KEY_BASE64
+  # existingSecretTeamIdKey / existingSecretKeyIdKey / existingSecretKey
+  # to rename them; an inline teamId/keyId wins over the Secret.
 ```
 
 Enablement is all-or-nothing: the server activates push only when team
 id, key id, and key are all present (the chart mirrors this — the env
-block renders only when `teamId` and `keyId` are both set). Check the
-server boot log for `APNs enabled`. Requires a server image with the
-push module (`sha-6cb9f9f` / ≥ 0.2.7).
+block renders only when `existingSecret` is set, or `teamId` and
+`keyId` are both inline). Check the server boot log for `APNs enabled`.
+Requires a server image with the push module (`sha-6cb9f9f` / ≥ 0.2.7).
+Note the pod-rolling `checksum/secret` annotation only tracks the
+chart-managed Secret — after rotating a key inside your own
+`existingSecret`, roll the server Deployment yourself.
 
 ## Wiring the SPA to the API
 
@@ -364,6 +367,7 @@ The most important knobs:
 | `apns.teamId`             | `""` (off)                  | Apple team id; with `keyId` + key enables iOS push |
 | `apns.keyId`              | `""`                        | APNs token-auth `.p8` key id                    |
 | `apns.keyBase64`          | `""`                        | base64 `.p8` content (or use `apns.existingSecret`) |
+| `apns.existingSecret`     | `""`                        | Secret holding the whole trio (`APNS_TEAM_ID`/`APNS_KEY_ID`/`APNS_KEY_BASE64`) |
 | `apns.environment`        | `""` (→ `sandbox`)          | `production` for TestFlight/App Store builds    |
 | `server.replicaCount`     | `1`                         | NestJS replicas (Socket.IO is sticky-friendly)  |
 | `server.image.repository` | `kr4t0n/argus-server`       |                                                 |

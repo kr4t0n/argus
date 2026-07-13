@@ -106,12 +106,15 @@ apns:
   keyId: ""                              # the .p8 key's id (10 chars)
   # The .p8 file content, base64-encoded to a single line
   # (`base64 -i AuthKey_XXXX.p8 | tr -d '\n'`). Stored in the
-  # chart-managed server secret. If you bring your own secret via
-  # auth.existingSecret, add an APNS_KEY_BASE64 key there instead —
-  # or point at a separate secret below.
+  # chart-managed server secret.
   keyBase64: ""
+  # Or point at a Secret you manage. With existingSecret set, teamId /
+  # keyId above may be left empty and read from the Secret too, under
+  # the key names below (an inline teamId/keyId still wins).
   existingSecret: ""
-  existingSecretKey: "APNS_KEY_BASE64"
+  existingSecretTeamIdKey: "APNS_TEAM_ID"
+  existingSecretKeyIdKey: "APNS_KEY_ID"
+  existingSecretKey: "APNS_KEY_BASE64"   # the base64 .p8 content
   # Optional overrides; empty uses the server defaults, which are right
   # for the stock app: topic app.argus.ios, environment sandbox
   # (Xcode-installed builds). Set environment to "production" for
