@@ -11,11 +11,19 @@ type: application
 # changes. Releasing a new chart version only requires bumping this
 # field — see helm-publish.yml. Prerelease versions (-rc.N) are hidden
 # from plain `helm search`/`helm upgrade`; install them with
-# `--version 0.2.7-rc.2` (or `--devel`).
-version: 0.2.7-rc.2
+# `--version 0.2.7-rc.3` (or `--devel`).
+version: 0.2.7-rc.3
 # App version tracks the Docker image tags pulled by default. Bump in
 # lockstep with `version` whenever the chart starts requiring features
 # only present in newer images; otherwise it can lag.
+#
+# 0.2.7-rc.3 pins the `sha-2b48436` dev image, which fixes doubled push
+# notifications: the ingestor now finalizes a turn exactly once (the
+# sidecar emits two terminal chunks per turn; the finalize block —
+# including the APNs alert — ran per chunk), alert pushes carry
+# apns-collapse-id, and cancelled turns no longer push or get flipped
+# to 'completed'. Server-side fix — works with any sidecar version;
+# sidecar v0.2.7-rc.2 removes the redundant chunk at the source.
 #
 # 0.2.7-rc.2 lets `apns.existingSecret` supply the WHOLE trio — with it
 # set, teamId/keyId may be left empty and are read from the Secret
@@ -86,7 +94,7 @@ version: 0.2.7-rc.2
 # 0.2.0 shipped file/image attachments — the default images include the
 # attachment module, so `objectStore` works out of the box (set the
 # endpoint + bucket + creds to enable it).
-appVersion: "sha-6cb9f9f"
+appVersion: "sha-2b48436"
 
 home: https://github.com/kr4t0n/argus
 sources:
