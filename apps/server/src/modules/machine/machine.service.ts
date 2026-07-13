@@ -16,7 +16,9 @@ import {
   type AnyLifecycleEvent,
   type AvailableAdapter,
   type CreateAgentRequest,
+  type HeartbeatEvent,
   type MachineDTO,
+  type MachineHeartbeatEvent,
 } from '@argus/shared-types';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
@@ -28,6 +30,25 @@ import { SidecarUpdateService, stripSidecarPrefix } from './sidecar-update.servi
 const CONSUMER = 'server-1';
 const STALE_AFTER_MS = 30_000;
 const SWEEP_INTERVAL_MS = 15_000;
+
+/** Event kinds whose handlers do no DB work — RPC responses resolve a
+ *  requestId-keyed pending promise, watcher nudges are pure WS emits.
+ *  Handled before everything else in each batch: the FSService timers
+ *  (5s/15s) run on wall clock, and a response queued behind a batch of
+ *  DB-bound heartbeats used to time out before its handler ever ran.
+ *  Reordering is safe because these handlers touch no state the status
+ *  events write. */
+const FAST_KINDS = new Set<AnyLifecycleEvent['kind']>([
+  'fs-list-response',
+  'fs-read-response',
+  'git-log-response',
+  'model-catalog-response',
+  'fs-changed',
+  'git-changed',
+  'sidecar-update-started',
+  'sidecar-update-downloaded',
+  'sidecar-update-failed',
+]);
 
 /**
  * MachineService is the server-side counterpart to the Go machine
@@ -475,10 +496,11 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         // One blocking read covers both the lifecycle stream and the
         // notify stream (fs-changed / git-changed nudges). The split
         // is about MAXLEN buffer isolation — a nudge burst trimming
-        // unread heartbeats — not consumer isolation, so the handler
-        // switch is shared and the ack just targets whichever stream
-        // the entry came from. Old sidecars that still publish nudges
-        // on lifecycle keep working: `handle` routes by event kind.
+        // unread heartbeats — not consumer isolation, so batches from
+        // both streams go through the same processBatch and the batch
+        // ack targets whichever stream it came from. Old sidecars that
+        // still publish nudges on lifecycle keep working: routing is
+        // by event kind.
         const res = (await this.redis.read.xreadgroup(
           'GROUP',
           consumerGroups.lifecycle,
@@ -496,31 +518,175 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
 
         if (!res) continue;
         for (const [stream, entries] of res) {
-          for (const [msgId, fields] of entries) {
-            try {
-              const data = parseData(fields);
-              if (data) await this.handle(data as AnyLifecycleEvent);
-            } catch (err) {
-              this.logger.error(`failed to handle lifecycle event: ${(err as Error).message}`);
-            }
-            await this.redis.cmd.xack(stream, consumerGroups.lifecycle, msgId);
-          }
+          await this.processBatch(stream, entries);
         }
       } catch (err) {
         if (this.running) {
           const msg = (err as Error).message;
-          // Self-heal after a Redis flush (OOM recovery / manual FLUSHDB):
-          // the group vanishes and every '>' read fails NOGROUP forever
-          // until a restart. Re-create it and keep going.
+          // Self-heal after the group vanishes (Redis flush, or an
+          // emergency DEL of one stream — DEL takes its groups along,
+          // and the next XADD recreates the stream without them).
+          // One XREADGROUP spans BOTH streams and NOGROUP on either
+          // fails the whole call, so re-ensure both: healing only
+          // lifecycle would leave a group-less agent:notify wedging
+          // lifecycle consumption forever.
           if (msg.includes('NOGROUP')) {
             await this.redis
               .ensureGroup(streamKeys.lifecycle, consumerGroups.lifecycle)
+              .catch(() => {});
+            await this.redis
+              .ensureGroup(streamKeys.notify, consumerGroups.lifecycle)
               .catch(() => {});
           }
           this.logger.error(`lifecycle loop error: ${msg}`);
           await new Promise((r) => setTimeout(r, 1_000));
         }
       }
+    }
+  }
+
+  /**
+   * Handle one XREADGROUP batch from `stream`, then ack the whole batch
+   * with a single variadic XACK.
+   *
+   * The per-entry `await xack` this replaces was the consumer's
+   * bottleneck: at ~144ms RTT to a remote Redis, acking 50 entries one
+   * at a time cost ~7s per batch before any real work, and per-entry
+   * Prisma writes pushed throughput below heartbeat inflow — the
+   * backlog grew until MAXLEN trimmed entries that were never delivered
+   * (observed live: group lag > stream length), which is how fs/git RPC
+   * responses vanished and every panel request "timed out". Batch-acking
+   * doesn't weaken delivery semantics: a crash mid-batch leaves the
+   * whole batch in the PEL, and reclaimStalePending() already drops —
+   * never replays — leftover PEL entries on boot.
+   *
+   * Within the batch: no-DB handlers first (see FAST_KINDS), then
+   * heartbeats coalesced to the newest per agent / per machine and
+   * applied as grouped writes, then everything else in stream order.
+   * Coalescing drops only redundant older heartbeats — no information
+   * the newest doesn't carry. The one ordering change vs strict stream
+   * order: a heartbeat that arrived *after* a deregister in the same
+   * batch now applies before it, briefly showing the agent offline
+   * until its next 5s heartbeat — preferred over the reverse inversion
+   * (a deregistered agent shown online until the 30s stale sweep).
+   */
+  private async processBatch(stream: string, entries: Array<[string, string[]]>): Promise<void> {
+    if (entries.length === 0) return;
+
+    const agentBeats = new Map<string, HeartbeatEvent>();
+    const machineBeats = new Map<string, MachineHeartbeatEvent>();
+    // Quotas ride only on *some* machine-heartbeats. Track the newest
+    // quota-carrying event separately so coalescing to the newest
+    // heartbeat can't discard a fresh quota snapshot that happened to
+    // arrive on an older entry in the same batch.
+    const machineQuotaBeats = new Map<string, MachineHeartbeatEvent>();
+    const rest: AnyLifecycleEvent[] = [];
+
+    for (const [, fields] of entries) {
+      const ev = parseData(fields) as AnyLifecycleEvent | null;
+      if (!ev) continue;
+      if (FAST_KINDS.has(ev.kind)) {
+        try {
+          await this.handle(ev);
+        } catch (err) {
+          this.logger.error(`failed to handle lifecycle event: ${(err as Error).message}`);
+        }
+      } else if (ev.kind === 'heartbeat') {
+        agentBeats.set(ev.id, ev);
+      } else if (ev.kind === 'machine-heartbeat') {
+        machineBeats.set(ev.machineId, ev);
+        if (ev.quotas?.length) machineQuotaBeats.set(ev.machineId, ev);
+      } else {
+        rest.push(ev);
+      }
+    }
+
+    await this.applyAgentHeartbeats([...agentBeats.values()]);
+    for (const [machineId, ev] of machineBeats) {
+      await this.applyMachineHeartbeat(ev, machineQuotaBeats.get(machineId));
+    }
+    for (const ev of rest) {
+      try {
+        await this.handle(ev);
+      } catch (err) {
+        this.logger.error(`failed to handle lifecycle event: ${(err as Error).message}`);
+      }
+    }
+
+    await this.redis.cmd.xack(
+      stream,
+      consumerGroups.lifecycle,
+      ...entries.map(([msgId]) => msgId),
+    );
+  }
+
+  /**
+   * Apply a batch of coalesced per-agent heartbeats: one findMany (to
+   * learn which ids still exist — updateMany can't report that) plus
+   * one updateMany per distinct status, all in flight together, instead
+   * of one agent.update round trip per event. Status is emitted only
+   * for rows that exist, matching the old per-row
+   * `update().catch(() => null)` behavior for destroyed agents.
+   */
+  private async applyAgentHeartbeats(beats: HeartbeatEvent[]): Promise<void> {
+    if (beats.length === 0) return;
+    const now = new Date();
+    const byStatus = new Map<string, string[]>();
+    for (const ev of beats) {
+      const ids = byStatus.get(ev.status) ?? [];
+      ids.push(ev.id);
+      byStatus.set(ev.status, ids);
+    }
+    try {
+      const existingPromise = this.prisma.agent.findMany({
+        where: { id: { in: beats.map((b) => b.id) } },
+        select: { id: true },
+      });
+      await Promise.all(
+        [...byStatus.entries()].map(([status, ids]) =>
+          this.prisma.agent.updateMany({
+            where: { id: { in: ids } },
+            data: { status, lastHeartbeatAt: now },
+          }),
+        ),
+      );
+      const known = new Set((await existingPromise).map((r) => r.id));
+      for (const ev of beats) {
+        if (known.has(ev.id)) {
+          this.gateway.emitAgentStatus(ev.id, ev.status as AgentDTO['status']);
+        }
+      }
+    } catch (err) {
+      this.logger.error(`failed to apply agent heartbeats: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Apply the newest machine-heartbeat for one machine. `quotaEv` is
+   * the newest quota-carrying heartbeat from the same batch (possibly
+   * an older entry than `ev` — see processBatch).
+   */
+  private async applyMachineHeartbeat(
+    ev: MachineHeartbeatEvent,
+    quotaEv?: MachineHeartbeatEvent,
+  ): Promise<void> {
+    try {
+      // `updateMany` (not `update`) so the `deletedAt: null` filter
+      // is part of the WHERE: a soft-deleted machine matches zero
+      // rows and the heartbeat is a no-op (no status flip on a
+      // tombstone, no resurrection), same as an unknown machineId.
+      const res = await this.prisma.machine.updateMany({
+        where: { id: ev.machineId, deletedAt: null },
+        data: { status: 'online', lastSeenAt: new Date() },
+      });
+      if (res.count > 0) {
+        this.gateway.emitMachineStatus(ev.machineId, 'online');
+        if (quotaEv?.quotas?.length) {
+          await this.persistQuotas(ev.machineId, quotaEv.quotas);
+        }
+      }
+    } catch (err) {
+      this.logger.error(`failed to apply machine heartbeat: ${(err as Error).message}`);
     }
   }
 
@@ -594,23 +760,9 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         await this.syncAgents(ev.machineId);
         break;
       }
-      case 'machine-heartbeat': {
-        // `updateMany` (not `update`) so the `deletedAt: null` filter
-        // is part of the WHERE: a soft-deleted machine matches zero
-        // rows and the heartbeat is a no-op (no status flip on a
-        // tombstone, no resurrection), same as an unknown machineId.
-        const res = await this.prisma.machine.updateMany({
-          where: { id: ev.machineId, deletedAt: null },
-          data: { status: 'online', lastSeenAt: new Date() },
-        });
-        if (res.count > 0) {
-          this.gateway.emitMachineStatus(ev.machineId, 'online');
-          if (ev.quotas?.length) {
-            await this.persistQuotas(ev.machineId, ev.quotas);
-          }
-        }
-        break;
-      }
+      // 'machine-heartbeat' and 'heartbeat' never reach this switch —
+      // processBatch coalesces them and applies the batched helpers
+      // (applyMachineHeartbeat / applyAgentHeartbeats) directly.
       case 'register': {
         const now = new Date();
         const workingDir = ev.workingDir ?? null;
@@ -645,16 +797,6 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         if (saved) {
           this.gateway.emitAgentUpsert(MachineService.agentToDto(saved, machine.name));
         }
-        break;
-      }
-      case 'heartbeat': {
-        const saved = await this.prisma.agent
-          .update({
-            where: { id: ev.id },
-            data: { status: ev.status, lastHeartbeatAt: new Date() },
-          })
-          .catch(() => null);
-        if (saved) this.gateway.emitAgentStatus(saved.id, saved.status as AgentDTO['status']);
         break;
       }
       case 'deregister': {

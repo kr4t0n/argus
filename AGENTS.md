@@ -108,7 +108,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `agent:notify` (`fs-changed` / `git-changed`) in one XREADGROUP —
   same group name registered on both streams, shared handler switch,
   so nudges from pre-notify sidecars that still arrive on `lifecycle`
-  are handled identically. Upserts
+  are handled identically. Batches are processed as units
+  (`processBatch`): no-DB handlers (RPC responses, nudges) run first,
+  heartbeats are coalesced newest-per-agent/machine into grouped
+  `updateMany` writes, and the whole batch is acked with one variadic
+  XACK — see the "Lifecycle consumer throughput" gotcha before adding
+  per-entry awaits back. Upserts
   `Machine` rows, replies with a `sync-agents` reconcile so the
   sidecar's cached agent set converges with the server's. Exposes
   REST (`GET /machines`, `POST /machines/:id/agents`,
@@ -886,6 +891,38 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Redis trims lazily on listpack boundaries, so actual stored length
   can briefly exceed N; that's the budget headroom, not slack to
   rely on.
+- **Lifecycle consumer throughput must out-pace heartbeat inflow —
+  per-entry awaits are the enemy**: heartbeat volume is linear in
+  agents (one per agent per 5s + one per machine), and every awaited
+  round trip inside the consume loop divides throughput. Observed live
+  (Jul 2026, ~144 ms RTT to a remote Redis): one awaited `XACK` + one
+  Prisma `update` per entry capped the consumer at ~2 entries/s
+  against ~2.4/s inflow — the backlog grew until MAXLEN trimmed
+  *undelivered* entries (group lag > stream length), so the fs/git/
+  model RPC responses riding `lifecycle` vanished and the dashboard
+  showed "agent did not respond — the machine may be offline" for
+  perfectly healthy sidecars, while `sweepStale` flapped live machines
+  offline. `MachineService.processBatch` therefore (1) acks each batch
+  with one variadic XACK, (2) handles no-DB events (`FAST_KINDS`: RPC
+  responses, watcher nudges) before DB-bound ones so a response never
+  waits behind heartbeats, and (3) coalesces heartbeats
+  newest-per-agent/machine into grouped `updateMany` writes (keeping
+  the newest *quota-carrying* machine-heartbeat separately, since
+  quotas ride only some heartbeats). Don't add per-entry awaits back;
+  if the loop ever lags again, measure entries/s consumed vs produced
+  first. The structural fix — per-machine×CLI runners instead of
+  per-agent heartbeats — is `docs/plan-agent-to-runners.md`.
+- **A multi-stream XREADGROUP fails as a unit on NOGROUP**: the
+  lifecycle loop reads `agent:lifecycle` + `agent:notify` in one call;
+  if the group is missing on *either* stream, Redis rejects the whole
+  command and nothing is read from the healthy stream either. `DEL` of
+  a stream (e.g. the emergency Redis-full runbook) deletes its groups,
+  and a later XADD recreates the stream *without* them — so the
+  NOGROUP self-heal in `consumeLoop` must re-ensure the group on BOTH
+  streams (it healed only `lifecycle` until Jul 2026, which would have
+  wedged all lifecycle consumption forever after a notify DEL). The
+  result-ingestor's NOGROUP branch handles the same trap for destroyed
+  agents' result streams.
 - **MAXLEN caps entry COUNT, not bytes — one fat chunk can blow the
   whole budget**: the `streamMaxLen` caps above bound the *number* of
   entries, so the memory model silently assumes each entry is small
