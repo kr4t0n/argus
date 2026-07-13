@@ -102,6 +102,12 @@ func Start(ctx context.Context, spec StreamSpec) (*CLIRunner, error) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
+	// Whether the mapper already delivered the CLI's own terminal chunk
+	// (the `result` event). Written only by the stdout goroutine before
+	// wg.Done(), read by the waiter after wg.Wait() — the WaitGroup is
+	// the happens-before edge, no lock needed.
+	sawTerminal := false
+
 	// stdout
 	go func() {
 		defer wg.Done()
@@ -115,6 +121,9 @@ func Start(ctx context.Context, spec StreamSpec) (*CLIRunner, error) {
 			for _, c := range spec.Mapper(line) {
 				select {
 				case out <- c:
+					if c.IsFinal || c.Kind == protocol.KindFinal || c.Kind == protocol.KindError {
+						sawTerminal = true
+					}
 				case <-ctx.Done():
 					return
 				}
@@ -144,17 +153,24 @@ func Start(ctx context.Context, spec StreamSpec) (*CLIRunner, error) {
 		}
 	}()
 
-	// waiter: when both pipes close and process exits, emit final/error and close channel.
+	// waiter: when both pipes close and the process exits, close out the
+	// stream. The synthetic terminal chunk is a SAFETY NET for CLIs that
+	// die without emitting their result event (crash, OOM, kill) — when
+	// the mapper already delivered the real final, adding another would
+	// make the server finalize the turn twice (double push
+	// notifications, an empty trailing chunk in the transcript).
 	go func() {
 		wg.Wait()
 		err := cmd.Wait()
 		runner.mu.Lock()
 		runner.done = true
 		runner.mu.Unlock()
-		if err != nil && !isCancelled(err, ctx) {
-			out <- Chunk{Kind: protocol.KindError, Content: err.Error(), IsFinal: true}
-		} else {
-			out <- Chunk{Kind: protocol.KindFinal, IsFinal: true}
+		if !sawTerminal {
+			if err != nil && !isCancelled(err, ctx) {
+				out <- Chunk{Kind: protocol.KindError, Content: err.Error(), IsFinal: true}
+			} else {
+				out <- Chunk{Kind: protocol.KindFinal, IsFinal: true}
+			}
 		}
 		close(out)
 	}()
