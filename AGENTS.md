@@ -777,6 +777,25 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Gotchas
 
+- **A turn may deliver MORE THAN ONE terminal chunk — finalize must be
+  idempotent**: sidecars ≤ 0.2.7-rc.1 emitted two finals per healthy
+  turn — the CLI's own `result` final (rich: usage, real
+  success/failure) and, when the process exited, `clistream.go`'s
+  unconditional synthetic final (a safety net meant for CLIs that die
+  without a result event). The web absorbed the duplicate (it notifies
+  on the active→terminal *transition* and `tag`-collapses browser
+  notifications), so it stayed invisible until APNs push fired once per
+  terminal chunk → two lock-screen alerts per turn. Fixed twice over:
+  the sidecar now suppresses the synthetic final when the mapper
+  already emitted a terminal chunk, and the ingestor finalizes
+  first-final-wins (status-guarded `updateMany`; the rich final always
+  precedes the synthetic one). Keep both: Redis delivery is
+  at-least-once, so the server can see a duplicate final regardless of
+  sidecar version. Related subtlety: the trailing final of a CANCELLED
+  turn is what flips the session back to `idle` (CommandService.cancel
+  only marks the Command row) — the ingestor's already-terminal branch
+  handles that case explicitly, without a push or unread dot, and no
+  longer overwrites `cancelled` with `completed`.
 - **`path:line` citations in markdown links**: CLI agents emit links like
   `[src/foo.go:123](src/foo.go:123)`. TWO layers conspire against these,
   and both must be handled (`StreamViewer.tsx`):

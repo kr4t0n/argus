@@ -101,7 +101,10 @@ export class PushService {
       });
 
       await Promise.allSettled(
-        devices.map((device) => this.send(device.token, payload)),
+        // Collapse id mirrors the web notification's `tag`: a newer
+        // completion in the same session replaces the older banner
+        // instead of stacking (and any duplicate send collapses too).
+        devices.map((device) => this.send(device.token, payload, { collapseId: session.id })),
       );
     } catch (err) {
       this.logger.warn(`push fan-out failed: ${String(err)}`);
@@ -282,11 +285,17 @@ export class PushService {
     deviceToken: string,
     payload: string,
     opts: {
-      topic: string;
-      pushType: 'alert' | 'liveactivity';
-      kind: 'device' | 'live-activity';
-    } = { topic: this.topic, pushType: 'alert', kind: 'device' },
+      topic?: string;
+      pushType?: 'alert' | 'liveactivity';
+      kind?: 'device' | 'live-activity';
+      /** apns-collapse-id (≤64 bytes): later pushes with the same id
+       *  replace the delivered notification instead of stacking. */
+      collapseId?: string;
+    } = {},
   ): Promise<void> {
+    const topic = opts.topic ?? this.topic;
+    const pushType = opts.pushType ?? 'alert';
+    const kind = opts.kind ?? 'device';
     return new Promise((resolve) => {
       const session = http2.connect(this.host);
       const finish = () => {
@@ -302,10 +311,11 @@ export class PushService {
         ':method': 'POST',
         ':path': `/3/device/${deviceToken}`,
         authorization: `bearer ${this.providerJwt()}`,
-        'apns-topic': opts.topic,
-        'apns-push-type': opts.pushType,
+        'apns-topic': topic,
+        'apns-push-type': pushType,
         'apns-priority': '10',
         'content-type': 'application/json',
+        ...(opts.collapseId ? { 'apns-collapse-id': opts.collapseId } : {}),
       });
 
       let status = 0;
@@ -319,7 +329,7 @@ export class PushService {
       });
       req.on('end', () => {
         if (status !== 200) {
-          this.handleFailure(deviceToken, status, body, opts.kind);
+          this.handleFailure(deviceToken, status, body, kind);
         }
         finish();
       });

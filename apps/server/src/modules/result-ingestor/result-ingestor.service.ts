@@ -211,16 +211,48 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
       // read-then-update is cheap; the read is needed to pick the
       // adapter-specific parser without trusting the chunk envelope.
       const usageData = await this.computeCommandUsage(chunk);
-      await this.prisma.command
-        .update({
-          where: { id: chunk.commandId },
+      // First terminal chunk wins. A turn can legitimately deliver more
+      // than one terminal signal — sidecars ≤ 0.2.7-rc.1 emit both the
+      // CLI's result final and a bare process-exit final, and Redis
+      // delivery is at-least-once — but finalizing twice double-fires
+      // the push notification. The status guard makes everything below
+      // run exactly once per turn; the CLI's own final always precedes
+      // the synthetic one, so the rich chunk (usage, real
+      // success/failure) is the one that wins.
+      const finalized = await this.prisma.command
+        .updateMany({
+          where: {
+            id: chunk.commandId,
+            status: { notIn: ['completed', 'failed', 'cancelled'] },
+          },
           data: {
             status,
             completedAt: new Date(),
             ...(usageData !== undefined ? { usage: usageData } : {}),
           },
         })
-        .then((cmd) => this.gateway.emitCommandUpdated(CommandService.toDto(cmd)))
+        .catch(() => ({ count: 0 }));
+      if (finalized.count === 0) {
+        // Already terminal: a duplicate final for a finished turn (the
+        // first one did all the work below), or the process-exit final
+        // of a CANCELLED turn. Cancel marks the Command row up front
+        // but only chunk ingestion knows when the CLI actually stopped,
+        // so the session flip + lock-screen cleanup still run for it —
+        // without the unread dot or a push: the user ended that turn
+        // themselves.
+        const cmd = await this.prisma.command.findUnique({
+          where: { id: chunk.commandId },
+          select: { status: true },
+        });
+        if (cmd?.status === 'cancelled') {
+          await this.sessions.setStatus(chunk.sessionId, 'idle', { unread: false });
+          void this.push.endLiveActivity(chunk.sessionId, false);
+        }
+        return;
+      }
+      await this.prisma.command
+        .findUnique({ where: { id: chunk.commandId } })
+        .then((cmd) => cmd && this.gateway.emitCommandUpdated(CommandService.toDto(cmd)))
         .catch(() => {});
       // Terminal: success lands lifecycle-`idle`, error lands `failed`,
       // and either way the result is unread until the user opens it —
