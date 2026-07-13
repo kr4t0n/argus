@@ -9,11 +9,26 @@ type: application
 
 # Chart version is independent of the app it ships. Bump on chart
 # changes. Releasing a new chart version only requires bumping this
-# field — see helm-publish.yml.
-version: 0.2.6
+# field — see helm-publish.yml. Prerelease versions (-rc.N) are hidden
+# from plain `helm search`/`helm upgrade`; install them with
+# `--version 0.2.7-rc.1` (or `--devel`).
+version: 0.2.7-rc.1
 # App version tracks the Docker image tags pulled by default. Bump in
 # lockstep with `version` whenever the chart starts requiring features
 # only present in newer images; otherwise it can lag.
+#
+# 0.2.7-rc.1 is a prerelease cut from `dev` for the native iOS/iPadOS
+# client: the chart grows an `apns` values block (APNS_TEAM_ID /
+# APNS_KEY_ID / APNS_KEY_BASE64 + optional topic/env) so the server can
+# send push notifications and Live Activity updates to the app. Push is
+# all-or-nothing and off by default — existing web-only installs need no
+# values changes. appVersion pins the immutable `sha-6cb9f9f` dev image
+# (there is no 0.2.7 image tag yet), which ships the iOS support: the
+# /me/devices + /me/live-activities endpoints, the APNs sender, and the
+# split fs/git notify stream. Carries database migrations
+# (device tokens + live-activity tokens) applied automatically on boot
+# via `prisma migrate deploy`. Pair with sidecar v0.2.7-rc.1 on agent
+# hosts to test the notify-stream split.
 #
 # 0.2.6 is a control-plane (web) release with no schema change, adding two
 # UI features: the prompt queue now drains app-wide in the background —
@@ -65,7 +80,7 @@ version: 0.2.6
 # 0.2.0 shipped file/image attachments — the default images include the
 # attachment module, so `objectStore` works out of the box (set the
 # endpoint + bucket + creds to enable it).
-appVersion: "0.2.6"
+appVersion: "sha-6cb9f9f"
 
 home: https://github.com/kr4t0n/argus
 sources:

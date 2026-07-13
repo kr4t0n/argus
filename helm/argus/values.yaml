@@ -96,6 +96,29 @@ objectStore:
   maxFileBytes: 26214400                 # 25 MiB per file
   maxFiles: 10                           # files per turn
 
+# ─── APNs push (native iOS client) ───────────────────────────────────
+# All-or-nothing, mirroring the server: leave teamId/keyId/key empty and
+# push (alerts + Live Activity updates) is silently disabled — web-only
+# deployments need nothing here. One token-auth .p8 key covers both
+# regular pushes and the liveactivity topic.
+apns:
+  teamId: ""                             # Apple Developer → Membership (10 chars)
+  keyId: ""                              # the .p8 key's id (10 chars)
+  # The .p8 file content, base64-encoded to a single line
+  # (`base64 -i AuthKey_XXXX.p8 | tr -d '\n'`). Stored in the
+  # chart-managed server secret. If you bring your own secret via
+  # auth.existingSecret, add an APNS_KEY_BASE64 key there instead —
+  # or point at a separate secret below.
+  keyBase64: ""
+  existingSecret: ""
+  existingSecretKey: "APNS_KEY_BASE64"
+  # Optional overrides; empty uses the server defaults, which are right
+  # for the stock app: topic app.argus.ios, environment sandbox
+  # (Xcode-installed builds). Set environment to "production" for
+  # TestFlight/App Store builds.
+  topic: ""
+  environment: ""
+
 # ─── Server ──────────────────────────────────────────────────────────
 server:
   enabled: true
