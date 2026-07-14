@@ -27,7 +27,6 @@ struct SessionSidebar: View {
     @State private var renameTarget: SessionDTO?
     @State private var renameText = ""
     @State private var newSessionProject: ProjectGroup?
-    @State private var showNewProject = false
     /// Collapsed project keys, persisted like the web's uiStore.expanded
     /// (default expanded — a key is present only when collapsed).
     @State private var collapsed = SessionSidebar.loadCollapsed()
@@ -68,17 +67,10 @@ struct SessionSidebar: View {
         }
         .navigationTitle("Argus")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button("New project…", systemImage: "folder.badge.plus") {
-                        showNewProject = true
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                }
-            }
-        }
+        // No global "new project" button: projects are created from the
+        // machine they live on (machine panel → "…" → New project), which
+        // is also where the web puts it. A global button would just have
+        // to ask which machine anyway.
         .alert("Rename session", isPresented: renameAlertBinding) {
             TextField("Title", text: $renameText)
             Button("Cancel", role: .cancel) { renameTarget = nil }
@@ -86,9 +78,6 @@ struct SessionSidebar: View {
         }
         .sheet(item: $newSessionProject) { project in
             NewSessionSheet(project: project)
-        }
-        .sheet(isPresented: $showNewProject) {
-            NewProjectSheet()
         }
     }
 

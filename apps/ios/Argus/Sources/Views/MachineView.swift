@@ -11,7 +11,7 @@ struct MachineView: View {
     @State private var agents: [AgentDTO] = []
     @State private var versionInfo: SidecarVersionInfo?
     @State private var updateNotice: String?
-    @State private var showNewAgent = false
+    @State private var showNewProject = false
     @State private var destroyTarget: AgentDTO?
     @State private var showDeleteMachine = false
 
@@ -34,11 +34,9 @@ struct MachineView: View {
             }
         }
         .task { await reload() }
-        .sheet(isPresented: $showNewAgent) {
+        .sheet(isPresented: $showNewProject) {
             if let machine {
-                NewAgentSheet(machine: machine) { created in
-                    agents.append(created)
-                }
+                NewProjectSheet(machine: machine)
             }
         }
         .confirmationDialog(
@@ -147,7 +145,7 @@ struct MachineView: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
-                Button("New agent…", systemImage: "plus") { showNewAgent = true }
+                Button("New project…", systemImage: "folder.badge.plus") { showNewProject = true }
                 Button("Update sidecar", systemImage: "arrow.down.circle") { updateSidecar() }
                     .disabled(machine?.status != .online)
                 Divider()
@@ -222,114 +220,6 @@ struct MachineView: View {
                 await app.refreshAll()
             } catch {
                 app.handleAPIError(error)
-            }
-        }
-    }
-}
-
-/// Full-control agent creation (the machine-panel flow: explicit name,
-/// working dir, terminal opt-in) — unlike the sidebar's auto-vivify.
-private struct NewAgentSheet: View {
-    @Environment(AppModel.self) private var app
-    @Environment(\.dismiss) private var dismiss
-
-    let machine: MachineDTO
-    let onCreated: (AgentDTO) -> Void
-
-    @State private var adapterType: AgentType = ""
-    @State private var name = ""
-    @State private var autoName = ""
-    @State private var workingDir = ""
-    @State private var supportsTerminal = false
-    @State private var busy = false
-    @State private var errorMessage: String?
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                AdapterPickerSection(machine: machine, adapterType: $adapterType)
-                Section("Agent") {
-                    TextField("Name", text: $name)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                    TextField("Working directory (optional)", text: $workingDir)
-                        .font(.callout.monospaced())
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                    Toggle("Attach interactive terminal", isOn: $supportsTerminal)
-                }
-                if supportsTerminal {
-                    Section {
-                        Text("The terminal grants every dashboard user shell access on this host — enable only where that trust model is acceptable.")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    }
-                }
-                if let errorMessage {
-                    Section { Text(errorMessage).foregroundStyle(.red).font(.callout) }
-                }
-            }
-            .navigationTitle("New agent")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") { create() }
-                        .disabled(busy || adapterType.isEmpty || trimmedName.isEmpty)
-                }
-            }
-        }
-        .onAppear {
-            if adapterType.isEmpty {
-                adapterType = machine.availableAdapters.first?.type ?? ""
-            }
-            if name.isEmpty { regenerateName() }
-        }
-        .onChange(of: adapterType) {
-            // Refresh the suggestion only while the user hasn't typed
-            // their own name.
-            if name.isEmpty || name == autoName { regenerateName() }
-        }
-    }
-
-    private func regenerateName() {
-        autoName = defaultName
-        name = autoName
-    }
-
-    private var trimmedName: String {
-        name.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var defaultName: String {
-        "\(adapterType)-\(String(UUID().uuidString.prefix(4)).lowercased())"
-    }
-
-    private func create() {
-        guard let client = app.client else { return }
-        busy = true
-        errorMessage = nil
-        let dir = workingDir.trimmingCharacters(in: .whitespacesAndNewlines)
-        Task {
-            defer { busy = false }
-            do {
-                let agent = try await client.createAgent(
-                    machineId: machine.id,
-                    CreateAgentRequest(
-                        name: trimmedName,
-                        type: adapterType,
-                        workingDir: dir.isEmpty ? nil : dir,
-                        supportsTerminal: supportsTerminal ? true : nil
-                    )
-                )
-                app.fleet.upsert(agent: agent)
-                onCreated(agent)
-                dismiss()
-            } catch {
-                app.handleAPIError(error)
-                errorMessage = (error as? APIError)?.message ?? error.localizedDescription
             }
         }
     }

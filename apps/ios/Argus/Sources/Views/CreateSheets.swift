@@ -93,14 +93,24 @@ struct NewSessionSheet: View {
     }
 }
 
-/// Sidebar "+" → new project: machine + working dir + first session.
-/// The project row itself is derived — creating the first agent/session
-/// in that directory is what brings it into existence.
+/// Machine panel "…" → new project: working dir + first session, on
+/// that machine. The project row is created server-side by the
+/// project-first session POST (which also vivifies the agent).
+///
+/// Web parity: projects are created FROM a machine (the machine list's
+/// hover "+"), never from a global button that then asks which machine —
+/// the machine is the natural entry point, so `machine` is passed in and
+/// its picker is a locked display row.
 struct NewProjectSheet: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
 
-    @State private var machineId = ""
+    /// The machine this project lives on — always supplied by the
+    /// caller (MachineView). Kept as a field rather than re-picked so
+    /// the sheet can't create a project on a machine the user isn't
+    /// looking at.
+    let machine: MachineDTO
+
     @State private var workingDir = ""
     @State private var adapterType: AgentType = ""
     @State private var title = ""
@@ -108,23 +118,11 @@ struct NewProjectSheet: View {
     @State private var busy = false
     @State private var errorMessage: String?
 
-    private var machines: [MachineDTO] {
-        app.fleet.machines.values
-            .filter { $0.archivedAt == nil }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
-    private var machine: MachineDTO? { app.fleet.machines[machineId] }
-
     var body: some View {
         NavigationStack {
             Form {
                 Section("Machine") {
-                    Picker("Machine", selection: $machineId) {
-                        ForEach(machines) { machine in
-                            Text(machine.name).tag(machine.id)
-                        }
-                    }
+                    LabeledContent("Machine", value: machine.name)
                 }
                 Section("Working directory") {
                     TextField("/home/me/projects/app", text: $workingDir)
@@ -136,7 +134,7 @@ struct NewProjectSheet: View {
                 Section("First session") {
                     TextField("Title (optional)", text: $title)
                     ModelRow(
-                        machineId: machineId.isEmpty ? nil : machineId,
+                        machineId: machine.id,
                         adapterType: adapterType,
                         selection: $modelSelection
                     )
@@ -153,16 +151,14 @@ struct NewProjectSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") { create() }
-                        .disabled(busy || machineId.isEmpty || adapterType.isEmpty || trimmedDir.isEmpty)
+                        .disabled(busy || adapterType.isEmpty || trimmedDir.isEmpty)
                 }
             }
         }
         .onAppear {
-            if machineId.isEmpty { machineId = machines.first?.id ?? "" }
-        }
-        .onChange(of: machineId) {
-            adapterType = machine?.availableAdapters.first?.type ?? ""
-            modelSelection = ModelSelection()
+            if adapterType.isEmpty {
+                adapterType = machine.availableAdapters.first?.type ?? ""
+            }
         }
         .onChange(of: adapterType) {
             modelSelection = ModelSelection()
@@ -180,7 +176,7 @@ struct NewProjectSheet: View {
             defer { busy = false }
             do {
                 _ = try await app.createSession(
-                    machineId: machineId,
+                    machineId: machine.id,
                     workingDir: trimmedDir,
                     adapterType: adapterType,
                     title: title,
