@@ -11,6 +11,9 @@ import { ProgressPane } from './ProgressPane';
 import { DiffPane } from './DiffPane';
 import { TerminalPane } from './TerminalPane';
 import { cn, relativeTime } from '../lib/utils';
+import { agentProjectRef, resolveProjectRef } from '../lib/projects';
+import { useAgentStore } from '../stores/agentStore';
+import { useProjectStore } from '../stores/projectStore';
 import { useSessionModel } from '../lib/usage';
 import { useUIStore } from '../stores/uiStore';
 
@@ -31,6 +34,19 @@ type Props = {
 type TabKey = 'commits' | 'files' | 'terminal' | 'note' | 'progress' | 'diff';
 
 export function ContextPane({ agent, session, commands, chunks }: Props) {
+  // Project identity for the fs/git panes (Phase 4 prep): the
+  // session's pinned projectId when present, else derived from the
+  // agent's (machineId, workingDir) pair via the hydrated rows. Null
+  // (panes hidden) only for workdir-less agents or during the boot
+  // race before the project rows hydrate.
+  const agentsById = useAgentStore((st) => st.agents);
+  const projectRows = useProjectStore((st) => st.projects);
+  const projectRef = useMemo(
+    () =>
+      resolveProjectRef(session, agentsById, projectRows) ??
+      agentProjectRef(agent, projectRows),
+    [session, agent, agentsById, projectRows],
+  );
   // Notes / Progress / Diff extensions: when on, each adds a tab to the
   // pane. All gate on a workingDir (the project key for Notes/Progress;
   // file diffs only exist when the agent has a working tree), matching
@@ -143,11 +159,16 @@ export function ContextPane({ agent, session, commands, chunks }: Props) {
           ))}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-3 no-scrollbar">
-          {active === 'commits' && agent.workingDir && (
-            <GitLogPanel key={agent.id} agentId={agent.id} hideHeader />
+          {active === 'commits' && projectRef && (
+            <GitLogPanel
+              key={projectRef.projectId}
+              project={projectRef}
+              legacyAgentId={agent.id}
+              hideHeader
+            />
           )}
-          {active === 'files' && agent.workingDir && (
-            <FileTree key={agent.id} agentId={agent.id} />
+          {active === 'files' && projectRef && (
+            <FileTree key={projectRef.projectId} project={projectRef} legacyAgentId={agent.id} />
           )}
           {active === 'terminal' && <TerminalPane key={agent.id} agent={agent} />}
           {active === 'note' && agent.workingDir && (

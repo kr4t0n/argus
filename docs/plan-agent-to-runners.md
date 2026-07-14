@@ -280,9 +280,10 @@ Original scope for reference:
       testing of rc.2+; `SELECT "sidecarVersion" FROM "Machine"`)
 - [ ] Phases 1–3 soak in prod without regressions (fs panel, turn
       dispatch/streaming, archive flows, quota, terminals)
-- [ ] Web FileTree / GitLogPanel / fileTabsStore switched to project
-      routes + project rooms (deferred from Phase 2; agent routes die
-      in Phase 4)
+- [x] Web FileTree / GitLogPanel / fileTabsStore switched to project
+      routes + project rooms (ProjectRef in lib/projects.ts; legacy
+      agent-room shim kept for the mixed-fleet window; queue drainer
+      reachability is machine-level; agent fs/git api methods deleted)
 - [ ] iOS creates sessions project-first (needs a macOS build window)
 
 Removal checklist when the gate clears: drop the auto-vivify +

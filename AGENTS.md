@@ -639,7 +639,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   way: **Progress** (`<ProgressPane>`, `progressExtensionEnabled`) and
   **Diff** (`<DiffPane>`, `diffExtensionEnabled`). ContextPane receives
   the session's `commands` (not just `chunks`) so the Diff tab can scope
-  its file diffs to the last turn.
+  its file diffs to the last turn. Commits/Files render only when a
+  `ProjectRef` resolves (lib/projects.ts — session.projectId + the
+  (machineId, workingDir) pair; Phase 4 prep): they fetch via the
+  `/projects/:id/*` routes and join the project WS room (with a legacy
+  agent-room shim for pre-Phase-2 sidecars); file tabs are scoped by
+  projectId (`fileTabsStore.scope`), and the queue drainer's
+  reachability check is machine-level, resolved through the same
+  ProjectRef.
 - `components/MachinePanel.tsx` — `/machines/:id` route. Header with
   machine glyph + name + status dot + sidecar-update / new-agent buttons.
   Below the header: 2:3 grid with Host KV + Supports adapters on the

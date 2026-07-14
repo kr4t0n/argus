@@ -120,7 +120,6 @@ export const api = {
   archiveAgent: (id: string) => http<AgentDTO>(`/agents/${id}/archive`, { method: 'POST' }),
   unarchiveAgent: (id: string) => http<AgentDTO>(`/agents/${id}/unarchive`, { method: 'POST' }),
 
-  // Machines
   // Projects (server-backed since Phase 1b — see projectStore)
   createProject: (body: {
     machineId: string;
@@ -141,6 +140,7 @@ export const api = {
   unarchiveProject: (id: string) =>
     http<ProjectDTO>(`/projects/${id}/unarchive`, { method: 'POST' }),
 
+  // Machines
   listMachines: (opts?: { includeArchived?: boolean }) =>
     http<MachineDTO[]>(`/machines${opts?.includeArchived ? '?includeArchived=true' : ''}`),
   getMachine: (id: string) => http<MachineDTO>(`/machines/${id}`),
@@ -292,18 +292,17 @@ export const api = {
   // walk multiple levels in one round trip — the result hydrates the
   // tree cache for every returned path so expanding those folders is
   // instant. Omit or pass 1 for the historical single-level listing.
-  listAgentDir: (agentId: string, path: string, showAll: boolean, depth?: number) => {
-    const q = new URLSearchParams();
-    if (path) q.set('path', path);
-    if (showAll) q.set('showAll', 'true');
+  listProjectDir: (projectId: string, path: string, showAll: boolean, depth?: number) => {
+    const q = new URLSearchParams({ path, showAll: String(showAll) });
     if (depth && depth > 1) q.set('depth', String(depth));
-    const qs = q.toString();
-    return http<FSListResponse>(`/agents/${agentId}/fs/list${qs ? `?${qs}` : ''}`);
+    return http<FSListResponse>(`/projects/${projectId}/fs/list?${q.toString()}`);
   },
-  readAgentFile: (agentId: string, path: string) => {
-    const q = new URLSearchParams({ path });
-    return http<FSReadResponse>(`/agents/${agentId}/fs/read?${q.toString()}`);
-  },
+  readProjectFile: (projectId: string, path: string) =>
+    http<FSReadResponse>(`/projects/${projectId}/fs/read?${new URLSearchParams({ path })}`),
+  getProjectGitLog: (projectId: string, limit?: number) =>
+    http<GitLogResponse>(
+      `/projects/${projectId}/git/log${limit ? `?limit=${limit}` : ''}`,
+    ),
 
   /** Per-day command count for the current user (last 365 days). The
    *  response is dense — zero-days included — so the heatmap can map
@@ -376,10 +375,4 @@ export const api = {
   /** Recent commits for the agent's workingDir. The response also
    *  carries a fresh GitStatus so the panel header (branch /
    *  detached) renders in one round trip. */
-  getAgentGitLog: (agentId: string, limit?: number) => {
-    const q = new URLSearchParams();
-    if (limit && limit > 0) q.set('limit', String(limit));
-    const qs = q.toString();
-    return http<GitLogResponse>(`/agents/${agentId}/git/log${qs ? `?${qs}` : ''}`);
-  },
 };

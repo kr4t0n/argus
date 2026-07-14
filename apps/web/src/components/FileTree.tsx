@@ -11,7 +11,8 @@ import {
 } from 'lucide-react';
 import type { FSEntry } from '@argus/shared-types';
 import { api, ApiError } from '../lib/api';
-import { joinAgent, leaveAgent, subscribeHandler } from '../lib/ws';
+import { joinAgent, leaveAgent, joinProject, leaveProject, subscribeHandler } from '../lib/ws';
+import type { ProjectRef } from '../lib/projects';
 import { useFileTabsStore } from '../stores/fileTabsStore';
 import { cn } from '../lib/utils';
 
@@ -32,21 +33,25 @@ type DirState = {
 const TREE_PREFETCH_DEPTH = 3;
 
 type Props = {
-  agentId: string;
+  project: ProjectRef;
+  /** During the mixed-fleet window, pre-Phase-2 sidecars broadcast
+   *  fs:changed to the agent room only (no workingDir on the event) —
+   *  join that room too and match on it. Dies with Phase 4. */
+  legacyAgentId?: string;
 };
 
 /**
- * Lazy-expanding file tree for the agent's working directory. On
+ * Lazy-expanding file tree for the project's working directory. On
  * mount and on cold expansions, fetches TREE_PREFETCH_DEPTH levels
- * in one round trip from `GET /agents/:id/fs/list` and hydrates a
+ * in one round trip from `GET /projects/:id/fs/list` and hydrates a
  * flat `Map<path, DirState>` cache, so the next few expansions
  * render synchronously. Subscribes to `fs:changed` to re-fetch any
- * loaded level as the agent edits files.
+ * loaded level as CLIs edit files.
  *
  * Double-clicking a file opens it as a preview tab in the main pane
  * (see FileTabStrip + FileViewer).
  */
-export function FileTree({ agentId }: Props) {
+export function FileTree({ project, legacyAgentId }: Props) {
   // Keyed by path (empty string = root). We never delete entries on
   // collapse — the UI just hides them — so that re-expanding is
   // instant. Collapse → expand → instant is the cursor-style UX the
@@ -58,8 +63,8 @@ export function FileTree({ agentId }: Props) {
   // Bound to this agent so DirNode doesn't need to know about it.
   const openFile = useFileTabsStore((s) => s.openFile);
   const onOpenFile = useCallback(
-    (path: string) => openFile({ agentId, path }),
-    [agentId, openFile],
+    (path: string) => openFile({ project, path }),
+    [project, openFile],
   );
 
   // Keep the latest `showAll` in a ref so the `fs:changed` handler
@@ -81,7 +86,7 @@ export function FileTree({ agentId }: Props) {
         return next;
       });
       try {
-        const res = await api.listAgentDir(agentId, path, showAllRef.current, depth);
+        const res = await api.listProjectDir(project.projectId, path, showAllRef.current, depth);
         setDirs((prev) => {
           const next = new Map(prev);
           // Depth>1 responses hydrate every level the sidecar walked
@@ -112,11 +117,11 @@ export function FileTree({ agentId }: Props) {
         });
       }
     },
-    [agentId],
+    [project.projectId],
   );
 
-  // Reset everything when the agent changes — different agents have
-  // different working dirs, entries from one are nonsense for another.
+  // Reset everything when the project changes — entries from one
+  // working dir are nonsense for another.
   // The initial fetch pulls TREE_PREFETCH_DEPTH levels so the first
   // couple of expansion clicks are instant.
   useEffect(() => {
@@ -124,7 +129,7 @@ export function FileTree({ agentId }: Props) {
     setExpanded(new Set(['']));
     setSelected(null);
     void fetchDir('', TREE_PREFETCH_DEPTH);
-  }, [agentId, fetchDir]);
+  }, [project.projectId, fetchDir]);
 
   // Filter toggle collapses back to the root and refetches with the
   // new filter — same shape as refreshAll. Skip the initial-render
@@ -144,28 +149,35 @@ export function FileTree({ agentId }: Props) {
   }, [showAll]);
 
   // Live updates: sidecar fsnotify → server broadcast → we refetch
-  // exactly the affected directory if we've already loaded it. The
-  // server scopes the broadcast to the agent's room, so we have to
-  // join it while the tree is mounted.
+  // exactly the affected directory if we've already loaded it. Runner
+  // sidecars broadcast to the project room; pre-Phase-2 sidecars only
+  // to the agent room — join both during the mixed-fleet window and
+  // match on whichever identity the event carries.
   useEffect(() => {
-    joinAgent(agentId);
+    joinProject(project.machineId, project.workingDir);
+    if (legacyAgentId) joinAgent(legacyAgentId);
+    const matches = (p: { agentId: string; machineId?: string; workingDir?: string }) =>
+      p.workingDir
+        ? p.machineId === project.machineId && p.workingDir === project.workingDir
+        : !!legacyAgentId && p.agentId === legacyAgentId;
     const unsubscribe = subscribeHandler({
-      onFSChanged: ({ agentId: eventAgent, path }) => {
-        if (eventAgent !== agentId) return;
+      onFSChanged: (ev) => {
+        if (!matches(ev)) return;
         setDirs((prev) => {
-          if (!prev.has(path)) return prev;
+          if (!prev.has(ev.path)) return prev;
           // setState during setState is banned — defer the refetch so
           // the current tree render commits first.
-          queueMicrotask(() => fetchDir(path));
+          queueMicrotask(() => fetchDir(ev.path));
           return prev;
         });
       },
     });
     return () => {
       unsubscribe();
-      leaveAgent(agentId);
+      leaveProject(project.machineId, project.workingDir);
+      if (legacyAgentId) leaveAgent(legacyAgentId);
     };
-  }, [agentId, fetchDir]);
+  }, [project.projectId, project.machineId, project.workingDir, legacyAgentId, fetchDir]);
 
   const toggleDir = useCallback(
     (path: string) => {

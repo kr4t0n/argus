@@ -3,6 +3,9 @@ import { api } from './api';
 import { useQueueStore } from '../stores/queueStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useAgentStore } from '../stores/agentStore';
+import { useMachineStore } from '../stores/machineStore';
+import { useProjectStore } from '../stores/projectStore';
+import { resolveProjectRef } from './projects';
 
 /**
  * Background prompt-queue drainer.
@@ -32,9 +35,15 @@ import { useAgentStore } from '../stores/agentStore';
  *   • an `inFlight` entry for it → we've dispatched but the turn hasn't
  *     shown up as `active` yet (bridges the dispatch→first-chunk window);
  *     cleared once it goes active or after a timeout.
- * Agent status is used only for reachability (skip `offline`/`error`) — its
- * heartbeat `busy` is deliberately ignored (it lingers ~5s after a turn and
- * is per-agent, which is the wrong granularity anyway).
+ * Reachability (skip while the target is down) is MACHINE-level since
+ * the runner refactor: liveness belongs to the sidecar process, and
+ * runner sidecars send no per-agent signal at all. The machine is
+ * resolved through the session's pinned project (agent row fallback
+ * for workdir-less sessions); only when no machine is resolvable do we
+ * fall back to the legacy agent-status check. Skipping (rather than
+ * letting the server reject) matters: a rejected send re-queues the
+ * head under a 60s stall cooldown, so an offline blip would delay the
+ * queue far longer than the outage itself.
  */
 
 /** Safety valve: drop an in-flight guard if a dispatched turn never shows
@@ -53,7 +62,7 @@ const isReachable = (status: string | undefined): boolean =>
 
 export function useQueueDrainer() {
   useEffect(() => {
-    // agentId → ts we dispatched a turn but haven't yet seen it go active.
+    // sessionId → ts we dispatched a turn but haven't yet seen it go active.
     const inFlight = new Map<string, number>();
     // sessionId → { head id whose send failed, ts to retry after }.
     const stalled = new Map<string, { headId: string; until: number }>();
@@ -75,6 +84,8 @@ export function useQueueDrainer() {
 
       const { sessions } = useSessionStore.getState();
       const { agents } = useAgentStore.getState();
+      const { machines } = useMachineStore.getState();
+      const { projects } = useProjectStore.getState();
 
       // Release in-flight guards whose turn has started (now visible as
       // `active` — the status gate takes over) or that timed out.
@@ -89,8 +100,17 @@ export function useQueueDrainer() {
         if (!queue || queue.length === 0) continue;
         const session = sessions[sessionId];
         if (!session) continue; // not loaded yet / deleted — leave queued
-        const agent = agents[session.agentId];
-        if (!agent || !isReachable(agent.status)) continue; // offline/error
+        const machineId =
+          resolveProjectRef(session, agents, projects)?.machineId ??
+          agents[session.agentId]?.machineId;
+        if (machineId) {
+          if (machines[machineId]?.status !== 'online') continue; // machine down
+        } else {
+          // No machine resolvable (stores still hydrating) — legacy
+          // agent-status check as a last resort.
+          const agent = agents[session.agentId];
+          if (!agent || !isReachable(agent.status)) continue;
+        }
         // Serialize per SESSION only: a session can't run two turns at once
         // (they'd both `--resume` the same id and corrupt its transcript),
         // but sessions that share an agent run as independent CLI processes
@@ -147,6 +167,8 @@ export function useQueueDrainer() {
       useQueueStore.subscribe(schedule),
       useSessionStore.subscribe(schedule),
       useAgentStore.subscribe(schedule),
+      useMachineStore.subscribe(schedule),
+      useProjectStore.subscribe(schedule),
     ];
     schedule(); // initial pass — picks up persisted queues on load
 

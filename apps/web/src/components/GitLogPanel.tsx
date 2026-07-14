@@ -2,11 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { GitBranch, Loader2, RefreshCw } from 'lucide-react';
 import type { GitCommit, GitStatus } from '@argus/shared-types';
 import { api, ApiError } from '../lib/api';
-import { joinAgent, leaveAgent, subscribeHandler } from '../lib/ws';
+import { joinAgent, leaveAgent, joinProject, leaveProject, subscribeHandler } from '../lib/ws';
+import type { ProjectRef } from '../lib/projects';
 import { cn } from '../lib/utils';
 
 type Props = {
-  agentId: string;
+  project: ProjectRef;
+  /** Mixed-fleet shim — see FileTree. Dies with Phase 4. */
+  legacyAgentId?: string;
   /** When true, omit the in-component "Recent commits" caps header +
    *  refresh button. Used by ContextPane, which now wraps this panel
    *  in a generic collapsible Section that owns the header itself. */
@@ -25,7 +28,7 @@ type Props = {
  * the section disappears gracefully when the agent is pointed at a
  * directory without a `.git/`.
  */
-export function GitLogPanel({ agentId, hideHeader = false }: Props) {
+export function GitLogPanel({ project, legacyAgentId, hideHeader = false }: Props) {
   const [commits, setCommits] = useState<GitCommit[] | null>(null);
   const [git, setGit] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(false);
@@ -38,7 +41,7 @@ export function GitLogPanel({ agentId, hideHeader = false }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const resp = await api.getAgentGitLog(agentId);
+      const resp = await api.getProjectGitLog(project.projectId);
       setCommits(resp.commits);
       setGit(resp.git ?? null);
     } catch (err) {
@@ -48,9 +51,9 @@ export function GitLogPanel({ agentId, hideHeader = false }: Props) {
       setLoading(false);
       setLoadedOnce(true);
     }
-  }, [agentId]);
+  }, [project.projectId]);
 
-  // Fetch on mount + whenever the agent id changes.
+  // Fetch on mount + whenever the project changes.
   useEffect(() => {
     fetchLog();
   }, [fetchLog]);
@@ -59,10 +62,14 @@ export function GitLogPanel({ agentId, hideHeader = false }: Props) {
   // movement and pushes a single git:changed per commit/checkout/
   // reset/rebase. Same room subscription pattern as FileTree.
   useEffect(() => {
-    joinAgent(agentId);
+    joinProject(project.machineId, project.workingDir);
+    if (legacyAgentId) joinAgent(legacyAgentId);
     const unsub = subscribeHandler({
-      onGitChanged: ({ agentId: eventAgent }) => {
-        if (eventAgent !== agentId) return;
+      onGitChanged: (ev) => {
+        const match = ev.workingDir
+          ? ev.machineId === project.machineId && ev.workingDir === project.workingDir
+          : !!legacyAgentId && ev.agentId === legacyAgentId;
+        if (!match) return;
         // Defer to a microtask so multiple events in the same tick
         // (e.g. paired packed-refs + HEAD) collapse into one fetch.
         queueMicrotask(() => fetchLog());
@@ -70,9 +77,10 @@ export function GitLogPanel({ agentId, hideHeader = false }: Props) {
     });
     return () => {
       unsub();
-      leaveAgent(agentId);
+      leaveProject(project.machineId, project.workingDir);
+      if (legacyAgentId) leaveAgent(legacyAgentId);
     };
-  }, [agentId, fetchLog]);
+  }, [project.projectId, project.machineId, project.workingDir, legacyAgentId, fetchLog]);
 
   // Hide the entire section for non-repos. We can only know that
   // after the first fetch (server returns commits=[] + git=undefined

@@ -14,6 +14,7 @@ import { StreamViewer } from './StreamViewer';
 import { Composer } from './Composer';
 import { ContextPane } from './ContextPane';
 import { FileTabStrip } from './FileTabStrip';
+import { useProjectRef } from '../lib/projects';
 import { UsageBadge } from './UsageBadge';
 import { relativeTime } from '../lib/utils';
 
@@ -126,14 +127,15 @@ export function SessionPanel() {
   // when the selection points to a different agent's file (those tabs
   // are hidden but the store still remembers them, so navigating back
   // to the original agent restores the selection).
+  const projectRef = useProjectRef(entry?.session);
   const openFiles = useFileTabsStore((s) => s.openFiles);
   const activeFileKey = useFileTabsStore((s) => s.activeKey);
   const activeFile = useMemo(() => {
-    if (!agent || !activeFileKey) return null;
-    return openFiles.find(
-      (f) => f.key === activeFileKey && f.agentId === agent.id,
-    ) ?? null;
-  }, [openFiles, activeFileKey, agent?.id]);
+    if (!projectRef || !activeFileKey) return null;
+    return (
+      openFiles.find((f) => f.key === activeFileKey && f.scope === projectRef.projectId) ?? null
+    );
+  }, [openFiles, activeFileKey, projectRef]);
 
   if (!sessionId) {
     return (
@@ -226,7 +228,7 @@ export function SessionPanel() {
           </div>
         </div>
 
-        <FileTabStrip agentId={agent?.id} />
+        <FileTabStrip scope={projectRef?.projectId} />
 
         <div className="flex-1 min-h-0">
           {activeFile ? (
@@ -241,6 +243,7 @@ export function SessionPanel() {
             </Suspense>
           ) : (
             <StreamViewer
+              project={projectRef}
               sessionId={entry.session.id}
               commands={entry.commands}
               chunks={entry.chunks}
