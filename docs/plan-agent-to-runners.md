@@ -284,12 +284,15 @@ Original scope for reference:
       routes + project rooms (ProjectRef in lib/projects.ts; legacy
       agent-room shim kept for the mixed-fleet window; queue drainer
       reachability is machine-level; agent fs/git api methods deleted)
-- [ ] iOS ships in TWO stages (needs a macOS build window; see the
-      inventory below): Stage A (DTO relax: agentId optional everywhere,
-      projectId/cliType added — MUST be installed on devices BEFORE the
-      Phase-4 server nulls agentId; App Store propagation is the long
-      pole of the whole gate), then Stage B (project-first creation +
-      re-keyed panes + machine-level drainer gate).
+- [x] iOS Stages A+B IMPLEMENTED (commit 8e6fae7) — macOS CI green
+      (ArgusKit swift build+test AND the app's xcodebuild Simulator
+      build). Stage A = the DTO relax that MUST be installed on devices
+      BEFORE the Phase-4 server nulls agentId; App Store propagation is
+      now the long pole of the gate, so cut a build early.
+- [ ] Kyle: build + ship the iOS app from a macOS window, confirm
+      on-device (sessions list, transcripts, project-first create,
+      Files/Commits live refresh on a ≥0.3 machine, model picker,
+      queued prompts).
 - [ ] Server grows a project/machine-addressed terminal-open route
       (`POST /agents/:id/terminals` is the ONLY open route today — the
       web uses it too; both clients must migrate before agent REST can
