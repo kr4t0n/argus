@@ -74,6 +74,18 @@ export interface ProjectDTO {
   id: string;
   machineId: string;
   workingDir: string;
+  /** User-picked label; null = client derives basename(workingDir).
+   *  Set at create or via PATCH /projects/:id. */
+  name: string | null;
+  /** Default for agents auto-vivified under this project. */
+  supportsTerminal: boolean;
+  /** ISO timestamp; null = active. Set via POST /projects/:id/archive. */
+  archivedAt: string | null;
+  /** Restore snapshot captured by the client-side archive cascade —
+   *  the ids the cascade actually flipped, so restore un-archives
+   *  only those and preserves individual archives made earlier.
+   *  Null when active or for legacy archives without a snapshot. */
+  archiveSnapshot: { archivedAgentIds: string[]; archivedSessionIds: string[] } | null;
   /** User-picked glyph (a single A-Z letter today). Null = use the
    *  frontend's default folder icon. Set via PATCH /projects/icon. */
   iconKey: string | null;

@@ -121,6 +121,26 @@ export const api = {
   unarchiveAgent: (id: string) => http<AgentDTO>(`/agents/${id}/unarchive`, { method: 'POST' }),
 
   // Machines
+  // Projects (server-backed since Phase 1b — see projectStore)
+  createProject: (body: {
+    machineId: string;
+    workingDir: string;
+    name?: string;
+    supportsTerminal?: boolean;
+  }) => http<ProjectDTO>(`/projects`, { method: 'POST', body: JSON.stringify(body) }),
+  renameProject: (id: string, name: string) =>
+    http<ProjectDTO>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+  archiveProject: (
+    id: string,
+    snapshot?: { archivedAgentIds: string[]; archivedSessionIds: string[] },
+  ) =>
+    http<ProjectDTO>(`/projects/${id}/archive`, {
+      method: 'POST',
+      body: JSON.stringify(snapshot ?? {}),
+    }),
+  unarchiveProject: (id: string) =>
+    http<ProjectDTO>(`/projects/${id}/unarchive`, { method: 'POST' }),
+
   listMachines: (opts?: { includeArchived?: boolean }) =>
     http<MachineDTO[]>(`/machines${opts?.includeArchived ? '?includeArchived=true' : ''}`),
   getMachine: (id: string) => http<MachineDTO>(`/machines/${id}`),

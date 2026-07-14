@@ -150,6 +150,18 @@ model Project {
   id         String   @id @default(cuid())
   machineId  String
   workingDir String
+  // Placeholder metadata promoted from the web's localStorage store
+  // (Phase 1b of docs/plan-agent-to-runners.md). `name` is the
+  // user-picked label — NULL derives basename(workingDir) client-side.
+  // `supportsTerminal` is the default for agents vivified under this
+  // project. `archiveSnapshot` rides alongside `archivedAt`: the
+  // {archivedAgentIds, archivedSessionIds} the client-side cascade
+  // actually flipped, so restore un-archives only those and preserves
+  // items the user archived individually before the cascade.
+  name             String?
+  supportsTerminal Boolean   @default(false)
+  archivedAt       DateTime?
+  archiveSnapshot  Json?
   iconKey    String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt

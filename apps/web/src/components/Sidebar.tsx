@@ -325,7 +325,7 @@ function ProjectRow({
           agentResults.forEach((a) => a && onAgentArchived(a));
         }
 
-        setProjectArchived(project.key, false);
+        await setProjectArchived(project.key, false);
       } else {
         // Archive: snapshot the items we actually flip (skipping ones
         // already archived) so restore can be surgical. Sessions
@@ -365,7 +365,7 @@ function ProjectRow({
         });
 
         if (!project.local) {
-          addProject({
+          await addProject({
             machineId: project.machineId,
             name: project.label,
             workingDir: project.fullPath,
@@ -376,7 +376,7 @@ function ProjectRow({
             archivedSessionIds,
           });
         } else {
-          setProjectArchived(project.key, true, {
+          await setProjectArchived(project.key, true, {
             archivedAgentIds,
             archivedSessionIds,
           });

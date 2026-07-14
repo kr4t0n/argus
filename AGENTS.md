@@ -535,8 +535,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   row's label and let empty projects render before their first
   agent). Same `(machineId, workingDir)` key on both sides, so a
   placeholder and its later agents collapse into one row.
-  Placeholders are client-only and persisted under `argus.projects`
-  — promote to a server entity when the flow stabilises. Archiving
+  Placeholders are server-backed since Phase 1b (POST /projects,
+  archive/rename endpoints; `argus.projects` localStorage is now a
+  paint-instantly cache hydrated from GET /projects, with a one-shot
+  boot migration — `migrateLocalProjects.ts` — pushing pre-promotion
+  local rows up). Archiving
   a project from its hover action cascades client-side: every
   non-archived session under every non-archived agent is archived
   via REST (skipping items already archived individually), then

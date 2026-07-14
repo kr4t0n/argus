@@ -156,11 +156,15 @@ mostly moot after Phase 3 but is correct and cheap insurance meanwhile.
   `{agentId}` accepted for iOS — and it ALSO pins projectId/cliType.
   Forks copy `projectId`/`cliType` from the source session.
 - Web: `CreateAgentPopover` asSession path posts the new shape.
-- DEFERRED to a Phase-1b follow-up: promoting `projectStore` placeholders
-  (names, archive-cascade snapshots, terminal defaults) to server rows —
-  it's UI-metadata roaming, off the critical path to retiring agents, and
-  carries its own product decisions (server-side archive cascade
-  semantics). Project rows meanwhile need no `archivedAt`.
+- Phase 1b ✅ IMPLEMENTED: placeholders promoted to server rows — Project
+  gains `name`, `supportsTerminal`, `archivedAt`, `archiveSnapshot`
+  (migration `20260714031024_project_placeholder_promotion`); POST
+  /projects + rename/archive/unarchive endpoints; the archive *cascade*
+  deliberately stays client-driven via existing per-item REST — the row
+  only persists the outcome + restore snapshot, so no new server-side
+  cascade semantics were introduced. Web `projectStore` is hydrated from
+  GET /projects (localStorage is a paint-instantly cache), and
+  `migrateLocalProjects.ts` one-shot-pushes pre-promotion local rows.
 - Docs: AGENTS.md `project/` module + sidebar sections updated.
 
 ### Phase 2 — re-key read paths: fs/git/models RPC + WS rooms (server + web + sidecar-tolerant)

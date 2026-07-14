@@ -153,25 +153,16 @@ export function CreateProjectPopover({ machine, anchor, onClose }: Props) {
         }
       }
 
-      // Always pass archivedAt: null so creating against an archived
-      // workingDir un-archives the placeholder (the silent-failure
-      // case before this change). For non-archived merges it's a
-      // harmless reaffirmation.
-      const created = addProject({
+      // Server-side create upserts by (machineId, workingDir) and
+      // always clears archive state + snapshot, so creating against an
+      // archived pair un-archives it — the restore-via-recreate flow
+      // needs no separate setArchived call anymore.
+      const created = await addProject({
         machineId: machine.id,
         name: name.trim(),
         workingDir: trimmedDir,
         supportsTerminal,
-        archivedAt: null,
       });
-      // Snapshot is meaningful only while archived; clearing it here
-      // keeps the persisted placeholder tidy and matches the
-      // setArchived(false) cleanup semantics in projectStore.
-      if (isRestoring) {
-        useProjectStore
-          .getState()
-          .setArchived(projectKey(created.machineId, created.workingDir), false);
-      }
       // Force-open the project row so the user lands on a visible,
       // expanded project and can immediately click its `+` to add an
       // agent. The `expanded` map's default-open semantics aren't

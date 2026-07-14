@@ -13,6 +13,7 @@ import { ensureSocket, resetSocket, subscribeHandler } from './lib/ws';
 import { api } from './lib/api';
 import { migrateLocalMachineIconsToServer } from './lib/migrateMachineIcons';
 import { migrateLocalProjectIconsToServer } from './lib/migrateProjectIcons';
+import { migrateLocalProjectsToServer } from './lib/migrateLocalProjects';
 import { useProjectStore } from './stores/projectStore';
 import {
   activeSessionIdFromPath,
@@ -88,12 +89,16 @@ export default function App() {
     // a pick already made on another browser wins over the local copy.
     const machinesReady = loadMachines();
     machinesReady.then(() => migrateLocalMachineIconsToServer()).catch(() => {});
-    const projectIconsReady = api
+    const projectsReady = api
       .listProjects()
-      .then((rows) => useProjectStore.getState().setServerIcons(rows))
+      .then((rows) => {
+        const store = useProjectStore.getState();
+        store.hydrate(rows);
+        store.setServerIcons(rows);
+      })
       .catch(() => {});
-    Promise.all([machinesReady, projectIconsReady])
-      .then(() => migrateLocalProjectIconsToServer())
+    Promise.all([machinesReady, projectsReady])
+      .then(() => Promise.all([migrateLocalProjectIconsToServer(), migrateLocalProjectsToServer()]))
       .catch(() => {});
     loadAgents();
     loadSessions();
@@ -119,7 +124,11 @@ export default function App() {
       onMachineUpsert: upsertMachine,
       onMachineStatus: (p) => setMachineStatus(p.id, p.status),
       onMachineRemoved: (p) => removeMachine(p.id),
-      onProjectUpsert: (p) => useProjectStore.getState().upsertServerIcon(p),
+      onProjectUpsert: (p) => {
+        const store = useProjectStore.getState();
+        store.upsertFromDto(p);
+        store.upsertServerIcon(p);
+      },
       onAgentUpsert: upsertAgent,
       onAgentStatus: (p) => {
         // Prefetch trigger: when an agent transitions busy → not-busy,
@@ -228,9 +237,11 @@ export default function App() {
           loadMachines(),
           loadAgents(),
           loadSessions(),
-          api
-            .listProjects()
-            .then((rows) => useProjectStore.getState().setServerIcons(rows)),
+          api.listProjects().then((rows) => {
+            const store = useProjectStore.getState();
+            store.hydrate(rows);
+            store.setServerIcons(rows);
+          }),
         ]).catch(() => {});
         const entriesSnap = useSessionStore.getState().entries;
         for (const [id, e] of Object.entries(entriesSnap)) {

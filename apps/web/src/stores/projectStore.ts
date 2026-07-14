@@ -1,25 +1,30 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { ProjectDTO } from '@argus/shared-types';
+import { api } from '../lib/api';
 
 /**
- * Client-only project placeholder. A project is a named `(machineId,
- * workingDir)` anchor under which agents are created. Today the
- * sidebar derives projects from agents' workingDirs; this store lets
- * the user create an *empty* project (no agents yet) from the machine
- * list and have it appear in the tree immediately. When agents
- * eventually land in the same `(machineId, workingDir)`, they merge
- * into the placeholder's row.
+ * Project rows, server-backed since Phase 1b of the agent→runner
+ * refactor. A project is a named `(machineId, workingDir)` anchor
+ * under which sessions are created. The store hydrates from
+ * `GET /projects` at boot (and on WS reconnect), stays warm via
+ * `project:upsert` events, and persists under `argus.projects` so
+ * rows paint instantly on reload before the boot fetch reconciles.
  *
- * Why client-only: no full Machine→Project server entity yet — only
- * per-project metadata that must roam across browsers has been
- * promoted (icons; see `serverIcons` + the server's Project row).
- * Placeholders themselves are persisted via zustand under
- * `argus.projects` so they survive reloads. Promote the rest to the
- * Prisma table when the next step lands.
+ * Mutations (`add`, `setArchived`) write through to the server first
+ * and reconcile the map from the returned DTO — the archive *cascade*
+ * (flipping sessions/agents) stays in the Sidebar via per-item REST;
+ * only the outcome + restore snapshot live on the Project row.
+ *
+ * Rows without `serverId` are legacy client-only placeholders from
+ * before the promotion; `migrateLocalProjectsToServer` pushes them up
+ * once at boot, after which every row is server-backed.
  */
 export interface LocalProject {
   id: string;
+  /** Server Project row id. Undefined only for legacy un-migrated
+   *  placeholders (pre-promotion localStorage rows). */
+  serverId?: string;
   machineId: string;
   name: string;
   workingDir: string;
@@ -73,17 +78,36 @@ interface ProjectState {
    * render instantly on reload (the boot fetch then reconciles).
    */
   serverIcons: Record<string, string>;
+  /** Replace/merge the map from a GET /projects response. Server rows
+   *  win; legacy local-only placeholders (no serverId) not yet known
+   *  to the server are preserved for the one-shot migration. Existing
+   *  keys keep their order; new ones append. */
+  hydrate(rows: ProjectDTO[]): void;
+  /** Apply one server row — from a `project:upsert` WS event or a
+   *  mutation response. */
+  upsertFromDto(p: ProjectDTO): LocalProject;
+  /** Create (or reclaim) a project server-side. Re-creating an
+   *  archived pair un-archives it (restore-via-recreate). When
+   *  `archivedAt` + snapshot are passed (Sidebar materializing an
+   *  agent-derived row mid-archive), the archive is persisted in the
+   *  same call chain. */
   add(
     input: Omit<
       LocalProject,
-      'id' | 'createdAt' | 'archivedAt' | 'archivedAgentIds' | 'archivedSessionIds' | 'iconKey'
+      | 'id'
+      | 'serverId'
+      | 'createdAt'
+      | 'archivedAt'
+      | 'archivedAgentIds'
+      | 'archivedSessionIds'
+      | 'iconKey'
     > & {
       archivedAt?: string | null;
       archivedAgentIds?: string[];
       archivedSessionIds?: string[];
     },
-  ): LocalProject;
-  setArchived(key: string, archived: boolean, snapshot?: ArchiveSnapshot): void;
+  ): Promise<LocalProject>;
+  setArchived(key: string, archived: boolean, snapshot?: ArchiveSnapshot): Promise<void>;
   remove(key: string): void;
   /** Replace the whole icon map from a GET /projects response —
    *  replacement (not merge) is what propagates remote resets. */
@@ -96,69 +120,107 @@ interface ProjectState {
   clearLegacyIcons(keys: string[]): void;
 }
 
+function dtoToLocal(p: ProjectDTO, prev?: LocalProject): LocalProject {
+  return {
+    id: prev?.id ?? p.id,
+    serverId: p.id,
+    machineId: p.machineId,
+    name: p.name ?? '',
+    workingDir: p.workingDir,
+    supportsTerminal: p.supportsTerminal,
+    createdAt: prev?.createdAt ?? new Date().toISOString(),
+    archivedAt: p.archivedAt,
+    archivedAgentIds: p.archiveSnapshot?.archivedAgentIds,
+    archivedSessionIds: p.archiveSnapshot?.archivedSessionIds,
+    // Deprecated legacy glyph copy: preserved until the one-shot icon
+    // migration strips it; the server value renders first regardless.
+    iconKey: prev?.iconKey,
+  };
+}
+
 export const useProjectStore = create<ProjectState>()(
   persist(
     (set, get) => ({
       projects: {},
       order: [],
       serverIcons: {},
-      add(input) {
-        const key = projectKey(input.machineId, input.workingDir);
-        const existing = get().projects[key];
-        if (existing) {
-          const merged: LocalProject = {
-            ...existing,
-            name: input.name || existing.name,
-            supportsTerminal: input.supportsTerminal,
-            // Only overwrite archive fields when the caller passes them
-            // explicitly — `undefined` means "don't touch" so a re-submit
-            // of the form doesn't accidentally unarchive a previously-
-            // archived project or clobber its restore snapshot.
-            ...(input.archivedAt !== undefined ? { archivedAt: input.archivedAt } : {}),
-            ...(input.archivedAgentIds !== undefined
-              ? { archivedAgentIds: input.archivedAgentIds }
-              : {}),
-            ...(input.archivedSessionIds !== undefined
-              ? { archivedSessionIds: input.archivedSessionIds }
-              : {}),
-          };
-          set({ projects: { ...get().projects, [key]: merged } });
-          return merged;
+      hydrate(rows) {
+        const prev = get().projects;
+        const next: Record<string, LocalProject> = {};
+        for (const row of rows) {
+          const key = projectKey(row.machineId, row.workingDir);
+          next[key] = dtoToLocal(row, prev[key]);
         }
-        const created: LocalProject = {
-          id:
-            typeof crypto !== 'undefined' && 'randomUUID' in crypto
-              ? crypto.randomUUID()
-              : `lp_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
-          machineId: input.machineId,
-          name: input.name,
-          workingDir: input.workingDir,
-          supportsTerminal: input.supportsTerminal,
-          createdAt: new Date().toISOString(),
-          archivedAt: input.archivedAt ?? null,
-          archivedAgentIds: input.archivedAgentIds,
-          archivedSessionIds: input.archivedSessionIds,
-        };
-        set({
-          projects: { ...get().projects, [key]: created },
-          order: [...get().order, key],
-        });
-        return created;
+        // Keep legacy un-migrated placeholders the server doesn't know
+        // yet — migrateLocalProjectsToServer pushes them up right
+        // after hydration, and dropping them here would lose the row
+        // if that push fails.
+        for (const [key, p] of Object.entries(prev)) {
+          if (!next[key] && !p.serverId) next[key] = p;
+        }
+        const order = [
+          ...get().order.filter((k) => next[k]),
+          ...Object.keys(next).filter((k) => !get().order.includes(k)),
+        ];
+        set({ projects: next, order });
       },
-      setArchived(key, archived, snapshot) {
-        const projects = get().projects;
-        const existing = projects[key];
+      upsertFromDto(p) {
+        const key = projectKey(p.machineId, p.workingDir);
+        const prev = get().projects;
+        const updated = dtoToLocal(p, prev[key]);
+        set({
+          projects: { ...prev, [key]: updated },
+          order: get().order.includes(key) ? get().order : [...get().order, key],
+        });
+        return updated;
+      },
+      async add(input) {
+        const dto = await api.createProject({
+          machineId: input.machineId,
+          workingDir: input.workingDir,
+          name: input.name || undefined,
+          supportsTerminal: input.supportsTerminal,
+        });
+        let final = dto;
+        // Sidebar materializes agent-derived rows mid-archive by
+        // creating them already-archived; persist that state in the
+        // same chain. (Create always clears archive server-side, so
+        // this ordering is safe for the restore-via-recreate flow.)
+        if (input.archivedAt) {
+          // Pass the snapshot only when the caller captured one — a
+          // snapshot-less archive must stay snapshot-less server-side
+          // so restore falls back to the broad path.
+          final = await api.archiveProject(
+            dto.id,
+            input.archivedAgentIds !== undefined || input.archivedSessionIds !== undefined
+              ? {
+                  archivedAgentIds: input.archivedAgentIds ?? [],
+                  archivedSessionIds: input.archivedSessionIds ?? [],
+                }
+              : undefined,
+          );
+        }
+        return get().upsertFromDto(final);
+      },
+      async setArchived(key, archived, snapshot) {
+        const existing = get().projects[key];
         if (!existing) return;
-        const updated: LocalProject = {
-          ...existing,
-          archivedAt: archived ? new Date().toISOString() : null,
-          // Snapshot is meaningful only while archived. Clearing on
-          // restore avoids the snapshot drifting forward if the user
-          // re-archives later without a fresh capture.
-          archivedAgentIds: archived ? snapshot?.archivedAgentIds : undefined,
-          archivedSessionIds: archived ? snapshot?.archivedSessionIds : undefined,
-        };
-        set({ projects: { ...projects, [key]: updated } });
+        // Legacy un-migrated placeholder: promote it on first touch so
+        // the archive state has a server row to land on.
+        let serverId = existing.serverId;
+        if (!serverId) {
+          const created = await api.createProject({
+            machineId: existing.machineId,
+            workingDir: existing.workingDir,
+            name: existing.name || undefined,
+            supportsTerminal: existing.supportsTerminal,
+          });
+          serverId = created.id;
+        }
+        const dto = archived
+          ? await api.archiveProject(serverId, snapshot)
+          : await api.unarchiveProject(serverId);
+        get().upsertFromDto(dto);
       },
       remove(key) {
         const projects = get().projects;
