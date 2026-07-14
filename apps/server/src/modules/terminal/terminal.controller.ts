@@ -27,6 +27,25 @@ class OpenTerminalDto {
 export class TerminalController {
   constructor(private readonly terminals: TerminalService) {}
 
+  /** Project-addressed open — the runner-era route. A terminal is a
+   *  (machine, cwd) pair; see TerminalService.openForProject. */
+  @Post('projects/:projectId/terminals')
+  async openForProject(
+    @Req() req: AuthedRequest,
+    @Param('projectId') projectId: string,
+    @Body() body: OpenTerminalDto,
+  ) {
+    return this.terminals.openForProject(req.user.id, projectId, body);
+  }
+
+  @Get('projects/:projectId/terminals')
+  async listForProject(@Req() req: AuthedRequest, @Param('projectId') projectId: string) {
+    const rows = await this.terminals.listForProject(req.user.id, projectId);
+    return rows.map(TerminalService.toDto);
+  }
+
+  /** Legacy agent-addressed open — kept for pre-switchover clients;
+   *  dies with the rest of the agent REST surface in Phase 4. */
   @Post('agents/:agentId/terminals')
   async open(
     @Req() req: AuthedRequest,

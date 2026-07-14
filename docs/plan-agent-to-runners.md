@@ -293,10 +293,16 @@ Original scope for reference:
       on-device (sessions list, transcripts, project-first create,
       Files/Commits live refresh on a ≥0.3 machine, model picker,
       queued prompts).
-- [ ] Server grows a project/machine-addressed terminal-open route
-      (`POST /agents/:id/terminals` is the ONLY open route today — the
-      web uses it too; both clients must migrate before agent REST can
-      be deleted). Gap found during the iOS inventory.
+- [x] Terminals are (machine, cwd)-addressed — the last agent-addressed
+      surface. `POST|GET /projects/:id/terminals`; Terminal rows carry
+      machineId (routing) + projectId, agentId is attribution-only and
+      SetNull; the keystroke hot path no longer joins Agent. Capability
+      moved to Project.supportsTerminal (migration inherited it from
+      terminal-capable agents). Both clients prefer the project route,
+      falling back to the agent route only for workdir-less sessions.
+      Legacy machines (<0.3 sidecar) still need a terminal-capable agent
+      under the project — the server says so explicitly rather than
+      letting the sidecar reject silently.
 - [ ] KNOWN BUG until iOS Stage B: iOS Files/Commits live refresh is
       already broken against ≥0.3 sidecars TODAY (it joins the agent
       room and filters on agentId; runner watcher events carry empty

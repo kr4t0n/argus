@@ -109,6 +109,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   panel (`apps/web/src/pages/UserPanel.tsx`, "API keys" section) drives the
   management endpoints — create with a read-only toggle, one-time secret
   reveal + copy + live "test" call, and inline-confirm revoke.
+- `terminal/` — PTY sessions, addressed by (machine, cwd) since the
+  terminal switchover. `POST|GET /projects/:id/terminals` is the live
+  route; the agent-addressed pair is legacy (dies in Phase 4). The
+  `Terminal` row carries `machineId` (the sidecar link's routing key —
+  the keystroke hot path reads it straight off the row, never joining
+  Agent) plus `projectId`; `agentId` is attribution-only and SetNull, so
+  retiring agent rows can't cascade-delete terminal history. Capability
+  is `Project.supportsTerminal`. A pre-runner sidecar still resolves the
+  PTY through its agent lookup, so project opens on those machines send
+  a representative agentId on the wire and 400 when none exists.
 - `machine/` — owns the `Machine` table and the agent control plane.
   Consumes `agent:lifecycle` (`machine-register`, `machine-heartbeat`,
   `agent-spawned`, `agent-spawn-failed`, `agent-destroyed`) plus

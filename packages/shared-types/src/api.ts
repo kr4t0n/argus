@@ -273,7 +273,15 @@ export type TerminalStatus = 'opening' | 'open' | 'closed' | 'error';
 
 export interface TerminalDTO {
   id: string;
-  agentId: string;
+  /** Routing key: the sidecar link is per-machine, and the PTY runner is
+   *  machine-wide. Terminals are (machine, cwd) pairs — no agent needed. */
+  machineId: string;
+  /** Project the terminal was opened under; null for agent-addressed
+   *  opens on workdir-less agents. */
+  projectId: string | null;
+  /** Attribution + the legacy open path's capability source. Nulled once
+   *  agent rows retire (Phase 4) — never route on it. */
+  agentId: string | null;
   userId: string;
   status: TerminalStatus;
   shell: string;

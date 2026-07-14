@@ -17,6 +17,7 @@ import { randomUUID } from 'crypto';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 import { SidecarLinkService } from '../sidecar-link/sidecar-link.service';
+import { isRunnerSidecar } from '../machine/sidecar-update.service';
 
 /**
  * In-memory view of the subset of terminal state needed on the hot path.
@@ -33,11 +34,12 @@ import { SidecarLinkService } from '../sidecar-link/sidecar-link.service';
  *     which can tolerate an eventually-consistent DB write.
  */
 interface HotMeta {
-  agentId: string;
-  /** Sidecar link is keyed by machineId now that one daemon supervises
-   *  many agents. We cache it on first use so the keystroke hot path
-   *  doesn't need to re-join Agent on every frame. */
+  /** The sidecar link is keyed by machineId, and since the terminal
+   *  switchover the column lives on the Terminal row itself — the
+   *  keystroke hot path no longer joins Agent at all (and keeps working
+   *  once agent rows retire). */
   machineId: string;
+  agentId: string | null;
   userId: string;
   status: string;
 }
@@ -68,15 +70,12 @@ export class TerminalService {
       if (cached.status === 'closed' || cached.status === 'error') return null;
       return cached;
     }
-    const t = await this.prisma.terminal.findUnique({
-      where: { id: terminalId },
-      include: { agent: { select: { machineId: true } } },
-    });
+    const t = await this.prisma.terminal.findUnique({ where: { id: terminalId } });
     if (!t) throw new NotFoundException('terminal not found');
     if (t.userId !== userId) throw new ForbiddenException('terminal not yours');
     const meta: HotMeta = {
+      machineId: t.machineId,
       agentId: t.agentId,
-      machineId: t.agent.machineId,
       userId: t.userId,
       status: t.status,
     };
@@ -88,6 +87,8 @@ export class TerminalService {
   static toDto(t: PTerminal): TerminalDTO {
     return {
       id: t.id,
+      machineId: t.machineId,
+      projectId: t.projectId,
       agentId: t.agentId,
       userId: t.userId,
       status: t.status as TerminalDTO['status'],
@@ -102,6 +103,12 @@ export class TerminalService {
     };
   }
 
+  /**
+   * Legacy agent-addressed open. Kept for pre-switchover clients; the
+   * capability gate is the agent's own `supportsTerminal` flag. Resolves
+   * to the shared `spawn()` below, which is what actually talks to the
+   * sidecar — so both routes produce identical rows and frames.
+   */
   async open(
     userId: string,
     agentId: string,
@@ -116,7 +123,104 @@ export class TerminalService {
         'agent does not support terminals (enable when creating it from the dashboard)',
       );
     }
-    if (!this.link.isConnected(agent.machineId)) {
+
+    // Anchor the row to the agent's project when one exists, so the
+    // terminal still lists under the project after Phase 4 nulls agentId.
+    const project = agent.workingDir
+      ? await this.prisma.project.findUnique({
+          where: {
+            machineId_workingDir: {
+              machineId: agent.machineId,
+              workingDir: agent.workingDir,
+            },
+          },
+          select: { id: true },
+        })
+      : null;
+
+    return this.spawn({
+      userId,
+      machineId: agent.machineId,
+      projectId: project?.id ?? null,
+      agentId: agent.id,
+      defaultCwd: agent.workingDir ?? '',
+      req,
+    });
+  }
+
+  /**
+   * Project-addressed open — the runner-era route (Phase-4 prerequisite:
+   * this is what lets agent REST die). A terminal is a (machine, cwd)
+   * pair; the sidecar's PTY runner is machine-wide and takes the cwd
+   * explicitly, so no agent is needed to spawn one.
+   *
+   * Capability: the Project row's `supportsTerminal` (inherited from any
+   * terminal-capable agent under it by the switchover migration, and set
+   * by the create-project flow going forward).
+   *
+   * `agentId` still rides the wire frame when a representative agent
+   * exists, because PRE-runner sidecars (<0.3) resolve the PTY's
+   * capability + default cwd through their agent lookup. Runner sidecars
+   * ignore it and honor the explicit cwd. A legacy machine with no
+   * terminal-capable agent under the project therefore can't open one —
+   * surfaced as a clear 400 rather than a silent sidecar-side reject.
+   */
+  async openForProject(
+    userId: string,
+    projectId: string,
+    req: OpenTerminalRequest,
+  ): Promise<TerminalDTO> {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      include: { machine: { select: { id: true, status: true, deletedAt: true, sidecarVersion: true } } },
+    });
+    if (!project || project.machine.deletedAt) throw new NotFoundException('project not found');
+    if (!project.supportsTerminal) {
+      throw new BadRequestException(
+        'terminals are not enabled for this project (turn them on when creating it)',
+      );
+    }
+    if (project.machine.status === 'offline') {
+      throw new BadRequestException('machine is offline');
+    }
+
+    const rep = await this.prisma.agent.findFirst({
+      where: {
+        machineId: project.machineId,
+        workingDir: project.workingDir,
+        supportsTerminal: true,
+        archivedAt: null,
+      },
+      select: { id: true },
+      orderBy: { registeredAt: 'asc' },
+    });
+    if (!rep && !isRunnerSidecar(project.machine.sidecarVersion)) {
+      throw new BadRequestException(
+        'this machine runs a pre-runner sidecar, which can only open terminals through a terminal-capable agent',
+      );
+    }
+
+    return this.spawn({
+      userId,
+      machineId: project.machineId,
+      projectId: project.id,
+      agentId: rep?.id ?? null,
+      defaultCwd: project.workingDir,
+      req,
+    });
+  }
+
+  /** Shared open path: persist the row, push the frame, seed the cache. */
+  private async spawn(args: {
+    userId: string;
+    machineId: string;
+    projectId: string | null;
+    agentId: string | null;
+    defaultCwd: string;
+    req: OpenTerminalRequest;
+  }): Promise<TerminalDTO> {
+    const { userId, machineId, projectId, agentId, defaultCwd, req } = args;
+    if (!this.link.isConnected(machineId)) {
       throw new ServiceUnavailableException(
         'sidecar link not connected for this machine (check argus-sidecar logs)',
       );
@@ -126,15 +230,17 @@ export class TerminalService {
     const rows = clampDimension(req.rows ?? 32, 5, 200);
     const id = randomUUID();
 
-    // Resolve cwd server-side: explicit request wins, else the agent
-    // row's workingDir (the session's project dir). Phase 3 runner
-    // sidecars have no Lookup(agentID) default to fall back on, so an
-    // empty cwd must mean "no project", not "you figure it out".
-    const cwd = req.cwd?.trim() || agent.workingDir || '';
+    // Resolve cwd server-side: explicit request wins, else the project /
+    // agent working dir. Runner sidecars have no agent lookup to fall
+    // back on, so an empty cwd means "use the user's home", not "you
+    // figure it out".
+    const cwd = req.cwd?.trim() || defaultCwd || '';
 
     const row = await this.prisma.terminal.create({
       data: {
         id,
+        machineId,
+        projectId,
         agentId,
         userId,
         status: 'opening',
@@ -145,10 +251,12 @@ export class TerminalService {
       },
     });
 
-    const sent = this.link.send(agent.machineId, {
+    const sent = this.link.send(machineId, {
       kind: 'terminal-open',
       terminalId: id,
-      agentId,
+      // Empty string (not omitted) for runner-only opens: the Go frame
+      // types AgentID as a plain string.
+      agentId: agentId ?? '',
       shell: req.shell ?? '',
       cwd,
       cols,
@@ -159,18 +267,11 @@ export class TerminalService {
       // Race: link dropped between the isConnected check and the send.
       // Roll back the row so the client gets a clean error and no
       // orphaned "opening" terminal lingers in the DB.
-      await this.prisma.terminal
-        .delete({ where: { id } })
-        .catch(() => undefined);
+      await this.prisma.terminal.delete({ where: { id } }).catch(() => undefined);
       throw new ServiceUnavailableException('sidecar link dropped during open');
     }
 
-    this.hotCache.set(id, {
-      agentId,
-      machineId: agent.machineId,
-      userId,
-      status: 'opening',
-    });
+    this.hotCache.set(id, { machineId, agentId, userId, status: 'opening' });
     const dto = TerminalService.toDto(row);
     this.gateway.emitTerminalCreated(dto);
     return dto;
@@ -181,19 +282,13 @@ export class TerminalService {
     if (t.status === 'closed' || t.status === 'error') {
       return TerminalService.toDto(t);
     }
-    const agent = await this.prisma.agent.findUnique({
-      where: { id: t.agentId },
-      select: { machineId: true },
-    });
     // Fire-and-forget: even if the link is down we still want to mark
     // the row closed so the UI stops showing a zombie terminal.
-    const sent = agent
-      ? this.link.send(agent.machineId, {
-          kind: 'terminal-close',
-          terminalId: t.id,
-          ts: Date.now(),
-        })
-      : false;
+    const sent = this.link.send(t.machineId, {
+      kind: 'terminal-close',
+      terminalId: t.id,
+      ts: Date.now(),
+    });
     if (!sent) {
       await this.markClosed(terminalId, -1, 'sidecar link not connected');
     }
@@ -302,6 +397,13 @@ export class TerminalService {
   listForAgent(userId: string, agentId: string): Promise<PTerminal[]> {
     return this.prisma.terminal.findMany({
       where: { userId, agentId, status: { in: ['opening', 'open'] } },
+      orderBy: { openedAt: 'desc' },
+    });
+  }
+
+  listForProject(userId: string, projectId: string): Promise<PTerminal[]> {
+    return this.prisma.terminal.findMany({
+      where: { userId, projectId, status: { in: ['opening', 'open'] } },
       orderBy: { openedAt: 'desc' },
     });
   }

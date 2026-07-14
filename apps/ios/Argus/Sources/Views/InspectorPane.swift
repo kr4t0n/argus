@@ -35,6 +35,21 @@ struct InspectorPane: View {
     /// Project addressing for Files/Commits/Note/Progress; nil for
     /// workdir-less sessions (those panes have no surface there).
     private var projectRef: ProjectRef? { app.fleet.projectRef(for: session) }
+    /// The hydrated Project row for `projectRef` (pair-keyed store).
+    private var projectRow: ProjectDTO? {
+        projectRef.flatMap {
+            app.fleet.projects[FleetStore.projectKey(
+                machineId: $0.machineId, workingDir: $0.workingDir
+            )]
+        }
+    }
+    /// Terminal capability moved to the Project row with the terminal
+    /// switchover (the migration inherited it from terminal-capable
+    /// agents); the agent flag remains for workdir-less sessions still
+    /// on the legacy open route.
+    private var supportsTerminal: Bool {
+        projectRow?.supportsTerminal == true || agent?.supportsTerminal == true
+    }
 
     /// Web ContextPane order: Commits, Files, Terminal, Note, Progress,
     /// Diff. Terminal appears only for agents created with the PTY
@@ -43,7 +58,7 @@ struct InspectorPane: View {
     /// project-scoped).
     private var tabs: [Tab] {
         var result: [Tab] = [.commits, .files]
-        if agent?.supportsTerminal == true { result.append(.terminal) }
+        if supportsTerminal { result.append(.terminal) }
         if app.extensions.notes, projectRef != nil { result.append(.note) }
         if app.extensions.progress, projectRef != nil { result.append(.progress) }
         if app.extensions.diff { result.append(.diff) }
@@ -81,15 +96,12 @@ struct InspectorPane: View {
                 // tab switches for the inspector's lifetime.
                 if let terminalController {
                     TerminalPanel(controller: terminalController)
-                } else if let agent {
+                } else if projectRef != nil || agent != nil {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .onAppear { makeTerminalController(agent: agent) }
+                        .onAppear { makeTerminalController() }
                 } else {
-                    ContentUnavailableView(
-                        "Agent unavailable",
-                        systemImage: "questionmark.circle"
-                    )
+                    noProjectPlaceholder
                 }
             case .note:
                 if let project = projectRef {
@@ -157,11 +169,15 @@ struct InspectorPane: View {
         )
     }
 
-    private func makeTerminalController(agent: AgentDTO) {
+    /// Project-addressed open when the session is pinned to one (works
+    /// with no agent row); the agent route covers workdir-less sessions.
+    private func makeTerminalController() {
         guard terminalController == nil,
               let client = app.client, let stream = app.stream
         else { return }
-        let controller = TerminalController(agent: agent, client: client, stream: stream)
+        let controller = TerminalController(
+            project: projectRef, agent: agent, client: client, stream: stream
+        )
         terminalController = controller
         app.activeTerminal = controller
     }

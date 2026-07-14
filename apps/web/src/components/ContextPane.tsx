@@ -13,7 +13,7 @@ import { TerminalPane } from './TerminalPane';
 import { cn, relativeTime } from '../lib/utils';
 import { agentProjectRef, resolveProjectRef } from '../lib/projects';
 import { useAgentStore } from '../stores/agentStore';
-import { useProjectStore } from '../stores/projectStore';
+import { useProjectStore, projectKey } from '../stores/projectStore';
 import { useSessionModel } from '../lib/usage';
 import { useUIStore } from '../stores/uiStore';
 
@@ -47,6 +47,12 @@ export function ContextPane({ agent, session, commands, chunks }: Props) {
       agentProjectRef(agent, projectRows),
     [session, agent, agentsById, projectRows],
   );
+  // Terminal capability moved to the Project row with the terminal
+  // switchover (the migration inherited it from terminal-capable
+  // agents), so the project route can gate without an agent.
+  const projectSupportsTerminal = projectRef
+    ? projectRows[projectKey(projectRef.machineId, projectRef.workingDir)]?.supportsTerminal === true
+    : false;
   // Notes / Progress / Diff extensions: when on, each adds a tab to the
   // pane. All gate on a workingDir (the project key for Notes/Progress;
   // file diffs only exist when the agent has a working tree), matching
@@ -170,7 +176,18 @@ export function ContextPane({ agent, session, commands, chunks }: Props) {
           {active === 'files' && projectRef && (
             <FileTree key={projectRef.projectId} project={projectRef} legacyAgentId={agent.id} />
           )}
-          {active === 'terminal' && <TerminalPane key={agent.id} agent={agent} />}
+          {active === 'terminal' && (
+            <TerminalPane
+              key={projectRef?.projectId ?? agent.id}
+              project={projectRef}
+              agent={agent}
+              // Project capability first (the server gates on it for the
+              // project route); the agent flag covers workdir-less
+              // sessions still on the legacy route.
+              supported={projectSupportsTerminal || agent.supportsTerminal}
+              machineName={agent.machineName}
+            />
+          )}
           {active === 'note' && agent.workingDir && (
             <NotePane key={agent.id} machineId={agent.machineId} workingDir={agent.workingDir} />
           )}

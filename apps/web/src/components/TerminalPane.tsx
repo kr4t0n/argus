@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { Loader2, Power, RotateCcw, Terminal as TerminalIcon, X } from 'lucide-react';
+import type { ProjectRef } from '../lib/projects';
 import type {
   AgentDTO,
   TerminalDTO,
@@ -23,7 +24,18 @@ import { useResolvedTheme } from '../lib/theme';
 import { cn } from '../lib/utils';
 
 type Props = {
-  agent: AgentDTO;
+  /** Project the PTY runs in — the open route is project-addressed
+   *  (a terminal is a (machine, cwd) pair). Null for workdir-less
+   *  sessions, which fall back to the legacy agent route. */
+  project: ProjectRef | null;
+  /** Legacy fallback + display identity; optional once agent rows
+   *  retire (Phase 4). */
+  agent: AgentDTO | undefined;
+  /** Whether terminals are enabled here — Project.supportsTerminal,
+   *  with the agent flag as the pre-switchover fallback. */
+  supported: boolean;
+  /** Machine label for the idle hint. */
+  machineName: string;
 };
 
 type Status =
@@ -77,8 +89,7 @@ function encodeUtf8Base64(s: string): string {
  *   receive a duplicate of the last message we already wrote. We track
  *   the highest seq seen and discard duplicates.
  */
-export function TerminalPane({ agent }: Props) {
-  const supported = agent.supportsTerminal;
+export function TerminalPane({ project, agent, supported, machineName }: Props) {
 
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -115,7 +126,14 @@ export function TerminalPane({ agent }: Props) {
       const rect = containerRef.current?.getBoundingClientRect();
       const cols = rect ? Math.max(40, Math.floor(rect.width / 8.6)) : 100;
       const rows = rect ? Math.max(10, Math.floor(rect.height / 17)) : 24;
-      const t = await api.openTerminal(agent.id, { cols, rows });
+      // Project route when we have one (works with no agent row at all);
+      // the agent route stays for workdir-less sessions until Phase 4.
+      const t = project
+        ? await api.openProjectTerminal(project.projectId, { cols, rows })
+        : agent
+          ? await api.openTerminal(agent.id, { cols, rows })
+          : null;
+      if (!t) throw new Error('no project or agent to open a terminal on');
       terminalIdRef.current = t.id;
       joinTerminal(t.id);
       setStatus({ kind: 'open', terminal: t });
@@ -125,7 +143,7 @@ export function TerminalPane({ agent }: Props) {
         message: (err as Error).message ?? 'failed to open terminal',
       });
     }
-  }, [agent.id, supported]);
+  }, [project, agent, supported]);
 
   const close = useCallback(() => {
     const id = terminalIdRef.current;
@@ -254,22 +272,21 @@ export function TerminalPane({ agent }: Props) {
   // When the user switches agents, drop the open terminal and reset.
   useEffect(() => {
     return () => {
-      // Note: we don't auto-close the PTY on agent switch — the user
+      // Note: we don't auto-close the PTY on project switch — the user
       // may want to come back to it. The sidecar will reap it when the
       // shell exits or after the per-sidecar maxSessions cap. If you
       // want strict cleanup, call `close()` here.
     };
-  }, [agent.id]);
+  }, [project?.projectId, agent?.id]);
 
   if (!supported) {
     return (
       <div className="space-y-1">
         <div className="text-xs text-fg-tertiary">
-          this agent's sidecar has not opted into terminals.
+          terminals are not enabled for this project.
         </div>
         <div className="text-xs text-fg-muted">
-          set <span className="font-mono text-fg-tertiary">terminal.enabled: true</span> in its YAML
-          and restart.
+          turn them on when creating the project (the sidecar must also allow them).
         </div>
       </div>
     );
@@ -339,7 +356,7 @@ export function TerminalPane({ agent }: Props) {
         {status.kind === 'idle' && (
           <div className="text-center text-xs text-fg-muted">
             click <span className="text-fg-tertiary">open</span> to attach a shell on{' '}
-            <span className="font-mono text-fg-tertiary">{agent.machineName}</span>
+            <span className="font-mono text-fg-tertiary">{machineName}</span>
           </div>
         )}
         {status.kind === 'opening' && <Loader2 className="h-4 w-4 animate-spin text-fg-tertiary" />}

@@ -21,7 +21,11 @@ final class TerminalController {
 
     private(set) var state: State = .idle
 
-    let agent: AgentDTO
+    /// The PTY's project (machine + cwd). Nil only for workdir-less
+    /// sessions, which fall back to the legacy agent route.
+    let project: ProjectRef?
+    /// Legacy fallback identity; nil once agent rows retire.
+    let agent: AgentDTO?
     /// One UIKit view for the controller's lifetime — keeping it (not
     /// recreating per SwiftUI update) is what preserves scrollback
     /// across tab switches.
@@ -33,7 +37,8 @@ final class TerminalController {
     private var lastSeq = -1
     private let delegateBridge = TerminalDelegateBridge()
 
-    init(agent: AgentDTO, client: ArgusClient, stream: StreamClient) {
+    init(project: ProjectRef?, agent: AgentDTO?, client: ArgusClient, stream: StreamClient) {
+        self.project = project
         self.agent = agent
         self.client = client
         self.stream = stream
@@ -56,11 +61,23 @@ final class TerminalController {
         state = .connecting
         do {
             let term = terminalView.getTerminal()
-            let dto = try await client.openTerminal(
-                agentId: agent.id,
-                cols: max(2, term.cols),
-                rows: max(2, term.rows)
-            )
+            let cols = max(2, term.cols)
+            let rows = max(2, term.rows)
+            // Project route when we have one (needs no agent row at all);
+            // the agent route covers workdir-less sessions until Phase 4.
+            let dto: TerminalDTO
+            if let project {
+                dto = try await client.openProjectTerminal(
+                    projectId: project.projectId, cols: cols, rows: rows
+                )
+            } else if let agent {
+                dto = try await client.openTerminal(
+                    agentId: agent.id, cols: cols, rows: rows
+                )
+            } else {
+                state = .failed("no project or agent to open a terminal on")
+                return
+            }
             terminalId = dto.id
             stream.joinTerminal(dto.id)
             state = .open

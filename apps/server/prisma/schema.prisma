@@ -166,8 +166,9 @@ model Project {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  machine  Machine   @relation(fields: [machineId], references: [id], onDelete: Cascade)
-  sessions Session[]
+  machine   Machine    @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  sessions  Session[]
+  terminals Terminal[]
 
   @@unique([machineId, workingDir])
   @@index([machineId])
@@ -217,6 +218,7 @@ model Machine {
   projectNotes ProjectNote[]
   projects     Project[]
   cliCatalogs  MachineCliCatalog[]
+  terminals    Terminal[]
 
   @@index([status])
   @@index([archivedAt])
@@ -452,9 +454,19 @@ model ResultChunk {
 // We do NOT persist the keystroke transcript here; that would balloon
 // fast and risks capturing secrets typed into the shell. Add a separate
 // transcript table later if you need replay/forensics.
+// A PTY session on a machine. Addressed by (machine, cwd) since the
+// terminal switchover (docs/plan-agent-to-runners.md Phase-4 prep): the
+// sidecar's PTY runner is machine-wide and takes an explicit cwd, so
+// nothing here needs an agent. `machineId` is the routing key for every
+// frame (input/resize/close) — cached hot, never joined through Agent.
+// `agentId` survives as attribution + the legacy open path's capability
+// source; it goes nullable so retiring agent rows can't cascade-delete
+// terminal history.
 model Terminal {
   id          String    @id @default(cuid())
-  agentId     String
+  machineId   String
+  projectId   String?
+  agentId     String?
   userId      String
   status      String    @default("opening") // opening | open | closed | error
   shell       String
@@ -466,8 +478,12 @@ model Terminal {
   openedAt    DateTime  @default(now())
   closedAt    DateTime?
 
-  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  machine Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  agent   Agent?   @relation(fields: [agentId], references: [id], onDelete: SetNull)
 
+  @@index([machineId, openedAt])
+  @@index([projectId, openedAt])
   @@index([agentId, openedAt])
   @@index([userId, openedAt])
   @@index([status])
