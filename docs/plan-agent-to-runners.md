@@ -274,7 +274,28 @@ Original scope for reference:
   sidecars, new sidecars get `sync-projects` (the workdir allowlist).
 - Cleanup of drift folded in: delete dead TS `consumerGroups.sidecar`.
 
-### Phase 4 — retire Agent
+### Phase 4 — retire Agent ⛔ GATED — do not start until every box below is checked
+
+- [ ] Whole fleet runs sidecar ≥0.3.x (Kyle confirms after real-life
+      testing of rc.2+; `SELECT "sidecarVersion" FROM "Machine"`)
+- [ ] Phases 1–3 soak in prod without regressions (fs panel, turn
+      dispatch/streaming, archive flows, quota, terminals)
+- [ ] Web FileTree / GitLogPanel / fileTabsStore switched to project
+      routes + project rooms (deferred from Phase 2; agent routes die
+      in Phase 4)
+- [ ] iOS creates sessions project-first (needs a macOS build window)
+
+Removal checklist when the gate clears: drop the auto-vivify +
+create/destroy-agent control path; Session.agentId / Command.agentId /
+Terminal.agentId → nullable attribution columns (migration; history
+keeps rendering); delete agent-registry REST + agent-addressed
+fs/git/models routes + legacy request shapes; retire per-agent
+register/heartbeat/deregister handling and the per-agent sweepStale
+arm; sweep leftover agent:{id}:* streams; drop Agent.modelCatalog
+columns; delete dead consumerGroups.sidecar; AGENTS.md/README to
+runner/project vocabulary.
+
+Original sketch:
 
 - iOS migrates to `{projectId, cliType}` session creation (needs a macOS
   build window per the iOS constraint).
