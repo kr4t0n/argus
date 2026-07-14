@@ -284,7 +284,45 @@ Original scope for reference:
       routes + project rooms (ProjectRef in lib/projects.ts; legacy
       agent-room shim kept for the mixed-fleet window; queue drainer
       reachability is machine-level; agent fs/git api methods deleted)
-- [ ] iOS creates sessions project-first (needs a macOS build window)
+- [ ] iOS ships in TWO stages (needs a macOS build window; see the
+      inventory below): Stage A (DTO relax: agentId optional everywhere,
+      projectId/cliType added — MUST be installed on devices BEFORE the
+      Phase-4 server nulls agentId; App Store propagation is the long
+      pole of the whole gate), then Stage B (project-first creation +
+      re-keyed panes + machine-level drainer gate).
+- [ ] Server grows a project/machine-addressed terminal-open route
+      (`POST /agents/:id/terminals` is the ONLY open route today — the
+      web uses it too; both clients must migrate before agent REST can
+      be deleted). Gap found during the iOS inventory.
+- [ ] KNOWN BUG until iOS Stage B: iOS Files/Commits live refresh is
+      already broken against ≥0.3 sidecars TODAY (it joins the agent
+      room and filters on agentId; runner watcher events carry empty
+      agentId and fan out to the project room only). Manual refresh
+      still works; web is unaffected.
+
+iOS migration plan (from the code inventory, apps/ios):
+- Stage A (additive, safe against current server): relax agentId to
+  optional on SessionDTO/CommandDTO/TerminalDTO/BackgroundTaskDTO/
+  ModelCatalogResponse and the fs/git WS payloads (+machineId/
+  workingDir fields); add SessionDTO.projectId/cliType; ProjectDTO
+  gains the promoted-row fields; CreateSessionRequest gains the
+  project shape; harden AppModel.refreshAll so a listAgents failure
+  can't abort sessions/machines/projects hydration (today one 404
+  = infinite sidebar spinner).
+- Stage B: AppModel.createSession drops its client-side vivify for one
+  project-first POST; ProjectRef resolver ported from the web;
+  FileBrowser/Commits/FilePreview/InspectorPane re-keyed to project
+  routes + project rooms (fixes the live-refresh bug); model picker →
+  /machines/:id/models?cliType=; agentType consumers → session.cliType
+  (VM cache, Live Activities, transcript parsers, icons); sidebar
+  groups by session.projectId with fleet.projects anchors (needs a new
+  deliberate sort rule — agentSortsBefore dies); queue gate →
+  machine-level.
+- Stage C (with Phase-4 removals): delete the 13 agent-addressed
+  client methods (getAgent/archive/unarchive/listTerminals have zero
+  call sites already), MachineView agent roster + NewAgentSheet,
+  FleetStore.agents + agent WS cases, fixtures/tests/capture script
+  vocabulary.
 
 Removal checklist when the gate clears: drop the auto-vivify +
 create/destroy-agent control path; Session.agentId / Command.agentId /
