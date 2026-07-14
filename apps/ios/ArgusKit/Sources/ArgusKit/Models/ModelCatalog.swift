@@ -83,12 +83,19 @@ public struct ModelCatalogEntry: Codable, Equatable, Sendable, Identifiable {
     public let facets: ModelCatalogFacets?
 }
 
-/// `GET /agents/:id/models` — server-cached per agent; `?refresh=1` probes
-/// the CLI live.
+/// `GET /machines/:id/models?cliType=` (Phase-2 shape: catalogs belong
+/// to the machine's installed binary) and the legacy `GET
+/// /agents/:id/models` — every identity field is optional so one struct
+/// decodes both routes across server versions; `?refresh=1` probes the
+/// CLI live.
 public struct ModelCatalogResponse: Decodable, Sendable {
     /// 'static' | 'cli'
     public let source: String
-    public let agentId: String
+    /// Legacy agent-route identity; absent on Phase-2+ servers.
+    public let agentId: String?
+    /// Machine-route identity (machineId × cliType).
+    public let machineId: String?
+    public let cliType: String?
     public let fetchedAt: String
     public let models: [ModelCatalogEntry]
 }

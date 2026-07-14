@@ -156,11 +156,26 @@ public final class ArgusClient: @unchecked Sendable {
     }
 
     /// Model catalog for an agent's CLI; `refresh` bypasses the server cache.
+    /// Legacy route — prefer `getMachineModelCatalog` (Stage C deletes this).
     public func getModelCatalog(agentId: String, refresh: Bool = false) async throws -> ModelCatalogResponse {
         try await send(
             "GET", "/agents/\(agentId)/models",
             query: refresh ? [URLQueryItem(name: "refresh", value: "1")] : []
         )
+    }
+
+    /// Model catalog keyed (machineId, cliType) — catalogs belong to the
+    /// machine's installed binary since Phase 2, so the picker can load
+    /// one before any agent of the type exists; `refresh` bypasses the
+    /// server cache.
+    public func getMachineModelCatalog(
+        machineId: String,
+        cliType: String,
+        refresh: Bool = false
+    ) async throws -> ModelCatalogResponse {
+        var query = [URLQueryItem(name: "cliType", value: cliType)]
+        if refresh { query.append(URLQueryItem(name: "refresh", value: "1")) }
+        return try await send("GET", "/machines/\(machineId)/models", query: query)
     }
 
     // MARK: Machines / projects
@@ -242,6 +257,37 @@ public final class ArgusClient: @unchecked Sendable {
     }
 
     // MARK: Files / git (right-pane data)
+
+    // Project-addressed routes — the runner-era read path (the wire
+    // request carries the workingDir; the sidecar serves it after an
+    // allowlist check). The agent-addressed variants below stay for the
+    // mixed-fleet window and die with Stage C.
+
+    public func listProjectDir(
+        projectId: String,
+        path: String = "",
+        showAll: Bool = false,
+        depth: Int? = nil
+    ) async throws -> FSListResponse {
+        var query: [URLQueryItem] = []
+        if !path.isEmpty { query.append(URLQueryItem(name: "path", value: path)) }
+        if showAll { query.append(URLQueryItem(name: "showAll", value: "true")) }
+        if let depth, depth > 1 { query.append(URLQueryItem(name: "depth", value: String(depth))) }
+        return try await send("GET", "/projects/\(projectId)/fs/list", query: query)
+    }
+
+    public func readProjectFile(projectId: String, path: String) async throws -> FSReadResponse {
+        try await send(
+            "GET", "/projects/\(projectId)/fs/read",
+            query: [URLQueryItem(name: "path", value: path)]
+        )
+    }
+
+    public func getProjectGitLog(projectId: String, limit: Int? = nil) async throws -> GitLogResponse {
+        var query: [URLQueryItem] = []
+        if let limit, limit > 0 { query.append(URLQueryItem(name: "limit", value: String(limit))) }
+        return try await send("GET", "/projects/\(projectId)/git/log", query: query)
+    }
 
     public func listAgentDir(
         agentId: String,

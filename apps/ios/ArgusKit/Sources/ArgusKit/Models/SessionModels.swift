@@ -10,7 +10,18 @@ import Foundation
 public struct SessionDTO: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var userId: String
-    public var agentId: String
+    /// Legacy routing FK. Optional since the runner refactor
+    /// (docs/plan-agent-to-runners.md Phase 4): the server nulls it once
+    /// agent rows retire, so no consumer may force-unwrap it.
+    public var agentId: String?
+    /// The `(machineId, workingDir)` Project row this session is pinned
+    /// to. Nil for pre-backfill rows on workdir-less agents (the
+    /// per-machine "no project" bucket).
+    public var projectId: String?
+    /// CLI adapter type, denormalized onto the session at creation.
+    /// Nil only for pre-backfill rows whose agent vanished before the
+    /// Phase-1 migration ran.
+    public var cliType: AgentType?
     public var title: String
     public var externalId: String?
     public var status: SessionStatus
@@ -50,7 +61,9 @@ public struct AttachmentDTO: Codable, Equatable, Sendable, Identifiable {
 public struct CommandDTO: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var sessionId: String
-    public var agentId: String
+    /// Attribution only; optional since the runner refactor (nulled on
+    /// Phase-4 servers, absent for runner-dispatched turns).
+    public var agentId: String?
     public var kind: CommandKind
     public var prompt: String?
     public var status: CommandStatus
@@ -152,19 +165,41 @@ public typealias ResultChunkDTO = ResultChunk
 
 // MARK: Requests
 
+/// Two addressing shapes, mirroring shared-types: legacy `{agentId}`
+/// (wins when both are sent) or project-first `{machineId, workingDir,
+/// cliType}` — the server upserts the Project row for the pair and
+/// reuses-or-vivifies the agent internally. Optionals encode as absent
+/// keys, so each caller sends only its shape.
 public struct CreateSessionRequest: Encodable, Sendable {
-    public var agentId: String
+    /// Legacy addressing: an explicit agent.
+    public var agentId: String?
+    /// Project-first addressing: the target machine.
+    public var machineId: String?
+    /// Project anchor. Empty/absent = the machine's "no project" bucket.
+    public var workingDir: String?
+    public var cliType: AgentType?
+    /// Capability flag for an auto-vivified agent; ignored when an
+    /// existing agent is reused.
+    public var supportsTerminal: Bool?
     public var title: String?
     public var prompt: String?
     public var modelSelection: ModelSelection?
 
     public init(
-        agentId: String,
+        agentId: String? = nil,
+        machineId: String? = nil,
+        workingDir: String? = nil,
+        cliType: AgentType? = nil,
+        supportsTerminal: Bool? = nil,
         title: String? = nil,
         prompt: String? = nil,
         modelSelection: ModelSelection? = nil
     ) {
         self.agentId = agentId
+        self.machineId = machineId
+        self.workingDir = workingDir
+        self.cliType = cliType
+        self.supportsTerminal = supportsTerminal
         self.title = title
         self.prompt = prompt
         self.modelSelection = modelSelection
@@ -229,8 +264,12 @@ public struct SessionHistoryResponse: Decodable, Sendable {
 }
 
 /// `POST /sessions` — `command` is non-nil when the request carried an
-/// initial prompt (the first turn is dispatched inline).
+/// initial prompt (the first turn is dispatched inline). `agent` is the
+/// auto-vivified (or reused) AgentDTO for project-first requests, so the
+/// client can seed its fleet store without racing `agent:upsert`; null
+/// when the server created no row.
 public struct CreateSessionResponse: Decodable, Sendable {
     public var session: SessionDTO
     public var command: CommandDTO?
+    public var agent: AgentDTO?
 }

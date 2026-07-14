@@ -20,13 +20,16 @@ extension ModelSelection {
     }
 }
 
-/// The editor's Form sections. Catalog comes from `catalogAgentId` —
-/// for existing sessions that's the session's agent; at creation time
-/// it's any same-type agent on the target machine (catalogs are per-CLI,
-/// stored per-agent). nil = the CLI never ran there → custom-id only.
+/// The editor's Form sections. The catalog is keyed `(machineId,
+/// cliType)` since Phase 2 — it belongs to the machine's installed
+/// binary, not to a workdir-bound agent — so both the create sheets and
+/// the session sheet can load it before any agent exists (the old
+/// find-an-agent-for-catalog cold-start hole is gone). nil machineId =
+/// target machine unknown → custom-id only.
 struct ModelSelectionForm: View {
     @Environment(AppModel.self) private var app
-    let catalogAgentId: String?
+    let machineId: String?
+    let cliType: AgentType
     @Binding var selection: ModelSelection
 
     @State private var catalog: ModelCatalogResponse?
@@ -84,9 +87,9 @@ struct ModelSelectionForm: View {
                     }
                 }
             }
-        } else if catalogAgentId == nil {
+        } else if machineId == nil || cliType.isEmpty {
             Section {
-                Text("No agent of this type on the machine yet — the model catalog appears after the first one runs. A custom model id below still works.")
+                Text("No machine or CLI resolved for this session yet — the model catalog appears once they are. A custom model id below still works.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -159,9 +162,9 @@ struct ModelSelectionForm: View {
     }
 
     private func loadCatalog() async {
-        guard catalog == nil, let catalogAgentId, let client = app.client else { return }
+        guard catalog == nil, let machineId, !cliType.isEmpty, let client = app.client else { return }
         do {
-            catalog = try await client.getModelCatalog(agentId: catalogAgentId)
+            catalog = try await client.getMachineModelCatalog(machineId: machineId, cliType: cliType)
             // A pre-set model id that isn't in the catalog is a custom id.
             if let model = selection.model,
                catalog?.models.contains(where: { $0.id == model }) != true {
@@ -177,12 +180,13 @@ struct ModelSelectionForm: View {
 /// Pushed page for the create sheets' "Model" row. The binding applies
 /// live; it takes effect when the session is created.
 struct ModelSelectionPage: View {
-    let catalogAgentId: String?
+    let machineId: String?
+    let cliType: AgentType
     @Binding var selection: ModelSelection
 
     var body: some View {
         Form {
-            ModelSelectionForm(catalogAgentId: catalogAgentId, selection: $selection)
+            ModelSelectionForm(machineId: machineId, cliType: cliType, selection: $selection)
         }
         .navigationTitle("Model")
         .navigationBarTitleDisplayMode(.inline)
@@ -196,6 +200,8 @@ struct ModelPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let session: SessionDTO
+    /// Legacy fallback identity when the session predates the Phase-1
+    /// projectId/cliType backfill.
     let agent: AgentDTO?
 
     @State private var selection = ModelSelection()
@@ -203,10 +209,19 @@ struct ModelPickerSheet: View {
     @State private var saving = false
     @State private var saveError: String?
 
+    /// Machine through the pinned project (agent row fallback).
+    private var machineId: String? {
+        app.fleet.projectRef(for: session)?.machineId ?? agent?.machineId
+    }
+
+    private var cliType: AgentType {
+        session.cliType ?? agent?.type ?? ""
+    }
+
     var body: some View {
         NavigationStack {
             Form {
-                ModelSelectionForm(catalogAgentId: agent?.id, selection: $selection)
+                ModelSelectionForm(machineId: machineId, cliType: cliType, selection: $selection)
                 if let saveError {
                     Section { Text(saveError).foregroundStyle(.red).font(.callout) }
                 }

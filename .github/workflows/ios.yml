@@ -15,6 +15,9 @@ on:
     paths:
       - 'apps/ios/**'
       - '.github/workflows/ios.yml'
+  # Manual runs for Swift work on long-lived refactor branches — the
+  # dev box has no Swift toolchain, so this workflow is the compiler.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

@@ -760,6 +760,25 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `.unknown`), and contract confidence comes from
   `scripts/capture-ios-fixtures.sh`: it captures sanitized live-server
   responses into the package's test fixtures, which CI decodes.
+- **Runner-refactor posture** (docs/plan-agent-to-runners.md): every
+  `agentId` on the wire is OPTIONAL in the Swift DTOs — Phase 4 nulls
+  those columns server-side, and a non-optional decode would fail the
+  whole payload on already-installed builds (sidebar + transcripts go
+  dark). `ToleranceTests` pins that contract; never re-tighten it.
+  Sessions carry their own `projectId`/`cliType`, `FleetStore.projectRef`
+  resolves the `(machineId, workingDir)` pair, session creation is
+  project-first (the SERVER vivifies the agent), fs/git/note/progress
+  panes are project-addressed, the model picker is keyed (machineId,
+  cliType), and queue reachability is machine-level. The inspector joins
+  the project room AND the legacy agent room while the fleet is mixed —
+  the shim dies with Phase 4. The agent row survives only as the
+  Terminal tab's opener (the PTY route is still agent-addressed) and a
+  fallback identity for pre-backfill sessions.
+- **Swift is CI-compiled.** The dev box is Linux (no toolchain), so
+  `.github/workflows/ios.yml` — `swift build`+`swift test` for ArgusKit
+  and an `xcodebuild` Simulator build for the app — IS the compiler for
+  Swift changes. It runs on push to main/dev/`feat/ios-*`, on PRs, and
+  via `workflow_dispatch` for refactor branches.
   **If you change a shared-types DTO, update the Swift mirror and
   re-capture the fixtures in the same PR.**
 - Swift is authored on Linux but only compiles on macOS —

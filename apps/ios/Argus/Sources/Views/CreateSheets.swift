@@ -3,9 +3,9 @@ import ArgusKit
 
 // Creation flows, mirroring the web's CreateProjectPopover /
 // CreateAgentPopover(asSession): the user picks an adapter + title and
-// the agent layer auto-vivifies behind the scenes (reuse an existing
-// agent of that type in the project, else create one with an
-// auto-generated name).
+// AppModel.createSession posts the project-first shape (machineId +
+// workingDir + cliType) — the SERVER reuses-or-vivifies the agent; the
+// client never touches agent identity here.
 
 /// "＋" on a project row → new session inside that project.
 struct NewSessionSheet: View {
@@ -196,27 +196,17 @@ struct NewProjectSheet: View {
 }
 
 /// The create sheets' "Model" row: current selection as a summary,
-/// pushing the shared catalog editor. The catalog is sourced from any
-/// existing same-type agent on the target machine (catalogs are per-CLI
-/// and stored per-agent; the session's own agent may not exist yet).
+/// pushing the shared catalog editor. Both the machine and the adapter
+/// type are known right here, and catalogs are keyed (machineId,
+/// cliType) since Phase 2 — no agent lookup needed.
 struct ModelRow: View {
-    @Environment(AppModel.self) private var app
     let machineId: String?
     let adapterType: AgentType
     @Binding var selection: ModelSelection
 
-    private var catalogAgentId: String? {
-        guard let machineId, !adapterType.isEmpty else { return nil }
-        return app.fleet.agents.values
-            .first {
-                $0.machineId == machineId && $0.type == adapterType && $0.archivedAt == nil
-            }?
-            .id
-    }
-
     var body: some View {
         NavigationLink {
-            ModelSelectionPage(catalogAgentId: catalogAgentId, selection: $selection)
+            ModelSelectionPage(machineId: machineId, cliType: adapterType, selection: $selection)
         } label: {
             LabeledContent("Model") {
                 Text(selection.summary)

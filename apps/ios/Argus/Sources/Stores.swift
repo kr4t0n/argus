@@ -58,15 +58,56 @@ final class FleetStore {
     static func projectKey(machineId: String, workingDir: String) -> String {
         "\(machineId)::\(workingDir)"
     }
+
+    /// Resolve a session's ProjectRef (port of the web's
+    /// `resolveProjectRef`). `session.projectId` is authoritative —
+    /// pinned at create; the `(machineId, workingDir)` pair comes from
+    /// the agent row when loaded (same pair by construction), else from
+    /// the hydrated Project rows via an id reverse lookup. Nil for
+    /// workdir-less sessions (the "no project" bucket has no fs/git
+    /// surface) and during the boot race before either store has the row.
+    func projectRef(for session: SessionDTO?) -> ProjectRef? {
+        guard let session, let projectId = session.projectId else { return nil }
+        if let agent = session.agentId.flatMap({ agents[$0] }),
+           let workingDir = agent.workingDir, !workingDir.isEmpty {
+            return ProjectRef(
+                projectId: projectId,
+                machineId: agent.machineId,
+                workingDir: workingDir
+            )
+        }
+        for project in projects.values where project.id == projectId {
+            return ProjectRef(
+                projectId: projectId,
+                machineId: project.machineId,
+                workingDir: project.workingDir
+            )
+        }
+        return nil
+    }
+}
+
+/// Everything the project-addressed read paths need (Phase 4 prep of
+/// docs/plan-agent-to-runners.md): `projectId` drives the REST routes,
+/// the `(machineId, workingDir)` pair names the WS room and the machine
+/// for reachability. Resolved via `FleetStore.projectRef(for:)`; panes
+/// below the inspector never touch agent identity for fs/git.
+struct ProjectRef: Equatable {
+    let projectId: String
+    let machineId: String
+    let workingDir: String
 }
 
 /// One sidebar group: the `(machineId, workingDir)` pair every session in
 /// that directory shares (port of the web's `groupProjects`).
 struct ProjectGroup: Identifiable {
     let id: String
-    /// Last path component of the workingDir, or "no project".
+    /// The user-picked Project.name, else the workingDir's basename, or
+    /// "no project".
     let title: String
-    /// nil when the owning agent is unknown (can't anchor creation).
+    /// nil ONLY for the orphan bucket (can't anchor creation there);
+    /// groups resolved via a Project row or an agent join always carry it
+    /// so the header's "+" stays enabled.
     let machineId: String?
     let workingDir: String?
     let machineName: String
@@ -130,85 +171,112 @@ final class SessionListStore {
         sessions[id] = session
     }
 
-    /// Group visible sessions into projects, matching the web sidebar's
-    /// ordering exactly: projects follow the global AGENT sort order
-    /// (`groupProjects` over `agentStore.order`), so each project sits at
-    /// its first agent's position — reachable machines first, grouped by
-    /// machine name, then agent type/name. Sessions within a project are
-    /// newest-first. (NOT recency-ordered — that was the divergence.)
+    /// Group visible sessions into projects. Since the runner refactor
+    /// the grouping key is `session.projectId` resolved through the
+    /// server's Project rows; the agent join remains as a fallback for
+    /// pre-backfill sessions (nil projectId) and for rows the project
+    /// list hasn't hydrated yet. Sessions with neither anchor land in a
+    /// trailing "__orphan__" bucket so they stay reachable. A group
+    /// resolved through either path carries a non-nil machineId, which
+    /// keeps the header's "+" (new session) enabled.
+    ///
+    /// Ordering rule (deliberate — replaces the old piggyback on the
+    /// agent sort, which died with per-agent status):
+    ///   1. groups on ONLINE machines first,
+    ///   2. then machine name (case-insensitive),
+    ///   3. then project display name (Project.name overlay or
+    ///      basename(workingDir)); the per-machine "no project" bucket
+    ///      sinks below named projects of the same machine,
+    ///   4. group key as the deterministic tiebreaker.
+    /// Sessions within a project are newest-first.
     func projectGroups(fleet: FleetStore) -> [ProjectGroup] {
-        var sessionsByAgent: [String: [SessionDTO]] = [:]
-        for session in sessions.values {
-            sessionsByAgent[session.agentId, default: []].append(session)
+        // Reverse index: Project.id → row (fleet.projects is keyed by
+        // the machineId::workingDir pair).
+        var projectsById: [String: ProjectDTO] = [:]
+        for project in fleet.projects.values {
+            projectsById[project.id] = project
         }
 
-        // Agents in the web's global sort order (agentStore.sortOrder).
-        // fleet.agents includes archived agents (fetched with
-        // includeArchived) so their sessions group correctly; the
-        // comparator sinks them to the end.
-        let sortedAgents = fleet.agents.values.sorted(by: Self.agentSortsBefore)
-
-        var order: [String] = []
         var groups: [String: ProjectGroup] = [:]
-        for agent in sortedAgents {
-            guard let agentSessions = sessionsByAgent[agent.id], !agentSessions.isEmpty else {
+        var orphans: [SessionDTO] = []
+
+        for session in sessions.values {
+            // Resolve the (machineId, workingDir) anchor: projectId →
+            // Project row is authoritative, agent join is the fallback.
+            var machineId: String?
+            var workingDir: String?
+            var agentMachineName: String?
+            if let projectId = session.projectId, let project = projectsById[projectId] {
+                machineId = project.machineId
+                workingDir = project.workingDir
+            } else if let agent = session.agentId.flatMap({ fleet.agents[$0] }) {
+                machineId = agent.machineId
+                workingDir = agent.workingDir ?? ""
+                agentMachineName = agent.machineName
+            }
+            guard let machineId else {
+                orphans.append(session)
                 continue
             }
-            let workingDir = agent.workingDir ?? ""
-            let key = FleetStore.projectKey(machineId: agent.machineId, workingDir: workingDir)
+
+            let wd = workingDir ?? ""
+            let key = FleetStore.projectKey(machineId: machineId, workingDir: wd)
             if groups[key] == nil {
-                order.append(key)
+                // The pair-keyed row (when hydrated) overlays the
+                // user-picked name regardless of which path anchored us.
+                let row = fleet.projects[key]
+                let fallbackTitle = wd.isEmpty
+                    ? "no project"
+                    : (wd as NSString).lastPathComponent
+                let name = row?.name?.isEmpty == false ? row?.name : nil
                 groups[key] = ProjectGroup(
                     id: key,
-                    title: workingDir.isEmpty ? "no project" : (workingDir as NSString).lastPathComponent,
-                    machineId: agent.machineId,
-                    workingDir: agent.workingDir,
-                    machineName: agent.machineName,
+                    title: name ?? fallbackTitle,
+                    machineId: machineId,
+                    workingDir: wd.isEmpty ? nil : wd,
+                    machineName: fleet.machines[machineId]?.name ?? agentMachineName ?? "",
                     sessions: [],
                     archivedSessions: []
                 )
             }
-            groups[key]?.sessions.append(contentsOf: agentSessions.filter { $0.archivedAt == nil })
-            groups[key]?.archivedSessions.append(contentsOf: agentSessions.filter { $0.archivedAt != nil })
+            if session.archivedAt == nil {
+                groups[key]?.sessions.append(session)
+            } else {
+                groups[key]?.archivedSessions.append(session)
+            }
         }
 
-        // Sessions whose agent is gone from the fleet — keep them
+        // Sessions with no projectId AND no live agent row — keep them
         // reachable in a trailing "no project" bucket.
-        let known = Set(fleet.agents.keys)
-        let orphans = sessions.values.filter { !known.contains($0.agentId) }
         if !orphans.isEmpty {
-            let key = "__orphan__"
-            order.append(key)
-            groups[key] = ProjectGroup(
-                id: key, title: "no project", machineId: nil, workingDir: nil,
+            groups["__orphan__"] = ProjectGroup(
+                id: "__orphan__", title: "no project", machineId: nil, workingDir: nil,
                 machineName: "",
                 sessions: orphans.filter { $0.archivedAt == nil },
                 archivedSessions: orphans.filter { $0.archivedAt != nil }
             )
         }
 
-        return order.compactMap { key -> ProjectGroup? in
-            guard var group = groups[key] else { return nil }
+        var result = groups.values.map { group -> ProjectGroup in
+            var group = group
             group.sessions.sort { $0.updatedAt > $1.updatedAt }
             group.archivedSessions.sort { $0.updatedAt > $1.updatedAt }
             return group
         }
-    }
-
-    /// Agent comparator ported from the web's `agentStore.sortOrder`:
-    /// archived sink, then offline sink, then machineName, type, name.
-    static func agentSortsBefore(_ a: AgentDTO, _ b: AgentDTO) -> Bool {
-        let aArchived = a.archivedAt != nil ? 1 : 0
-        let bArchived = b.archivedAt != nil ? 1 : 0
-        if aArchived != bArchived { return aArchived < bArchived }
-        // online/busy/error all count as reachable (0); offline sinks (1).
-        let aOffline = a.status == .offline ? 1 : 0
-        let bOffline = b.status == .offline ? 1 : 0
-        if aOffline != bOffline { return aOffline < bOffline }
-        let machine = a.machineName.localizedCompare(b.machineName)
-        if machine != .orderedSame { return machine == .orderedAscending }
-        let type = a.type.localizedCompare(b.type)
-        if type != .orderedSame { return type == .orderedAscending }
-        return a.name.localizedCompare(b.name) == .orderedAscending
+        result.sort { a, b in
+            // Orphan bucket last, always.
+            if (a.machineId == nil) != (b.machineId == nil) { return b.machineId == nil }
+            let aOnline = a.machineId.flatMap { fleet.machines[$0]?.status } == .online ? 0 : 1
+            let bOnline = b.machineId.flatMap { fleet.machines[$0]?.status } == .online ? 0 : 1
+            if aOnline != bOnline { return aOnline < bOnline }
+            let machine = a.machineName.localizedCaseInsensitiveCompare(b.machineName)
+            if machine != .orderedSame { return machine == .orderedAscending }
+            // The per-machine "no project" bucket sinks within its machine.
+            if (a.workingDir == nil) != (b.workingDir == nil) { return b.workingDir == nil }
+            let title = a.title.localizedCaseInsensitiveCompare(b.title)
+            if title != .orderedSame { return title == .orderedAscending }
+            return a.id < b.id
+        }
+        return result
     }
 }

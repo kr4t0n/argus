@@ -8,7 +8,9 @@ import Foundation
 /// 'opening' | 'open' | 'closed' | 'error' — open string for tolerance.
 public struct TerminalDTO: Codable, Equatable, Sendable, Identifiable {
     public var id: String
-    public var agentId: String
+    /// Attribution only; optional since the runner refactor (nulled on
+    /// Phase-4 servers).
+    public var agentId: String?
     public var userId: String
     public var status: String
     public var shell: String
