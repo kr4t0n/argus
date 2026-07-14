@@ -650,3 +650,26 @@ export function compareSemver(a: string, b: string): number {
   }
   return 0;
 }
+
+/**
+ * Phase-3 fleet gate (docs/plan-agent-to-runners.md): sidecars ≥ 0.3.0
+ * are "runner-style" — no supervisors or per-agent heartbeats/streams;
+ * commands ride `machine:{id}:cli:{type}:cmd` and the control plane
+ * uses `sync-projects`. Every server-side old-vs-new routing decision
+ * funnels through this one predicate so the cutover has a single knob.
+ *
+ * Deliberately compares the numeric MAJOR.MINOR base only, not
+ * `compareSemver`: an rc build already speaks the new wire protocol,
+ * and §11 prerelease ordering would wrongly park `0.3.0-rc.1` on the
+ * legacy path. null/unknown/garbage versions read as legacy — the
+ * fail-safe wire shape for a sidecar we can't identify.
+ */
+export function isRunnerSidecar(version: string | null | undefined): boolean {
+  const v = stripSidecarPrefix(version);
+  if (!v) return false;
+  const [major = 0, minor = 0] = v
+    .split('-', 2)[0]
+    .split('.')
+    .map((p) => parseInt(p, 10) || 0);
+  return major > 0 || minor >= 3;
+}

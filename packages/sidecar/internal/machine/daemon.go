@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -24,18 +25,18 @@ import (
 const (
 	machineHeartbeatInterval = 5 * time.Second
 	controlReadBlock         = 2 * time.Second
-	// cmdReadBlock bounds the single machine-wide command reader's
-	// XREADGROUP. On expiry the reader re-snapshots the agent set, so a
-	// newly-spawned agent's command stream is picked up — and a
-	// destroyed agent's dropped — within this window.
+	// cmdReadBlock bounds the machine-wide command reader's XREADGROUP
+	// so ctx cancellation is observed promptly. The stream set itself is
+	// static per boot (one stream per installed CLI) — no re-snapshot on
+	// expiry.
 	cmdReadBlock = 2 * time.Second
-	// cmdReadCount caps entries pulled per agent stream per read. Small
+	// cmdReadCount caps entries pulled per runner stream per read. Small
 	// on purpose: commands are human-paced, and a tight cap bounds how
 	// many sit buffered (and would be lost) if the daemon shuts down
 	// mid-drain.
 	cmdReadCount = 10
 	// fsConcurrencyLimit caps how many fs-list / fs-read handlers run
-	// in parallel across all agents. Picked empirically: high enough
+	// in parallel across all workdirs. Picked empirically: high enough
 	// that a tree refresh of ~20 expanded folders drains in parallel
 	// instead of serializing through the control loop, low enough
 	// that a malicious or buggy client can't fork-bomb the disk.
@@ -48,35 +49,37 @@ const (
 	// one for second-scale subprocesses that may hit vendor APIs
 	// (cursor-agent models). Keeping them apart means a tree refresh
 	// can't delay a catalog probe and vice versa. 4 covers the
-	// realistic worst case — a boot-time push for every agent on the
+	// realistic worst case — a boot-time push for every runner on the
 	// machine plus a manual refresh — without herding processes.
 	cliConcurrencyLimit = 4
 )
 
 // Daemon is the long-lived per-machine process. It owns a single bus
-// connection, a single sidecar↔server link (lazy: only spun up if any
-// agent has supportsTerminal), and a set of agent supervisors keyed by
-// agentId.
+// connection, a single sidecar↔server link (for terminals), one runner
+// per installed CLI type, and the per-workdir watcher registry driven
+// by the server's sync-projects allowlist.
 //
 // The cache is the source of truth across daemon restarts: on boot we
-// spawn supervisors from the cached set immediately (so dashboard users
-// don't see a blank machine while the server reconciles), then a
-// SyncAgentsCommand from the server reconciles any drift that happened
-// while we were offline.
+// bring watchers + the fs jail up from the cached workdir allowlist
+// immediately (so dashboard users don't see a blank machine while the
+// server reconciles), then a SyncProjectsCommand from the server
+// reconciles any drift that happened while we were offline.
 type Daemon struct {
 	cachePath      string
 	cache          *Cache
 	sidecarVersion string
 	bus            *bus.Bus
-	link           *sidecarlink.Client // nil unless any agent has supportsTerminal
+	link           *sidecarlink.Client // nil unless server.url is configured
 	terminals      *terminal.Runner    // nil unless link is up
 	log            *log.Logger
 
-	mu          sync.Mutex
-	supervisors map[string]*supervisor // agentID → supervisor
+	mu       sync.Mutex
+	runners  map[string]*runner // cliType → runner
+	workdirs []string           // sync-projects allowlist (sorted)
+	watchers *watchRegistry
 
 	// availableAdapters captured once at boot; the dashboard reads this
-	// to decide which adapter types to offer in the create-agent UI.
+	// to decide which CLI types this machine can run.
 	availableAdapters []protocol.AvailableAdapter
 	hostname          string
 
@@ -114,28 +117,12 @@ func New(cachePath string, cache *Cache, sidecarVersion string, logger *log.Logg
 		cache:          cache,
 		sidecarVersion: sidecarVersion,
 		log:            logger,
-		supervisors:    make(map[string]*supervisor),
+		runners:        make(map[string]*runner),
 		hostname:       hn,
 		update:         &UpdateState{},
 		fsSlots:        make(chan struct{}, fsConcurrencyLimit),
 		cliSlots:       make(chan struct{}, cliConcurrencyLimit),
 	}
-}
-
-// Lookup implements terminal.AgentLookup so the terminal runner can ask
-// the daemon for an agent's working dir / opt-in state without taking a
-// dependency on the supervisor type itself.
-func (d *Daemon) Lookup(agentID string) (terminal.AgentInfo, bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	s, ok := d.supervisors[agentID]
-	if !ok {
-		return terminal.AgentInfo{}, false
-	}
-	return terminal.AgentInfo{
-		SupportsTerminal: s.spec.SupportsTerminal,
-		WorkingDir:       s.spec.WorkingDir,
-	}, true
 }
 
 // Run is the daemon main loop. Blocks until ctx is cancelled.
@@ -173,11 +160,22 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("ensure control group: %w", err)
 	}
 
-	for _, rec := range d.cache.Agents {
-		d.spawnSupervisor(ctx, rec, false)
+	// One runner per installed CLI — the set is static for this boot;
+	// a newly installed CLI is picked up on the next daemon restart.
+	for _, a := range d.availableAdapters {
+		d.spawnRunner(ctx, a.Type)
 	}
 
-	d.maybeStartTerminalLink(ctx)
+	// Seed the workdir allowlist from the cache: the persisted Phase-3
+	// allowlist, unioned with the workdirs of any pre-runner cached
+	// agent records (one-way migration — Agents is never written again).
+	// The server re-sends sync-projects on every machine-register, so
+	// any drift reconciles within one round trip.
+	d.watchers = newWatchRegistry(d.cache.MachineID, d.bus, d.log)
+	boot := append(append([]string(nil), d.cache.Workdirs...), agentWorkdirs(d.cache.Agents)...)
+	d.setWorkdirs(ctx, boot)
+
+	d.startTerminalLink(ctx)
 
 	d.quota = quota.New(d.log)
 
@@ -191,17 +189,19 @@ func (d *Daemon) Run(ctx context.Context) error {
 		defer wg.Done()
 		d.quota.Run(ctx)
 	}()
-	// Single machine-wide command reader: fans in every agent's command
-	// stream on one connection, replacing the old per-agent blocking
-	// readers (one parked Redis connection each).
+	// Single machine-wide command reader: fans in every runner's command
+	// stream on one connection.
 	go func() {
 		defer wg.Done()
 		d.commandReaderLoop(ctx)
 	}()
 
 	consumer := "c-" + uuid.NewString()[:8]
-	d.log.Printf("machine ready id=%s name=%s agents=%d",
-		d.cache.MachineID, d.cache.Name, len(d.supervisors))
+	d.mu.Lock()
+	nRunners, nWorkdirs := len(d.runners), len(d.workdirs)
+	d.mu.Unlock()
+	d.log.Printf("machine ready id=%s name=%s runners=%d projects=%d",
+		d.cache.MachineID, d.cache.Name, nRunners, nWorkdirs)
 
 	for {
 		if ctx.Err() != nil {
@@ -223,7 +223,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		_ = d.bus.Ack(ctx, controlStream, controlGroup, msgID)
 	}
 
-	d.shutdownAllSupervisors()
+	d.shutdownAllRunners()
 	wg.Wait()
 	return nil
 }
@@ -268,47 +268,42 @@ func (d *Daemon) machineHeartbeatLoop(ctx context.Context) {
 }
 
 // commandReaderLoop is the single, machine-wide consumer of every
-// agent's command stream. One blocking XREADGROUP fans in over all
-// agent:{id}:cmd streams under one consumer group, then routes each
-// entry to the owning supervisor over its in-process channel. This
-// replaces the old one-blocking-reader-per-agent model, which parked a
-// Redis connection per agent; the machine now reads commands on a single
-// connection regardless of how many agents it runs.
+// runner's command stream. One blocking XREADGROUP fans in over all
+// machine:{id}:cli:{type}:cmd streams under one consumer group, then
+// routes each entry to the owning runner over its in-process channel —
+// the machine reads commands on a single connection regardless of how
+// many CLIs it runs.
 //
-// The stream set is re-snapshotted every iteration, so agents created or
-// destroyed at runtime are picked up (or dropped) within one cmdReadBlock.
+// The stream set is snapshotted ONCE: runners are spawned per installed
+// CLI at boot and never churn, so the old per-iteration re-snapshot of
+// the agent stream set (and its 2 s pickup window) is gone.
 func (d *Daemon) commandReaderLoop(ctx context.Context) {
 	group := protocol.SidecarCommandGroup(d.cache.MachineID)
 	consumer := "cmd-" + uuid.NewString()[:8]
 
+	// Groups are ensured at spawn time, so every stream here already has
+	// its group (except after a Redis flush — handled via the NOGROUP
+	// branch below).
+	d.mu.Lock()
+	streams := make([]string, 0, len(d.runners))
+	routes := make(map[string]*runner, len(d.runners))
+	for cliType, r := range d.runners {
+		st := protocol.RunnerCommandStream(d.cache.MachineID, cliType)
+		streams = append(streams, st)
+		routes[st] = r
+	}
+	d.mu.Unlock()
+
+	if len(streams) == 0 {
+		// No CLIs installed — nothing to read, ever (the set is static
+		// per boot). The machine still serves control-plane RPCs.
+		d.log.Printf("command reader: no runners; reader idle until restart")
+		return
+	}
+
 	for {
 		if ctx.Err() != nil {
 			return
-		}
-
-		// Snapshot the current command streams and a stream→supervisor
-		// route table. Groups are ensured at spawn time, so every stream
-		// here already has its group (except after a Redis flush — handled
-		// via the NOGROUP branch below).
-		d.mu.Lock()
-		streams := make([]string, 0, len(d.supervisors))
-		routes := make(map[string]*supervisor, len(d.supervisors))
-		for id, s := range d.supervisors {
-			st := protocol.CommandStream(id)
-			streams = append(streams, st)
-			routes[st] = s
-		}
-		d.mu.Unlock()
-
-		if len(streams) == 0 {
-			// No agents yet (or all gone) — wait a beat, then re-check.
-			// Avoids a hot spin before the first agent is spawned.
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(cmdReadBlock):
-			}
-			continue
 		}
 
 		msgs, err := d.bus.ReadGroupMulti(ctx, streams, group, consumer, cmdReadCount, cmdReadBlock)
@@ -320,7 +315,7 @@ func (d *Daemon) commandReaderLoop(ctx context.Context) {
 			// groups vanish and XREADGROUP fails NOGROUP for the whole
 			// batch. Recreate the groups on the current streams and retry
 			// — without this the reader would log-and-sleep forever and
-			// never deliver another command until every agent was bounced.
+			// never deliver another command until the daemon was bounced.
 			if isNoGroup(err) {
 				d.ensureCommandGroups(ctx, streams, group)
 				continue
@@ -331,10 +326,10 @@ func (d *Daemon) commandReaderLoop(ctx context.Context) {
 		}
 
 		for _, m := range msgs {
-			s := routes[m.Stream]
-			if s == nil || !s.enqueue(inboundCmd{msgID: m.ID, payload: m.Payload}) {
-				// Agent vanished between snapshot and read, or is shutting
-				// down. Ack-drop so the entry doesn't dangle in the PEL.
+			r := routes[m.Stream]
+			if r == nil || !r.enqueue(inboundCmd{msgID: m.ID, payload: m.Payload}) {
+				// Runner is shutting down. Ack-drop so the entry doesn't
+				// dangle in the PEL.
 				_ = d.bus.Ack(ctx, m.Stream, group, m.ID)
 			}
 		}
@@ -364,27 +359,19 @@ func isNoGroup(err error) bool {
 func (d *Daemon) dispatchControl(ctx context.Context, payload map[string]any) {
 	kindStr, _ := payload["kind"].(string)
 	switch kindStr {
-	case "create-agent":
-		var ev protocol.CreateAgentCommand
+	case "sync-projects":
+		var ev protocol.SyncProjectsCommand
 		if err := remarshal(payload, &ev); err != nil {
-			d.log.Printf("control: bad create-agent: %v", err)
+			d.log.Printf("control: bad sync-projects: %v", err)
 			return
 		}
-		d.handleCreateAgent(ctx, ev.Agent)
-	case "destroy-agent":
-		var ev protocol.DestroyAgentCommand
-		if err := remarshal(payload, &ev); err != nil {
-			d.log.Printf("control: bad destroy-agent: %v", err)
-			return
-		}
-		d.handleDestroyAgent(ctx, ev.AgentID)
-	case "sync-agents":
-		var ev protocol.SyncAgentsCommand
-		if err := remarshal(payload, &ev); err != nil {
-			d.log.Printf("control: bad sync-agents: %v", err)
-			return
-		}
-		d.handleSyncAgents(ctx, ev.Agents)
+		d.handleSyncProjects(ctx, ev)
+	case "create-agent", "destroy-agent", "sync-agents":
+		// Pre-runner control plane. This sidecar (≥0.3.x) has no
+		// per-agent supervisors to create or destroy; a Phase-3 server
+		// sends sync-projects instead. Old-server + new-sidecar is an
+		// unsupported pairing (see docs/plan-agent-to-runners.md §Phase 3).
+		d.log.Printf("control: ignoring %q — agent-addressed control from a pre-runner server; upgrade the server", kindStr)
 	case "fs-list":
 		var ev protocol.FSListRequestCommand
 		if err := remarshal(payload, &ev); err != nil {
@@ -432,33 +419,102 @@ func (d *Daemon) dispatchControl(ctx context.Context, payload map[string]any) {
 	}
 }
 
-// workdirAllowed reports whether wd is a workingDir this machine
-// already knows — i.e. some supervisor's spec points at it. The
-// allowlist is the security boundary for workdir-addressed fs/git
-// RPCs (Phase 2): the daemon must never serve a path the server
-// invents, only pairs the machine's own agent set vouches for. Phase
-// 3 replaces the supervisor scan with the sync-projects allowlist.
+// handleSyncProjects reconciles the workdir allowlist (and with it the
+// watcher registry and fs/git jail) against the server's authoritative
+// snapshot. Idempotent by design — the server re-sends the full list on
+// every machine-register and on any project change.
+func (d *Daemon) handleSyncProjects(ctx context.Context, ev protocol.SyncProjectsCommand) {
+	d.setWorkdirs(ctx, ev.Workdirs)
+	d.mu.Lock()
+	n := len(d.workdirs)
+	d.mu.Unlock()
+	d.log.Printf("sync-projects: reconciled to %d workdir(s)", n)
+}
+
+// setWorkdirs installs a normalized allowlist, reconciles the watcher
+// registry against it, and persists it to the cache. Shared by boot
+// (cache seed + Agents migration) and handleSyncProjects.
+func (d *Daemon) setWorkdirs(ctx context.Context, workdirs []string) {
+	normalized := normalizeWorkdirs(workdirs)
+
+	d.mu.Lock()
+	d.workdirs = normalized
+	snapshot := *d.cache
+	snapshot.Workdirs = append([]string(nil), normalized...)
+	d.cache.Workdirs = snapshot.Workdirs
+	d.mu.Unlock()
+
+	d.watchers.Reconcile(ctx, normalized)
+
+	if err := Save(d.cachePath, &snapshot); err != nil {
+		d.log.Printf("cache save failed: %v", err)
+	}
+}
+
+// normalizeWorkdirs dedupes, drops empties, and sorts so the persisted
+// allowlist (and reconcile behavior) is deterministic regardless of the
+// order the server enumerated projects in.
+func normalizeWorkdirs(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, wd := range in {
+		if wd == "" {
+			continue
+		}
+		if _, dup := seen[wd]; dup {
+			continue
+		}
+		seen[wd] = struct{}{}
+		out = append(out, wd)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// agentWorkdirs extracts the workingDirs from a pre-runner cached agent
+// set (the boot-time migration source; see Cache.Agents).
+func agentWorkdirs(agents []AgentRecord) []string {
+	out := make([]string, 0, len(agents))
+	for _, a := range agents {
+		if a.WorkingDir != "" {
+			out = append(out, a.WorkingDir)
+		}
+	}
+	return out
+}
+
+// workdirAllowed reports whether wd is on the sync-projects allowlist.
+// The allowlist is the security boundary for workdir-addressed fs/git
+// RPCs (plan §4.3): the daemon must never serve a path the server
+// invents, only project dirs the server registered through an explicit
+// sync-projects control command (or the cache carried over).
 func (d *Daemon) workdirAllowed(wd string) bool {
 	if wd == "" {
 		return false
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for _, s := range d.supervisors {
-		if s.spec.WorkingDir == wd {
+	for _, known := range d.workdirs {
+		if known == wd {
 			return true
 		}
 	}
 	return false
 }
 
+// legacyAgentAddressingError is the synthetic error published when a
+// request arrives with only agentId addressing. A Phase-3 server always
+// sends workingDir; hitting this path means an old server is talking to
+// a runner-mode sidecar.
+const legacyAgentAddressingError = "agent addressing is not supported by this sidecar — upgrade the server"
+
 // handleFSList serves an fs-list request. Workdir-addressed requests
-// (Phase 2, `workingDir` set) are validated against the allowlist and
-// served directly — no supervisor involved; legacy agent-addressed
-// requests route through the target supervisor as before. If neither
-// resolves (race: agent deleted between server publish and sidecar
-// read, or an unknown workdir) we publish a synthetic error response
-// so the server-side pending request resolves instead of timing out.
+// (`workingDir` set) are validated against the allowlist and served
+// directly; legacy agent-addressed requests get a synthetic error — the
+// Phase-3 server always sends workingDir, so that path only fires
+// against pre-runner servers. Publishing the synthetic response (rather
+// than dropping) lets the server-side pending request resolve instead
+// of timing out.
 //
 // The actual listing runs in a goroutine bounded by fsSlots so the
 // control loop returns immediately. Without this, a tree refresh
@@ -466,39 +522,26 @@ func (d *Daemon) workdirAllowed(wd string) bool {
 // serialized past the server's 5 s timeout and surfaced as
 // "agent did not respond" in the dashboard.
 func (d *Daemon) handleFSList(ctx context.Context, req protocol.FSListRequestCommand) {
-	if req.WorkingDir != "" {
-		if !d.workdirAllowed(req.WorkingDir) {
-			_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSListResponseEvent{
-				Kind:      "fs-list-response",
-				MachineID: d.cache.MachineID,
-				AgentID:   req.AgentID,
-				RequestID: req.RequestID,
-				Path:      req.Path,
-				Error:     "workingDir is not a known project on this machine",
-				TS:        time.Now().UnixMilli(),
-			})
-			return
-		}
-		go func() {
-			d.fsSlots <- struct{}{}
-			defer func() { <-d.fsSlots }()
-			serveFSList(ctx, d.bus, d.log, d.cache.MachineID, req.AgentID, req.WorkingDir, req)
-		}()
-		return
-	}
-	d.mu.Lock()
-	s, ok := d.supervisors[req.AgentID]
-	d.mu.Unlock()
-	if !ok {
-		// Synthetic-error path is fast and Bus.Publish is thread-safe,
-		// but we still publish inline here — there's no work to gate.
+	if req.WorkingDir == "" {
 		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSListResponseEvent{
 			Kind:      "fs-list-response",
 			MachineID: d.cache.MachineID,
 			AgentID:   req.AgentID,
 			RequestID: req.RequestID,
 			Path:      req.Path,
-			Error:     "agent not running on this machine",
+			Error:     legacyAgentAddressingError,
+			TS:        time.Now().UnixMilli(),
+		})
+		return
+	}
+	if !d.workdirAllowed(req.WorkingDir) {
+		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSListResponseEvent{
+			Kind:      "fs-list-response",
+			MachineID: d.cache.MachineID,
+			AgentID:   req.AgentID,
+			RequestID: req.RequestID,
+			Path:      req.Path,
+			Error:     "workingDir is not a known project on this machine",
 			TS:        time.Now().UnixMilli(),
 		})
 		return
@@ -506,41 +549,15 @@ func (d *Daemon) handleFSList(ctx context.Context, req protocol.FSListRequestCom
 	go func() {
 		d.fsSlots <- struct{}{}
 		defer func() { <-d.fsSlots }()
-		s.HandleFSList(ctx, req)
+		serveFSList(ctx, d.bus, d.log, d.cache.MachineID, req.AgentID, req.WorkingDir, req)
 	}()
 }
 
-// handleFSRead routes an fs-read request to the target agent's
-// supervisor. Same race window as handleFSList — publish a synthetic
-// error response if the agent is gone, so the server-side pending
-// request resolves instead of timing out. Async dispatch + shared
-// fsSlots gate, same rationale as handleFSList.
+// handleFSRead mirrors handleFSList: allowlist-validated workdir
+// addressing, synthetic error for legacy agent addressing, async
+// dispatch under the shared fsSlots gate.
 func (d *Daemon) handleFSRead(ctx context.Context, req protocol.FSReadRequestCommand) {
-	if req.WorkingDir != "" {
-		if !d.workdirAllowed(req.WorkingDir) {
-			_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSReadResponseEvent{
-				Kind:      "fs-read-response",
-				MachineID: d.cache.MachineID,
-				AgentID:   req.AgentID,
-				RequestID: req.RequestID,
-				Path:      req.Path,
-				Result:    "error",
-				Error:     "workingDir is not a known project on this machine",
-				TS:        time.Now().UnixMilli(),
-			})
-			return
-		}
-		go func() {
-			d.fsSlots <- struct{}{}
-			defer func() { <-d.fsSlots }()
-			serveFSRead(ctx, d.bus, d.log, d.cache.MachineID, req.AgentID, req.WorkingDir, req)
-		}()
-		return
-	}
-	d.mu.Lock()
-	s, ok := d.supervisors[req.AgentID]
-	d.mu.Unlock()
-	if !ok {
+	if req.WorkingDir == "" {
 		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSReadResponseEvent{
 			Kind:      "fs-read-response",
 			MachineID: d.cache.MachineID,
@@ -548,7 +565,20 @@ func (d *Daemon) handleFSRead(ctx context.Context, req protocol.FSReadRequestCom
 			RequestID: req.RequestID,
 			Path:      req.Path,
 			Result:    "error",
-			Error:     "agent not running on this machine",
+			Error:     legacyAgentAddressingError,
+			TS:        time.Now().UnixMilli(),
+		})
+		return
+	}
+	if !d.workdirAllowed(req.WorkingDir) {
+		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSReadResponseEvent{
+			Kind:      "fs-read-response",
+			MachineID: d.cache.MachineID,
+			AgentID:   req.AgentID,
+			RequestID: req.RequestID,
+			Path:      req.Path,
+			Result:    "error",
+			Error:     "workingDir is not a known project on this machine",
 			TS:        time.Now().UnixMilli(),
 		})
 		return
@@ -556,46 +586,34 @@ func (d *Daemon) handleFSRead(ctx context.Context, req protocol.FSReadRequestCom
 	go func() {
 		d.fsSlots <- struct{}{}
 		defer func() { <-d.fsSlots }()
-		s.HandleFSRead(ctx, req)
+		serveFSRead(ctx, d.bus, d.log, d.cache.MachineID, req.AgentID, req.WorkingDir, req)
 	}()
 }
 
-// handleGitLog mirrors handleFSList: routes to the target supervisor,
-// publishes a synthetic error response if the agent is gone so the
-// server-side pending request resolves instead of timing out, and
-// dispatches the actual `git log` shell-out under the shared fsSlots
-// gate (a depth-N tree refresh shouldn't queue behind a git log; same
-// gate keeps total concurrent disk-touching ops bounded).
+// handleGitLog mirrors handleFSList: allowlist-validated workdir
+// addressing, synthetic error for legacy agent addressing, and the
+// actual `git log` shell-out dispatched under the shared fsSlots gate
+// (a depth-N tree refresh shouldn't queue behind a git log; same gate
+// keeps total concurrent disk-touching ops bounded).
 func (d *Daemon) handleGitLog(ctx context.Context, req protocol.GitLogRequestCommand) {
-	if req.WorkingDir != "" {
-		if !d.workdirAllowed(req.WorkingDir) {
-			_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.GitLogResponseEvent{
-				Kind:      "git-log-response",
-				MachineID: d.cache.MachineID,
-				AgentID:   req.AgentID,
-				RequestID: req.RequestID,
-				Error:     "workingDir is not a known project on this machine",
-				TS:        time.Now().UnixMilli(),
-			})
-			return
-		}
-		go func() {
-			d.fsSlots <- struct{}{}
-			defer func() { <-d.fsSlots }()
-			serveGitLog(ctx, d.bus, d.log, d.cache.MachineID, req.AgentID, req.WorkingDir, req)
-		}()
-		return
-	}
-	d.mu.Lock()
-	s, ok := d.supervisors[req.AgentID]
-	d.mu.Unlock()
-	if !ok {
+	if req.WorkingDir == "" {
 		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.GitLogResponseEvent{
 			Kind:      "git-log-response",
 			MachineID: d.cache.MachineID,
 			AgentID:   req.AgentID,
 			RequestID: req.RequestID,
-			Error:     "agent not running on this machine",
+			Error:     legacyAgentAddressingError,
+			TS:        time.Now().UnixMilli(),
+		})
+		return
+	}
+	if !d.workdirAllowed(req.WorkingDir) {
+		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.GitLogResponseEvent{
+			Kind:      "git-log-response",
+			MachineID: d.cache.MachineID,
+			AgentID:   req.AgentID,
+			RequestID: req.RequestID,
+			Error:     "workingDir is not a known project on this machine",
 			TS:        time.Now().UnixMilli(),
 		})
 		return
@@ -603,38 +621,32 @@ func (d *Daemon) handleGitLog(ctx context.Context, req protocol.GitLogRequestCom
 	go func() {
 		d.fsSlots <- struct{}{}
 		defer func() { <-d.fsSlots }()
-		s.HandleGitLog(ctx, req)
+		serveGitLog(ctx, d.bus, d.log, d.cache.MachineID, req.AgentID, req.WorkingDir, req)
 	}()
 }
 
-// handleListModels mirrors handleGitLog: route to the target
-// supervisor, synthetic error response when the agent is gone so the
-// server-side pending request resolves instead of timing out, actual
-// work dispatched async. Gated by cliSlots (not fsSlots) so catalog
-// probes and tree walks can't queue behind each other.
+// handleListModels routes a list-models request to the runner for the
+// requested CLI type — the catalog is a property of the installed
+// binary. Unknown or missing cliType gets a synthetic error response
+// (echoing AgentID / RequestID) so the server-side pending request
+// resolves instead of timing out. Gated by cliSlots (not fsSlots) so
+// catalog probes and tree walks can't queue behind each other.
 func (d *Daemon) handleListModels(ctx context.Context, req protocol.ListModelsRequestCommand) {
 	d.mu.Lock()
-	s, ok := d.supervisors[req.AgentID]
-	// CliType addressing (Phase 2): the catalog is a property of the
-	// installed binary, so any supervisor of the requested adapter type
-	// can answer. Falls back gracefully when the agent id is stale or
-	// absent — the first same-type supervisor wins.
-	if !ok && req.CliType != "" {
-		for _, cand := range d.supervisors {
-			if cand.spec.Type == req.CliType {
-				s, ok = cand, true
-				break
-			}
-		}
-	}
+	r, ok := d.runners[req.CliType]
 	d.mu.Unlock()
 	if !ok {
+		reason := fmt.Sprintf("cli type %q is not installed on this machine", req.CliType)
+		if req.CliType == "" {
+			reason = legacyAgentAddressingError
+		}
 		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.ModelCatalogResponseEvent{
 			Kind:      "model-catalog-response",
 			MachineID: d.cache.MachineID,
 			AgentID:   req.AgentID,
+			CliType:   req.CliType,
 			RequestID: req.RequestID,
-			Error:     "agent not running on this machine",
+			Error:     reason,
 			TS:        time.Now().UnixMilli(),
 		})
 		return
@@ -642,216 +654,82 @@ func (d *Daemon) handleListModels(ctx context.Context, req protocol.ListModelsRe
 	go func() {
 		d.cliSlots <- struct{}{}
 		defer func() { <-d.cliSlots }()
-		s.HandleListModels(ctx, req)
+		r.HandleListModels(ctx, req)
 	}()
 }
 
-func (d *Daemon) handleCreateAgent(ctx context.Context, spec protocol.AgentSpec) {
-	rec := agentSpecToRecord(spec)
-	d.mu.Lock()
-	if _, exists := d.supervisors[rec.AgentID]; exists {
-		d.mu.Unlock()
-		d.log.Printf("create-agent: %s already running (ignoring)", rec.AgentID)
-		return
-	}
-	d.mu.Unlock()
-	d.spawnSupervisor(ctx, rec, true)
-}
-
-func (d *Daemon) handleDestroyAgent(ctx context.Context, agentID string) {
-	d.mu.Lock()
-	s, ok := d.supervisors[agentID]
-	if !ok {
-		d.mu.Unlock()
-		d.log.Printf("destroy-agent: %s not found", agentID)
-		return
-	}
-	delete(d.supervisors, agentID)
-	d.mu.Unlock()
-
-	s.stop()
-	d.removeFromCache(agentID)
-	d.publishAgentDestroyed(ctx, agentID)
-	d.log.Printf("destroyed agent %s", agentID)
-	d.maybeStartTerminalLink(ctx)
-}
-
-// handleSyncAgents reconciles the supervisor set against the
-// authoritative server-side list. We compute the intersection ourselves
-// rather than tearing everything down and rebuilding so live
-// supervisors keep their existing CLI subprocesses (and any in-flight
-// commands) across reconciles.
-func (d *Daemon) handleSyncAgents(ctx context.Context, specs []protocol.AgentSpec) {
-	want := make(map[string]AgentRecord, len(specs))
-	for _, sp := range specs {
-		want[sp.AgentID] = agentSpecToRecord(sp)
-	}
-
-	d.mu.Lock()
-	have := make(map[string]struct{}, len(d.supervisors))
-	for id := range d.supervisors {
-		have[id] = struct{}{}
-	}
-	d.mu.Unlock()
-
-	for id := range have {
-		if _, keep := want[id]; !keep {
-			d.handleDestroyAgent(ctx, id)
-		}
-	}
-	for id, rec := range want {
-		if _, already := have[id]; already {
-			// TODO(machine-driven): support in-place updates
-			// (workingDir change, supportsTerminal toggle) by
-			// detecting drift and bouncing the supervisor.
-			continue
-		}
-		d.spawnSupervisor(ctx, rec, true)
-	}
-	d.log.Printf("sync-agents: reconciled to %d agent(s)", len(want))
-	d.maybeStartTerminalLink(ctx)
-}
-
-// spawnSupervisor builds and starts a supervisor for one agent. If
-// publishAck is true (i.e. this came from a control command, not a
-// boot-time cache replay) we publish an agent-spawned / -spawn-failed
-// event back to the server so the dashboard can flip status promptly.
-//
-// Persists the agent into the cache on success so a subsequent reboot
-// can respawn it without waiting for the server to push a sync.
-func (d *Daemon) spawnSupervisor(ctx context.Context, rec AgentRecord, publishAck bool) {
-	s, err := newSupervisor(ctx, d.cache.MachineID, d.cache.Server.URL, d.bus, rec, d.log)
+// spawnRunner builds and starts the runner for one installed CLI type.
+// Failures are logged and skipped — the type just won't be dispatchable
+// this boot (Discover already LookPath'd the binary, so this is rare).
+func (d *Daemon) spawnRunner(ctx context.Context, cliType string) {
+	r, err := newRunner(ctx, d.cache.MachineID, d.cache.Server.URL, d.bus, cliType, d.log)
 	if err != nil {
-		d.log.Printf("agent %s: spawn failed: %v", rec.AgentID, err)
-		if publishAck {
-			d.publishSpawnFailed(ctx, rec.AgentID, err.Error())
-		}
+		d.log.Printf("runner %s: spawn failed: %v", cliType, err)
 		return
 	}
-	// Ensure the shared command group on this agent's stream BEFORE the
-	// supervisor becomes visible to the machine-wide reader (added to the
-	// map) and before it registers — so the reader never hits NOGROUP on
-	// it, and no command published right after register lands ahead of
-	// the group's start position. Non-fatal: the reader re-ensures groups
-	// if it ever does hit NOGROUP (e.g. after a Redis flush).
-	cmdStream := protocol.CommandStream(rec.AgentID)
+	// Ensure the shared command group on this runner's stream BEFORE the
+	// runner becomes visible to the machine-wide reader (added to the
+	// map) — so the reader never hits NOGROUP on it, and no command
+	// published right after machine-register lands ahead of the group's
+	// start position. Non-fatal: the reader re-ensures groups if it ever
+	// does hit NOGROUP (e.g. after a Redis flush).
+	cmdStream := protocol.RunnerCommandStream(d.cache.MachineID, cliType)
 	group := protocol.SidecarCommandGroup(d.cache.MachineID)
 	if err := d.bus.EnsureGroup(ctx, cmdStream, group); err != nil {
-		d.log.Printf("agent %s: ensure command group: %v", rec.AgentID, err)
+		d.log.Printf("runner %s: ensure command group: %v", cliType, err)
 	}
-	// Start the supervisor (which sets s.runCtx) BEFORE publishing it to
+	// Start the runner (which sets r.runCtx) BEFORE publishing it to
 	// the map. The machine-wide reader routes commands by reading the map
-	// under d.mu, then calls s.enqueue — which selects on s.runCtx. If we
-	// inserted first, the reader could see a supervisor whose runCtx isn't
+	// under d.mu, then calls r.enqueue — which selects on r.runCtx. If we
+	// inserted first, the reader could see a runner whose runCtx isn't
 	// set yet. Inserting after Start (with the lock as the barrier) means
-	// any reader that can see the supervisor also sees a live runCtx.
-	s.Start(ctx)
+	// any reader that can see the runner also sees a live runCtx.
+	r.Start(ctx)
 	d.mu.Lock()
-	d.supervisors[rec.AgentID] = s
+	d.runners[cliType] = r
 	d.mu.Unlock()
 
-	d.upsertCache(rec)
-	if publishAck {
-		d.publishSpawned(ctx, rec.AgentID)
-	}
 	// Warm the server's stored model catalog so a picker opening later
 	// never waits on a live CLI exec. Best-effort and fully off the
-	// spawn path; cliSlots keeps a many-agent boot replay from herding
+	// spawn path; cliSlots keeps a multi-CLI boot from herding
 	// subprocesses.
 	go func() {
 		d.cliSlots <- struct{}{}
 		defer func() { <-d.cliSlots }()
-		s.PushModelCatalog(ctx)
+		r.PushModelCatalog(ctx)
 	}()
-	// Newly-spawned agents may have opted into terminal access; bring
-	// the sidecar↔server link up if this is the first such agent on
-	// the machine. Idempotent — safe to call from every spawn path
-	// (boot replay, single create-agent, and bulk sync-agents).
-	if rec.SupportsTerminal {
-		d.maybeStartTerminalLink(ctx)
-	}
 }
 
-func (d *Daemon) shutdownAllSupervisors() {
+func (d *Daemon) shutdownAllRunners() {
 	d.mu.Lock()
-	all := make([]*supervisor, 0, len(d.supervisors))
-	for _, s := range d.supervisors {
-		all = append(all, s)
+	all := make([]*runner, 0, len(d.runners))
+	for _, r := range d.runners {
+		all = append(all, r)
 	}
 	d.mu.Unlock()
 	var wg sync.WaitGroup
 	wg.Add(len(all))
-	for _, s := range all {
-		go func(s *supervisor) {
+	for _, r := range all {
+		go func(r *runner) {
 			defer wg.Done()
-			s.stop()
-		}(s)
+			r.stop()
+		}(r)
 	}
 	wg.Wait()
 }
 
-func (d *Daemon) publishSpawned(ctx context.Context, agentID string) {
-	_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.AgentSpawnedEvent{
-		Kind:      "agent-spawned",
-		MachineID: d.cache.MachineID,
-		AgentID:   agentID,
-		TS:        time.Now().UnixMilli(),
-	})
-}
-
-func (d *Daemon) publishSpawnFailed(ctx context.Context, agentID, reason string) {
-	_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.AgentSpawnFailedEvent{
-		Kind:      "agent-spawn-failed",
-		MachineID: d.cache.MachineID,
-		AgentID:   agentID,
-		Reason:    reason,
-		TS:        time.Now().UnixMilli(),
-	})
-}
-
-func (d *Daemon) publishAgentDestroyed(ctx context.Context, agentID string) {
-	_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.AgentDestroyedEvent{
-		Kind:      "agent-destroyed",
-		MachineID: d.cache.MachineID,
-		AgentID:   agentID,
-		TS:        time.Now().UnixMilli(),
-	})
-}
-
-// maybeStartTerminalLink lazily brings up the sidecar↔server WebSocket
-// the moment the first terminal-enabled agent is created, and tears it
-// back down when the last one goes away. Avoids paying the link's
-// keepalive cost on machines whose agents are all headless.
-//
-// Idempotent — safe to call after every reconcile / create / destroy.
-func (d *Daemon) maybeStartTerminalLink(ctx context.Context) {
-	d.mu.Lock()
-	wantLink := false
-	for _, s := range d.supervisors {
-		if s.spec.SupportsTerminal {
-			wantLink = true
-			break
-		}
-	}
-	hasLink := d.link != nil
-	d.mu.Unlock()
-
-	switch {
-	case wantLink && !hasLink:
-		if d.cache.Server.URL == "" {
-			d.log.Printf("terminal: an agent opted into terminal access but server.url is unset in the cache; run `argus-sidecar init --force` to set it")
-			return
-		}
-		d.startTerminalLink(ctx)
-	case !wantLink && hasLink:
-		// We deliberately do NOT tear the link down. Once started,
-		// the link stays up for the daemon's lifetime — restarting
-		// it on every churn would amplify reconnect storms after a
-		// transient server hiccup. The link is cheap when idle.
-	}
-}
-
+// startTerminalLink brings up the sidecar↔server WebSocket at boot when
+// a server URL is configured. Terminal capability gating moved
+// server-side with the runner refactor (there is no per-agent opt-in on
+// the sidecar anymore), so the link is unconditional: it's cheap when
+// idle, and once started it stays up for the daemon's lifetime —
+// restarting it on churn would amplify reconnect storms after a
+// transient server hiccup.
 func (d *Daemon) startTerminalLink(ctx context.Context) {
+	if d.cache.Server.URL == "" {
+		d.log.Printf("terminal: server.url is unset in the cache; terminals disabled (run `argus-sidecar init --force` to set it)")
+		return
+	}
 	d.mu.Lock()
 	if d.link != nil {
 		d.mu.Unlock()
@@ -860,7 +738,7 @@ func (d *Daemon) startTerminalLink(ctx context.Context) {
 	link := sidecarlink.New(d.cache.Server.URL, d.cache.Server.Token, d.cache.MachineID, d.log)
 	d.link = link
 	settings := terminal.DefaultSettings()
-	d.terminals = terminal.New(settings, d, link, d.log)
+	d.terminals = terminal.New(settings, link, d.log)
 	d.mu.Unlock()
 
 	go link.Run(ctx)
@@ -870,64 +748,6 @@ func (d *Daemon) startTerminalLink(ctx context.Context) {
 		}
 	}()
 	d.log.Printf("terminal link started (server=%s)", d.cache.Server.URL)
-}
-
-// upsertCache replaces an existing agent record (matched by AgentID) or
-// appends a new one, then persists. We rewrite the whole file each time;
-// the agent set is bounded (low double digits in practice) and
-// strict-consistency is more valuable than rewrite cost.
-func (d *Daemon) upsertCache(rec AgentRecord) {
-	d.mu.Lock()
-	updated := false
-	for i, existing := range d.cache.Agents {
-		if existing.AgentID == rec.AgentID {
-			d.cache.Agents[i] = rec
-			updated = true
-			break
-		}
-	}
-	if !updated {
-		d.cache.Agents = append(d.cache.Agents, rec)
-	}
-	snapshot := *d.cache
-	snapshot.Agents = append([]AgentRecord(nil), d.cache.Agents...)
-	d.mu.Unlock()
-
-	if err := Save(d.cachePath, &snapshot); err != nil {
-		d.log.Printf("cache save failed: %v", err)
-	}
-}
-
-func (d *Daemon) removeFromCache(agentID string) {
-	d.mu.Lock()
-	out := d.cache.Agents[:0]
-	for _, a := range d.cache.Agents {
-		if a.AgentID != agentID {
-			out = append(out, a)
-		}
-	}
-	d.cache.Agents = out
-	snapshot := *d.cache
-	snapshot.Agents = append([]AgentRecord(nil), d.cache.Agents...)
-	d.mu.Unlock()
-
-	if err := Save(d.cachePath, &snapshot); err != nil {
-		d.log.Printf("cache save failed: %v", err)
-	}
-}
-
-// agentSpecToRecord converts the wire shape into the on-disk shape.
-// Field-by-field rather than a type alias because the two evolve
-// independently (cache may grow local-only fields like spawn-attempts).
-func agentSpecToRecord(sp protocol.AgentSpec) AgentRecord {
-	return AgentRecord{
-		AgentID:          sp.AgentID,
-		Name:             sp.Name,
-		Type:             sp.Type,
-		WorkingDir:       sp.WorkingDir,
-		SupportsTerminal: sp.SupportsTerminal,
-		Adapter:          sp.Adapter,
-	}
 }
 
 // remarshal is a tiny helper: take a generic JSON-decoded map and

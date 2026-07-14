@@ -10,17 +10,28 @@ import (
 )
 
 // Workdir-addressed serving for the fs-list / fs-read / git-log RPCs
-// (Phase 2 of docs/plan-agent-to-runners.md). These are the shared
-// bodies behind both addressing modes: the supervisor Handle* methods
-// delegate here with their spec's workingDir (legacy agent-addressed
-// requests), and the daemon calls them directly for requests that
-// carry an explicit `workingDir` — after validating it against the
-// machine's known-workdirs allowlist, so a buggy or compromised
-// server can't list arbitrary paths (see plan §4.3).
+// (Phase 2 of docs/plan-agent-to-runners.md). The daemon calls these
+// for requests that carry an explicit `workingDir` — after validating
+// it against the machine's sync-projects allowlist, so a buggy or
+// compromised server can't list arbitrary paths (see plan §4.3).
 //
 // `agentID` is attribution only: responses echo whatever id the
 // request carried (possibly empty for project-addressed requests) —
 // the server's pending map is keyed by RequestID alone.
+
+func toProtocolEntries(entries []FSEntry) []protocol.FSEntry {
+	out := make([]protocol.FSEntry, len(entries))
+	for i, e := range entries {
+		out[i] = protocol.FSEntry{
+			Name:       e.Name,
+			Kind:       e.Kind,
+			Size:       e.Size,
+			MTime:      e.MTime,
+			Gitignored: e.Gitignored,
+		}
+	}
+	return out
+}
 
 func serveFSList(
 	ctx context.Context,

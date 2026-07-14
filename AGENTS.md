@@ -30,9 +30,16 @@ Argus has **four** moving parts and one wire format:
      - `agent:background`       — `argus-bg` task progress (see the
        background-task service note under Server modules).
      - `machine:{mid}:control`  — server → sidecar daemon
-       (`create-agent`, `destroy-agent`, `sync-agents`).
+       (`create-agent`, `destroy-agent`, `sync-agents`; runner sidecars
+       get `sync-projects` — the full workdir allowlist — instead).
      - `agent:{id}:cmd`         — server → that agent's supervisor.
      - `agent:{id}:result`      — supervisor → server (chunks, externalId).
+     - `machine:{mid}:cli:{type}:cmd` / `:result` — Phase-3 runner
+       streams (docs/plan-agent-to-runners.md): sidecars ≥ 0.3.0 drop
+       the per-agent pair for one pair per machine × installed CLI.
+       The server routes per machine off `Machine.sidecarVersion` via
+       `isRunnerSidecar` (`sidecar-update.service.ts`), so a mixed
+       fleet uses both families side by side.
    - **Sidecar link** (direct WebSocket, path `/sidecar-link`) for terminal
      PTY traffic (open / input / resize / close / output / closed). This
      bypasses Redis because every keystroke-echo round-trip used to cost
@@ -120,7 +127,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `DELETE /machines/:id/agents/:agentId`, `DELETE /machines/:id`) and
   emits `machine:upsert` / `machine:status` / `machine:removed` /
   `agent:spawn-failed` over WS. Also publishes `create-agent` / `destroy-agent` commands on
-  `machine:{mid}:control`.
+  `machine:{mid}:control`. Runner-style machines (sidecar ≥ 0.3.0,
+  gated by `isRunnerSidecar`) diverge: register/create/destroy send an
+  idempotent `sync-projects` workdir-allowlist snapshot instead of the
+  agent commands, and — since runner sidecars send no per-agent
+  heartbeats — the machine-heartbeat handler bumps the machine's
+  non-archived agent rows (status + `lastHeartbeatAt`) so `sweepStale`
+  never false-flags those routing records offline. Command dispatch
+  gates on machine status for them (`command.service.ts`).
 - `project/` — server-side metadata for "projects" (the
   `(machineId, workingDir)` pair the sidebar groups sessions
   under). Since Phase 1 of the agent→runner refactor
@@ -176,8 +190,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   command, mints **15-min pull tokens** for the wire `Command.attachments`,
   and returns/loads **1-h display tokens** in `AttachmentDTO.url`
   (`SessionService.withAttachments` batches them onto the transcript).
-- `result-ingestor/` — single XREADGROUP across **all** agent result streams
-  (refreshed every 5s). Persists each chunk and **immediately** forwards to
+- `result-ingestor/` — single XREADGROUP across **all** result streams
+  (refreshed every 5s): legacy machines' per-agent `agent:{id}:result`
+  plus runner machines' `machine:{id}:cli:{type}:result` (one per
+  entry in `availableAdapters`), routed per machine by
+  `isRunnerSidecar`. Persists each chunk and **immediately** forwards to
   WS room `session:{sessionId}` (no batching — the typewriter UX needs it).
   Also flips command/session status on `final`/`error` (success →
   session `idle` + `unread`, error → `failed` + `unread`; interim

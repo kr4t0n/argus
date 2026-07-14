@@ -82,7 +82,7 @@ export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
   private async consumeLoop() {
     while (this.running) {
       try {
-        const res = (await this.redis.read.xreadgroup(
+        const res = (await this.redis.readBackground.xreadgroup(
           'GROUP',
           consumerGroups.background,
           CONSUMER,

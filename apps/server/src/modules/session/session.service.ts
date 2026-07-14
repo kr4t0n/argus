@@ -15,6 +15,7 @@ import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 import { AttachmentService } from '../attachment/attachment.service';
 import { MachineService } from '../machine/machine.service';
+import { isRunnerSidecar } from '../machine/sidecar-update.service';
 
 /** Internal shape of `create` — mirrors CreateSessionRequest minus the
  *  controller-level concerns (title derivation from prompt, dispatch). */
@@ -377,6 +378,30 @@ export class SessionService {
     // session remains a history-only fork (no externalId) and the next
     // prompt starts a fresh CLI conversation.
     if (src.externalId) {
+      // Route the clone the same way dispatch routes turns (Phase 3):
+      // runner sidecars take it on the machine×CLI stream and need the
+      // pinned workdir to locate the CLI's cwd-keyed on-disk state;
+      // legacy sidecars resolve it from their cached agent spec.
+      const agent = await this.prisma.agent.findUnique({
+        where: { id: src.agentId },
+        select: {
+          machineId: true,
+          workingDir: true,
+          machine: { select: { sidecarVersion: true } },
+        },
+      });
+      const runnerCli =
+        agent && isRunnerSidecar(agent.machine.sidecarVersion) ? src.cliType : null;
+      let workingDir: string | undefined;
+      if (runnerCli) {
+        const project = src.projectId
+          ? await this.prisma.project.findUnique({
+              where: { id: src.projectId },
+              select: { workingDir: true },
+            })
+          : null;
+        workingDir = project?.workingDir ?? agent?.workingDir ?? undefined;
+      }
       const wire: WireCommand = {
         id: randomUUID(),
         agentId: src.agentId,
@@ -386,9 +411,15 @@ export class SessionService {
           srcExternalId: src.externalId,
           turnIndex: prefix.length,
         },
+        ...(runnerCli ? { workingDir, cliType: runnerCli } : {}),
       };
       try {
-        await this.redis.publish(streamKeys.command(src.agentId), wire);
+        await this.redis.publish(
+          runnerCli && agent
+            ? streamKeys.runnerCommand(agent.machineId, runnerCli)
+            : streamKeys.command(src.agentId),
+          wire,
+        );
       } catch (err) {
         // Don't fail the fork if Redis hiccups — the session row is
         // already there. Log via the gateway logger by re-throwing

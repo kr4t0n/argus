@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import type {
   AgentType,
+  AvailableAdapter,
   ResultChunk,
   ResultChunkDTO,
   SessionCloneFailedEvent,
@@ -14,6 +15,7 @@ import { StreamGateway } from '../gateway/stream.gateway';
 import { SessionService } from '../session/session.service';
 import { CommandService } from '../command/command.service';
 import { PushService } from '../push/push.service';
+import { isRunnerSidecar } from '../machine/sidecar-update.service';
 
 const CONSUMER = 'server-1';
 const REFRESH_AGENT_STREAMS_MS = 5_000;
@@ -21,10 +23,12 @@ const REFRESH_AGENT_STREAMS_MS = 5_000;
 type ResultEnvelope = ResultChunk | SessionExternalIdEvent | SessionCloneFailedEvent;
 
 /**
- * Consumes every agent's `agent:{id}:result` stream, persists each chunk,
- * and relays it to the WS room `session:{sessionId}` for the live UI.
+ * Consumes every result stream — legacy `agent:{id}:result` plus the
+ * Phase-3 runners' `machine:{id}:cli:{type}:result` — persists each
+ * chunk, and relays it to the WS room `session:{sessionId}` for the
+ * live UI.
  *
- * We maintain a single XREADGROUP call across all agent streams. The list of
+ * We maintain a single XREADGROUP call across all result streams. The list of
  * streams is refreshed every few seconds so newly registered sidecars are
  * picked up automatically.
  */
@@ -58,8 +62,36 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async refreshStreams() {
-    const agents = await this.prisma.agent.findMany({ select: { id: true } });
-    const next = agents.map((a) => streamKeys.result(a.id));
+    // Two stream families coexist during the Phase-3 fleet rollout
+    // (docs/plan-agent-to-runners.md): legacy sidecars publish per
+    // agent (`agent:{id}:result`), runner sidecars (≥ 0.3.0) per
+    // machine × installed CLI (`machine:{id}:cli:{type}:result`).
+    // Route per machine off sidecarVersion; ingest itself is shape-
+    // agnostic (chunks carry commandId/sessionId either way).
+    const [machines, agents] = await Promise.all([
+      this.prisma.machine.findMany({
+        where: { deletedAt: null },
+        select: { id: true, sidecarVersion: true, availableAdapters: true },
+      }),
+      this.prisma.agent.findMany({ select: { id: true, machineId: true } }),
+    ]);
+    const runnerMachines = machines.filter((m) => isRunnerSidecar(m.sidecarVersion));
+    const runnerIds = new Set(runnerMachines.map((m) => m.id));
+    const next: string[] = [];
+    for (const a of agents) {
+      // Agent rows on runner machines are routing records — nothing
+      // publishes on their per-agent streams anymore. Agents on
+      // soft-deleted machines keep theirs (matches the previous
+      // all-agents behavior; their sidecar may still be running).
+      if (!runnerIds.has(a.machineId)) next.push(streamKeys.result(a.id));
+    }
+    for (const m of runnerMachines) {
+      const adapters = (m.availableAdapters ?? []) as unknown as AvailableAdapter[];
+      if (!Array.isArray(adapters)) continue;
+      for (const ad of adapters) {
+        if (ad?.type) next.push(streamKeys.runnerResult(m.id, ad.type));
+      }
+    }
     for (const s of next) {
       await this.redis.ensureGroup(s, consumerGroups.server);
     }
@@ -85,7 +117,7 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
           ...this.streams,
           ...this.streams.map(() => '>'),
         ] as unknown as [string, ...string[]];
-        const res = (await (this.redis.read as any).xreadgroup(...args)) as Array<
+        const res = (await (this.redis.readResults as any).xreadgroup(...args)) as Array<
           [string, Array<[string, string[]]>]
         > | null;
         if (!res) continue;
@@ -144,10 +176,12 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
     if (!meta) return undefined;
     const cmd = await this.prisma.command.findUnique({
       where: { id: chunk.commandId },
-      select: { agent: { select: { type: true } } },
+      select: { session: { select: { cliType: true } }, agent: { select: { type: true } } },
     });
     if (!cmd) return undefined;
-    const parsed = parseUsage(cmd.agent.type as AgentType, meta);
+    // Session.cliType is the pinned CLI (Phase 1, survives Phase 4's
+    // Agent retirement); agent.type covers pre-backfill rows.
+    const parsed = parseUsage((cmd.session.cliType ?? cmd.agent.type) as AgentType, meta);
     if (!parsed) return undefined;
     return parsed as unknown as Prisma.InputJsonValue;
   }

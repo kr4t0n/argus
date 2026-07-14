@@ -134,14 +134,15 @@ func (a *ClaudeCodeAdapter) Execute(
 	state := newFileEditState()
 	tasks := newTaskListState()
 
+	dir := runDir(cmd.WorkingDir, a.workingDir)
 	spec := StreamSpec{
 		Binary:     a.binary,
 		Args:       args,
 		Stdin:      cmd.Prompt,
-		Dir:        a.workingDir,
+		Dir:        dir,
 		StderrKind: protocol.KindStderr,
 		Mapper: func(line string) []Chunk {
-			return mapClaudeLine(line, state, tasks, a.workingDir)
+			return mapClaudeLine(line, state, tasks, dir)
 		},
 	}
 
@@ -191,9 +192,10 @@ func (a *ClaudeCodeAdapter) Cancel(_ context.Context, commandID string) error {
 // with the previous assistant turn. Stopping there would leave a
 // dangling tool_use without its result, which Claude refuses to resume.
 func (a *ClaudeCodeAdapter) CloneSession(
-	_ context.Context, srcExternalID string, turnIndex int,
+	_ context.Context, workingDir, srcExternalID string, turnIndex int,
 ) (string, error) {
-	if a.workingDir == "" {
+	wd := runDir(workingDir, a.workingDir)
+	if wd == "" {
 		return "", fmtCloneError("claude-code", srcExternalID,
 			fmt.Errorf("workingDir not set; cannot derive project slug"))
 	}
@@ -201,7 +203,7 @@ func (a *ClaudeCodeAdapter) CloneSession(
 	if err != nil {
 		return "", fmtCloneError("claude-code", srcExternalID, err)
 	}
-	slug := claudeProjectSlug(a.workingDir)
+	slug := claudeProjectSlug(wd)
 	projectDir := filepath.Join(home, ".claude", "projects", slug)
 	srcFile := filepath.Join(projectDir, srcExternalID+".jsonl")
 	if _, err := os.Stat(srcFile); err != nil {

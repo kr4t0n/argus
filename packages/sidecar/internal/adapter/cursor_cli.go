@@ -114,13 +114,14 @@ func (a *CursorCLIAdapter) Execute(
 	// release that omits diffString could opt back into snapshot diffing.
 	state := newFileEditState()
 
+	dir := runDir(cmd.WorkingDir, a.workingDir)
 	spec := StreamSpec{
 		Binary:     a.binary,
 		Args:       args,
-		Dir:        a.workingDir,
+		Dir:        dir,
 		StderrKind: protocol.KindStderr,
 		Mapper: func(line string) []Chunk {
-			return mapCursorLine(line, state, a.workingDir)
+			return mapCursorLine(line, state, dir)
 		},
 	}
 	runner, err := Start(ctx, spec)

@@ -245,10 +245,27 @@ export interface DestroyAgentCommand {
 }
 
 /** Full canonical list — sidecar reconciles its supervisor set against
- *  this and stops/starts deltas. Sent on every (re)connect. */
+ *  this and stops/starts deltas. Sent on every (re)connect. Legacy
+ *  (< 0.3.0) sidecars only — runner sidecars get SyncProjects instead. */
 export interface SyncAgentsCommand {
   kind: 'sync-agents';
   agents: AgentSpec[];
+  ts: number;
+}
+
+/**
+ * Full idempotent snapshot of the machine's known-project workdir
+ * allowlist. Phase 3 (docs/plan-agent-to-runners.md): runner sidecars
+ * (≥ 0.3.0) have no supervisors, so create/destroy/sync-agents is
+ * replaced by this one command — the sidecar reconciles its fs/git
+ * jail allowlist (`workdirAllowed`) and refcounted watcher registry
+ * against the list. Re-sent on every machine-register and after any
+ * agent vivify/create/destroy, so a missed entry heals on the next
+ * trigger.
+ */
+export interface SyncProjectsCommand {
+  kind: 'sync-projects';
+  workdirs: string[];
   ts: number;
 }
 
@@ -695,6 +712,7 @@ export type MachineControlCommand =
   | CreateAgentCommand
   | DestroyAgentCommand
   | SyncAgentsCommand
+  | SyncProjectsCommand
   | FSListRequestCommand
   | FSReadRequestCommand
   | GitLogRequestCommand
@@ -925,6 +943,15 @@ export interface Command {
   attachments?: AttachmentRef[];
   /** Set when kind === 'clone-session'; ignored otherwise. */
   clone?: CloneSpec;
+  /** Phase 3: the session's pinned workdir (docs/plan-agent-to-runners.md
+   *  §4.1 — resume state is cwd-keyed on disk). Runner sidecars (≥ 0.3.0)
+   *  execute/clone with this as cwd; legacy sidecars resolve cwd from
+   *  their cached agent spec and ignore it. */
+  workingDir?: string;
+  /** Phase 3: the session's pinned CLI type — matches the
+   *  machine:{id}:cli:{type}:cmd stream the command was published on.
+   *  Legacy sidecars ignore it. */
+  cliType?: string;
 }
 
 /** Sidecar → server, streamed */
@@ -1114,9 +1141,18 @@ export const streamKeys = {
   notify: 'agent:notify',
   command: (agentId: string) => `agent:${agentId}:cmd`,
   result: (agentId: string) => `agent:${agentId}:result`,
+  /** Phase-3 runner streams (docs/plan-agent-to-runners.md): sidecars
+   *  ≥ 0.3.0 replace the per-agent cmd/result pair with one pair per
+   *  machine × installed CLI, so stream count scales with the bounded
+   *  dimensions (M·C) instead of projects. The server routes per
+   *  machine off `Machine.sidecarVersion`; a mixed fleet uses both
+   *  families side by side. */
+  runnerCommand: (machineId: string, cliType: string) => `machine:${machineId}:cli:${cliType}:cmd`,
+  runnerResult: (machineId: string, cliType: string) => `machine:${machineId}:cli:${cliType}:result`,
   /** Per-machine control plane: server publishes Create/Destroy/Sync
-   *  agent commands here; the sidecar reads them with its own group
-   *  so a server restart doesn't replay everything. */
+   *  agent commands (sync-projects for runner sidecars) here; the
+   *  sidecar reads them with its own group so a server restart doesn't
+   *  replay everything. */
   machineControl: (machineId: string) => `machine:${machineId}:control`,
 };
 
@@ -1136,6 +1172,10 @@ export const streamMaxLen = (streamKey: string): number => {
   // nudges (fs and git share this stream and burst at correlated
   // moments — a rebase is both).
   if (streamKey === streamKeys.notify) return 2000;
+  // The suffix matches cover BOTH stream families: legacy per-agent
+  // (`agent:{id}:cmd` / `:result`) and Phase-3 per-runner
+  // (`machine:{id}:cli:{type}:cmd` / `:result`) share the same caps by
+  // design — runner streams deliberately mirror the per-agent budget.
   if (streamKey.endsWith(':cmd')) return 200;
   if (streamKey.endsWith(':result')) return 500;
   if (streamKey.endsWith(':control')) return 200;
@@ -1143,7 +1183,9 @@ export const streamMaxLen = (streamKey: string): number => {
 };
 
 export const consumerGroups = {
-  /** server-side consumer group reading result streams */
+  /** server-side consumer group reading result streams — registered
+   *  per stream on both families (legacy `agent:{id}:result` and
+   *  runner `machine:{id}:cli:{type}:result`), same name everywhere. */
   server: 'server',
   /** server-side consumer group reading lifecycle events. Also created
    *  on `agent:notify`: MachineService drains both streams with a
@@ -1165,6 +1207,13 @@ export const consumerGroups = {
    *  command stream. Naming the group after the agent (rather than
    *  the machine or sidecar) lets two supervisors briefly overlap
    *  during a daemon restart and cooperatively drain the pending
-   *  entry list instead of double-delivering commands. */
+   *  entry list instead of double-delivering commands.
+   *
+   *  DRIFT NOTE: the Go side no longer uses this — the daemon reads
+   *  every cmd stream (per-agent and, in Phase 3, per machine×CLI
+   *  runner streams alike) under one machine-wide group,
+   *  `SidecarCommandGroup(machineID)` = `sidecar-cmd-{machineId}`
+   *  (protocol.go). Kept only as documentation until Phase 4 sweeps
+   *  legacy remnants. */
   sidecar: (agentId: string) => `sidecar-${agentId}`,
 };

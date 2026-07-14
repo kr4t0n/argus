@@ -126,6 +126,12 @@ export class TerminalService {
     const rows = clampDimension(req.rows ?? 32, 5, 200);
     const id = randomUUID();
 
+    // Resolve cwd server-side: explicit request wins, else the agent
+    // row's workingDir (the session's project dir). Phase 3 runner
+    // sidecars have no Lookup(agentID) default to fall back on, so an
+    // empty cwd must mean "no project", not "you figure it out".
+    const cwd = req.cwd?.trim() || agent.workingDir || '';
+
     const row = await this.prisma.terminal.create({
       data: {
         id,
@@ -133,7 +139,7 @@ export class TerminalService {
         userId,
         status: 'opening',
         shell: req.shell ?? '',
-        cwd: req.cwd ?? null,
+        cwd: cwd || null,
         cols,
         rows,
       },
@@ -144,7 +150,7 @@ export class TerminalService {
       terminalId: id,
       agentId,
       shell: req.shell ?? '',
-      cwd: req.cwd ?? '',
+      cwd,
       cols,
       rows,
       ts: Date.now(),

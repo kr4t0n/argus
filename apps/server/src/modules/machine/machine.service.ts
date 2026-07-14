@@ -25,7 +25,7 @@ import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 import { FSService } from './fs.service';
 import { ModelsService } from './models.service';
-import { SidecarUpdateService, stripSidecarPrefix } from './sidecar-update.service';
+import { SidecarUpdateService, isRunnerSidecar, stripSidecarPrefix } from './sidecar-update.service';
 
 const CONSUMER = 'server-1';
 const STALE_AFTER_MS = 30_000;
@@ -231,7 +231,11 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
    * Redis hiccup doesn't leave the dashboard with a ghost agent.
    *
    * The agent boots into `offline` status; the sidecar's
-   * RegisterEvent flips it `online` once the supervisor is up.
+   * RegisterEvent flips it `online` once the supervisor is up. On
+   * runner-style machines (≥ 0.3.0) there is no supervisor: the row
+   * inherits machine liveness on the next machine-heartbeat (≤ 5s),
+   * and the sidecar gets a `sync-projects` allowlist snapshot instead
+   * of `create-agent`.
    */
   async createAgent(machineId: string, req: CreateAgentRequest): Promise<AgentDTO> {
     const machine = await this.prisma.machine.findUnique({ where: { id: machineId } });
@@ -276,19 +280,27 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
       throw err;
     }
 
-    const spec: AgentSpec = {
-      agentId: row.id,
-      name: row.name,
-      type: row.type,
-      workingDir: row.workingDir ?? undefined,
-      supportsTerminal: row.supportsTerminal,
-      adapter: req.adapter,
-    };
-    await this.publishControl(machineId, {
-      kind: 'create-agent',
-      agent: spec,
-      ts: Date.now(),
-    });
+    if (isRunnerSidecar(machine.sidecarVersion)) {
+      // Runner sidecars have no supervisors and ignore create-agent;
+      // what they need is the new workdir in their allowlist. The row
+      // itself stays — it's the routing record sessions and commands
+      // hang off until Phase 4.
+      await this.syncProjects(machineId);
+    } else {
+      const spec: AgentSpec = {
+        agentId: row.id,
+        name: row.name,
+        type: row.type,
+        workingDir: row.workingDir ?? undefined,
+        supportsTerminal: row.supportsTerminal,
+        adapter: req.adapter,
+      };
+      await this.publishControl(machineId, {
+        kind: 'create-agent',
+        agent: spec,
+        ts: Date.now(),
+      });
+    }
 
     const dto = MachineService.agentToDto(row, machine.name);
     this.gateway.emitAgentUpsert(dto);
@@ -307,24 +319,38 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
    * history.
    */
   async destroyAgent(machineId: string, agentId: string): Promise<void> {
-    const agent = await this.prisma.agent.findUnique({ where: { id: agentId } });
+    const agent = await this.prisma.agent.findUnique({
+      where: { id: agentId },
+      include: { machine: { select: { sidecarVersion: true } } },
+    });
     if (!agent) throw new NotFoundException('agent not found');
     if (agent.machineId !== machineId) {
       throw new BadRequestException('agent does not belong to this machine');
     }
 
-    await this.publishControl(machineId, {
-      kind: 'destroy-agent',
-      agentId,
-      ts: Date.now(),
-    });
+    const runner = isRunnerSidecar(agent.machine.sidecarVersion);
+    if (!runner) {
+      await this.publishControl(machineId, {
+        kind: 'destroy-agent',
+        agentId,
+        ts: Date.now(),
+      });
+    }
     await this.prisma.agent.delete({ where: { id: agentId } });
-    // Reclaim the agent's Redis streams now. This covers the
+    // Reclaim the agent's per-agent Redis streams now. This covers the
     // sidecar-offline case (no `agent-destroyed` ack will come); if the
     // sidecar is online, its ack path DELs again once the supervisor is
     // torn down, cleaning up any stream a late supervisor write recreated
-    // in the gap. See `deleteAgentStreams`.
+    // in the gap. See `deleteAgentStreams`. Harmless no-op on runner
+    // machines (their streams are per machine×CLI and shared — never
+    // deleted on an agent destroy).
     await this.deleteAgentStreams(agentId);
+    if (runner) {
+      // Runner sidecars ignore destroy-agent; re-snapshot the allowlist
+      // instead so a workdir with no remaining rows drops out (stops
+      // its watchers, closes the fs/git jail for it).
+      await this.syncProjects(machineId);
+    }
     this.gateway.emitAgentRemoved(agentId);
   }
 
@@ -343,6 +369,10 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
    * sidecar's machine-wide command reader re-ensures groups + re-snapshots
    * its agent set, and the result-ingestor re-syncs its stream list (see
    * its NOGROUP branch).
+   *
+   * Deliberately per-agent only: the Phase-3 runner streams
+   * (`machine:{id}:cli:{type}:*`) are shared by every session of that
+   * CLI on the machine and must never be deleted on an agent destroy.
    */
   private async deleteAgentStreams(agentId: string): Promise<void> {
     try {
@@ -488,6 +518,39 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
       ts: Date.now(),
     });
     this.logger.log(`sync-agents → ${machineId}: ${specs.length} agent(s)`);
+  }
+
+  /**
+   * Push the full workdir allowlist down to a runner-style sidecar
+   * (≥ 0.3.0). Replaces sync-agents/create-agent/destroy-agent for
+   * those machines: the sidecar reconciles its fs/git jail allowlist
+   * and refcounted watcher registry against the snapshot. Idempotent
+   * full snapshot — re-sent on every register and after any agent
+   * create/destroy, so a dropped control entry heals on the next
+   * trigger.
+   *
+   * Project rows are the authoritative source (every session pins one
+   * since Phase 1, archived or not — archived sessions stay resumable);
+   * live agents' workingDirs are unioned in to cover pre-promotion
+   * rows that never got a Project.
+   */
+  private async syncProjects(machineId: string): Promise<void> {
+    const [projects, agents] = await Promise.all([
+      this.prisma.project.findMany({ where: { machineId }, select: { workingDir: true } }),
+      this.prisma.agent.findMany({
+        where: { machineId, archivedAt: null },
+        select: { workingDir: true },
+      }),
+    ]);
+    const workdirs = [
+      ...new Set(
+        [...projects, ...agents]
+          .map((r) => r.workingDir?.trim() ?? '')
+          .filter((wd) => wd !== ''),
+      ),
+    ];
+    await this.publishControl(machineId, { kind: 'sync-projects', workdirs, ts: Date.now() });
+    this.logger.log(`sync-projects → ${machineId}: ${workdirs.length} workdir(s)`);
   }
 
   private async consumeLoop() {
@@ -671,16 +734,35 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     quotaEv?: MachineHeartbeatEvent,
   ): Promise<void> {
     try {
-      // `updateMany` (not `update`) so the `deletedAt: null` filter
-      // is part of the WHERE: a soft-deleted machine matches zero
-      // rows and the heartbeat is a no-op (no status flip on a
-      // tombstone, no resurrection), same as an unknown machineId.
+      // One read up front: the runner gate below needs sidecarVersion.
+      // Deleted/unknown machines bail here — same no-op semantics as
+      // before (no status flip on a tombstone, no resurrection).
+      const machine = await this.prisma.machine.findUnique({
+        where: { id: ev.machineId },
+        select: { id: true, deletedAt: true, sidecarVersion: true },
+      });
+      if (!machine || machine.deletedAt) return;
+      const now = new Date();
+      // `updateMany` (not `update`) keeps the `deletedAt: null` filter
+      // in the WHERE as defense against a soft-delete racing the read
+      // above — a tombstone still matches zero rows.
       const res = await this.prisma.machine.updateMany({
         where: { id: ev.machineId, deletedAt: null },
-        data: { status: 'online', lastSeenAt: new Date() },
+        data: { status: 'online', lastSeenAt: now },
       });
       if (res.count > 0) {
         this.gateway.emitMachineStatus(ev.machineId, 'online');
+        if (isRunnerSidecar(machine.sidecarVersion)) {
+          // Runner sidecars send no per-agent heartbeats — their agent
+          // rows (routing records) inherit machine liveness here so
+          // sweepStale's lastHeartbeatAt arm never false-flags them.
+          // No per-agent WS emit: nothing transitions on the steady 5s
+          // beat, and dispatch gates on machine status for runners.
+          await this.prisma.agent.updateMany({
+            where: { machineId: ev.machineId, archivedAt: null },
+            data: { status: 'online', lastHeartbeatAt: now },
+          });
+        }
         if (quotaEv?.quotas?.length) {
           await this.persistQuotas(ev.machineId, quotaEv.quotas);
         }
@@ -757,7 +839,15 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         // machine to come back on the new binary, fire `completed`
         // and resolve the bulk-loop promise.
         this.sidecarUpdate.observeMachineRegister(ev.machineId, sidecarVersion);
-        await this.syncAgents(ev.machineId);
+        // Reconcile shape follows the sidecar's style. Gate on the
+        // freshly reported version, not the DB row — a register is
+        // exactly when the style can have just changed (self-update
+        // restart), and the stale row would send the wrong command.
+        if (isRunnerSidecar(sidecarVersion)) {
+          await this.syncProjects(ev.machineId);
+        } else {
+          await this.syncAgents(ev.machineId);
+        }
         break;
       }
       // 'machine-heartbeat' and 'heartbeat' never reach this switch —

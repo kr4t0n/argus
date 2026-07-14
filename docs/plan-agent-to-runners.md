@@ -200,7 +200,62 @@ Original scope for reference:
   events already carry path; sidecar adds workingDir (most events carry it
   already).
 
-### Phase 3 — sidecar runners + stream consolidation (the wire change)
+### Phase 3 — sidecar runners + stream consolidation ✅ IMPLEMENTED (branch refactor/agent-to-runners)
+
+Verified end-to-end with the real sidecar binary (built as 0.3.0-test)
++ fake-claude against a local stack: machine-register → project-first
+session create → sync-projects reconcile → prompt dispatched on
+machine:{id}:cli:claude-code:cmd → 17 chunks ingested from the runner
+result stream → second turn resumed via the stable externalId; fs RPC
+served workdir-addressed in ~12ms; live model probe answered; ZERO
+per-agent heartbeat/register events on lifecycle; no per-agent streams
+created. Found-and-fixed during verification: the server's three
+blocking consumer loops (lifecycle, results, background) shared ONE
+ioredis connection, serializing behind each other's 5s BLOCK — masked
+for years by heartbeat chatter, exposed the moment the lifecycle
+stream went quiet. Each loop now owns a dedicated connection
+(redis.service.ts).
+
+Deploy order (STRICT): server first, then sidecars. A ≥0.3.0 sidecar
+against a pre-Phase-3 server has no command path. isRunnerSidecar()
+gates on MAJOR.MINOR ≥ 0.3 (prerelease-tolerant).
+
+Locked design decisions (as implemented):
+
+- **Clean cut, server-leading.** Sidecar ≥0.3.x drops supervisors
+  entirely: runners per installed CLI, no per-agent heartbeats, new
+  streams. It REQUIRES a Phase-3 server (deploy order: server first,
+  then sidecars self-update — Kyle's normal order). The server keeps
+  full legacy support for old sidecars, gated on `Machine.sidecarVersion`
+  (semver ≥ 0.3.0 ⇒ new-style). Old-server + new-sidecar is unsupported.
+- **Streams**: `machine:{id}:cli:{type}:cmd` / `:result`, MAXLEN mirrors
+  the per-agent caps (200/500) in both streamMaxLen helpers. Wire
+  `Command` gains `workingDir` (from Session, pinned at create) —
+  adapters take Dir per command; `CloneSession` gains a workdir arg.
+- **Dispatch** (`command.service.ts`): session → projectId/cliType →
+  machine; new-style ⇒ machine:cli stream + machine-level online gate;
+  legacy ⇒ agent stream as today. Result-ingestor consumes new-style
+  machines' (machine × availableAdapters) streams + old machines'
+  agent streams; ingest itself is unchanged (chunks carry
+  commandId/sessionId).
+- **Agent rows become routing records** on new-style machines: they
+  inherit machine liveness (machine-heartbeat handler bumps their
+  status/lastHeartbeatAt so sweepStale never false-flags them); busy is
+  already session-derived in the UI. Rows keep serving iOS + legacy
+  reads until Phase 4.
+- **Control plane**: new sidecars get `sync-projects` (full workdir
+  allowlist, idempotent, re-sent on every register and on any
+  vivify/create/destroy) instead of create/destroy/sync-agents. The
+  allowlist feeds `workdirAllowed` (Phase 2) and the watcher registry.
+- **Watchers**: refcounted per-workdir registry (fs/git/progress) built
+  from the allowlist; events carry workingDir (agentId empty) — the
+  server's project-room fanout (Phase 2) already routes them.
+- **Terminal**: server sends cwd explicitly in TerminalOpen (from the
+  agent row / project); sidecar drops its Lookup(agentID) dependency.
+  Capability check stays server-side.
+- **Catalog push**: once per runner spawn instead of per supervisor.
+
+Original scope for reference:
 
 - Sidecar: replace `supervisors map[agentID]` with runners per cliType;
   refcounted watcher registry keyed by workdir (start on first
