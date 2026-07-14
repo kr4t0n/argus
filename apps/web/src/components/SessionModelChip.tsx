@@ -3,6 +3,7 @@ import { ChevronDown, Cpu } from 'lucide-react';
 import type { ModelSelection, SessionDTO } from '@argus/shared-types';
 import { api } from '../lib/api';
 import { useSessionStore } from '../stores/sessionStore';
+import { useAgentStore } from '../stores/agentStore';
 import { ModelPicker, modelSelectionLabel, useModelCatalog } from './ModelPicker';
 import { cn } from '../lib/utils';
 
@@ -35,7 +36,13 @@ export function SessionModelChip({
   // `undefined` = nothing in flight; `null` is a real value (Default).
   const [pending, setPending] = useState<ModelSelection | null | undefined>(undefined);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const { catalog } = useModelCatalog(agentId ?? null);
+  // Catalogs are machine×CLI (Phase 2). The session's own cliType is
+  // authoritative; the agent row supplies machineId (and a type
+  // fallback for pre-backfill sessions).
+  const agent = useAgentStore((s) => (agentId ? s.agents[agentId] : undefined));
+  const cliType = session.cliType ?? agent?.type ?? null;
+  const target = agent && cliType ? { machineId: agent.machineId, cliType } : null;
+  const { catalog } = useModelCatalog(target);
 
   // Resync the draft when another browser/dialog changes the session.
   useEffect(() => {
@@ -113,7 +120,7 @@ export function SessionModelChip({
       {open && (
         <div className="absolute right-0 top-full z-50 mt-1.5 w-[352px] max-w-[calc(100vw-16px)] rounded-lg border border-default bg-surface-0 p-3 shadow-2xl">
           <div className="mb-2 text-caps">session model</div>
-          <ModelPicker agentId={agentId ?? null} value={draft} onChange={setDraft} />
+          <ModelPicker target={target} value={draft} onChange={setDraft} />
         </div>
       )}
     </div>

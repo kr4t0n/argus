@@ -35,3 +35,16 @@ export class GitController {
     return this.fs.listGitLog(id, q.limit ?? GIT_LOG_DEFAULT_LIMIT);
   }
 }
+
+/** Project-addressed variant (Phase 2) — same service, resolved via
+ *  the Project row instead of an agent. */
+@UseGuards(JwtAuthGuard)
+@Controller('projects/:id/git')
+export class ProjectGitController {
+  constructor(private readonly fs: FSService) {}
+
+  @Get('log')
+  log(@Param('id') id: string, @Query() q: GitLogQueryDto): Promise<GitLogResponse> {
+    return this.fs.listGitLogForProject(id, q.limit ?? GIT_LOG_DEFAULT_LIMIT);
+  }
+}

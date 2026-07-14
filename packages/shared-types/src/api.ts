@@ -256,7 +256,10 @@ export interface CreateCommandRequest {
  * pass `?refresh=1` to bypass.
  */
 export interface ModelCatalogResponse {
-  agentId: string;
+  /** Catalog identity since Phase 2: a catalog belongs to the machine's
+   *  installed binary, not to a workdir-bound agent. */
+  machineId: string;
+  cliType: string;
   source: 'static' | 'cli';
   fetchedAt: string;
   models: ModelCatalogEntry[];

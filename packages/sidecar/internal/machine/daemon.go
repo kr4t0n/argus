@@ -432,10 +432,33 @@ func (d *Daemon) dispatchControl(ctx context.Context, payload map[string]any) {
 	}
 }
 
-// handleFSList routes an fs-list request to the target agent's
-// supervisor. If the agent is unknown (race: deleted between server
-// publish and sidecar read) we publish a synthetic error response so
-// the server-side pending request resolves instead of timing out.
+// workdirAllowed reports whether wd is a workingDir this machine
+// already knows — i.e. some supervisor's spec points at it. The
+// allowlist is the security boundary for workdir-addressed fs/git
+// RPCs (Phase 2): the daemon must never serve a path the server
+// invents, only pairs the machine's own agent set vouches for. Phase
+// 3 replaces the supervisor scan with the sync-projects allowlist.
+func (d *Daemon) workdirAllowed(wd string) bool {
+	if wd == "" {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, s := range d.supervisors {
+		if s.spec.WorkingDir == wd {
+			return true
+		}
+	}
+	return false
+}
+
+// handleFSList serves an fs-list request. Workdir-addressed requests
+// (Phase 2, `workingDir` set) are validated against the allowlist and
+// served directly — no supervisor involved; legacy agent-addressed
+// requests route through the target supervisor as before. If neither
+// resolves (race: agent deleted between server publish and sidecar
+// read, or an unknown workdir) we publish a synthetic error response
+// so the server-side pending request resolves instead of timing out.
 //
 // The actual listing runs in a goroutine bounded by fsSlots so the
 // control loop returns immediately. Without this, a tree refresh
@@ -443,6 +466,26 @@ func (d *Daemon) dispatchControl(ctx context.Context, payload map[string]any) {
 // serialized past the server's 5 s timeout and surfaced as
 // "agent did not respond" in the dashboard.
 func (d *Daemon) handleFSList(ctx context.Context, req protocol.FSListRequestCommand) {
+	if req.WorkingDir != "" {
+		if !d.workdirAllowed(req.WorkingDir) {
+			_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSListResponseEvent{
+				Kind:      "fs-list-response",
+				MachineID: d.cache.MachineID,
+				AgentID:   req.AgentID,
+				RequestID: req.RequestID,
+				Path:      req.Path,
+				Error:     "workingDir is not a known project on this machine",
+				TS:        time.Now().UnixMilli(),
+			})
+			return
+		}
+		go func() {
+			d.fsSlots <- struct{}{}
+			defer func() { <-d.fsSlots }()
+			serveFSList(ctx, d.bus, d.log, d.cache.MachineID, req.AgentID, req.WorkingDir, req)
+		}()
+		return
+	}
 	d.mu.Lock()
 	s, ok := d.supervisors[req.AgentID]
 	d.mu.Unlock()
@@ -473,6 +516,27 @@ func (d *Daemon) handleFSList(ctx context.Context, req protocol.FSListRequestCom
 // request resolves instead of timing out. Async dispatch + shared
 // fsSlots gate, same rationale as handleFSList.
 func (d *Daemon) handleFSRead(ctx context.Context, req protocol.FSReadRequestCommand) {
+	if req.WorkingDir != "" {
+		if !d.workdirAllowed(req.WorkingDir) {
+			_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSReadResponseEvent{
+				Kind:      "fs-read-response",
+				MachineID: d.cache.MachineID,
+				AgentID:   req.AgentID,
+				RequestID: req.RequestID,
+				Path:      req.Path,
+				Result:    "error",
+				Error:     "workingDir is not a known project on this machine",
+				TS:        time.Now().UnixMilli(),
+			})
+			return
+		}
+		go func() {
+			d.fsSlots <- struct{}{}
+			defer func() { <-d.fsSlots }()
+			serveFSRead(ctx, d.bus, d.log, d.cache.MachineID, req.AgentID, req.WorkingDir, req)
+		}()
+		return
+	}
 	d.mu.Lock()
 	s, ok := d.supervisors[req.AgentID]
 	d.mu.Unlock()
@@ -503,6 +567,25 @@ func (d *Daemon) handleFSRead(ctx context.Context, req protocol.FSReadRequestCom
 // gate (a depth-N tree refresh shouldn't queue behind a git log; same
 // gate keeps total concurrent disk-touching ops bounded).
 func (d *Daemon) handleGitLog(ctx context.Context, req protocol.GitLogRequestCommand) {
+	if req.WorkingDir != "" {
+		if !d.workdirAllowed(req.WorkingDir) {
+			_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.GitLogResponseEvent{
+				Kind:      "git-log-response",
+				MachineID: d.cache.MachineID,
+				AgentID:   req.AgentID,
+				RequestID: req.RequestID,
+				Error:     "workingDir is not a known project on this machine",
+				TS:        time.Now().UnixMilli(),
+			})
+			return
+		}
+		go func() {
+			d.fsSlots <- struct{}{}
+			defer func() { <-d.fsSlots }()
+			serveGitLog(ctx, d.bus, d.log, d.cache.MachineID, req.AgentID, req.WorkingDir, req)
+		}()
+		return
+	}
 	d.mu.Lock()
 	s, ok := d.supervisors[req.AgentID]
 	d.mu.Unlock()
@@ -532,6 +615,18 @@ func (d *Daemon) handleGitLog(ctx context.Context, req protocol.GitLogRequestCom
 func (d *Daemon) handleListModels(ctx context.Context, req protocol.ListModelsRequestCommand) {
 	d.mu.Lock()
 	s, ok := d.supervisors[req.AgentID]
+	// CliType addressing (Phase 2): the catalog is a property of the
+	// installed binary, so any supervisor of the requested adapter type
+	// can answer. Falls back gracefully when the agent id is stale or
+	// absent — the first same-type supervisor wins.
+	if !ok && req.CliType != "" {
+		for _, cand := range d.supervisors {
+			if cand.spec.Type == req.CliType {
+				s, ok = cand, true
+				break
+			}
+		}
+	}
 	d.mu.Unlock()
 	if !ok {
 		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.ModelCatalogResponseEvent{

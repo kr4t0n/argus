@@ -852,9 +852,14 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
       }
       case 'fs-changed': {
         // Debounced notification from the sidecar's fsnotify watcher.
-        // Broadcast into the agent room so connected dashboards can
-        // invalidate their cached tree listings.
-        this.gateway.emitFSChanged({ agentId: ev.agentId, path: ev.path });
+        // Broadcast into the project room (Phase 2) + legacy agent room
+        // so connected dashboards can invalidate their cached listings.
+        this.gateway.emitFSChanged({
+          agentId: ev.agentId,
+          path: ev.path,
+          machineId: ev.machineId,
+          workingDir: ev.workingDir,
+        });
         break;
       }
       case 'git-log-response': {
@@ -871,9 +876,13 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
       }
       case 'git-changed': {
         // Debounced notification from the sidecar's secondary git
-        // watcher (.git/HEAD + refs/heads/). Broadcast into the agent
-        // room so connected dashboards can refresh their commit panel.
-        this.gateway.emitGitChanged({ agentId: ev.agentId });
+        // watcher (.git/HEAD + refs/heads/). Same project-room +
+        // legacy agent-room fanout as fs-changed.
+        this.gateway.emitGitChanged({
+          agentId: ev.agentId,
+          machineId: ev.machineId,
+          workingDir: ev.workingDir,
+        });
         break;
       }
       case 'sidecar-update-started':

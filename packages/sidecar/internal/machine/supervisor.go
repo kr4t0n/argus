@@ -488,11 +488,12 @@ func (s *supervisor) startFSWatcher(ctx context.Context) {
 	}
 	w, err := newFSWatcher(ctx, s.spec.WorkingDir, func(relDir string) {
 		_ = s.bus.Publish(ctx, protocol.NotifyStream(), protocol.FSChangedEvent{
-			Kind:      "fs-changed",
-			MachineID: s.machine,
-			AgentID:   s.spec.AgentID,
-			Path:      relDir,
-			TS:        time.Now().UnixMilli(),
+			Kind:       "fs-changed",
+			MachineID:  s.machine,
+			AgentID:    s.spec.AgentID,
+			WorkingDir: s.spec.WorkingDir,
+			Path:       relDir,
+			TS:         time.Now().UnixMilli(),
 		})
 	}, s.log)
 	if err != nil {
@@ -512,10 +513,11 @@ func (s *supervisor) startGitWatcher(ctx context.Context) {
 	}
 	w, err := newGitWatcher(ctx, s.spec.WorkingDir, func() {
 		_ = s.bus.Publish(ctx, protocol.NotifyStream(), protocol.GitChangedEvent{
-			Kind:      "git-changed",
-			MachineID: s.machine,
-			AgentID:   s.spec.AgentID,
-			TS:        time.Now().UnixMilli(),
+			Kind:       "git-changed",
+			MachineID:  s.machine,
+			AgentID:    s.spec.AgentID,
+			WorkingDir: s.spec.WorkingDir,
+			TS:         time.Now().UnixMilli(),
 		})
 	}, s.log)
 	if err != nil {
@@ -612,66 +614,11 @@ func (s *supervisor) publishBackgroundTaskEvent(ctx context.Context, ev bgEvent)
 // the dashboard can hydrate its tree cache in a single round trip.
 // Entries always carries the requested path's listing so clients that
 // don't consume Listings keep working.
+// Delegates to the shared workdir-addressed body in fsserve.go —
+// legacy agent-addressed requests just resolve the workingDir from
+// this supervisor's spec (Phase 2 of docs/plan-agent-to-runners.md).
 func (s *supervisor) HandleFSList(ctx context.Context, req protocol.FSListRequestCommand) {
-	resp := protocol.FSListResponseEvent{
-		Kind:      "fs-list-response",
-		MachineID: s.machine,
-		AgentID:   s.spec.AgentID,
-		RequestID: req.RequestID,
-		Path:      req.Path,
-		TS:        time.Now().UnixMilli(),
-	}
-
-	depth := req.Depth
-	if depth < 1 {
-		depth = 1
-	}
-	// Match ListDirs' root-path normalization so the root-listing
-	// lookup below hits the canonical "" key it produces.
-	rootKey := req.Path
-	if rootKey == "." {
-		rootKey = ""
-	}
-	listings, err := ListDirs(ListDirRequest{
-		WorkingDir: s.spec.WorkingDir,
-		Path:       req.Path,
-		ShowAll:    req.ShowAll,
-	}, depth, protocol.FSListRecursiveDescentBudget)
-
-	if err != nil {
-		resp.Error = err.Error()
-	} else {
-		if depth > 1 {
-			resp.Listings = make(map[string][]protocol.FSEntry, len(listings))
-		}
-		for path, entries := range listings {
-			pe := toProtocolEntries(entries)
-			if path == rootKey {
-				resp.Entries = pe
-			}
-			if depth > 1 {
-				resp.Listings[path] = pe
-			}
-		}
-		s.attachGit(&resp)
-	}
-
-	if err := s.bus.Publish(ctx, protocol.LifecycleStream(), resp); err != nil {
-		s.log.Printf("agent %s: fs-list-response publish failed: %v", s.spec.AgentID, err)
-	}
-}
-
-// attachGit best-effort fills resp.Git. Non-repo workingDirs return
-// (nil, nil) and silently no-op; real errors are logged but not fatal.
-func (s *supervisor) attachGit(resp *protocol.FSListResponseEvent) {
-	git, err := ReadGitStatus(s.spec.WorkingDir)
-	if err != nil {
-		s.log.Printf("agent %s: read git status: %v", s.spec.AgentID, err)
-		return
-	}
-	if git != nil {
-		resp.Git = git
-	}
+	serveFSList(ctx, s.bus, s.log, s.machine, s.spec.AgentID, s.spec.WorkingDir, req)
 }
 
 func toProtocolEntries(entries []FSEntry) []protocol.FSEntry {
@@ -695,33 +642,7 @@ func toProtocolEntries(entries []FSEntry) []protocol.FSEntry {
 // Result="error" so the dashboard always gets a structured reply
 // within the server's timeout window.
 func (s *supervisor) HandleFSRead(ctx context.Context, req protocol.FSReadRequestCommand) {
-	res, err := ReadFile(ReadFileRequest{
-		WorkingDir: s.spec.WorkingDir,
-		Path:       req.Path,
-		MaxBytes:   protocol.FSReadMaxBytes,
-	})
-	resp := protocol.FSReadResponseEvent{
-		Kind:      "fs-read-response",
-		MachineID: s.machine,
-		AgentID:   s.spec.AgentID,
-		RequestID: req.RequestID,
-		Path:      req.Path,
-		TS:        time.Now().UnixMilli(),
-	}
-	if err != nil {
-		resp.Result = "error"
-		resp.Error = err.Error()
-	} else {
-		resp.Result = res.Result
-		resp.Content = res.Content
-		resp.MIME = res.MIME
-		resp.Base64 = res.Base64
-		resp.Size = res.Size
-		resp.Error = res.Error
-	}
-	if err := s.bus.Publish(ctx, protocol.LifecycleStream(), resp); err != nil {
-		s.log.Printf("agent %s: fs-read-response publish failed: %v", s.spec.AgentID, err)
-	}
+	serveFSRead(ctx, s.bus, s.log, s.machine, s.spec.AgentID, s.spec.WorkingDir, req)
 }
 
 // HandleGitLog runs `git log` in the agent's workingDir and publishes
@@ -731,33 +652,7 @@ func (s *supervisor) HandleFSRead(ctx context.Context, req protocol.FSReadReques
 // on PATH, exec failure) are surfaced as Error so the dashboard
 // renders a panel-level error instead of timing out.
 func (s *supervisor) HandleGitLog(ctx context.Context, req protocol.GitLogRequestCommand) {
-	resp := protocol.GitLogResponseEvent{
-		Kind:      "git-log-response",
-		MachineID: s.machine,
-		AgentID:   s.spec.AgentID,
-		RequestID: req.RequestID,
-		TS:        time.Now().UnixMilli(),
-	}
-	commits, err := ReadGitLog(ctx, s.spec.WorkingDir, req.Limit)
-	if err != nil {
-		resp.Error = err.Error()
-	} else {
-		// commits == nil ⇒ non-repo workingDir. The server treats nil
-		// the same as an empty list at the controller layer, so callers
-		// see "no commits" rather than an error. We could also return
-		// an explicit error here, but rendering an empty list keeps the
-		// panel flicker-free if the user toggles into a non-repo dir.
-		resp.Commits = commits
-	}
-	// Attach GitStatus regardless — even when log read failed, the
-	// panel header might still want to display the current branch.
-	// Cheap: ReadGitStatus is one .git/HEAD read.
-	if status, gerr := ReadGitStatus(s.spec.WorkingDir); gerr == nil && status != nil {
-		resp.Git = status
-	}
-	if err := s.bus.Publish(ctx, protocol.LifecycleStream(), resp); err != nil {
-		s.log.Printf("agent %s: git-log-response publish failed: %v", s.spec.AgentID, err)
-	}
+	serveGitLog(ctx, s.bus, s.log, s.machine, s.spec.AgentID, s.spec.WorkingDir, req)
 }
 
 // HandleListModels answers a `list-models` control request with this
@@ -772,6 +667,7 @@ func (s *supervisor) HandleListModels(ctx context.Context, req protocol.ListMode
 		Kind:      "model-catalog-response",
 		MachineID: s.machine,
 		AgentID:   s.spec.AgentID,
+		CliType:   s.spec.Type,
 		RequestID: req.RequestID,
 		TS:        time.Now().UnixMilli(),
 	}
@@ -820,6 +716,7 @@ func (s *supervisor) PushModelCatalog(ctx context.Context) {
 		Kind:      "model-catalog-response",
 		MachineID: s.machine,
 		AgentID:   s.spec.AgentID,
+		CliType:   s.spec.Type,
 		RequestID: "", // unsolicited push
 		Source:    source,
 		Models:    models,

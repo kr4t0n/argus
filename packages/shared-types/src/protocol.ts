@@ -413,7 +413,11 @@ export interface GitLogResponseEvent {
 export interface GitChangedEvent {
   kind: 'git-changed';
   machineId: string;
+  /** Attribution only; `workingDir` (Phase 2) is what the server
+   *  routes on — nudges are project-scoped. Absent from pre-Phase-2
+   *  sidecars, which then get legacy agent-room-only fanout. */
   agentId: string;
+  workingDir?: string;
   ts: number;
 }
 
@@ -675,6 +679,10 @@ export interface ModelCatalogResponseEvent {
   kind: 'model-catalog-response';
   machineId: string;
   agentId: string;
+  /** Self-described adapter type (Phase 2: catalogs stored
+   *  machine×CLI). Absent from pre-Phase-2 sidecars — the server then
+   *  resolves the type from the agent row. */
+  cliType?: string;
   /** Correlates to a ListModelsRequestCommand; '' = unsolicited push. */
   requestId: string;
   source?: 'static' | 'cli';
@@ -752,7 +760,9 @@ export interface FSReadResponseEvent {
 export interface FSChangedEvent {
   kind: 'fs-changed';
   machineId: string;
+  /** See GitChangedEvent — agentId is attribution, workingDir routing. */
   agentId: string;
+  workingDir?: string;
   path: string;
   ts: number;
 }

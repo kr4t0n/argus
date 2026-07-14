@@ -247,9 +247,15 @@ type GitStatus struct {
 type FSListRequestCommand struct {
 	Kind      string `json:"kind"` // "fs-list"
 	RequestID string `json:"requestId"`
-	AgentID   string `json:"agentId"`
-	Path      string `json:"path"`
-	ShowAll   bool   `json:"showAll"`
+	// AgentID addressing is legacy (pre-Phase-2 of the agent→runner
+	// refactor); kept so old servers and old sidecars interoperate.
+	// When WorkingDir is set it wins: the daemon serves the request
+	// directly after validating the path against its known-workdirs
+	// allowlist — no supervisor involved.
+	AgentID    string `json:"agentId,omitempty"`
+	WorkingDir string `json:"workingDir,omitempty"`
+	Path       string `json:"path"`
+	ShowAll    bool   `json:"showAll"`
 	// Depth is the number of directory levels to include in the
 	// response, counting Path itself as level 1. 0 or 1 means the
 	// historical single-level listing. >1 asks the sidecar to walk
@@ -269,9 +275,12 @@ type FSListRequestCommand struct {
 type FSReadRequestCommand struct {
 	Kind      string `json:"kind"` // "fs-read"
 	RequestID string `json:"requestId"`
-	AgentID   string `json:"agentId"`
-	Path      string `json:"path"`
-	TS        int64  `json:"ts"`
+	// See FSListRequestCommand: WorkingDir addressing wins over the
+	// legacy AgentID when both are present.
+	AgentID    string `json:"agentId,omitempty"`
+	WorkingDir string `json:"workingDir,omitempty"`
+	Path       string `json:"path"`
+	TS         int64  `json:"ts"`
 }
 
 // FSReadMaxBytes mirrors FS_READ_MAX_BYTES on the TS side. Keep in sync.
@@ -285,7 +294,10 @@ const FSReadMaxBytes = 1_048_576
 type GitLogRequestCommand struct {
 	Kind      string `json:"kind"` // "git-log"
 	RequestID string `json:"requestId"`
-	AgentID   string `json:"agentId"`
+	// See FSListRequestCommand: WorkingDir addressing wins over the
+	// legacy AgentID when both are present.
+	AgentID    string `json:"agentId,omitempty"`
+	WorkingDir string `json:"workingDir,omitempty"`
 	// Limit caps how many commits to return (1-based). 0 or negative
 	// means "use the sidecar's default" (50). The server caps at 200
 	// at the controller layer.
@@ -382,8 +394,13 @@ type ModelCatalogEntry struct {
 type ListModelsRequestCommand struct {
 	Kind      string `json:"kind"` // "list-models"
 	RequestID string `json:"requestId"`
-	AgentID   string `json:"agentId"`
-	TS        int64  `json:"ts"`
+	// AgentID addressing is legacy (Phase 2 of the agent→runner
+	// refactor moved catalogs to machine×CLI). When CliType is set the
+	// daemon answers from any supervisor of that adapter type — the
+	// catalog is a property of the installed binary, not the workdir.
+	AgentID string `json:"agentId,omitempty"`
+	CliType string `json:"cliType,omitempty"`
+	TS      int64  `json:"ts"`
 }
 
 // ModelCatalogResponseEvent is the sidecar's reply — or unsolicited
@@ -396,9 +413,14 @@ type ListModelsRequestCommand struct {
 // before any picker opens. Error pushes are not published — a
 // boot-time CLI hiccup must not clobber a stored good catalog.
 type ModelCatalogResponseEvent struct {
-	Kind      string              `json:"kind"` // "model-catalog-response"
-	MachineID string              `json:"machineId"`
-	AgentID   string              `json:"agentId"`
+	Kind      string `json:"kind"` // "model-catalog-response"
+	MachineID string `json:"machineId"`
+	AgentID   string `json:"agentId"`
+	// CliType self-describes the catalog's adapter type (Phase 2:
+	// catalogs are stored machine×CLI server-side); old servers ignore
+	// it and old sidecars omit it (the server then resolves the type
+	// from the agent row).
+	CliType   string              `json:"cliType,omitempty"`
 	RequestID string              `json:"requestId"` // "" = unsolicited push
 	Source    string              `json:"source,omitempty"`
 	Models    []ModelCatalogEntry `json:"models,omitempty"`
@@ -414,8 +436,12 @@ type ModelCatalogResponseEvent struct {
 type GitChangedEvent struct {
 	Kind      string `json:"kind"` // "git-changed"
 	MachineID string `json:"machineId"`
-	AgentID   string `json:"agentId"`
-	TS        int64  `json:"ts"`
+	// AgentID is attribution; WorkingDir (Phase 2) is what the server
+	// routes on — nudges are project-scoped, and two agents sharing a
+	// workdir emit interchangeable ones.
+	AgentID    string `json:"agentId"`
+	WorkingDir string `json:"workingDir,omitempty"`
+	TS         int64  `json:"ts"`
 }
 
 // ─────────── Background task progress (sidecar → server) ───────────
@@ -529,9 +555,12 @@ const FSListRecursiveDescentBudget = 5000
 type FSChangedEvent struct {
 	Kind      string `json:"kind"` // "fs-changed"
 	MachineID string `json:"machineId"`
-	AgentID   string `json:"agentId"`
-	Path      string `json:"path"`
-	TS        int64  `json:"ts"`
+	// AgentID is attribution; WorkingDir (Phase 2) is what the server
+	// routes on — see GitChangedEvent.
+	AgentID    string `json:"agentId"`
+	WorkingDir string `json:"workingDir,omitempty"`
+	Path       string `json:"path"`
+	TS         int64  `json:"ts"`
 }
 
 // FSReadResponseEvent is the sidecar's reply to FSReadRequestCommand.

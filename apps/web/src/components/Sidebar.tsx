@@ -51,10 +51,20 @@ export function Sidebar() {
   const localProjectOrder = useProjectStore((s) => s.order);
 
   const sessionsByAgent: Record<string, SessionDTO[]> = {};
+  // Phase 2: sessions carry their own projectId — group by it directly
+  // so a row no longer depends on its (auto-vivified) agent being in
+  // the store. The agent map stays as the fallback for pre-backfill
+  // sessions (projectId null) and for rows whose server Project hasn't
+  // hydrated yet.
+  const sessionsByProject: Record<string, SessionDTO[]> = {};
   for (const s of Object.values(sessions)) {
     (sessionsByAgent[s.agentId] ||= []).push(s);
+    if (s.projectId) (sessionsByProject[s.projectId] ||= []).push(s);
   }
   for (const list of Object.values(sessionsByAgent)) {
+    list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+  for (const list of Object.values(sessionsByProject)) {
     list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
@@ -109,6 +119,7 @@ export function Sidebar() {
               machine={machines[p.machineId]}
               agents={agents}
               sessionsByAgent={sessionsByAgent}
+              sessionsByProject={sessionsByProject}
               activeSessionId={sessionId}
               showArchivedMap={showArchived}
               onToggleShowArchived={toggleShowArchived}
@@ -150,6 +161,7 @@ function ProjectRow({
   machine,
   agents,
   sessionsByAgent,
+  sessionsByProject,
   activeSessionId,
   showArchivedMap,
   onToggleShowArchived,
@@ -161,6 +173,7 @@ function ProjectRow({
   machine: MachineDTO | undefined;
   agents: Record<string, AgentDTO>;
   sessionsByAgent: Record<string, SessionDTO[]>;
+  sessionsByProject: Record<string, SessionDTO[]>;
   activeSessionId: string | undefined;
   /**
    * Per-project show-archived state, keyed by `project.key` (was
@@ -241,13 +254,22 @@ function ProjectRow({
     setEditing(false);
   }
 
-  // Flatten: every session under every agent in the project, most-
-  // recent first. Agents are no longer rendered as their own rows
-  // in the tree — the AgentTypeIcon prefix on each SessionRow carries
-  // the agent identity instead.
-  const allSessions = project.agentIds
+  // Flatten: every session in the project, most-recent first. Since
+  // Phase 2 the primary source is `session.projectId` (the row shows
+  // even before its auto-vivified agent lands in the store); the agent
+  // join remains for pre-backfill sessions and for rows whose server
+  // Project hasn't hydrated yet — those are excluded from the direct
+  // source by construction, so the union can't double-count. Agents
+  // are no longer rendered as their own rows in the tree — the
+  // AgentTypeIcon prefix on each SessionRow carries the identity.
+  const serverProjectId = project.local?.serverId;
+  const directSessions = serverProjectId ? (sessionsByProject[serverProjectId] ?? []) : [];
+  const agentJoined = project.agentIds
     .flatMap((id) => sessionsByAgent[id] ?? [])
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    .filter((s) => (serverProjectId ? s.projectId !== serverProjectId : true));
+  const allSessions = [...directSessions, ...agentJoined].sort((a, b) =>
+    b.updatedAt.localeCompare(a.updatedAt),
+  );
   const archivedVisible = showArchivedMap[project.key] ?? false;
   const visibleSessions = archivedVisible
     ? allSessions

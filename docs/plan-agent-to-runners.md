@@ -167,7 +167,23 @@ mostly moot after Phase 3 but is correct and cheap insurance meanwhile.
   `migrateLocalProjects.ts` one-shot-pushes pre-promotion local rows.
 - Docs: AGENTS.md `project/` module + sidebar sections updated.
 
-### Phase 2 — re-key read paths: fs/git/models RPC + WS rooms (server + web + sidecar-tolerant)
+### Phase 2 — re-key read paths ✅ IMPLEMENTED (branch refactor/agent-to-runners)
+
+Shipped: fs/git wire requests carry `workingDir` + representative
+`agentId` (old sidecars route by agent, new sidecars serve the workdir
+after allowlist validation — `daemon.workdirAllowed`, supervisors'
+specs for now, sync-projects in Phase 3); `/projects/:id/fs|git`
+routes; catalogs stored machine×CLI (`MachineCliCatalog`, backfilled
+from Agent.modelCatalog) with `/machines/:id/models?cliType=` and the
+picker re-keyed — cold-start hole fixed; watcher nudges carry
+workingDir and fan out to the existing project room (legacy agent room
+kept); sidebar groups sessions by `session.projectId` with agent-join
+fallback. Deferred to a follow-up: FileTree / GitLogPanel /
+fileTabsStore switching to the project routes — they keep using the
+agent routes, which stay fully functional through Phase 3 (only
+heartbeats/streams change there); must land before Phase 4.
+
+Original scope for reference:
 
 - fs/git RPC: routes gain project addressing
   (`/projects/:id/fs/*`, `/projects/:id/git/log`); the wire request to

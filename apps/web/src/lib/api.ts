@@ -219,6 +219,10 @@ export const api = {
     }),
   /** Model catalog for an agent's CLI — drives the model picker.
    *  Server-cached per agent (~1h); `refresh` bypasses the cache. */
+  getMachineModelCatalog: (machineId: string, cliType: string, opts?: { refresh?: boolean }) =>
+    http<ModelCatalogResponse>(
+      `/machines/${machineId}/models?cliType=${encodeURIComponent(cliType)}${opts?.refresh ? '&refresh=1' : ''}`,
+    ),
   getModelCatalog: (agentId: string, opts?: { refresh?: boolean }) =>
     http<ModelCatalogResponse>(`/agents/${agentId}/models${opts?.refresh ? '?refresh=1' : ''}`),
   /** Replace the session-default model choice; null clears to "CLI

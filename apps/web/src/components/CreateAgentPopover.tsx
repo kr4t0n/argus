@@ -102,13 +102,11 @@ export function CreateAgentPopover({
   // Session mode only; agent creation doesn't carry a model default.
   const [modelByType, setModelByType] = useState<Record<string, ModelSelection | null>>({});
   const modelSelection = modelByType[type] ?? null;
-  // The catalog needs an existing agent of the chosen type. For the
-  // project's first session on an adapter there is none yet (the agent
-  // is auto-vivified on submit) — the picker degrades to a free-text
-  // input in that case, by design.
-  const catalogAgentId = asSession
-    ? ((existingAgents ?? []).find((a) => a.type === type)?.id ?? null)
-    : null;
+  // Catalogs are machine×CLI (Phase 2), so the picker works even for
+  // the project's first session on an adapter — the old cold-start
+  // free-text degradation only remains for machines that never
+  // reported a catalog at all.
+  const catalogTarget = asSession && type ? { machineId: machine.id, cliType: type } : null;
   const popRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -357,7 +355,7 @@ export function CreateAgentPopover({
         {asSession && (
           <Field label="model" as="div">
             <ModelPicker
-              agentId={catalogAgentId}
+              target={catalogTarget}
               value={modelSelection}
               onChange={(v) => setModelByType((prev) => ({ ...prev, [type]: v }))}
             />

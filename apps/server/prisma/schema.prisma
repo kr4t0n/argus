@@ -216,6 +216,7 @@ model Machine {
   quotas       MachineAgentQuota[]
   projectNotes ProjectNote[]
   projects     Project[]
+  cliCatalogs  MachineCliCatalog[]
 
   @@index([status])
   @@index([archivedAt])
@@ -269,6 +270,27 @@ model MachineAgentQuota {
 
   @@unique([machineId, agentType, fingerprint])
   @@index([agentType, fingerprint])
+}
+
+// Model catalog per (machine, CLI type) — Phase 2 of the agent→runner
+// refactor. A catalog is a property of the installed binary, not the
+// workdir, so storing it per agent (the pre-Phase-2 home,
+// Agent.modelCatalog — retired, dropped in Phase 4) duplicated it per
+// project and left the picker cold for a project's first session of a
+// type. Written by the sidecar's unsolicited spawn-time push and every
+// on-demand fetch; read by the models endpoints.
+model MachineCliCatalog {
+  id        String   @id @default(cuid())
+  machineId String
+  cliType   String
+  source    String // "static" | "cli"
+  models    Json
+  fetchedAt DateTime
+  updatedAt DateTime @updatedAt
+
+  machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+
+  @@unique([machineId, cliType])
 }
 
 model Agent {

@@ -213,20 +213,38 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   /**
    * Broadcast a dir-level change from the sidecar's fsnotify watcher.
-   * Scoped to the agent room so only clients actually viewing that
-   * agent's file tree get poked.
+   * Emitted to the project room (Phase 2 — nudges are project-scoped,
+   * and two agents sharing a workdir emit interchangeable ones) AND
+   * the legacy agent room, so panes that haven't re-keyed yet keep
+   * refreshing. Pre-Phase-2 sidecars omit machineId/workingDir and
+   * get agent-room-only fanout.
    */
-  emitFSChanged(payload: { agentId: string; path: string }) {
+  emitFSChanged(payload: {
+    agentId: string;
+    path: string;
+    machineId?: string;
+    workingDir?: string;
+  }) {
     this.server.to(`agent:${payload.agentId}`).emit('fs:changed', payload);
+    if (payload.machineId && payload.workingDir) {
+      this.server
+        .to(projectRoom(payload.machineId, payload.workingDir))
+        .emit('fs:changed', payload);
+    }
   }
 
   /**
    * Broadcast a debounced ref-change from the sidecar's secondary git
-   * watcher. Scoped to the agent room — only clients viewing that
-   * agent's panel re-fetch.
+   * watcher. Same dual project-room + legacy agent-room fanout as
+   * emitFSChanged.
    */
-  emitGitChanged(payload: { agentId: string }) {
+  emitGitChanged(payload: { agentId: string; machineId?: string; workingDir?: string }) {
     this.server.to(`agent:${payload.agentId}`).emit('git:changed', payload);
+    if (payload.machineId && payload.workingDir) {
+      this.server
+        .to(projectRoom(payload.machineId, payload.workingDir))
+        .emit('git:changed', payload);
+    }
   }
 
   // ------- Sidecar remote-update events -------
