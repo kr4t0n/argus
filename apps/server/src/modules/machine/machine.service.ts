@@ -767,12 +767,23 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
           // Runner sidecars send no per-agent heartbeats — their agent
           // rows (routing records) inherit machine liveness here so
           // sweepStale's lastHeartbeatAt arm never false-flags them.
-          // No per-agent WS emit: nothing transitions on the steady 5s
-          // beat, and dispatch gates on machine status for runners.
+          // WS emits go out ONLY for rows that actually transition
+          // (steady 5s beats stay silent): the old sidecar's shutdown
+          // deregister — or the stale sweep — broadcast `offline` to
+          // every open dashboard, and without an `online` counterpart
+          // here their agent stores held the stale status forever,
+          // freezing the web's queue gate after a sidecar upgrade.
+          const transitioning = await this.prisma.agent.findMany({
+            where: { machineId: ev.machineId, archivedAt: null, status: { not: 'online' } },
+            select: { id: true },
+          });
           await this.prisma.agent.updateMany({
             where: { machineId: ev.machineId, archivedAt: null },
             data: { status: 'online', lastHeartbeatAt: now },
           });
+          for (const { id } of transitioning) {
+            this.gateway.emitAgentStatus(id, 'online');
+          }
         }
         if (quotaEv?.quotas?.length) {
           await this.persistQuotas(ev.machineId, quotaEv.quotas);
