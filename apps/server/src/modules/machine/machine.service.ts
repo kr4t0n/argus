@@ -263,7 +263,18 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
           name: req.name.trim(),
           machineId,
           type: req.type,
-          status: 'offline',
+          // Legacy machines: born offline, the supervisor's RegisterEvent
+          // flips it online once spawned. Runner machines have no
+          // per-agent register — the row is a routing record whose
+          // liveness is machine-implied (applyMachineHeartbeat maintains
+          // it every 5s thereafter), so it must be born with the
+          // machine's current status or the web's dispatch queue holds
+          // the first prompt for up to a heartbeat interval waiting for
+          // an "online" that nothing else will send sooner.
+          status:
+            isRunnerSidecar(machine.sidecarVersion) && machine.status === 'online'
+              ? 'online'
+              : 'offline',
           supportsTerminal: req.supportsTerminal ?? false,
           workingDir: req.workingDir ?? null,
           lastHeartbeatAt: now,
