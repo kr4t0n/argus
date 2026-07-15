@@ -13,7 +13,6 @@ import {
   type AgentQuota,
   type AnyLifecycleEvent,
   type AvailableAdapter,
-  type HeartbeatEvent,
   type MachineDTO,
   type MachineHeartbeatEvent,
 } from '@argus/shared-types';
@@ -51,25 +50,20 @@ const FAST_KINDS = new Set<AnyLifecycleEvent['kind']>([
  * MachineService is the server-side counterpart to the Go machine
  * daemon. It owns:
  *
- *   - The lifecycle Redis stream consumer that ingests
- *     machine-register / machine-heartbeat / agent-spawned /
- *     agent-spawn-failed / agent-destroyed events (plus the per-agent
- *     register / heartbeat / deregister events). The same blocking
- *     read also drains `agent:notify`, the watcher-nudge stream
+ *   - The lifecycle Redis stream consumer that ingests machine-register
+ *     / machine-heartbeat events plus the fs/git RPC responses. The same
+ *     blocking read also drains the watcher-nudge stream
  *     (fs-changed / git-changed) — split off so nudge bursts can't
  *     MAXLEN-trim unread heartbeats.
- *   - The reverse channel: REST endpoints for the dashboard land here
- *     (createAgent / destroyAgent), and we publish CreateAgent /
- *     DestroyAgent commands onto each machine's machine:M:control
+ *   - The reverse channel: it publishes sync-projects / fs/git RPC /
+ *     sidecar-update commands onto each machine's machine:M:control
  *     stream.
- *   - A periodic sweeper that flips machines + their agents to
- *     `offline` when heartbeats lapse, so the UI doesn't show
- *     phantom-online hosts after a sidecar crash.
+ *   - A periodic sweeper that flips machines to `offline` when
+ *     heartbeats lapse, so the UI doesn't show phantom-online hosts
+ *     after a sidecar crash.
  *
- * We keep both lifecycle ingest and command publish in one service
- * because they share the Machine ↔ Agent invariants (e.g. don't send
- * a CreateAgent to an offline machine without queueing it on the
- * stream — Redis Streams already buffer).
+ * Runner sidecars (≥ 0.3) have no per-agent supervisors — the machine
+ * is the only lifecycle actor, and sessions route by projectId.
  */
 @Injectable()
 export class MachineService implements OnModuleInit, OnModuleDestroy {

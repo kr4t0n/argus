@@ -11,8 +11,6 @@ export type BuiltInAgentType = (typeof BUILT_IN_AGENT_TYPES)[number];
 // Open string: custom adapters can register their own type name.
 export type AgentType = BuiltInAgentType | (string & {});
 
-export type AgentStatus = 'online' | 'offline' | 'busy' | 'error';
-
 /**
  * Session lifecycle state — the "is a turn running / how did the last
  * one end" axis. Deliberately separate from the unread axis
@@ -35,64 +33,20 @@ export type ResultKind =
   | 'final' // end of a turn
   | 'error';
 
-/**
- * Per-agent register event, emitted by an agent supervisor inside the
- * machine daemon when it (re-)spawns. The server treats this as a
- * status nudge — the Agent row already exists in Postgres because it
- * was created by the dashboard via POST /machines/:id/agents.
- */
-export interface RegisterEvent {
-  kind: 'register';
-  id: string;
-  machineId: string;
-  type: AgentType;
-  /**
-   * Whether the supervisor has a PTY runner attached. Controls whether
-   * the dashboard exposes the Terminal pane and whether the server
-   * accepts terminal-open requests targeting this agent.
-   */
-  supportsTerminal: boolean;
-  version: string;
-  /** Working directory the wrapped CLI is launched in. Empty means inherited. */
-  workingDir?: string;
-  ts: number;
-}
-
-/** Sidecar → server, every N seconds */
-export interface HeartbeatEvent {
-  kind: 'heartbeat';
-  id: string;
-  status: AgentStatus;
-  ts: number;
-}
-
-/** Sidecar → server, on graceful shutdown */
-export interface DeregisterEvent {
-  kind: 'deregister';
-  id: string;
-  ts: number;
-}
-
-export type LifecycleEvent = RegisterEvent | HeartbeatEvent | DeregisterEvent;
-
 // ─────────────────────────────────────────────────────────────────────
 // Machine lifecycle (sidecar daemon ⇄ server)
 //
 // Each host runs one argus-sidecar process, which self-identifies as a
-// `Machine` on the same `agent:lifecycle` stream that agents use. We
-// piggy-back the same stream because:
-//   - The server already runs one consumer there (single sweep loop).
-//   - Machine and agent registrations are causally related (an agent
-//     can only register after the server knows about its machine), so
-//     ordering matters.
-// Events are discriminated by `kind`.
+// `Machine` on the lifecycle stream (`streamKeys.lifecycle`). Runner
+// sidecars (≥ 0.3) have no per-agent supervisors — the machine is the
+// only lifecycle actor. Events are discriminated by `kind`.
 // ─────────────────────────────────────────────────────────────────────
 
 /**
  * One adapter the sidecar found on PATH at boot. Surfaced verbatim in
  * `MachineDTO.availableAdapters` so the dashboard can populate the
- * adapter dropdown in the "create agent" popover with installed CLIs
- * only (don't show "Claude Code" if `claude` isn't on this box).
+ * adapter dropdown in the new-session popover with installed CLIs only
+ * (don't show "Claude Code" if `claude` isn't on this box).
  */
 export interface AvailableAdapter {
   type: AgentType;
@@ -372,7 +326,6 @@ export interface GitCommit {
 export interface GitLogResponseEvent {
   kind: 'git-log-response';
   machineId: string;
-  agentId: string;
   requestId: string;
   commits?: GitCommit[];
   git?: GitStatus;
@@ -649,10 +602,7 @@ export interface ListModelsRequestCommand {
 export interface ModelCatalogResponseEvent {
   kind: 'model-catalog-response';
   machineId: string;
-  agentId: string;
-  /** Self-described adapter type (Phase 2: catalogs stored
-   *  machine×CLI). Absent from pre-Phase-2 sidecars — the server then
-   *  resolves the type from the agent row. */
+  /** Self-described adapter type (catalogs are stored machine×CLI). */
   cliType?: string;
   /** Correlates to a ListModelsRequestCommand; '' = unsolicited push. */
   requestId: string;
@@ -674,7 +624,6 @@ export type MachineControlCommand =
 export interface FSListResponseEvent {
   kind: 'fs-list-response';
   machineId: string;
-  agentId: string;
   requestId: string;
   path: string;
   entries?: FSEntry[];
@@ -707,7 +656,6 @@ export interface FSListResponseEvent {
 export interface FSReadResponseEvent {
   kind: 'fs-read-response';
   machineId: string;
-  agentId: string;
   requestId: string;
   path: string;
   result: 'text' | 'image' | 'binary' | 'error';
@@ -776,49 +724,17 @@ export interface SidecarUpdateFailedEvent {
   ts: number;
 }
 
-/** Sidecar acks (back on agent:lifecycle). Server uses these to flip
- *  the Agent row's status promptly and surface spawn failures in the UI. */
-export interface AgentSpawnedEvent {
-  kind: 'agent-spawned';
-  machineId: string;
-  agentId: string;
-  ts: number;
-}
-
-export interface AgentSpawnFailedEvent {
-  kind: 'agent-spawn-failed';
-  machineId: string;
-  agentId: string;
-  reason: string;
-  ts: number;
-}
-
-export interface AgentDestroyedEvent {
-  kind: 'agent-destroyed';
-  machineId: string;
-  agentId: string;
-  ts: number;
-}
-
-export type MachineLifecycleAck = AgentSpawnedEvent | AgentSpawnFailedEvent | AgentDestroyedEvent;
-
-/** Anything the server expects on `agent:lifecycle`. Ordering matters:
+/** Anything the server expects on the lifecycle stream. Ordering matters:
  *  more specific kinds first so TS narrows correctly.
  *
  *  `BackgroundTask{Started,Progress,Ended}Event` deliberately are NOT
- *  in this union — they ride a dedicated `agent:background` stream
+ *  in this union — they ride a dedicated background stream
  *  (see streamKeys.background) so chatty progress frames can't trim
  *  the shared lifecycle stream via MAXLEN. They're consumed by
  *  BackgroundTaskService.consumeLoop, not MachineService.handle. */
 export type AnyLifecycleEvent =
-  | RegisterEvent
-  | HeartbeatEvent
-  | DeregisterEvent
   | MachineRegisterEvent
   | MachineHeartbeatEvent
-  | AgentSpawnedEvent
-  | AgentSpawnFailedEvent
-  | AgentDestroyedEvent
   | FSListResponseEvent
   | FSReadResponseEvent
   | FSChangedEvent
@@ -907,7 +823,6 @@ export interface Command {
 export interface ResultChunk {
   id: string;
   commandId: string;
-  agentId: string;
   sessionId: string;
   seq: number;
   kind: ResultKind;

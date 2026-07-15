@@ -15,7 +15,7 @@ interface UIState {
   /** Persisted width of the right-hand context pane in pixels. */
   contextPaneWidth: number;
   expanded: Record<string, boolean>;
-  /** agentId → whether archived sessions are visible for that agent. */
+  /** Project-group key → whether that group's archived sessions show. */
   showArchived: Record<string, boolean>;
   /** Global toggle: show archived agents in the sidebar. */
   showArchivedAgents: boolean;
