@@ -1032,10 +1032,8 @@ export const streamMaxLen = (streamKey: string): number => {
   // nudges (fs and git share this stream and burst at correlated
   // moments — a rebase is both).
   if (streamKey === streamKeys.notify) return 2000;
-  // The suffix matches cover BOTH stream families: legacy per-agent
-  // (`agent:{id}:cmd` / `:result`) and Phase-3 per-runner
-  // (`machine:{id}:cli:{type}:cmd` / `:result`) share the same caps by
-  // design — runner streams deliberately mirror the per-agent budget.
+  // Runner streams (`machine:{id}:cli:{type}:cmd` / `:result`), matched by
+  // suffix.
   if (streamKey.endsWith(':cmd')) return 200;
   if (streamKey.endsWith(':result')) return 500;
   if (streamKey.endsWith(':control')) return 200;
@@ -1043,9 +1041,9 @@ export const streamMaxLen = (streamKey: string): number => {
 };
 
 export const consumerGroups = {
-  /** server-side consumer group reading result streams — registered
-   *  per stream on both families (legacy `agent:{id}:result` and
-   *  runner `machine:{id}:cli:{type}:result`), same name everywhere. */
+  /** server-side consumer group reading result streams — registered per
+   *  runner stream (`machine:{id}:cli:{type}:result`), same name
+   *  everywhere. */
   server: 'server',
   /** server-side consumer group reading lifecycle events. Also created
    *  on `agent:notify`: MachineService drains both streams with a

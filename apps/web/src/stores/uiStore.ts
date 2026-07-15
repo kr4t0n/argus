@@ -14,11 +14,12 @@ interface UIState {
   contextPaneOpen: boolean;
   /** Persisted width of the right-hand context pane in pixels. */
   contextPaneWidth: number;
+  /** Project-row key (`proj:<machineId>::<workingDir>`) → expanded. */
   expanded: Record<string, boolean>;
   /** Project-group key → whether that group's archived sessions show. */
   showArchived: Record<string, boolean>;
-  /** Global toggle: show archived agents in the sidebar. */
-  showArchivedAgents: boolean;
+  /** Global toggle: show archived projects in the sidebar. */
+  showArchivedProjects: boolean;
   /** sessionId → the composer's unsent draft for that session. */
   drafts: Record<string, string>;
   /** User's theme preference. The resolved (system → light/dark) value
@@ -53,9 +54,9 @@ interface UIState {
   setSidebarWidth: (w: number) => void;
   toggleContextPane: () => void;
   setContextPaneWidth: (w: number) => void;
-  toggleAgentExpanded: (id: string, expanded?: boolean) => void;
+  toggleExpanded: (id: string, expanded?: boolean) => void;
   toggleShowArchived: (key: string) => void;
-  toggleShowArchivedAgents: () => void;
+  toggleShowArchivedProjects: () => void;
   setDraft: (sessionId: string, v: string) => void;
   setTheme: (t: ThemePreference) => void;
   setNotificationsEnabled: (v: boolean) => void;
@@ -78,7 +79,7 @@ export const useUIStore = create<UIState>()(
       contextPaneWidth: 320,
       expanded: {},
       showArchived: {},
-      showArchivedAgents: false,
+      showArchivedProjects: false,
       drafts: {},
       theme: 'system',
       notificationsEnabled: false,
@@ -99,7 +100,7 @@ export const useUIStore = create<UIState>()(
           contextPaneWidth: Math.max(CONTEXT_PANE_MIN, Math.min(CONTEXT_PANE_MAX, Math.round(w))),
         });
       },
-      toggleAgentExpanded(id, expanded) {
+      toggleExpanded(id, expanded) {
         const current = get().expanded[id] ?? true;
         set({
           expanded: {
@@ -114,8 +115,8 @@ export const useUIStore = create<UIState>()(
           showArchived: { ...get().showArchived, [key]: !current },
         });
       },
-      toggleShowArchivedAgents() {
-        set({ showArchivedAgents: !get().showArchivedAgents });
+      toggleShowArchivedProjects() {
+        set({ showArchivedProjects: !get().showArchivedProjects });
       },
       setDraft(sessionId, v) {
         set({ drafts: { ...get().drafts, [sessionId]: v } });

@@ -45,7 +45,7 @@ const VIEWPORT_MARGIN = 8;
 export function CreateProjectPopover({ machine, anchor, onClose }: Props) {
   const addProject = useProjectStore((s) => s.add);
   const projects = useProjectStore((s) => s.projects);
-  const setExpanded = useUIStore((s) => s.toggleAgentExpanded);
+  const setExpanded = useUIStore((s) => s.toggleExpanded);
   const upsertSession = useSessionStore((s) => s.upsertSession);
 
   const [name, setName] = useState('');

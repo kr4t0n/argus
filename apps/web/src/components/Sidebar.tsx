@@ -37,11 +37,11 @@ export function Sidebar() {
   const machines = useMachineStore((s) => s.machines);
   const sessions = useSessionStore((s) => s.sessions);
   const expanded = useUIStore((s) => s.expanded);
-  const toggle = useUIStore((s) => s.toggleAgentExpanded);
+  const toggle = useUIStore((s) => s.toggleExpanded);
   const showArchived = useUIStore((s) => s.showArchived);
   const toggleShowArchived = useUIStore((s) => s.toggleShowArchived);
-  const showArchivedAgents = useUIStore((s) => s.showArchivedAgents);
-  const toggleShowArchivedAgents = useUIStore((s) => s.toggleShowArchivedAgents);
+  const showArchivedProjects = useUIStore((s) => s.showArchivedProjects);
+  const toggleShowArchivedProjects = useUIStore((s) => s.toggleShowArchivedProjects);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const localProjects = useProjectStore((s) => s.projects);
   const localProjectOrder = useProjectStore((s) => s.order);
@@ -56,19 +56,16 @@ export function Sidebar() {
     list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
-  const visibleLocalOrder = showArchivedAgents
+  const visibleLocalOrder = showArchivedProjects
     ? localProjectOrder
     : localProjectOrder.filter((k) => !localProjects[k]?.archivedAt);
   const projects = groupProjects(localProjects, visibleLocalOrder);
-  // In the flat tree projects (placeholders) are the unit of
-  // navigation, not agents — so the toggle counts archived
-  // placeholders. Agents archived individually via MachinePanel
-  // (no placeholder touched) won't surface here; that's fine since
-  // they aren't a sidebar concept in the flatten.
+  // Projects (placeholders) are the unit of navigation in the flat tree,
+  // so the toggle counts archived placeholders.
   const archivedProjectCount = Object.values(localProjects).filter(
     (p) => !!p.archivedAt,
   ).length;
-  const hiddenArchivedProjectCount = showArchivedAgents ? 0 : archivedProjectCount;
+  const hiddenArchivedProjectCount = showArchivedProjects ? 0 : archivedProjectCount;
 
   return (
     <aside className="h-full w-full flex flex-col border-r border-default bg-surface-0">
@@ -109,9 +106,9 @@ export function Sidebar() {
             />
           );
         })}
-        {!showArchivedAgents && hiddenArchivedProjectCount > 0 && (
+        {!showArchivedProjects && hiddenArchivedProjectCount > 0 && (
           <button
-            onClick={toggleShowArchivedAgents}
+            onClick={toggleShowArchivedProjects}
             className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-xs rounded-md text-fg-muted hover:text-fg-secondary hover:bg-surface-1 transition-colors"
           >
             <Archive className="h-3 w-3" />
@@ -119,9 +116,9 @@ export function Sidebar() {
             {hiddenArchivedProjectCount === 1 ? '' : 's'}
           </button>
         )}
-        {showArchivedAgents && archivedProjectCount > 0 && (
+        {showArchivedProjects && archivedProjectCount > 0 && (
           <button
-            onClick={toggleShowArchivedAgents}
+            onClick={toggleShowArchivedProjects}
             className="mt-1 flex items-center gap-1.5 px-3 py-1.5 w-full text-left text-xs rounded-md text-emerald-400 hover:text-emerald-300 hover:bg-surface-1 transition-colors"
           >
             <Archive className="h-3 w-3" />

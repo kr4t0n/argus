@@ -22,10 +22,9 @@ const REFRESH_AGENT_STREAMS_MS = 5_000;
 type ResultEnvelope = ResultChunk | SessionExternalIdEvent | SessionCloneFailedEvent;
 
 /**
- * Consumes every result stream — legacy `agent:{id}:result` plus the
- * Phase-3 runners' `machine:{id}:cli:{type}:result` — persists each
- * chunk, and relays it to the WS room `session:{sessionId}` for the
- * live UI.
+ * Consumes every runner result stream (`machine:{id}:cli:{type}:result`,
+ * one per installed CLI on each machine), persists each chunk, and relays
+ * it to the WS room `session:{sessionId}` for the live UI.
  *
  * We maintain a single XREADGROUP call across all result streams. The list of
  * streams is refreshed every few seconds so newly registered sidecars are
