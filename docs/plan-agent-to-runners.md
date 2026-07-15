@@ -274,9 +274,27 @@ Original scope for reference:
   sidecars, new sidecars get `sync-projects` (the workdir allowlist).
 - Cleanup of drift folded in: delete dead TS `consumerGroups.sidecar`.
 
-### Phase 4 — retire Agent ⛔ GATED — do not start until every box below is checked
+### Phase 4 — retire Agent ✅ IMPLEMENTED (branch refactor/agent-to-runners)
 
-- [ ] Whole fleet runs sidecar ≥0.3.x (Kyle confirms after real-life
+DONE: server drops the Agent as a runtime entity (agentId → nullable
+attribution; sessions route by projectId→machine + cliType→runner);
+agent-registry + agent-addressed fs/git/models/terminal REST deleted;
+per-agent lifecycle handling gone. Web off agent identity (no /agents
+fetch; sidebar groups by projectId; MachinePanel shows projects). iOS
+Stage C drops agent client methods; MachineView shows projects.
+Verified e2e (agentless session create/dispatch/resume/fork/terminal;
+lifecycle stream = machine-heartbeats only) + web/iOS builds green.
+
+Deploy: server+web image first (fleet already ≥0.3); iOS ships on its
+App Store cadence (its Stage A tolerance means it survives either way).
+Follow-ups (non-blocking cosmetic): remove the fs.service dead agent
+methods, web agentStore + CreateAgentPopover agent branch + archive
+cascade agent calls, iOS FleetStore.agents + agent WS cases. Sweep the
+~41 leftover agent:{id}:* Redis streams once (Kyle-approved, data-safe).
+
+Original gate (all cleared):
+
+- [x] Whole fleet runs sidecar ≥0.3.x (Kyle confirms after real-life
       testing of rc.2+; `SELECT "sidecarVersion" FROM "Machine"`)
 - [ ] Phases 1–3 soak in prod without regressions (fs panel, turn
       dispatch/streaming, archive flows, quota, terminals)

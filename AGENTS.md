@@ -158,9 +158,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   /projects/icon` upserts by `(machineId, workingDir)` (404s for
   deleted machines, keeps the row with `iconKey` NULL on reset)
   and broadcasts the DTO via the global `project:upsert` WS event.
-- `agent-registry/` — `Agent` CRUD: list, get, archive/unarchive, plus
-  the shared `agentToDto` mapper. Lifecycle ingestion lives in
-  `machine/`; this module is purely about the persisted Agent row.
+- **Agent is retired (Phase 4, docs/plan-agent-to-runners.md).** There is
+  no agent runtime concept and no agent-addressed REST: sessions route by
+  `projectId` → machine + `cliType` → runner stream
+  (`SessionService.resolveRouting`), created project-first with
+  `agentId` NULL. `Session.agentId` / `Command.agentId` / `Terminal.agentId`
+  survive as nullable attribution columns (SetNull) so old rows still
+  render their history; never route on them. The `Agent` table + rows
+  persist as legacy attribution only.
 - `session/` — CRUD for sessions; resolves `externalId` so each subsequent
   turn carries it back to the sidecar for `--resume`. Also owns the
   session-default model choice: `POST /sessions` accepts
