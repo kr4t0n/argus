@@ -74,17 +74,6 @@ export class ModelsService implements OnModuleDestroy {
     this.pending.clear();
   }
 
-  /** Legacy agent-addressed read (kept for iOS + old web): resolve the
-   *  agent's (machineId, type) and serve the machine-level catalog. */
-  async getCatalog(agentId: string, refresh = false): Promise<ModelCatalogResponse> {
-    const agent = await this.prisma.agent.findUnique({
-      where: { id: agentId },
-      select: { id: true, machineId: true, type: true },
-    });
-    if (!agent) throw new NotFoundException('agent not found');
-    return this.getCatalogForMachine(agent.machineId, agent.type, refresh);
-  }
-
   async getCatalogForMachine(
     machineId: string,
     cliType: string,

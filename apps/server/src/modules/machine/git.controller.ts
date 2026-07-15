@@ -18,26 +18,11 @@ class GitLogQueryDto {
 }
 
 /**
- * REST face for the right-pane git log panel. Lives in
- * `agents/:id/git/*` rather than `machines/:id/git/*` for the same
- * reason as the FS endpoints — the dashboard only knows the agent id,
- * the service resolves the parent machine. Currently exposes only the
- * recent-commits read; future endpoints (commit detail, diff) would
- * sit alongside.
+ * REST face for the right-pane git log panel, addressed by project id
+ * (the (machineId, workingDir) pair). Currently exposes only the
+ * recent-commits read; future endpoints (commit detail, diff) sit
+ * alongside.
  */
-@UseGuards(JwtAuthGuard)
-@Controller('agents/:id/git')
-export class GitController {
-  constructor(private readonly fs: FSService) {}
-
-  @Get('log')
-  log(@Param('id') id: string, @Query() q: GitLogQueryDto): Promise<GitLogResponse> {
-    return this.fs.listGitLog(id, q.limit ?? GIT_LOG_DEFAULT_LIMIT);
-  }
-}
-
-/** Project-addressed variant (Phase 2) — same service, resolved via
- *  the Project row instead of an agent. */
 @UseGuards(JwtAuthGuard)
 @Controller('projects/:id/git')
 export class ProjectGitController {

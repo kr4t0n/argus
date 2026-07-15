@@ -10,16 +10,8 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import {
-  IsBoolean,
-  IsObject,
-  IsOptional,
-  IsString,
-  MaxLength,
-  ValidateIf,
-} from 'class-validator';
+import { IsBoolean, IsOptional, IsString, MaxLength, ValidateIf } from 'class-validator';
 import { Transform } from 'class-transformer';
-import type { CreateAgentRequest } from '@argus/shared-types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { MachineService } from './machine.service';
 import { SidecarUpdateService } from './sidecar-update.service';
@@ -43,29 +35,6 @@ class SetMachineIconDto {
   @IsString()
   @MaxLength(64)
   iconKey!: string | null;
-}
-
-class CreateAgentDto implements CreateAgentRequest {
-  @IsString()
-  @MaxLength(120)
-  name!: string;
-
-  @IsString()
-  @MaxLength(80)
-  type!: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(1024)
-  workingDir?: string;
-
-  @IsOptional()
-  @IsBoolean()
-  supportsTerminal?: boolean;
-
-  @IsOptional()
-  @IsObject()
-  adapter?: Record<string, unknown>;
 }
 
 @UseGuards(JwtAuthGuard)
@@ -93,22 +62,6 @@ export class MachineController {
   @Get(':id')
   get(@Param('id') id: string) {
     return this.service.getMachine(id);
-  }
-
-  @Get(':id/agents')
-  listAgents(@Param('id') id: string) {
-    return this.service.listAgentsForMachine(id);
-  }
-
-  @Post(':id/agents')
-  createAgent(@Param('id') id: string, @Body() body: CreateAgentDto) {
-    return this.service.createAgent(id, body);
-  }
-
-  @Delete(':id/agents/:agentId')
-  @HttpCode(204)
-  async destroyAgent(@Param('id') id: string, @Param('agentId') agentId: string) {
-    await this.service.destroyAgent(id, agentId);
   }
 
   // Soft-delete a machine (sticky tombstone; history preserved).

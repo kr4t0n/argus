@@ -126,7 +126,9 @@ export interface CreateAgentRequest {
 export interface SessionDTO {
   id: string;
   userId: string;
-  agentId: string;
+  /** Attribution only since Phase 4 — null on sessions created after
+   *  it; kept on older rows. Never route on it. */
+  agentId: string | null;
   /** The (machineId, workingDir) Project row this session is pinned
    *  to. Null for pre-backfill rows on workdir-less agents (the
    *  per-machine "no project" bucket). Pinned at creation — claude-code
@@ -195,7 +197,8 @@ export interface AttachmentDTO {
 export interface CommandDTO {
   id: string;
   sessionId: string;
-  agentId: string;
+  /** Attribution only since Phase 4 — null on commands created after it. */
+  agentId: string | null;
   kind: 'execute' | 'cancel';
   prompt: string | null;
   status: CommandStatus;

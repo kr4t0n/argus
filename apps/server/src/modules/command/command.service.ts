@@ -13,7 +13,6 @@ import { RedisService } from '../../infra/redis/redis.service';
 import { SessionService } from '../session/session.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 import { AttachmentService } from '../attachment/attachment.service';
-import { isRunnerSidecar } from '../machine/sidecar-update.service';
 
 @Injectable()
 export class CommandService {
@@ -49,25 +48,15 @@ export class CommandService {
   ): Promise<CommandDTO> {
     const session = await this.sessions.get(userId, sessionId);
 
-    const agent = await this.prisma.agent.findUnique({
-      where: { id: session.agentId },
-      include: { machine: { select: { status: true, sidecarVersion: true } } },
-    });
-    if (!agent) throw new BadRequestException('agent gone');
-
-    // Phase 3 routing (docs/plan-agent-to-runners.md): sessions pinned
-    // to a CLI on a runner-style sidecar dispatch to the machine×CLI
-    // stream and gate on machine liveness — runner sidecars send no
-    // per-agent heartbeats, so agent.status is machine-implied.
-    // Anything else (legacy sidecar, or a pre-backfill session without
-    // cliType) keeps the per-agent stream + per-agent gate.
-    const runnerCli = isRunnerSidecar(agent.machine.sidecarVersion) ? session.cliType : null;
-    if (runnerCli) {
-      if (agent.machine.status === 'offline') {
-        throw new BadRequestException('machine is offline');
-      }
-    } else if (agent.status === 'offline') {
-      throw new BadRequestException('agent is offline');
+    // Since Phase 4 a turn routes entirely by the session's pinned
+    // (project → machine, cliType) — no Agent row. Gate on machine
+    // liveness; runner sidecars send no per-agent signal.
+    const routing = await this.sessions.resolveRouting(session);
+    if (!routing) {
+      throw new BadRequestException('session has no runnable project');
+    }
+    if (routing.machineStatus === 'offline') {
+      throw new BadRequestException('machine is offline');
     }
 
     // Session-default ModelSelection merged under any per-turn options
@@ -82,7 +71,7 @@ export class CommandService {
     const cmd = await this.prisma.command.create({
       data: {
         sessionId,
-        agentId: session.agentId,
+        // agentId stays NULL — attribution only, and there's no agent.
         kind: 'execute',
         prompt,
         status: 'pending',
@@ -97,26 +86,20 @@ export class CommandService {
 
     const wire: WireCommand = {
       id: cmd.id,
-      agentId: cmd.agentId,
       sessionId,
       externalId: session.externalId ?? undefined,
       kind: 'execute',
       prompt,
       options: mergedOptions,
       attachments: refs.length ? refs : undefined,
-      // Runner sidecars execute in the session's pinned workdir —
-      // resume state is cwd-keyed on disk (§4.1), so it must ride
-      // every turn. Legacy sidecars ignore both fields.
-      ...(runnerCli
-        ? {
-            workingDir: await this.resolveWorkingDir(session.projectId, agent.workingDir),
-            cliType: runnerCli,
-          }
-        : {}),
+      // The runner executes in the session's pinned workdir — resume
+      // state is cwd-keyed on disk (§4.1), so it rides every turn.
+      workingDir: routing.workingDir ?? undefined,
+      cliType: routing.cliType,
     };
 
     await this.redis.publish(
-      runnerCli ? streamKeys.runnerCommand(agent.machineId, runnerCli) : streamKeys.command(agent.id),
+      streamKeys.runnerCommand(routing.machineId, routing.cliType),
       wire,
     );
     const sent = await this.prisma.command.update({
@@ -134,38 +117,10 @@ export class CommandService {
     return dto;
   }
 
-  /**
-   * The session's pinned workdir for the wire Command: the Project row
-   * is authoritative (every session pins one since Phase 1), the agent
-   * row covers pre-backfill sessions whose projectId is NULL.
-   */
-  private async resolveWorkingDir(
-    projectId: string | null,
-    agentWorkingDir: string | null,
-  ): Promise<string | undefined> {
-    if (projectId) {
-      const project = await this.prisma.project.findUnique({
-        where: { id: projectId },
-        select: { workingDir: true },
-      });
-      if (project?.workingDir) return project.workingDir;
-    }
-    return agentWorkingDir ?? undefined;
-  }
-
   async cancel(userId: string, commandId: string): Promise<CommandDTO> {
     const cmd = await this.prisma.command.findUnique({
       where: { id: commandId },
-      include: {
-        session: true,
-        agent: {
-          select: {
-            machineId: true,
-            workingDir: true,
-            machine: { select: { sidecarVersion: true } },
-          },
-        },
-      },
+      include: { session: true },
     });
     if (!cmd) throw new NotFoundException('command not found');
     if (cmd.session.userId !== userId) throw new NotFoundException('command not found');
@@ -173,31 +128,24 @@ export class CommandService {
       return CommandService.toDto(cmd);
     }
 
-    // Cancel must land on the same stream the execute went out on —
-    // re-derive dispatch's routing decision from the same inputs
-    // (session.cliType is immutable and the sidecar style only changes
-    // across an update, which kills in-flight CLIs anyway).
-    const runnerCli = isRunnerSidecar(cmd.agent.machine.sidecarVersion)
-      ? cmd.session.cliType
-      : null;
-    const wire: WireCommand = {
-      id: cmd.id,
-      agentId: cmd.agentId,
-      sessionId: cmd.sessionId,
-      kind: 'cancel',
-      ...(runnerCli
-        ? {
-            workingDir: await this.resolveWorkingDir(cmd.session.projectId, cmd.agent.workingDir),
-            cliType: runnerCli,
-          }
-        : {}),
-    };
-    await this.redis.publish(
-      runnerCli
-        ? streamKeys.runnerCommand(cmd.agent.machineId, runnerCli)
-        : streamKeys.command(cmd.agentId),
-      wire,
-    );
+    // Cancel lands on the same runner stream the execute went out on —
+    // re-derive routing from the session (cliType is immutable, and a
+    // sidecar update kills in-flight CLIs anyway). A session that no
+    // longer routes (project gone) simply has nothing to cancel.
+    const routing = await this.sessions.resolveRouting(cmd.session);
+    if (routing) {
+      const wire: WireCommand = {
+        id: cmd.id,
+        sessionId: cmd.sessionId,
+        kind: 'cancel',
+        workingDir: routing.workingDir ?? undefined,
+        cliType: routing.cliType,
+      };
+      await this.redis.publish(
+        streamKeys.runnerCommand(routing.machineId, routing.cliType),
+        wire,
+      );
+    }
 
     const updated = await this.prisma.command.update({
       where: { id: commandId },

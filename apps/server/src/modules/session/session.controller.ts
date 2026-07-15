@@ -30,31 +30,21 @@ import { CommandService } from '../command/command.service';
 type AuthedRequest = Request & { user: { id: string } };
 
 class CreateSessionDto {
-  /** Legacy addressing — an explicit agent. Either this or the
-   *  project shape (machineId + cliType) is required; the service
-   *  enforces the disjunction since class-validator can't express
-   *  XOR cleanly. */
-  @IsOptional()
+  /** Project-first addressing — the machine the session runs on. */
   @IsString()
   @MinLength(1)
-  agentId?: string;
-
-  @IsOptional()
-  @IsString()
-  @MinLength(1)
-  machineId?: string;
+  machineId!: string;
 
   /** Project anchor; empty/absent = the machine's "no project" bucket. */
   @IsOptional()
   @IsString()
   workingDir?: string;
 
-  @IsOptional()
   @IsString()
   @MinLength(1)
-  cliType?: string;
+  cliType!: string;
 
-  /** Capability flag for an auto-vivified agent; ignored on reuse. */
+  /** Seeds Project.supportsTerminal when this create makes the row. */
   @IsOptional()
   @IsBoolean()
   supportsTerminal?: boolean;
@@ -168,7 +158,6 @@ export class SessionController {
   async create(@Req() req: AuthedRequest, @Body() body: CreateSessionDto) {
     const title = body.title ?? body.prompt?.slice(0, 60) ?? 'New session';
     const { session, agent } = await this.sessions.create(req.user.id, {
-      agentId: body.agentId,
       machineId: body.machineId,
       workingDir: body.workingDir,
       cliType: body.cliType,

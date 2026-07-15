@@ -103,50 +103,6 @@ export class TerminalService {
     };
   }
 
-  /**
-   * Legacy agent-addressed open. Kept for pre-switchover clients; the
-   * capability gate is the agent's own `supportsTerminal` flag. Resolves
-   * to the shared `spawn()` below, which is what actually talks to the
-   * sidecar — so both routes produce identical rows and frames.
-   */
-  async open(
-    userId: string,
-    agentId: string,
-    req: OpenTerminalRequest,
-  ): Promise<TerminalDTO> {
-    const agent = await this.prisma.agent.findUnique({ where: { id: agentId } });
-    if (!agent) throw new NotFoundException('agent not found');
-    if (agent.archivedAt) throw new BadRequestException('agent is archived');
-    if (agent.status === 'offline') throw new BadRequestException('agent is offline');
-    if (!agent.supportsTerminal) {
-      throw new BadRequestException(
-        'agent does not support terminals (enable when creating it from the dashboard)',
-      );
-    }
-
-    // Anchor the row to the agent's project when one exists, so the
-    // terminal still lists under the project after Phase 4 nulls agentId.
-    const project = agent.workingDir
-      ? await this.prisma.project.findUnique({
-          where: {
-            machineId_workingDir: {
-              machineId: agent.machineId,
-              workingDir: agent.workingDir,
-            },
-          },
-          select: { id: true },
-        })
-      : null;
-
-    return this.spawn({
-      userId,
-      machineId: agent.machineId,
-      projectId: project?.id ?? null,
-      agentId: agent.id,
-      defaultCwd: agent.workingDir ?? '',
-      req,
-    });
-  }
 
   /**
    * Project-addressed open — the runner-era route (Phase-4 prerequisite:
@@ -392,13 +348,6 @@ export class TerminalService {
     await Promise.all(
       rows.map((r) => this.markClosed(r.id, -1, reason).catch(() => undefined)),
     );
-  }
-
-  listForAgent(userId: string, agentId: string): Promise<PTerminal[]> {
-    return this.prisma.terminal.findMany({
-      where: { userId, agentId, status: { in: ['opening', 'open'] } },
-      orderBy: { openedAt: 'desc' },
-    });
   }
 
   listForProject(userId: string, projectId: string): Promise<PTerminal[]> {

@@ -310,13 +310,6 @@ model Agent {
   lastHeartbeatAt  DateTime
   registeredAt     DateTime
   archivedAt       DateTime? // soft-hide from sidebar; preserves history.
-  // Stored model catalog: {source, models: ModelCatalogEntry[]}.
-  // Written by the sidecar's unsolicited push at supervisor spawn and
-  // by every on-demand fetch; read by GET /agents/:id/models so the
-  // picker never waits on a live CLI exec. modelCatalogAt drives the
-  // stale-while-revalidate threshold. NULL = never probed.
-  modelCatalog     Json?
-  modelCatalogAt   DateTime?
 
   machine   Machine    @relation(fields: [machineId], references: [id], onDelete: Cascade)
   sessions  Session[]
@@ -333,16 +326,17 @@ model Agent {
 model Session {
   id         String   @id @default(cuid())
   userId     String
-  agentId    String
-  // Phase 1 of the agent→runner refactor (docs/plan-agent-to-runners.md):
-  // sessions carry their own (project, CLI) identity so later phases can
-  // route without the Agent row. `projectId` anchors the session to its
-  // (machineId, workingDir) pair — pinned at creation because claude-code
-  // and cursor keep resume state on disk keyed by the cwd, so a session's
-  // workdir must never change after the first turn. NULL on both = a
-  // pre-backfill row whose agent had no workingDir (the sidebar's
-  // per-machine "no project" bucket). `agentId` stays authoritative for
-  // dispatch until Phase 3/4 retire it.
+  // Attribution only since Phase 4 (docs/plan-agent-to-runners.md): the
+  // session routes by `projectId` → machine + `cliType` → runner stream,
+  // no Agent row involved. NULL on every session created after Phase 4;
+  // populated on older rows and kept for history. SetNull so retiring an
+  // agent row can't delete conversation history.
+  agentId    String?
+  // `projectId` anchors the session to its (machineId, workingDir) pair —
+  // pinned at creation because claude-code and cursor keep resume state
+  // on disk keyed by the cwd, so a session's workdir must never change
+  // after the first turn. NULL = a workdir-less session (the sidebar's
+  // per-machine "no project" bucket). `cliType` is the runner target.
   projectId  String?
   cliType    String?
   title      String
@@ -363,10 +357,12 @@ model Session {
   updatedAt  DateTime @updatedAt
 
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  agent    Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  // SetNull (not Cascade): a machine hard-delete already removes
-  // sessions through the Agent cascade; losing just a Project row must
-  // never take conversation history with it.
+  // Both SetNull: a session's history outlives both the agent (retired
+  // in Phase 4) and the Project row. A machine hard-delete still removes
+  // sessions through the Machine→Project cascade... no — Project SetNull
+  // means a project delete orphans, never deletes. Machine delete is a
+  // soft tombstone; nothing hard-deletes a live session's history.
+  agent    Agent?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
   project  Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
   commands Command[]
 
@@ -379,7 +375,9 @@ model Session {
 model Command {
   id          String    @id @default(cuid())
   sessionId   String
-  agentId     String
+  // Attribution only since Phase 4 — the turn routes via its session's
+  // project/cliType. NULL on commands created after Phase 4. SetNull.
+  agentId     String?
   kind        String    @default("execute") // execute | cancel
   prompt      String?   @db.Text
   status      String    @default("pending")
@@ -399,7 +397,7 @@ model Command {
   options     Json?
 
   session     Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  agent       Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agent       Agent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
   chunks      ResultChunk[]
   attachments Attachment[]
 

@@ -924,7 +924,10 @@ export interface AttachmentRef {
 /** Server → sidecar */
 export interface Command {
   id: string;
-  agentId: string;
+  /** Attribution only since Phase 4 — the sidecar routes by the runner
+   *  stream + `workingDir`/`cliType`. Absent on commands for sessions
+   *  created after Phase 4; the sidecar tags result chunks with "" then. */
+  agentId?: string;
   sessionId: string;
   /**
    * CLI-native conversation id. When present the sidecar passes

@@ -216,191 +216,6 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     return dto;
   }
 
-  async listAgentsForMachine(machineId: string): Promise<AgentDTO[]> {
-    const rows = await this.prisma.agent.findMany({
-      where: { machineId, archivedAt: null },
-      include: { machine: { select: { name: true } } },
-      orderBy: [{ name: 'asc' }],
-    });
-    return rows.map((r) => MachineService.agentToDto(r, r.machine.name));
-  }
-
-  /**
-   * Create an Agent row and push a `create-agent` control command to
-   * the target machine's sidecar. We persist before publishing so a
-   * Redis hiccup doesn't leave the dashboard with a ghost agent.
-   *
-   * The agent boots into `offline` status; the sidecar's
-   * RegisterEvent flips it `online` once the supervisor is up. On
-   * runner-style machines (≥ 0.3.0) there is no supervisor: the row
-   * inherits machine liveness on the next machine-heartbeat (≤ 5s),
-   * and the sidecar gets a `sync-projects` allowlist snapshot instead
-   * of `create-agent`.
-   */
-  async createAgent(machineId: string, req: CreateAgentRequest): Promise<AgentDTO> {
-    const machine = await this.prisma.machine.findUnique({ where: { id: machineId } });
-    if (!machine || machine.deletedAt) throw new NotFoundException('machine not found');
-    if (machine.archivedAt) throw new BadRequestException('machine is archived');
-
-    if (!req.name?.trim()) throw new BadRequestException('name is required');
-    if (!req.type?.trim()) throw new BadRequestException('type is required');
-
-    const adapters = (machine.availableAdapters ?? []) as unknown as AvailableAdapter[];
-    if (Array.isArray(adapters) && adapters.length > 0) {
-      const known = new Set(adapters.map((a) => a.type));
-      if (!known.has(req.type)) {
-        throw new BadRequestException(
-          `adapter type "${req.type}" is not installed on machine "${machine.name}". Installed: ${[...known].join(', ') || '(none)'}`,
-        );
-      }
-    }
-
-    const now = new Date();
-    let row: PAgent;
-    try {
-      row = await this.prisma.agent.create({
-        data: {
-          name: req.name.trim(),
-          machineId,
-          type: req.type,
-          // Legacy machines: born offline, the supervisor's RegisterEvent
-          // flips it online once spawned. Runner machines have no
-          // per-agent register — the row is a routing record whose
-          // liveness is machine-implied (applyMachineHeartbeat maintains
-          // it every 5s thereafter), so it must be born with the
-          // machine's current status or the web's dispatch queue holds
-          // the first prompt for up to a heartbeat interval waiting for
-          // an "online" that nothing else will send sooner.
-          status:
-            isRunnerSidecar(machine.sidecarVersion) && machine.status === 'online'
-              ? 'online'
-              : 'offline',
-          supportsTerminal: req.supportsTerminal ?? false,
-          workingDir: req.workingDir ?? null,
-          lastHeartbeatAt: now,
-          registeredAt: now,
-        },
-      });
-    } catch (err) {
-      // Surface the unique-constraint failure as a friendlier 400.
-      if ((err as { code?: string }).code === 'P2002') {
-        throw new BadRequestException(
-          `an agent named "${req.name}" already exists on this machine`,
-        );
-      }
-      throw err;
-    }
-
-    if (isRunnerSidecar(machine.sidecarVersion)) {
-      // Runner sidecars have no supervisors and ignore create-agent;
-      // what they need is the new workdir in their allowlist. The row
-      // itself stays — it's the routing record sessions and commands
-      // hang off until Phase 4.
-      await this.syncProjects(machineId);
-    } else {
-      const spec: AgentSpec = {
-        agentId: row.id,
-        name: row.name,
-        type: row.type,
-        workingDir: row.workingDir ?? undefined,
-        supportsTerminal: row.supportsTerminal,
-        adapter: req.adapter,
-      };
-      await this.publishControl(machineId, {
-        kind: 'create-agent',
-        agent: spec,
-        ts: Date.now(),
-      });
-    }
-
-    const dto = MachineService.agentToDto(row, machine.name);
-    this.gateway.emitAgentUpsert(dto);
-    return dto;
-  }
-
-  /**
-   * Destroy an Agent: hard-delete the row (cascading to its sessions /
-   * commands / chunks / terminals) and push a `destroy-agent` control
-   * command to the sidecar so it stops the supervisor and drops the
-   * agent from its on-disk cache.
-   *
-   * We hard-delete (not archive) here — the dashboard surface for this
-   * operation is a destructive "remove from machine", semantically
-   * different from the existing per-agent archive button which keeps
-   * history.
-   */
-  async destroyAgent(machineId: string, agentId: string): Promise<void> {
-    const agent = await this.prisma.agent.findUnique({
-      where: { id: agentId },
-      include: { machine: { select: { sidecarVersion: true } } },
-    });
-    if (!agent) throw new NotFoundException('agent not found');
-    if (agent.machineId !== machineId) {
-      throw new BadRequestException('agent does not belong to this machine');
-    }
-
-    const runner = isRunnerSidecar(agent.machine.sidecarVersion);
-    if (!runner) {
-      await this.publishControl(machineId, {
-        kind: 'destroy-agent',
-        agentId,
-        ts: Date.now(),
-      });
-    }
-    await this.prisma.agent.delete({ where: { id: agentId } });
-    // Reclaim the agent's per-agent Redis streams now. This covers the
-    // sidecar-offline case (no `agent-destroyed` ack will come); if the
-    // sidecar is online, its ack path DELs again once the supervisor is
-    // torn down, cleaning up any stream a late supervisor write recreated
-    // in the gap. See `deleteAgentStreams`. Harmless no-op on runner
-    // machines (their streams are per machine×CLI and shared — never
-    // deleted on an agent destroy).
-    await this.deleteAgentStreams(agentId);
-    if (runner) {
-      // Runner sidecars ignore destroy-agent; re-snapshot the allowlist
-      // instead so a workdir with no remaining rows drops out (stops
-      // its watchers, closes the fs/git jail for it).
-      await this.syncProjects(machineId);
-    }
-    this.gateway.emitAgentRemoved(agentId);
-  }
-
-  /**
-   * Best-effort removal of a destroyed agent's Redis streams (command +
-   * result). Redis streams have no TTL, so without this every agent ever
-   * destroyed leaves its `agent:{id}:cmd` / `agent:{id}:result` streams —
-   * and their consumer groups, which DEL takes with them — in Redis
-   * forever, monotonically growing the footprint on a bridge that is
-   * supposed to hold no permanent data.
-   *
-   * Safe because Redis is only a transient bridge: the read path is
-   * Postgres, and a destroyed agent's sessions/commands/chunks are
-   * cascade-deleted with the row, so nothing downstream needs these
-   * entries. Both readers self-heal from the resulting NOGROUP — the
-   * sidecar's machine-wide command reader re-ensures groups + re-snapshots
-   * its agent set, and the result-ingestor re-syncs its stream list (see
-   * its NOGROUP branch).
-   *
-   * Deliberately per-agent only: the Phase-3 runner streams
-   * (`machine:{id}:cli:{type}:*`) are shared by every session of that
-   * CLI on the machine and must never be deleted on an agent destroy.
-   */
-  private async deleteAgentStreams(agentId: string): Promise<void> {
-    try {
-      const removed = await this.redis.cmd.del(
-        streamKeys.command(agentId),
-        streamKeys.result(agentId),
-      );
-      if (removed > 0) {
-        this.logger.log(`deleted ${removed} Redis stream(s) for destroyed agent ${agentId}`);
-      }
-    } catch (err) {
-      this.logger.warn(
-        `failed to delete Redis streams for agent ${agentId}: ${(err as Error).message}`,
-      );
-    }
-  }
-
   /**
    * Soft-delete a Machine: set the sticky `deletedAt` tombstone and
    * archive its agents, then broadcast `machine:removed` so every
@@ -507,38 +322,12 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Push the canonical agent set down to a freshly-(re)connected
-   * sidecar. Called whenever a machine-register lands so a sidecar
-   * that missed a CreateAgent / DestroyAgent while offline catches up
-   * without operator intervention.
-   */
-  private async syncAgents(machineId: string): Promise<void> {
-    const rows = await this.prisma.agent.findMany({
-      where: { machineId, archivedAt: null },
-    });
-    const specs: AgentSpec[] = rows.map((r) => ({
-      agentId: r.id,
-      name: r.name,
-      type: r.type,
-      workingDir: r.workingDir ?? undefined,
-      supportsTerminal: r.supportsTerminal,
-    }));
-    await this.publishControl(machineId, {
-      kind: 'sync-agents',
-      agents: specs,
-      ts: Date.now(),
-    });
-    this.logger.log(`sync-agents → ${machineId}: ${specs.length} agent(s)`);
-  }
-
-  /**
-   * Push the full workdir allowlist down to a runner-style sidecar
-   * (≥ 0.3.0). Replaces sync-agents/create-agent/destroy-agent for
-   * those machines: the sidecar reconciles its fs/git jail allowlist
-   * and refcounted watcher registry against the snapshot. Idempotent
-   * full snapshot — re-sent on every register and after any agent
-   * create/destroy, so a dropped control entry heals on the next
-   * trigger.
+   * Push the full workdir allowlist down to the machine's runner
+   * sidecar. The only control command since Phase 4 (sync-agents /
+   * create-agent / destroy-agent are gone): the sidecar reconciles its
+   * fs/git jail allowlist and refcounted watcher registry against the
+   * snapshot. Idempotent full snapshot — re-sent on every register, so
+   * a dropped control entry heals on the next one.
    *
    * Project rows are the authoritative source (every session pins one
    * since Phase 1, archived or not — archived sessions stay resumable);
@@ -635,19 +424,14 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
    * never replays — leftover PEL entries on boot.
    *
    * Within the batch: no-DB handlers first (see FAST_KINDS), then
-   * heartbeats coalesced to the newest per agent / per machine and
-   * applied as grouped writes, then everything else in stream order.
-   * Coalescing drops only redundant older heartbeats — no information
-   * the newest doesn't carry. The one ordering change vs strict stream
-   * order: a heartbeat that arrived *after* a deregister in the same
-   * batch now applies before it, briefly showing the agent offline
-   * until its next 5s heartbeat — preferred over the reverse inversion
-   * (a deregistered agent shown online until the 30s stale sweep).
+   * machine heartbeats coalesced to the newest per machine and applied
+   * as grouped writes, then everything else in stream order. Coalescing
+   * drops only redundant older heartbeats. (Per-agent heartbeats are
+   * gone since Phase 4 — runner sidecars send only the machine beat.)
    */
   private async processBatch(stream: string, entries: Array<[string, string[]]>): Promise<void> {
     if (entries.length === 0) return;
 
-    const agentBeats = new Map<string, HeartbeatEvent>();
     const machineBeats = new Map<string, MachineHeartbeatEvent>();
     // Quotas ride only on *some* machine-heartbeats. Track the newest
     // quota-carrying event separately so coalescing to the newest
@@ -665,8 +449,6 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         } catch (err) {
           this.logger.error(`failed to handle lifecycle event: ${(err as Error).message}`);
         }
-      } else if (ev.kind === 'heartbeat') {
-        agentBeats.set(ev.id, ev);
       } else if (ev.kind === 'machine-heartbeat') {
         machineBeats.set(ev.machineId, ev);
         if (ev.quotas?.length) machineQuotaBeats.set(ev.machineId, ev);
@@ -675,7 +457,6 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    await this.applyAgentHeartbeats([...agentBeats.values()]);
     for (const [machineId, ev] of machineBeats) {
       await this.applyMachineHeartbeat(ev, machineQuotaBeats.get(machineId));
     }
@@ -695,47 +476,6 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Apply a batch of coalesced per-agent heartbeats: one findMany (to
-   * learn which ids still exist — updateMany can't report that) plus
-   * one updateMany per distinct status, all in flight together, instead
-   * of one agent.update round trip per event. Status is emitted only
-   * for rows that exist, matching the old per-row
-   * `update().catch(() => null)` behavior for destroyed agents.
-   */
-  private async applyAgentHeartbeats(beats: HeartbeatEvent[]): Promise<void> {
-    if (beats.length === 0) return;
-    const now = new Date();
-    const byStatus = new Map<string, string[]>();
-    for (const ev of beats) {
-      const ids = byStatus.get(ev.status) ?? [];
-      ids.push(ev.id);
-      byStatus.set(ev.status, ids);
-    }
-    try {
-      const existingPromise = this.prisma.agent.findMany({
-        where: { id: { in: beats.map((b) => b.id) } },
-        select: { id: true },
-      });
-      await Promise.all(
-        [...byStatus.entries()].map(([status, ids]) =>
-          this.prisma.agent.updateMany({
-            where: { id: { in: ids } },
-            data: { status, lastHeartbeatAt: now },
-          }),
-        ),
-      );
-      const known = new Set((await existingPromise).map((r) => r.id));
-      for (const ev of beats) {
-        if (known.has(ev.id)) {
-          this.gateway.emitAgentStatus(ev.id, ev.status as AgentDTO['status']);
-        }
-      }
-    } catch (err) {
-      this.logger.error(`failed to apply agent heartbeats: ${(err as Error).message}`);
-    }
-  }
-
-  /**
    * Apply the newest machine-heartbeat for one machine. `quotaEv` is
    * the newest quota-carrying heartbeat from the same batch (possibly
    * an older entry than `ev` — see processBatch).
@@ -745,46 +485,16 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     quotaEv?: MachineHeartbeatEvent,
   ): Promise<void> {
     try {
-      // One read up front: the runner gate below needs sidecarVersion.
-      // Deleted/unknown machines bail here — same no-op semantics as
-      // before (no status flip on a tombstone, no resurrection).
-      const machine = await this.prisma.machine.findUnique({
-        where: { id: ev.machineId },
-        select: { id: true, deletedAt: true, sidecarVersion: true },
-      });
-      if (!machine || machine.deletedAt) return;
       const now = new Date();
       // `updateMany` (not `update`) keeps the `deletedAt: null` filter
-      // in the WHERE as defense against a soft-delete racing the read
-      // above — a tombstone still matches zero rows.
+      // in the WHERE: a soft-deleted machine matches zero rows, so a
+      // tombstone can't be resurrected or flipped online.
       const res = await this.prisma.machine.updateMany({
         where: { id: ev.machineId, deletedAt: null },
         data: { status: 'online', lastSeenAt: now },
       });
       if (res.count > 0) {
         this.gateway.emitMachineStatus(ev.machineId, 'online');
-        if (isRunnerSidecar(machine.sidecarVersion)) {
-          // Runner sidecars send no per-agent heartbeats — their agent
-          // rows (routing records) inherit machine liveness here so
-          // sweepStale's lastHeartbeatAt arm never false-flags them.
-          // WS emits go out ONLY for rows that actually transition
-          // (steady 5s beats stay silent): the old sidecar's shutdown
-          // deregister — or the stale sweep — broadcast `offline` to
-          // every open dashboard, and without an `online` counterpart
-          // here their agent stores held the stale status forever,
-          // freezing the web's queue gate after a sidecar upgrade.
-          const transitioning = await this.prisma.agent.findMany({
-            where: { machineId: ev.machineId, archivedAt: null, status: { not: 'online' } },
-            select: { id: true },
-          });
-          await this.prisma.agent.updateMany({
-            where: { machineId: ev.machineId, archivedAt: null },
-            data: { status: 'online', lastHeartbeatAt: now },
-          });
-          for (const { id } of transitioning) {
-            this.gateway.emitAgentStatus(id, 'online');
-          }
-        }
         if (quotaEv?.quotas?.length) {
           await this.persistQuotas(ev.machineId, quotaEv.quotas);
         }
@@ -861,95 +571,17 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         // machine to come back on the new binary, fire `completed`
         // and resolve the bulk-loop promise.
         this.sidecarUpdate.observeMachineRegister(ev.machineId, sidecarVersion);
-        // Reconcile shape follows the sidecar's style. Gate on the
-        // freshly reported version, not the DB row — a register is
-        // exactly when the style can have just changed (self-update
-        // restart), and the stale row would send the wrong command.
-        if (isRunnerSidecar(sidecarVersion)) {
-          await this.syncProjects(ev.machineId);
-        } else {
-          await this.syncAgents(ev.machineId);
-        }
+        // Every machine is a runner: push the workdir allowlist. (A
+        // pre-0.3 sidecar can't understand this and has no command path
+        // against a Phase-4 server — the fleet must be ≥0.3, which is
+        // this refactor's deploy contract.)
+        await this.syncProjects(ev.machineId);
         break;
       }
-      // 'machine-heartbeat' and 'heartbeat' never reach this switch —
-      // processBatch coalesces them and applies the batched helpers
-      // (applyMachineHeartbeat / applyAgentHeartbeats) directly.
-      case 'register': {
-        const now = new Date();
-        const workingDir = ev.workingDir ?? null;
-        const machine = await this.prisma.machine.findUnique({ where: { id: ev.machineId } });
-        if (!machine) {
-          this.logger.warn(
-            `register for unknown machine ${ev.machineId} (agent ${ev.id}); ignoring until machine-register lands`,
-          );
-          break;
-        }
-        const saved = await this.prisma.agent
-          .update({
-            where: { id: ev.id },
-            data: {
-              type: ev.type,
-              status: 'online',
-              supportsTerminal: ev.supportsTerminal,
-              version: ev.version,
-              workingDir,
-              lastHeartbeatAt: now,
-            },
-          })
-          .catch((err) => {
-            // Most likely cause: the agent row was destroyed while the
-            // sidecar was still trying to register it. Quietly drop —
-            // the sidecar will catch up on the next sync-agents.
-            this.logger.warn(
-              `register for unknown agent ${ev.id} (machine ${ev.machineId}): ${(err as Error).message}`,
-            );
-            return null;
-          });
-        if (saved) {
-          this.gateway.emitAgentUpsert(MachineService.agentToDto(saved, machine.name));
-        }
-        break;
-      }
-      case 'deregister': {
-        const saved = await this.prisma.agent
-          .update({ where: { id: ev.id }, data: { status: 'offline' } })
-          .catch(() => null);
-        if (saved) this.gateway.emitAgentStatus(saved.id, 'offline');
-        break;
-      }
-      case 'agent-spawned': {
-        // The supervisor will follow up with a `register` that sets
-        // status=online; this event is purely a UI nudge that the
-        // sidecar acknowledged the create-agent command.
-        this.logger.log(`agent-spawned ${ev.agentId} on ${ev.machineId}`);
-        break;
-      }
-      case 'agent-spawn-failed': {
-        this.logger.error(`agent-spawn-failed ${ev.agentId} on ${ev.machineId}: ${ev.reason}`);
-        this.gateway.emitAgentSpawnFailed({
-          machineId: ev.machineId,
-          agentId: ev.agentId,
-          reason: ev.reason,
-        });
-        // Reflect the failure in the row so the dashboard can paint an
-        // error pill rather than leaving the agent stuck at "offline".
-        await this.prisma.agent
-          .update({ where: { id: ev.agentId }, data: { status: 'error' } })
-          .catch(() => null);
-        this.gateway.emitAgentStatus(ev.agentId, 'error');
-        break;
-      }
-      case 'agent-destroyed': {
-        // Sidecar acked the destroy: the supervisor is torn down and the
-        // machine-wide command reader has dropped this agent from its
-        // snapshot, so a DEL now sticks — no self-heal can resurrect the
-        // streams. This is the authoritative cleanup; destroyAgent's
-        // earlier DEL covers the case where this ack never arrives.
-        this.logger.log(`agent-destroyed ${ev.agentId} on ${ev.machineId}`);
-        await this.deleteAgentStreams(ev.agentId);
-        break;
-      }
+      // Per-agent lifecycle events (register / heartbeat / deregister /
+      // agent-spawned / agent-spawn-failed / agent-destroyed) are gone:
+      // runner sidecars don't emit them. Only the machine heartbeat
+      // remains, coalesced in processBatch (applyMachineHeartbeat).
       case 'fs-list-response': {
         // Forwarded to FSService which resolves the pending REST call.
         // No-op if the request already timed out (late response).
@@ -1012,11 +644,10 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
   private async sweepStale() {
     const threshold = new Date(Date.now() - STALE_AFTER_MS);
 
-    // Machines: flip stale to offline, plus every agent that lives on
-    // them (the sidecar process is gone, so no agent on it can be live
-    // either — the per-agent heartbeat sweep below would catch them
-    // eventually but doing it together is faster and avoids a brief
-    // window where the UI shows an offline machine with online agents).
+    // Flip machines whose heartbeat lapsed to offline. Agent status is
+    // no longer maintained (Phase 4 — the row is history/attribution),
+    // so there's nothing per-agent to sweep; dispatch gates on the
+    // machine.
     const staleMachines = await this.prisma.machine.findMany({
       where: { status: { not: 'offline' }, lastSeenAt: { lt: threshold } },
       select: { id: true },
@@ -1027,36 +658,8 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         where: { id: { in: ids } },
         data: { status: 'offline' },
       });
-      const orphanedAgents = await this.prisma.agent.findMany({
-        where: { machineId: { in: ids }, status: { not: 'offline' } },
-        select: { id: true },
-      });
-      if (orphanedAgents.length > 0) {
-        await this.prisma.agent.updateMany({
-          where: { id: { in: orphanedAgents.map((a) => a.id) } },
-          data: { status: 'offline' },
-        });
-        for (const { id } of orphanedAgents) this.gateway.emitAgentStatus(id, 'offline');
-      }
       for (const id of ids) this.gateway.emitMachineStatus(id, 'offline');
-      this.logger.warn(
-        `swept ${staleMachines.length} stale machine(s), ${orphanedAgents.length} orphaned agent(s)`,
-      );
-    }
-
-    // Agents whose machine is fine but whose own heartbeat lapsed
-    // (e.g. supervisor crashed but daemon kept running).
-    const staleAgents = await this.prisma.agent.findMany({
-      where: { status: { not: 'offline' }, lastHeartbeatAt: { lt: threshold } },
-      select: { id: true },
-    });
-    if (staleAgents.length > 0) {
-      await this.prisma.agent.updateMany({
-        where: { id: { in: staleAgents.map((s) => s.id) } },
-        data: { status: 'offline' },
-      });
-      for (const { id } of staleAgents) this.gateway.emitAgentStatus(id, 'offline');
-      this.logger.warn(`swept ${staleAgents.length} stale agent(s)`);
+      this.logger.warn(`swept ${staleMachines.length} stale machine(s)`);
     }
   }
 

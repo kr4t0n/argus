@@ -44,23 +44,6 @@ export class TerminalController {
     return rows.map(TerminalService.toDto);
   }
 
-  /** Legacy agent-addressed open — kept for pre-switchover clients;
-   *  dies with the rest of the agent REST surface in Phase 4. */
-  @Post('agents/:agentId/terminals')
-  async open(
-    @Req() req: AuthedRequest,
-    @Param('agentId') agentId: string,
-    @Body() body: OpenTerminalDto,
-  ) {
-    return this.terminals.open(req.user.id, agentId, body);
-  }
-
-  @Get('agents/:agentId/terminals')
-  async list(@Req() req: AuthedRequest, @Param('agentId') agentId: string) {
-    const rows = await this.terminals.listForAgent(req.user.id, agentId);
-    return rows.map(TerminalService.toDto);
-  }
-
   @Get('terminals/:id')
   async get(@Req() req: AuthedRequest, @Param('id') id: string) {
     const row = await this.terminals.get(req.user.id, id);

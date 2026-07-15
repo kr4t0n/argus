@@ -15,7 +15,6 @@ import { StreamGateway } from '../gateway/stream.gateway';
 import { SessionService } from '../session/session.service';
 import { CommandService } from '../command/command.service';
 import { PushService } from '../push/push.service';
-import { isRunnerSidecar } from '../machine/sidecar-update.service';
 
 const CONSUMER = 'server-1';
 const REFRESH_AGENT_STREAMS_MS = 5_000;
@@ -62,30 +61,17 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async refreshStreams() {
-    // Two stream families coexist during the Phase-3 fleet rollout
-    // (docs/plan-agent-to-runners.md): legacy sidecars publish per
-    // agent (`agent:{id}:result`), runner sidecars (≥ 0.3.0) per
-    // machine × installed CLI (`machine:{id}:cli:{type}:result`).
-    // Route per machine off sidecarVersion; ingest itself is shape-
-    // agnostic (chunks carry commandId/sessionId either way).
-    const [machines, agents] = await Promise.all([
-      this.prisma.machine.findMany({
-        where: { deletedAt: null },
-        select: { id: true, sidecarVersion: true, availableAdapters: true },
-      }),
-      this.prisma.agent.findMany({ select: { id: true, machineId: true } }),
-    ]);
-    const runnerMachines = machines.filter((m) => isRunnerSidecar(m.sidecarVersion));
-    const runnerIds = new Set(runnerMachines.map((m) => m.id));
+    // Since Phase 4 every machine is a runner: results arrive per
+    // machine × installed CLI (`machine:{id}:cli:{type}:result`). The
+    // stream set is a function of the machine roster alone — no more
+    // per-agent streams, no Agent-table poll. Ingest is shape-agnostic
+    // (chunks carry commandId/sessionId).
+    const machines = await this.prisma.machine.findMany({
+      where: { deletedAt: null },
+      select: { id: true, availableAdapters: true },
+    });
     const next: string[] = [];
-    for (const a of agents) {
-      // Agent rows on runner machines are routing records — nothing
-      // publishes on their per-agent streams anymore. Agents on
-      // soft-deleted machines keep theirs (matches the previous
-      // all-agents behavior; their sidecar may still be running).
-      if (!runnerIds.has(a.machineId)) next.push(streamKeys.result(a.id));
-    }
-    for (const m of runnerMachines) {
+    for (const m of machines) {
       const adapters = (m.availableAdapters ?? []) as unknown as AvailableAdapter[];
       if (!Array.isArray(adapters)) continue;
       for (const ad of adapters) {
@@ -180,8 +166,9 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
     });
     if (!cmd) return undefined;
     // Session.cliType is the pinned CLI (Phase 1, survives Phase 4's
-    // Agent retirement); agent.type covers pre-backfill rows.
-    const parsed = parseUsage((cmd.session.cliType ?? cmd.agent.type) as AgentType, meta);
+    // Agent retirement); agent.type covers pre-backfill rows whose
+    // agent still exists.
+    const parsed = parseUsage((cmd.session.cliType ?? cmd.agent?.type) as AgentType, meta);
     if (!parsed) return undefined;
     return parsed as unknown as Prisma.InputJsonValue;
   }
