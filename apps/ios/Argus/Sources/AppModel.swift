@@ -345,22 +345,15 @@ final class AppModel {
 
     func refreshAll() async {
         guard let client else { return }
-        // includeArchived: archived sessions stay reachable (the
-        // sidebar's per-project eye toggle), and archived agents are
-        // needed so those sessions still group into their projects
-        // instead of falling into the orphan bucket.
-        //
-        // Each list applies independently: a failing /agents fetch
-        // (retired on Phase-4 servers, or a transient error) must not
-        // abort machines/projects/sessions hydration — one 404 here used
-        // to mean an infinite sidebar spinner. 401s still funnel through
-        // handleAPIError in every branch.
-        async let agents = client.listAgents(includeArchived: true)
+        // Agents are retired (Phase 4): the sidebar groups sessions by
+        // projectId over the project store. includeArchived keeps
+        // archived sessions reachable via the per-project eye toggle.
+        // Each list applies independently so one transient failure can't
+        // abort the rest; 401s funnel through handleAPIError.
         async let machines = client.listMachines()
         async let projects = client.listProjects()
         async let sessions = client.listSessions(includeArchived: true)
         async let userExtensions = client.getMyExtensions()
-        do { fleet.setAgents(try await agents) } catch { handleAPIError(error) }
         do { fleet.setMachines(try await machines) } catch { handleAPIError(error) }
         do { fleet.setProjects(try await projects) } catch { handleAPIError(error) }
         do { sessionList.setAll(try await sessions) } catch { handleAPIError(error) }

@@ -137,37 +137,11 @@ public final class ArgusClient: @unchecked Sendable {
         try await send("POST", "/commands/\(id)/cancel")
     }
 
-    // MARK: Agents
-
-    public func listAgents(includeArchived: Bool = false) async throws -> [AgentDTO] {
-        try await send("GET", "/agents", query: flag("includeArchived", includeArchived))
-    }
-
-    public func getAgent(id: String) async throws -> AgentDTO {
-        try await send("GET", "/agents/\(id)")
-    }
-
-    public func archiveAgent(id: String) async throws -> AgentDTO {
-        try await send("POST", "/agents/\(id)/archive")
-    }
-
-    public func unarchiveAgent(id: String) async throws -> AgentDTO {
-        try await send("POST", "/agents/\(id)/unarchive")
-    }
-
-    /// Model catalog for an agent's CLI; `refresh` bypasses the server cache.
-    /// Legacy route — prefer `getMachineModelCatalog` (Stage C deletes this).
-    public func getModelCatalog(agentId: String, refresh: Bool = false) async throws -> ModelCatalogResponse {
-        try await send(
-            "GET", "/agents/\(agentId)/models",
-            query: refresh ? [URLQueryItem(name: "refresh", value: "1")] : []
-        )
-    }
+    // MARK: Models
 
     /// Model catalog keyed (machineId, cliType) — catalogs belong to the
-    /// machine's installed binary since Phase 2, so the picker can load
-    /// one before any agent of the type exists; `refresh` bypasses the
-    /// server cache.
+    /// machine's installed binary, so the picker can load one before any
+    /// session of the type exists; `refresh` bypasses the server cache.
     public func getMachineModelCatalog(
         machineId: String,
         cliType: String,
@@ -186,18 +160,6 @@ public final class ArgusClient: @unchecked Sendable {
 
     public func getMachine(id: String) async throws -> MachineDTO {
         try await send("GET", "/machines/\(id)")
-    }
-
-    public func listMachineAgents(machineId: String) async throws -> [AgentDTO] {
-        try await send("GET", "/machines/\(machineId)/agents")
-    }
-
-    public func createAgent(machineId: String, _ request: CreateAgentRequest) async throws -> AgentDTO {
-        try await send("POST", "/machines/\(machineId)/agents", body: request)
-    }
-
-    public func destroyAgent(machineId: String, agentId: String) async throws {
-        try await sendVoid("DELETE", "/machines/\(machineId)/agents/\(agentId)")
     }
 
     // MARK: Terminals (interactive PTY)
@@ -223,31 +185,6 @@ public final class ArgusClient: @unchecked Sendable {
             "POST", "/projects/\(projectId)/terminals",
             body: Body(shell: shell, cwd: cwd, cols: cols, rows: rows)
         )
-    }
-
-    /// Legacy agent-addressed open — kept for workdir-less sessions;
-    /// dies with the rest of the agent REST surface in Phase 4.
-    public func openTerminal(
-        agentId: String,
-        shell: String? = nil,
-        cwd: String? = nil,
-        cols: Int? = nil,
-        rows: Int? = nil
-    ) async throws -> TerminalDTO {
-        struct Body: Encodable {
-            let shell: String?
-            let cwd: String?
-            let cols: Int?
-            let rows: Int?
-        }
-        return try await send(
-            "POST", "/agents/\(agentId)/terminals",
-            body: Body(shell: shell, cwd: cwd, cols: cols, rows: rows)
-        )
-    }
-
-    public func listTerminals(agentId: String) async throws -> [TerminalDTO] {
-        try await send("GET", "/agents/\(agentId)/terminals")
     }
 
     @discardableResult
@@ -309,32 +246,6 @@ public final class ArgusClient: @unchecked Sendable {
         var query: [URLQueryItem] = []
         if let limit, limit > 0 { query.append(URLQueryItem(name: "limit", value: String(limit))) }
         return try await send("GET", "/projects/\(projectId)/git/log", query: query)
-    }
-
-    public func listAgentDir(
-        agentId: String,
-        path: String = "",
-        showAll: Bool = false,
-        depth: Int? = nil
-    ) async throws -> FSListResponse {
-        var query: [URLQueryItem] = []
-        if !path.isEmpty { query.append(URLQueryItem(name: "path", value: path)) }
-        if showAll { query.append(URLQueryItem(name: "showAll", value: "true")) }
-        if let depth, depth > 1 { query.append(URLQueryItem(name: "depth", value: String(depth))) }
-        return try await send("GET", "/agents/\(agentId)/fs/list", query: query)
-    }
-
-    public func readAgentFile(agentId: String, path: String) async throws -> FSReadResponse {
-        try await send(
-            "GET", "/agents/\(agentId)/fs/read",
-            query: [URLQueryItem(name: "path", value: path)]
-        )
-    }
-
-    public func getAgentGitLog(agentId: String, limit: Int? = nil) async throws -> GitLogResponse {
-        var query: [URLQueryItem] = []
-        if let limit, limit > 0 { query.append(URLQueryItem(name: "limit", value: String(limit))) }
-        return try await send("GET", "/agents/\(agentId)/git/log", query: query)
     }
 
     // MARK: /me views

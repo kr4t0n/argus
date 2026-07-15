@@ -63,21 +63,15 @@ final class TerminalController {
             let term = terminalView.getTerminal()
             let cols = max(2, term.cols)
             let rows = max(2, term.rows)
-            // Project route when we have one (needs no agent row at all);
-            // the agent route covers workdir-less sessions until Phase 4.
-            let dto: TerminalDTO
-            if let project {
-                dto = try await client.openProjectTerminal(
-                    projectId: project.projectId, cols: cols, rows: rows
-                )
-            } else if let agent {
-                dto = try await client.openTerminal(
-                    agentId: agent.id, cols: cols, rows: rows
-                )
-            } else {
-                state = .failed("no project or agent to open a terminal on")
+            // Terminals are project-addressed (a (machine, cwd) pair); a
+            // session with no project has no terminal surface.
+            guard let project else {
+                state = .failed("this session isn't pinned to a project")
                 return
             }
+            let dto = try await client.openProjectTerminal(
+                projectId: project.projectId, cols: cols, rows: rows
+            )
             terminalId = dto.id
             stream.joinTerminal(dto.id)
             state = .open
