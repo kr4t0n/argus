@@ -54,7 +54,7 @@ interface UIState {
   toggleContextPane: () => void;
   setContextPaneWidth: (w: number) => void;
   toggleAgentExpanded: (id: string, expanded?: boolean) => void;
-  toggleShowArchived: (agentId: string) => void;
+  toggleShowArchived: (key: string) => void;
   toggleShowArchivedAgents: () => void;
   setDraft: (sessionId: string, v: string) => void;
   setTheme: (t: ThemePreference) => void;
@@ -108,10 +108,10 @@ export const useUIStore = create<UIState>()(
           },
         });
       },
-      toggleShowArchived(agentId) {
-        const current = get().showArchived[agentId] ?? false;
+      toggleShowArchived(key) {
+        const current = get().showArchived[key] ?? false;
         set({
-          showArchived: { ...get().showArchived, [agentId]: !current },
+          showArchived: { ...get().showArchived, [key]: !current },
         });
       },
       toggleShowArchivedAgents() {

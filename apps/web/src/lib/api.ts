@@ -205,8 +205,6 @@ export const api = {
     http<ModelCatalogResponse>(
       `/machines/${machineId}/models?cliType=${encodeURIComponent(cliType)}${opts?.refresh ? '&refresh=1' : ''}`,
     ),
-  getModelCatalog: (agentId: string, opts?: { refresh?: boolean }) =>
-    http<ModelCatalogResponse>(`/agents/${agentId}/models${opts?.refresh ? '?refresh=1' : ''}`),
   /** Replace the session-default model choice; null clears to "CLI
    *  default". Applies to subsequent turns. */
   setSessionModel: (id: string, modelSelection: ModelSelection | null) =>
