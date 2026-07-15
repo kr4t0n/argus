@@ -102,13 +102,13 @@ export function useQueueDrainer() {
         if (!session) continue; // not loaded yet / deleted — leave queued
         const machineId =
           resolveProjectRef(session, agents, projects)?.machineId ??
-          agents[session.agentId]?.machineId;
+          (session.agentId ? agents[session.agentId]?.machineId : undefined);
         if (machineId) {
           if (machines[machineId]?.status !== 'online') continue; // machine down
         } else {
           // No machine resolvable (stores still hydrating) — legacy
           // agent-status check as a last resort.
-          const agent = agents[session.agentId];
+          const agent = session.agentId ? agents[session.agentId] : undefined;
           if (!agent || !isReachable(agent.status)) continue;
         }
         // Serialize per SESSION only: a session can't run two turns at once

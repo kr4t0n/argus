@@ -34,7 +34,7 @@ export function SessionPanel() {
   const loadSession = useSessionStore((s) => s.loadSession);
   const loadOlder = useSessionStore((s) => s.loadOlder);
   const agent = useAgentStore((s) =>
-    entry?.session ? s.agents[entry.session.agentId] : undefined,
+    entry?.session?.agentId ? s.agents[entry.session.agentId] : undefined,
   );
   // The queued follow-ups for this session are drained app-wide by
   // `useQueueDrainer` (see App.tsx), so they keep sending even when this

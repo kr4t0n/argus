@@ -58,7 +58,7 @@ export function Sidebar() {
   // hydrated yet.
   const sessionsByProject: Record<string, SessionDTO[]> = {};
   for (const s of Object.values(sessions)) {
-    (sessionsByAgent[s.agentId] ||= []).push(s);
+    if (s.agentId) (sessionsByAgent[s.agentId] ||= []).push(s);
     if (s.projectId) (sessionsByProject[s.projectId] ||= []).push(s);
   }
   for (const list of Object.values(sessionsByAgent)) {
@@ -605,7 +605,7 @@ function ProjectRow({
               key={s.id}
               session={s}
               active={activeSessionId === s.id}
-              agentType={agents[s.agentId]?.type}
+              agentType={s.agentId ? agents[s.agentId]?.type : undefined}
             />
           ))}
           {visibleSessions.length === 0 && (

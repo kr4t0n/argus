@@ -73,7 +73,7 @@ export function SidebarRail() {
   const sessionsByProject = new Map<string, SessionDTO[]>();
   for (const s of Object.values(sessions)) {
     if (s.archivedAt) continue;
-    const a = agents[s.agentId];
+    const a = s.agentId ? agents[s.agentId] : undefined;
     if (!a || a.archivedAt) continue;
     const wd = (a.workingDir ?? '').trim();
     if (!wd) continue;
@@ -92,7 +92,7 @@ export function SidebarRail() {
   let activeProjectKey: string | undefined;
   if (sessionId) {
     const s = sessions[sessionId];
-    const a = s ? agents[s.agentId] : undefined;
+    const a = s?.agentId ? agents[s.agentId] : undefined;
     const wd = (a?.workingDir ?? '').trim();
     if (a && wd) activeProjectKey = `${a.machineId}::${wd}`;
   }
@@ -369,7 +369,7 @@ function RailSessionFlyout({
       </div>
       <div className="max-h-80 overflow-y-auto p-1">
         {sessions.map((s) => {
-          const agentType = agents[s.agentId]?.type;
+          const agentType = s.agentId ? agents[s.agentId]?.type : undefined;
           // Same status-dot language as the full sidebar's SessionRow:
           // amber running, red failed, emerald done-but-unseen.
           return (

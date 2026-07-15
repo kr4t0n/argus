@@ -1,29 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowUpCircle, Loader2, Menu, Plus, Trash2 } from 'lucide-react';
-import type { AgentDTO, AvailableAdapter, SessionDTO } from '@argus/shared-types';
+import { ArrowUpCircle, Loader2, Menu, Trash2 } from 'lucide-react';
+import type { AvailableAdapter, SessionDTO } from '@argus/shared-types';
 import { useMachineStore } from '../stores/machineStore';
-import { useAgentStore } from '../stores/agentStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
+import { useProjectStore, projectKey } from '../stores/projectStore';
 import { useSidecarUpdateStore } from '../stores/sidecarUpdateStore';
 import { api, ApiError } from '../lib/api';
 import { StatusDot } from './ui/StatusDot';
 import { AgentTypeIcon, agentTypeLabel } from './ui/AgentTypeIcon';
-import { CreateAgentPopover } from './CreateAgentPopover';
+import { ProjectIconGlyph } from './ProjectIcon';
 import { MachineIconGlyph } from './MachineIcon';
 import { Button } from './ui/Button';
+import { basename } from '../lib/projects';
 import { cn, relativeTime } from '../lib/utils';
 
 /**
- * Right-pane "machine focus" view. Shown at /machines/:id when a user
- * clicks through from the sidebar machine row. Mirrors the structure
- * of the per-session ContextPane: read-only metadata at the top,
- * actionable list of agents at the bottom.
- *
- * The view is reactive — it reads straight from machineStore /
- * agentStore so machine-status flips and freshly created agents
- * appear without a refetch.
+ * Right-pane "machine focus" view (/machines/:id): read-only host
+ * metadata + installed adapters at the top, the machine's projects at
+ * the bottom (each navigable to its most recent session). Reactive off
+ * machineStore / projectStore.
  */
 export function MachinePanel() {
   const { machineId } = useParams();
@@ -38,17 +35,17 @@ export function MachinePanel() {
   // pane renders blank. Selecting the underlying maps and deriving in
   // a memo gives us a stable reference and a clean re-render only when
   // the inputs actually change.
-  const agentsMap = useAgentStore((s) => s.agents);
-  const agentOrder = useAgentStore((s) => s.order);
-  const agents = useMemo(
+  // Projects on this machine (Phase 4 — the machine's unit of work is
+  // the project, not the agent). Non-archived rows from the server
+  // project store, newest-updated first.
+  const projectsMap = useProjectStore((s) => s.projects);
+  const projects = useMemo(
     () =>
-      machineId
-        ? agentOrder.map((id) => agentsMap[id]!).filter((a) => a && a.machineId === machineId)
-        : [],
-    [machineId, agentsMap, agentOrder],
+      Object.values(projectsMap)
+        .filter((p) => p.machineId === machineId && !p.archivedAt)
+        .sort((a, b) => (a.name ?? a.workingDir).localeCompare(b.name ?? b.workingDir)),
+    [projectsMap, machineId],
   );
-  const [showCreate, setShowCreate] = useState(false);
-  const createBtnRef = useRef<HTMLDivElement>(null);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
 
   // Refresh the per-machine version badge whenever the panel mounts or the
@@ -113,23 +110,6 @@ export function MachinePanel() {
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <SidecarUpdateAction machineId={machineId} machineName={machine.name} />
-              <div ref={createBtnRef} className="relative">
-                <Button
-                  size="md"
-                  onClick={() => setShowCreate((v) => !v)}
-                  disabled={machine.status === 'offline'}
-                >
-                  <Plus className="h-3.5 w-3.5" strokeWidth={2.5} />
-                  new agent
-                </Button>
-                {showCreate && (
-                  <CreateAgentPopover
-                    machine={machine}
-                    anchor={createBtnRef}
-                    onClose={() => setShowCreate(false)}
-                  />
-                )}
-              </div>
               <DeleteMachineAction machineId={machineId} machineName={machine.name} />
             </div>
           </header>
@@ -170,15 +150,21 @@ export function MachinePanel() {
               <SupportsFooter adapters={adapters} />
             </div>
 
-            <Section title={`Agents · ${agents.length}`}>
-              {agents.length === 0 ? (
+            <Section title={`Projects · ${projects.length}`}>
+              {projects.length === 0 ? (
                 <div className="text-meta">
-                  no agents on this machine yet. spawn one to get started.
+                  no projects on this machine yet — create one from the sidebar.
                 </div>
               ) : (
                 <ul className="-mx-2 divide-y divide-default/40">
-                  {agents.map((a) => (
-                    <AgentLine key={a.id} machineId={machine.id} agent={a} />
+                  {projects.map((p) => (
+                    <ProjectLine
+                      key={p.id}
+                      machineId={machine.id}
+                      projectId={p.id}
+                      name={p.name || basename(p.workingDir)}
+                      workingDir={p.workingDir}
+                    />
                   ))}
                 </ul>
               )}
@@ -230,129 +216,78 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
   );
 }
 
-function AgentLine({ machineId, agent }: { machineId: string; agent: AgentDTO }) {
+/** One project row on the machine panel — navigates to its most recent
+ *  session (projects have no route of their own). */
+function ProjectLine({
+  machineId,
+  projectId,
+  name,
+  workingDir,
+}: {
+  machineId: string;
+  projectId: string;
+  name: string;
+  workingDir: string;
+}) {
   const navigate = useNavigate();
-  const removeAgent = useAgentStore((s) => s.remove);
   const sessions = useSessionStore((s) => s.sessions);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const iconKey = useProjectStore((s) => s.serverIcons[projectKey(machineId, workingDir)]);
 
-  const recentSession: SessionDTO | undefined = useMemo(() => {
-    const mine = Object.values(sessions).filter((s) => s.agentId === agent.id);
+  const recent: SessionDTO | undefined = useMemo(() => {
+    const mine = Object.values(sessions).filter((s) => s.projectId === projectId && !s.archivedAt);
     if (mine.length === 0) return undefined;
     return mine.reduce((a, b) => (a.updatedAt > b.updatedAt ? a : b));
-  }, [sessions, agent.id]);
+  }, [sessions, projectId]);
 
-  async function destroy(e: React.MouseEvent) {
-    e.stopPropagation();
-    if (busy) return;
-    if (!confirm(`Destroy agent "${agent.name}"? This deletes its sessions and history.`)) {
-      return;
-    }
-    setBusy(true);
-    setErr(null);
-    try {
-      await api.destroyAgent(machineId, agent.id);
-      removeAgent(agent.id);
-    } catch (ex) {
-      setErr(ex instanceof ApiError ? ex.message : 'failed to destroy');
-    } finally {
-      setBusy(false);
-    }
+  const count = useMemo(
+    () => Object.values(sessions).filter((s) => s.projectId === projectId && !s.archivedAt).length,
+    [sessions, projectId],
+  );
+
+  function jump() {
+    if (recent) navigate(`/sessions/${recent.id}`);
   }
 
-  function jumpToAgent() {
-    if (recentSession) navigate(`/sessions/${recentSession.id}`);
-  }
-
-  const verb = statusVerb(agent.status);
-  const contextLine = activityCaption(agent, recentSession);
-
-  // div + role="button" so the inner destroy <button> isn't nested
-  // in a button (invalid HTML).
   return (
     <li>
       <div
         role="button"
         tabIndex={0}
-        onClick={jumpToAgent}
+        onClick={jump}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            jumpToAgent();
+            jump();
           }
         }}
-        className="group flex w-full items-start gap-3 rounded-md px-2 py-3 text-left transition-colors hover:bg-surface-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-fg-tertiary cursor-pointer"
+        className={cn(
+          'group flex w-full items-start gap-3 rounded-md px-2 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-fg-tertiary',
+          recent ? 'hover:bg-surface-1 cursor-pointer' : 'cursor-default',
+        )}
       >
-        <AgentTypeIcon type={agent.type} size={16} className="mt-0.5 shrink-0 text-fg-secondary" />
+        <ProjectIconGlyph
+          iconKey={iconKey}
+          className="mt-0.5 h-4 w-4 shrink-0 text-[13px] text-fg-secondary"
+        />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
-            <span className="truncate text-sm font-medium text-fg-primary">{agent.name}</span>
-            <span className={cn('text-[11px] font-medium uppercase tracking-wider', verb.color)}>
-              {verb.label}
-            </span>
+            <span className="truncate text-sm font-medium text-fg-primary">{name}</span>
             <span className="ml-auto truncate font-mono text-[11px] text-fg-tertiary">
-              {agent.workingDir ? trimDir(agent.workingDir) : '—'}
+              {trimDir(workingDir)}
             </span>
           </div>
           <div className="mt-0.5 flex items-baseline gap-2 text-meta">
             <span>
-              {agentTypeLabel(agent.type)}
-              {agent.version && (
-                <>
-                  <span className="text-fg-muted"> · </span>
-                  <span className="font-mono">{agent.version}</span>
-                </>
-              )}
+              {count} session{count === 1 ? '' : 's'}
             </span>
-            <span className="ml-auto truncate text-fg-muted">{contextLine}</span>
+            <span className="ml-auto truncate text-fg-muted">
+              {recent ? `last active ${relativeTime(recent.updatedAt)} ago` : 'no sessions yet'}
+            </span>
           </div>
         </div>
-        {err && <span className="mt-1 text-[11px] text-red-500 dark:text-red-400">{err}</span>}
-        <button
-          onClick={destroy}
-          disabled={busy}
-          className={cn(
-            'mt-1 text-fg-muted transition-opacity hover:text-red-500 disabled:opacity-40 dark:hover:text-red-400',
-            'opacity-0 group-hover:opacity-100',
-          )}
-          title="destroy agent (irreversible)"
-          aria-label={`Destroy agent ${agent.name}`}
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
       </div>
     </li>
   );
-}
-
-function statusVerb(status: AgentDTO['status']): { label: string; color: string } {
-  switch (status) {
-    case 'busy':
-      return { label: 'running', color: 'text-amber-600 dark:text-amber-400' };
-    case 'online':
-      return { label: 'idle', color: 'text-emerald-700 dark:text-emerald-400' };
-    case 'offline':
-      return { label: 'offline', color: 'text-fg-muted' };
-    case 'error':
-      return { label: 'error', color: 'text-red-600 dark:text-red-400' };
-    default:
-      return { label: status, color: 'text-fg-muted' };
-  }
-}
-
-function activityCaption(agent: AgentDTO, recent: SessionDTO | undefined): string {
-  if (agent.status === 'busy') {
-    return recent ? `'${recent.title}'` : 'running';
-  }
-  if (agent.status === 'offline') {
-    return `last seen ${relativeTime(agent.lastHeartbeatAt)} ago`;
-  }
-  if (agent.status === 'error') {
-    return 'error';
-  }
-  if (recent) return `last active ${relativeTime(recent.updatedAt)} ago`;
-  return 'no sessions yet';
 }
 
 function trimDir(abs: string): string {

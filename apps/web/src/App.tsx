@@ -3,7 +3,6 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { useAuthStore } from './stores/authStore';
-import { useAgentStore } from './stores/agentStore';
 import { useMachineStore } from './stores/machineStore';
 import { useSessionStore } from './stores/sessionStore';
 import { useSidecarUpdateStore } from './stores/sidecarUpdateStore';
@@ -53,10 +52,6 @@ export default function App() {
 
   const bootstrap = useAuthStore((s) => s.bootstrap);
   const token = useAuthStore((s) => s.token);
-  const loadAgents = useAgentStore((s) => s.load);
-  const upsertAgent = useAgentStore((s) => s.upsert);
-  const setAgentStatus = useAgentStore((s) => s.setStatus);
-  const removeAgent = useAgentStore((s) => s.remove);
   const loadMachines = useMachineStore((s) => s.load);
   const upsertMachine = useMachineStore((s) => s.upsert);
   const setMachineStatus = useMachineStore((s) => s.setStatus);
@@ -100,7 +95,6 @@ export default function App() {
     Promise.all([machinesReady, projectsReady])
       .then(() => Promise.all([migrateLocalProjectIconsToServer(), migrateLocalProjectsToServer()]))
       .catch(() => {});
-    loadAgents();
     loadSessions();
     // Extension flags are account-level (server source of truth) but
     // cached in uiStore/localStorage so the UI reads them synchronously
@@ -129,33 +123,9 @@ export default function App() {
         store.upsertFromDto(p);
         store.upsertServerIcon(p);
       },
-      onAgentUpsert: upsertAgent,
-      onAgentStatus: (p) => {
-        // Prefetch trigger: when an agent transitions busy → not-busy,
-        // any session on that agent whose cached state still says
-        // "running" almost certainly just finished. Force-refresh
-        // those sessions silently in the background so the user sees
-        // the fresh state instantly when they navigate back, rather
-        // than the brief loading flash from SessionPanel's mount
-        // effect catching up. Read prev status BEFORE updating so we
-        // can detect the transition.
-        const prev = useAgentStore.getState().agents[p.id]?.status;
-        setAgentStatus(p.id, p.status);
-        if (prev === 'busy' && p.status !== 'busy') {
-          const ss = useSessionStore.getState();
-          for (const e of Object.values(ss.entries)) {
-            if (e.session.agentId !== p.id) continue;
-            const stillRunning = e.commands.some((c) =>
-              ['pending', 'sent', 'running'].includes(c.status),
-            );
-            if (!stillRunning) continue;
-            void ss.loadSession(e.session.id, { force: true }).catch(() => {
-              /* silent — re-entry will retry */
-            });
-          }
-        }
-      },
-      onAgentRemoved: (p) => removeAgent(p.id),
+      // Per-agent WS events are gone since Phase 4 — sessions drive the
+      // sidebar and their `session:status` events carry the
+      // busy→idle transition that used to prefetch here.
       onSessionCreated: upsertSession,
       onSessionUpdated: upsertSession,
       onSessionStatus: (p) => {
@@ -231,11 +201,9 @@ export default function App() {
       onSidecarUpdateBatchProgress: (p) =>
         useSidecarUpdateStore.getState().updateBatch(p.batchId, p.plan),
       onConnect: async () => {
-        // re-sync machines/agents/sessions/project icons + backfill
-        // active sessions.
+        // re-sync machines/sessions/projects + backfill active sessions.
         await Promise.all([
           loadMachines(),
-          loadAgents(),
           loadSessions(),
           api.listProjects().then((rows) => {
             const store = useProjectStore.getState();

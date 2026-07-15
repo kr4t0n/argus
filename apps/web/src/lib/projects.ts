@@ -29,7 +29,7 @@ export function resolveProjectRef(
   projects: Record<string, LocalProject>,
 ): ProjectRef | null {
   if (!session?.projectId) return null;
-  const agent = agents[session.agentId];
+  const agent = session.agentId ? agents[session.agentId] : undefined;
   if (agent?.workingDir) {
     return {
       projectId: session.projectId,

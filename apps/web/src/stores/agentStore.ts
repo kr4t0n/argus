@@ -16,19 +16,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   agents: {},
   order: [],
   loading: false,
+  // No-op since Phase 4: agents are retired, GET /agents is gone. The
+  // store stays empty; sessions drive the sidebar via projectId. Kept
+  // as an empty store so the remaining `useAgentStore` readers (which
+  // all treat a missing agent as "unknown") compile and degrade to
+  // their project/session fallbacks.
   async load() {
-    set({ loading: true });
-    // Always fetch *all* agents (archived included). The sidebar filters
-    // archived ones out by default but the data needs to be there so the
-    // user can flip the toggle without a refetch.
-    const list = await api.listAgents({ includeArchived: true });
-    const agents: Record<string, AgentDTO> = {};
-    const order: string[] = [];
-    for (const a of list) {
-      agents[a.id] = a;
-      order.push(a.id);
-    }
-    set({ agents, order: sortOrder(order, agents), loading: false });
+    /* agents retired — nothing to load */
   },
   upsert(a) {
     const agents = { ...get().agents, [a.id]: a };

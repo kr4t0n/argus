@@ -114,9 +114,10 @@ export const api = {
     return Array.isArray(agents) ? agents.length : 0;
   },
 
-  listAgents: (opts?: { includeArchived?: boolean }) =>
-    http<AgentDTO[]>(`/agents${opts?.includeArchived ? '?includeArchived=true' : ''}`),
-  getAgent: (id: string) => http<AgentDTO>(`/agents/${id}`),
+  // Agent archive endpoints: kept for the sidebar's project-archive
+  // cascade. Post-Phase-4 a project has no live agents, so these are a
+  // runtime no-op (the cascade's agent loop iterates nothing), but the
+  // call sites still reference them.
   archiveAgent: (id: string) => http<AgentDTO>(`/agents/${id}/archive`, { method: 'POST' }),
   unarchiveAgent: (id: string) => http<AgentDTO>(`/agents/${id}/unarchive`, { method: 'POST' }),
 
@@ -144,14 +145,11 @@ export const api = {
   listMachines: (opts?: { includeArchived?: boolean }) =>
     http<MachineDTO[]>(`/machines${opts?.includeArchived ? '?includeArchived=true' : ''}`),
   getMachine: (id: string) => http<MachineDTO>(`/machines/${id}`),
-  listMachineAgents: (id: string) => http<AgentDTO[]>(`/machines/${id}/agents`),
   createAgent: (machineId: string, body: CreateAgentRequest) =>
     http<AgentDTO>(`/machines/${machineId}/agents`, {
       method: 'POST',
       body: JSON.stringify(body),
     }),
-  destroyAgent: (machineId: string, agentId: string) =>
-    http<void>(`/machines/${machineId}/agents/${agentId}`, { method: 'DELETE' }),
   deleteMachine: (id: string) =>
     http<void>(`/machines/${id}`, { method: 'DELETE' }),
 
@@ -257,8 +255,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
-  listTerminals: (agentId: string) => http<TerminalDTO[]>(`/agents/${agentId}/terminals`),
-  closeTerminal: (id: string) => http<TerminalDTO>(`/terminals/${id}`, { method: 'DELETE' }),
 
   // Sidecar version + remote update
   getSidecarVersion: (machineId: string) =>
