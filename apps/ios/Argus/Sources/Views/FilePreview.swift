@@ -24,7 +24,10 @@ struct FilePreviewSheet: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
 
-    let agent: AgentDTO
+    /// Project addressing — fs/read is project-addressed since the
+    /// runner refactor, so previews keep working when the session's
+    /// agent row is gone.
+    let project: ProjectRef
     let target: FilePreviewTarget
 
     private enum HtmlMode: String, CaseIterable {
@@ -73,8 +76,8 @@ struct FilePreviewSheet: View {
                 .task {
                     guard let client = app.client else { return }
                     do {
-                        result = try await client.readAgentFile(
-                            agentId: agent.id, path: target.path
+                        result = try await client.readProjectFile(
+                            projectId: project.projectId, path: target.path
                         ).result
                     } catch {
                         app.handleAPIError(error)

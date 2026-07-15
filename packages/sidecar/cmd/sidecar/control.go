@@ -255,7 +255,7 @@ func runStatus(args []string) {
 	fmt.Printf("  log:     %s\n", resolvedLog)
 	if cache != nil {
 		fmt.Printf("  machine: %s (id=%s)\n", cache.Name, cache.MachineID)
-		fmt.Printf("  agents:  %d configured\n", len(cache.Agents))
+		fmt.Printf("  projects: %d workdir(s) allowlisted\n", len(cache.Workdirs))
 	}
 
 	switch {

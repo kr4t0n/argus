@@ -1,13 +1,30 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import type { Session as PSession } from '@prisma/client';
-import type { Command as WireCommand, ModelSelection, SessionDTO } from '@argus/shared-types';
+import type {
+  AgentType,
+  AvailableAdapter,
+  Command as WireCommand,
+  ModelSelection,
+  SessionDTO,
+} from '@argus/shared-types';
 import { streamKeys } from '@argus/shared-types';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 import { AttachmentService } from '../attachment/attachment.service';
+
+/** Internal shape of `create` — a project-first session (machineId +
+ *  cliType + optional workingDir). `agentId` is gone since Phase 4. */
+export interface CreateSessionInput {
+  machineId?: string;
+  workingDir?: string;
+  cliType?: string;
+  supportsTerminal?: boolean;
+  title?: string;
+  modelSelection?: ModelSelection;
+}
 
 @Injectable()
 export class SessionService {
@@ -34,7 +51,8 @@ export class SessionService {
     return {
       id: s.id,
       userId: s.userId,
-      agentId: s.agentId,
+      projectId: s.projectId ?? null,
+      cliType: (s.cliType as AgentType | null) ?? null,
       title: s.title,
       externalId: s.externalId,
       status: s.status as SessionDTO['status'],
@@ -68,14 +86,48 @@ export class SessionService {
     return s;
   }
 
-  async create(userId: string, agentId: string, title?: string, modelSelection?: ModelSelection) {
-    const agent = await this.prisma.agent.findUnique({ where: { id: agentId } });
-    if (!agent) throw new BadRequestException('unknown agent');
+  /**
+   * Create a session on a project: the request carries `machineId` +
+   * `cliType` + optional `workingDir`, and the server upserts the
+   * Project row for the (machine, workdir) pair and pins `projectId` +
+   * `cliType` on the session (the workdir is per-session state because
+   * claude-code/cursor keep resume data on disk keyed by the cwd — see
+   * docs/plan-agent-to-runners.md §4.1). The user names the session; no
+   * Agent row is created or referenced — the Agent entity was fully
+   * retired in the Phase-6 sweep. Routes to the machine's runner for
+   * that CLI.
+   */
+  async create(userId: string, input: CreateSessionInput): Promise<SessionDTO> {
+    const machineId = input.machineId?.trim();
+    const cliType = input.cliType?.trim();
+    if (!machineId || !cliType) {
+      throw new BadRequestException('machineId and cliType are required');
+    }
+
+    const machine = await this.prisma.machine.findUnique({ where: { id: machineId } });
+    if (!machine || machine.deletedAt) throw new NotFoundException('machine not found');
+    if (machine.archivedAt) throw new BadRequestException('machine is archived');
+    const adapters = (machine.availableAdapters ?? []) as unknown as AvailableAdapter[];
+    if (
+      Array.isArray(adapters) &&
+      adapters.length > 0 &&
+      !adapters.some((a) => a.type === cliType)
+    ) {
+      throw new BadRequestException(
+        `adapter type "${cliType}" is not installed on machine "${machine.name}". ` +
+          `Installed: ${adapters.map((a) => a.type).join(', ') || '(none)'}`,
+      );
+    }
+
+    const workingDir = input.workingDir?.trim() || null;
+    const projectId = await this.ensureProject(machineId, workingDir, input.supportsTerminal);
+
     const s = await this.prisma.session.create({
       data: {
         userId,
-        agentId,
-        title: title?.trim() || 'New session',
+        projectId,
+        cliType,
+        title: input.title?.trim() || 'New session',
         // Empty sessions start `'idle'`, not `'active'`. The sidebar's
         // amber dot tracks `status === 'active'`, and a fresh row has
         // no command in flight yet — `result-ingestor` flips status to
@@ -83,12 +135,71 @@ export class SessionService {
         // exactly when something is actually running. Forks already
         // use the same initial value (see `fork`).
         status: 'idle',
-        modelSelection: modelSelection ? (modelSelection as Prisma.InputJsonValue) : undefined,
+        modelSelection: input.modelSelection
+          ? (input.modelSelection as Prisma.InputJsonValue)
+          : undefined,
       },
     });
     const dto = SessionService.toDto(s);
     this.gateway.emitSessionCreated(dto);
     return dto;
+  }
+
+  /**
+   * Resolve the Project row a session should pin to, creating it if
+   * this is the first session under the (machineId, workingDir) pair.
+   * Null workingDir means the per-machine "no project" bucket — no row,
+   * projectId stays NULL. `supportsTerminal` seeds a freshly-created
+   * row (an existing row keeps its own value).
+   */
+  private async ensureProject(
+    machineId: string,
+    workingDir: string | null,
+    supportsTerminal?: boolean,
+  ): Promise<string | null> {
+    const wd = workingDir?.trim();
+    if (!wd) return null;
+    const row = await this.prisma.project.upsert({
+      where: { machineId_workingDir: { machineId, workingDir: wd } },
+      create: { machineId, workingDir: wd, supportsTerminal: supportsTerminal ?? false },
+      update: {},
+    });
+    return row.id;
+  }
+
+  /**
+   * Resolve where a session's turns run: (machine, workingDir, cliType)
+   * plus the machine's current status for the dispatch gate. `projectId`
+   * is authoritative; the agent row is a fallback only for old
+   * workdir-less sessions created before Phase 1 whose projectId is
+   * NULL but whose agent row still exists. Returns null when the session
+   * can't be routed (no cliType, or neither anchor resolves).
+   */
+  async resolveRouting(
+    session: Pick<PSession, 'projectId' | 'cliType'>,
+  ): Promise<{
+    machineId: string;
+    workingDir: string | null;
+    cliType: string;
+    machineStatus: string;
+  } | null> {
+    const cliType = session.cliType;
+    if (!cliType) return null;
+    if (session.projectId) {
+      const p = await this.prisma.project.findUnique({
+        where: { id: session.projectId },
+        select: { machineId: true, workingDir: true, machine: { select: { status: true } } },
+      });
+      if (p) {
+        return {
+          machineId: p.machineId,
+          workingDir: p.workingDir,
+          cliType,
+          machineStatus: p.machine.status,
+        };
+      }
+    }
+    return null;
   }
 
   /**
@@ -209,7 +320,12 @@ export class SessionService {
       const created = await tx.session.create({
         data: {
           userId,
-          agentId: src.agentId,
+          // A fork lives in the same project on the same CLI by
+          // construction — the on-disk clone the sidecar performs is
+          // only valid under the source's workingDir (cwd-keyed
+          // resume state, see docs/plan-agent-to-runners.md §4.1).
+          projectId: src.projectId,
+          cliType: src.cliType,
           title: forkTitle,
           status: 'idle',
         },
@@ -218,7 +334,6 @@ export class SessionService {
         const newCmd = await tx.command.create({
           data: {
             sessionId: created.id,
-            agentId: c.agentId,
             kind: c.kind,
             prompt: c.prompt,
             // Force-completed: the fork has no live runner to drive
@@ -255,28 +370,33 @@ export class SessionService {
     // Best-effort dispatch of the on-disk clone to the sidecar. We do
     // this AFTER the gateway emit so the dashboard can navigate
     // immediately and the externalId fills in once the sidecar reports
-    // back; if the agent is offline or doesn't implement Cloner, the
-    // session remains a history-only fork (no externalId) and the next
-    // prompt starts a fresh CLI conversation.
-    if (src.externalId) {
+    // back; if the machine is offline or the adapter doesn't implement
+    // Cloner, the session remains a history-only fork (no externalId)
+    // and the next prompt starts a fresh CLI conversation. The clone
+    // runs in the SOURCE session's project (a fork stays in the same
+    // workdir — that's what makes the cwd-keyed on-disk state valid).
+    const routing = src.externalId ? await this.resolveRouting(src) : null;
+    if (src.externalId && routing) {
       const wire: WireCommand = {
         id: randomUUID(),
-        agentId: src.agentId,
         sessionId: dto.id,
         kind: 'clone-session',
         clone: {
           srcExternalId: src.externalId,
           turnIndex: prefix.length,
         },
+        workingDir: routing.workingDir ?? undefined,
+        cliType: routing.cliType,
       };
       try {
-        await this.redis.publish(streamKeys.command(src.agentId), wire);
+        await this.redis.publish(
+          streamKeys.runnerCommand(routing.machineId, routing.cliType),
+          wire,
+        );
       } catch (err) {
         // Don't fail the fork if Redis hiccups — the session row is
-        // already there. Log via the gateway logger by re-throwing
-        // would surface to the caller; instead swallow and let the
-        // user retry by sending a prompt (which triggers a fresh CLI
-        // run regardless).
+        // already there; the user can retry by sending a prompt (which
+        // triggers a fresh CLI run regardless).
         console.warn(`[fork] clone-session publish failed`, err);
       }
     }

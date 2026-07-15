@@ -11,7 +11,6 @@ public struct BackgroundTaskDTO: Codable, Equatable, Sendable, Identifiable {
     public var taskId: String
     public var machineId: String
     public var workingDir: String
-    public var agentId: String
     public var label: String?
     public var cmd: [String]?
     /// Latest progress reading; absent until tqdm fires its first update.

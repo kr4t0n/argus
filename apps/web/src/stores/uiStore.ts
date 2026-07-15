@@ -14,11 +14,13 @@ interface UIState {
   contextPaneOpen: boolean;
   /** Persisted width of the right-hand context pane in pixels. */
   contextPaneWidth: number;
+  /** Project-row key (`proj:<machineId>::<workingDir>`) → expanded. */
   expanded: Record<string, boolean>;
-  /** agentId → whether archived sessions are visible for that agent. */
+  /** Project-group key → whether that group's archived sessions show. */
   showArchived: Record<string, boolean>;
-  /** Global toggle: show archived agents in the sidebar. */
-  showArchivedAgents: boolean;
+  /** Global toggle: show archived projects in the sidebar. */
+  showArchivedProjects: boolean;
+  /** sessionId → the composer's unsent draft for that session. */
   drafts: Record<string, string>;
   /** User's theme preference. The resolved (system → light/dark) value
    *  is applied to <html> as the `dark` class by `applyTheme()`. */
@@ -52,10 +54,10 @@ interface UIState {
   setSidebarWidth: (w: number) => void;
   toggleContextPane: () => void;
   setContextPaneWidth: (w: number) => void;
-  toggleAgentExpanded: (id: string, expanded?: boolean) => void;
-  toggleShowArchived: (agentId: string) => void;
-  toggleShowArchivedAgents: () => void;
-  setDraft: (agentId: string, v: string) => void;
+  toggleExpanded: (id: string, expanded?: boolean) => void;
+  toggleShowArchived: (key: string) => void;
+  toggleShowArchivedProjects: () => void;
+  setDraft: (sessionId: string, v: string) => void;
   setTheme: (t: ThemePreference) => void;
   setNotificationsEnabled: (v: boolean) => void;
   setNotesExtensionEnabled: (v: boolean) => void;
@@ -77,7 +79,7 @@ export const useUIStore = create<UIState>()(
       contextPaneWidth: 320,
       expanded: {},
       showArchived: {},
-      showArchivedAgents: false,
+      showArchivedProjects: false,
       drafts: {},
       theme: 'system',
       notificationsEnabled: false,
@@ -98,7 +100,7 @@ export const useUIStore = create<UIState>()(
           contextPaneWidth: Math.max(CONTEXT_PANE_MIN, Math.min(CONTEXT_PANE_MAX, Math.round(w))),
         });
       },
-      toggleAgentExpanded(id, expanded) {
+      toggleExpanded(id, expanded) {
         const current = get().expanded[id] ?? true;
         set({
           expanded: {
@@ -107,17 +109,17 @@ export const useUIStore = create<UIState>()(
           },
         });
       },
-      toggleShowArchived(agentId) {
-        const current = get().showArchived[agentId] ?? false;
+      toggleShowArchived(key) {
+        const current = get().showArchived[key] ?? false;
         set({
-          showArchived: { ...get().showArchived, [agentId]: !current },
+          showArchived: { ...get().showArchived, [key]: !current },
         });
       },
-      toggleShowArchivedAgents() {
-        set({ showArchivedAgents: !get().showArchivedAgents });
+      toggleShowArchivedProjects() {
+        set({ showArchivedProjects: !get().showArchivedProjects });
       },
-      setDraft(agentId, v) {
-        set({ drafts: { ...get().drafts, [agentId]: v } });
+      setDraft(sessionId, v) {
+        set({ drafts: { ...get().drafts, [sessionId]: v } });
       },
       setTheme(t) {
         set({ theme: t });

@@ -6,33 +6,47 @@ actual code.
 
 ## Mental model
 
+> **Status: the agent→runner refactor is complete** (docs/plan-agent-to-runners.md).
+> The `Agent` entity is fully retired — there is no `Agent` table, no
+> per-agent supervisor, and no `agentId` anywhere on the wire. Sessions
+> route **by `projectId` → machine + `cliType` → runner stream**. The whole
+> fleet runs runner sidecars (≥ 0.3); the pre-runner protocol has been
+> deleted. Read the current model below, not any lingering "agent worker"
+> phrasing you find deeper in this file.
+
 Argus has **four** moving parts and one wire format:
 
-1. **Web (`apps/web`)** — single-page React app. Knows nothing about agents
-   except via HTTP + WebSocket events.
+1. **Web (`apps/web`)** — single-page React app. Knows nothing about the
+   backend except via HTTP + WebSocket events.
 2. **Server (`apps/server`)** — NestJS control plane. Owns Postgres, owns the
    WebSocket, brokers between the UI and the message bus.
 3. **Sidecar (`packages/sidecar`)** — one Go binary per *machine*. The
    daemon registers itself as a `Machine`, discovers installed CLI
-   adapters on `PATH`, and supervises N agent processes — each a
-   wrapper around one CLI (`claude`, `codex`, `cursor-agent`, …)
-   created from the dashboard. Identity & agent set are persisted to
-   `~/.config/argus/sidecar.json` (see `internal/machine/cache.go`),
-   not YAML.
+   adapters on `PATH`, and runs **one runner per installed CLI** (`claude`,
+   `codex`, `cursor-agent`) — each a long-lived goroutine that dispatches
+   turns for every session of that CLI type on this host. There are no
+   per-session/per-agent processes. Identity + the project workdir
+   allowlist are persisted to `~/.config/argus/sidecar.json` (see
+   `internal/machine/cache.go`), not YAML.
 4. **Transports** — two independent channels, split by workload:
    - **Redis Streams** (durable, at-least-once) for control-plane traffic:
-     - `agent:lifecycle`        — machines announce/heartbeat themselves;
-       sidecars also publish per-agent spawn/destroy acknowledgments here.
-     - `agent:notify`           — fs-changed / git-changed watcher nudges.
+     - `lifecycle`               — machines announce/heartbeat themselves
+       (`machine-register` / `machine-heartbeat`) and reply with fs/git RPC
+       responses. (`streamKeys.lifecycle`; the historical Redis key name
+       predates the refactor.)
+     - `agent:notify`            — fs-changed / git-changed watcher nudges.
        Split off from `lifecycle` so a build-burst of fs events can't
-       MAXLEN-trim unread heartbeats (which flips healthy agents offline).
+       MAXLEN-trim unread heartbeats (which flips healthy machines offline).
        Drained by the same MachineService XREADGROUP as `lifecycle`.
-     - `agent:background`       — `argus-bg` task progress (see the
+     - `agent:background`        — `argus-bg` task progress (see the
        background-task service note under Server modules).
-     - `machine:{mid}:control`  — server → sidecar daemon
-       (`create-agent`, `destroy-agent`, `sync-agents`).
-     - `agent:{id}:cmd`         — server → that agent's supervisor.
-     - `agent:{id}:result`      — supervisor → server (chunks, externalId).
+     - `machine:{mid}:control`   — server → sidecar daemon
+       (`sync-projects` — the full workdir allowlist — plus fs/git/model
+       RPC requests and sidecar-update commands).
+     - `machine:{mid}:cli:{type}:cmd` / `:result` — server → runner /
+       runner → server (chunks, externalId), one pair per machine ×
+       installed CLI. This is the ONLY command/result routing; the old
+       per-agent `agent:{id}:*` streams are gone.
    - **Sidecar link** (direct WebSocket, path `/sidecar-link`) for terminal
      PTY traffic (open / input / resize / close / output / closed). This
      bypasses Redis because every keystroke-echo round-trip used to cost
@@ -47,21 +61,23 @@ change one, change the other.**
 
 ```
 User ── owns ──▶ many Sessions
-Session ── targets ──▶ one Agent
+Session ── pinned to ──▶ one Project (machine + workingDir) + a cliType
 Session ── contains ──▶ many Commands (user turns)
 Command ── emits ──▶ many ResultChunks (streamed)
 ```
 
-- A **Machine** is a host running one `argus-sidecar` daemon. Owns its
-  agents and reports its discovered adapters.
-- An **Agent** is a worker — a single CLI wrapper supervised by some
-  machine's daemon. "Who can do work." Server-managed: created and
-  destroyed from the dashboard, persisted to Postgres, and pushed down
-  to the owning machine over its control stream.
-- A **Session** is a conversation thread targeting one agent. It maps 1-1 to
-  the underlying CLI's native conversation id (Claude Code `--resume`, Codex
-  `resume`, Cursor CLI `--resume`) via `Session.externalId`. The server stores
-  the `externalId` after the sidecar reports it on the first turn.
+- A **Machine** is a host running one `argus-sidecar` daemon. It reports
+  its discovered CLI adapters and runs one runner per installed CLI.
+- A **Project** is a `(machineId, workingDir)` pair — the unit sessions
+  group and route under. Sessions pin to a `Project` row at creation
+  (`Session.projectId`) plus a `cliType`; the server resolves
+  `projectId → machine + cliType → runner stream` when dispatching. There
+  is no "agent" between the session and the runner.
+- A **Session** is a conversation thread pinned to one project + cliType.
+  It maps 1-1 to the underlying CLI's native conversation id (Claude Code
+  `--resume`, Codex `resume`, Cursor CLI `--resume`) via
+  `Session.externalId`. The server stores the `externalId` after the
+  sidecar reports it on the first turn.
   `Session.modelSelection` (nullable JSON) holds the session-default
   `ModelSelection` (`{model, effort, context, speed}`); NULL means "CLI
   default" — no model flags are passed, the pre-picker behavior.
@@ -102,38 +118,58 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   panel (`apps/web/src/pages/UserPanel.tsx`, "API keys" section) drives the
   management endpoints — create with a read-only toggle, one-time secret
   reveal + copy + live "test" call, and inline-confirm revoke.
-- `machine/` — owns the `Machine` table and the agent control plane.
-  Consumes `agent:lifecycle` (`machine-register`, `machine-heartbeat`,
-  `agent-spawned`, `agent-spawn-failed`, `agent-destroyed`) plus
-  `agent:notify` (`fs-changed` / `git-changed`) in one XREADGROUP —
-  same group name registered on both streams, shared handler switch,
-  so nudges from pre-notify sidecars that still arrive on `lifecycle`
-  are handled identically. Batches are processed as units
+- `terminal/` — PTY sessions, addressed by (machine, cwd). `POST|GET
+  /projects/:id/terminals` is the only route. The `Terminal` row carries
+  `machineId` (the sidecar link's routing key — the keystroke hot path
+  reads it straight off the row) plus `projectId`. Capability is
+  `Project.supportsTerminal`; the runner opens the PTY by cwd. A
+  pre-runner (< 0.3) sidecar has no runner to open one on, so the open is
+  rejected early with a clear 400 (`isRunnerSidecar` gate) — but the whole
+  fleet is ≥ 0.3, so that path is defensive only.
+- `machine/` — owns the `Machine` table and the machine control plane.
+  Consumes `lifecycle` (`machine-register`, `machine-heartbeat`, plus the
+  fs/git/model RPC responses) and `agent:notify` (`fs-changed` /
+  `git-changed`) in one XREADGROUP — same group name registered on both
+  streams, shared handler switch. Batches are processed as units
   (`processBatch`): no-DB handlers (RPC responses, nudges) run first,
-  heartbeats are coalesced newest-per-agent/machine into grouped
-  `updateMany` writes, and the whole batch is acked with one variadic
-  XACK — see the "Lifecycle consumer throughput" gotcha before adding
-  per-entry awaits back. Upserts
-  `Machine` rows, replies with a `sync-agents` reconcile so the
-  sidecar's cached agent set converges with the server's. Exposes
-  REST (`GET /machines`, `POST /machines/:id/agents`,
-  `DELETE /machines/:id/agents/:agentId`, `DELETE /machines/:id`) and
-  emits `machine:upsert` / `machine:status` / `machine:removed` /
-  `agent:spawn-failed` over WS. Also publishes `create-agent` / `destroy-agent` commands on
-  `machine:{mid}:control`.
+  heartbeats are coalesced newest-per-machine into grouped `updateMany`
+  writes, and the whole batch is acked with one variadic XACK — see the
+  "Lifecycle consumer throughput" gotcha before adding per-entry awaits
+  back. Upserts `Machine` rows, replies to each (re)register with an
+  idempotent `sync-projects` workdir-allowlist snapshot so the sidecar's
+  fs/git jail + watcher registry converge with the server's set of known
+  projects. Exposes REST (`GET /machines`, `DELETE /machines/:id`,
+  `GET /machines/:id/models`) and emits `machine:upsert` /
+  `machine:status` / `machine:removed` over WS. Command dispatch gates on
+  machine status (`command.service.ts`). The machine-heartbeat is the
+  only presence signal — runner sidecars have no per-agent heartbeats.
 - `project/` — server-side metadata for "projects" (the
   `(machineId, workingDir)` pair the sidebar groups sessions
-  under). Projects still have no first-class lifecycle — the
-  `Project` table exists for metadata that must roam across
-  browsers, today just the user-picked icon glyph (workspace-
-  shared like `Machine.iconKey`). `GET /projects` hydrates the
-  dashboard's icon map; `PATCH /projects/icon` upserts by
-  `(machineId, workingDir)` (404s for deleted machines, keeps the
-  row with `iconKey` NULL on reset) and broadcasts the DTO via
-  the global `project:upsert` WS event.
-- `agent-registry/` — `Agent` CRUD: list, get, archive/unarchive, plus
-  the shared `agentToDto` mapper. Lifecycle ingestion lives in
-  `machine/`; this module is purely about the persisted Agent row.
+  under). Since Phase 1 of the agent→runner refactor
+  (docs/plan-agent-to-runners.md) the `Project` row is the anchor
+  sessions pin to: `Session.projectId` + `Session.cliType` are set
+  at creation (rows upserted lazily by session-create and by the
+  icon path) and backfilled for pre-existing sessions. Sidebar
+  *placeholders* are still client-only (`useProjectStore`) — that
+  promotion is deferred, see the plan's Phase 1 note. `GET
+  /projects` hydrates the dashboard's icon map; `PATCH
+  /projects/icon` upserts by `(machineId, workingDir)` (404s for
+  deleted machines, keeps the row with `iconKey` NULL on reset)
+  and broadcasts the DTO via the global `project:upsert` WS event.
+- **The Agent entity is fully retired (docs/plan-agent-to-runners.md).**
+  There is no agent runtime concept, no `Agent` table, and no `agentId`
+  anywhere — on the wire, in the DB, or in any client. Sessions route by
+  `projectId` → machine + `cliType` → runner stream
+  (`SessionService.resolveRouting` — projectId-only), created
+  project-first. The sweep dropped, in order: the agent-addressed REST +
+  registry (Phase 4); the `Session.agentId` / `Command.agentId` /
+  `Terminal.agentId` FK columns + `agentId` from the DTOs and wire
+  `Command` (Phase 5, after `SELECT count(*) FROM "Session" WHERE
+  "projectId" IS NULL` = 0); the `Machine.agentCount` field and the
+  `Agent` table itself (Phase 6, migrations `9_phase6_drop_agent_table`);
+  and finally the legacy per-agent lifecycle protocol + every residual
+  `agentId` attribution echo (fs/git/bg-task events, RPC response frames,
+  `ResultChunk`) once the whole fleet was confirmed on runner sidecars.
 - `session/` — CRUD for sessions; resolves `externalId` so each subsequent
   turn carries it back to the sidecar for `--resume`. Also owns the
   session-default model choice: `POST /sessions` accepts
@@ -145,21 +181,23 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   text) dwarfs its count, which is why the API gzips responses
   (`compression()` in `main.ts`; nothing else fronts :4000 to do it)
   and the web opens with a 4-turn tail, paging 20 per scroll-up.
-- `command/` — persists commands, `XADD`s to `agent:{id}:cmd`, handles cancel.
-  `dispatch` merges `Session.modelSelection` under per-turn `options`
-  and records the merged map on `Command.options`.
-- `machine/models.{service,controller}.ts` — `GET /agents/:id/models`.
-  Reads are DB-first: the sidecar pushes each agent's catalog at
-  supervisor spawn (unsolicited `model-catalog-response`, empty
-  `requestId`) and it's persisted on `Agent.modelCatalog`/`At`, so the
-  endpoint is a Postgres read — warm across server restarts and for
-  every browser. Stored catalogs older than 6h are served as-is while
-  a background revalidate runs (stale-while-revalidate; reads never
-  block on freshness). The live RPC (same pending-promise pattern as
-  `fs.service`) runs only for `?refresh=1` (the picker's manual
-  refresh — the one synchronous path), the cold no-stored-catalog
-  case, and the background revalidate; all of them re-persist.
-  In-flight live fetches are collapsed per agent.
+- `command/` — persists commands, `XADD`s to the machine × CLI runner
+  stream (`machine:{id}:cli:{type}:cmd`), handles cancel. `dispatch`
+  merges `Session.modelSelection` under per-turn `options` and records the
+  merged map on `Command.options`.
+- `machine/models.{service,controller}.ts` — `GET
+  /machines/:id/models?cliType=`. Catalogs are keyed (machineId, cliType) —
+  a property of the installed binary, not any session. Reads are DB-first:
+  the sidecar pushes each CLI's catalog at runner spawn (unsolicited
+  `model-catalog-response`, empty `requestId`) and it's persisted on the
+  `MachineCliCatalog` row, so the endpoint is a Postgres read — warm
+  across server restarts and for every browser. Stored catalogs older than
+  6h are served as-is while a background revalidate runs
+  (stale-while-revalidate; reads never block on freshness). The live RPC
+  (same pending-promise pattern as `fs.service`) runs only for
+  `?refresh=1` (the picker's manual refresh — the one synchronous path),
+  the cold no-stored-catalog case, and the background revalidate; all of
+  them re-persist. In-flight live fetches are collapsed per (machine, CLI).
 - `attachment/` — file/image attachments. `POST /attachments` (JWT-
   guarded, multer `FileInterceptor`) streams an upload into S3/MinIO
   (`@aws-sdk/client-s3`, `forcePathStyle` for MinIO) and records an
@@ -173,14 +211,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   command, mints **15-min pull tokens** for the wire `Command.attachments`,
   and returns/loads **1-h display tokens** in `AttachmentDTO.url`
   (`SessionService.withAttachments` batches them onto the transcript).
-- `result-ingestor/` — single XREADGROUP across **all** agent result streams
-  (refreshed every 5s). Persists each chunk and **immediately** forwards to
-  WS room `session:{sessionId}` (no batching — the typewriter UX needs it).
+- `result-ingestor/` — single XREADGROUP across **all** runner result
+  streams (refreshed every 5s): `machine:{id}:cli:{type}:result`, one per
+  entry in each machine's `availableAdapters`. Persists each chunk and
+  **immediately** forwards to WS room `session:{sessionId}` (no batching —
+  the typewriter UX needs it).
   Also flips command/session status on `final`/`error` (success →
   session `idle` + `unread`, error → `failed` + `unread`; interim
   chunks → `active` + clears `unread`).
 - `terminal/` — interactive PTY plumbing. Owns the `Terminal` row, exposes
-  REST (`POST/GET /agents/:id/terminals`, `DELETE /terminals/:id`), a WS
+  REST (`POST/GET /projects/:id/terminals`, `DELETE /terminals/:id`), a WS
   subgateway for `terminal:input` / `terminal:resize` / `terminal:close`,
   and a `TerminalLinkBridge` that routes inbound `SidecarLinkService`
   frames (output, closed) back to the browser WS and the DB. When the
@@ -206,7 +246,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   viewing the project sees the card disappear), matching how the
   earlier wall-clock auto-eviction worked. `GET /machines/:id/
   background-tasks?workingDir=...` hydrates a tab opening mid-run.
-  No DB persistence — JSONL on the agent's disk is authoritative if
+  No DB persistence — JSONL on the machine's disk is authoritative if
   you need history.
 - `push/` — APNs sender for native clients. `DeviceController`
   (`POST /me/devices` upsert-by-token — re-homing a token that moved
@@ -227,9 +267,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   frame)` / `onFrame(...)` / `onDisconnect(...)` hooks to the terminal
   module. Pings every 15 s, idle-timeout after 45 s.
 - `gateway/` — Socket.IO namespace `/stream`. Rooms: `user:{id}`,
-  `agent:{id}`, `session:{id}`, `terminal:{id}`. Authenticates the handshake
-  using the same JWT used for REST. The gateway is the **only** thing that
-  emits live data to clients.
+  `session:{id}`, `terminal:{id}`, and the per-project
+  `project:{machineId}:{workingDir}` (fs/git nudges + background tasks).
+  Authenticates the handshake using the same JWT used for REST. The
+  gateway is the **only** thing that emits live data to clients.
 - `infra/redis/` — wrapper that owns *two* connections: one for blocking
   XREADGROUP, one for everything else (ioredis requires this).
 - `infra/prisma/` — Prisma client.
@@ -253,35 +294,28 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `protocol/` — wire structs (mirror of shared-types).
 - `machine/` — daemon, on-disk cache, and adapter discovery.
   - `cache.go` persists `~/.config/argus/sidecar.json` (machine id,
-    bus URL, server link credentials, canonical agent list) with an
-    atomic write so a sidecar restart re-spawns every supervisor
-    *instantly*, without waiting for the server's reconcile broadcast.
+    bus URL, server link credentials, the project workdir allowlist) with
+    an atomic write so the fs jail + watchers come up on restart *before*
+    the server's `sync-projects` reconcile lands.
   - `discovery.go` walks the registered adapter set, runs `exec.LookPath`
     on each `DefaultBinary`, and probes `--version`. The result is
     reported in `MachineRegisterEvent.adapters` so the dashboard can
-    filter the "create agent" dropdown to what's actually installed.
+    filter the new-session adapter picker to what's actually installed.
   - `daemon.go` is the long-lived process: registers the machine,
-    heartbeats, subscribes to `machine:{mid}:control`, fans
-    create/destroy/sync commands out to per-agent `supervisor`s, and
-    holds the single sidecar↔server WebSocket on behalf of all agents
-    on this host. It also runs **one** machine-wide command reader
-    (`commandReaderLoop`): a single `XREADGROUP` fanning in over every
-    `agent:{id}:cmd` stream under one consumer group
-    (`SidecarCommandGroup(machineID)`), re-snapshotting the agent set
-    each iteration so create/destroy is picked up within `cmdReadBlock`.
-    Decoded entries are routed to the owning supervisor over an
-    in-process channel. This is the key reason a machine holds a
-    *constant* number of Redis connections (control reader + command
-    reader + publishes) instead of one blocking connection per agent.
-    See the "Sidecar command consumption" gotcha.
-  - `supervisor.go` owns one agent: builds the adapter, pings it once,
-    receives commands on its `cmdCh` (fed by the daemon's command
-    reader — it does **not** read Redis itself), dispatches to the
-    adapter, forwards chunks back on `agent:{id}:result`, heartbeats,
-    and gracefully drains on destroy. There is no per-agent process —
-    supervisors are goroutines inside the single daemon. The supervisor
-    still owns the `XACK` for each command (after the handler completes)
-    and the in-flight `WaitGroup` that shutdown drains.
+    heartbeats, subscribes to `machine:{mid}:control` (`sync-projects` +
+    fs/git/model RPC + sidecar-update), starts **one runner per installed
+    CLI**, and holds the single sidecar↔server WebSocket on behalf of the
+    whole host. It holds a *constant* number of Redis connections (control
+    reader + one command reader per CLI type + publishes) regardless of
+    how many sessions or projects exist — the property the runner refactor
+    was built for.
+  - `runner.go` owns one CLI type on this machine: it `XREADGROUP`s its
+    `machine:{mid}:cli:{type}:cmd` stream, dispatches each turn to the
+    adapter as an independent goroutine (`go handleCommand`, no per-session
+    lock — sessions of the same type run truly in parallel), forwards
+    chunks back on `machine:{mid}:cli:{type}:result`, and owns the `XACK`
+    per command after the handler completes. There is no per-session or
+    per-agent process.
   - `attachments.go` — `materializeAttachments` runs inside
     `handleCommand` **before** `adapter.Execute`: for each
     `cmd.Attachments` ref it HTTP-GETs `{serverURL}/attachments/{id}?
@@ -292,7 +326,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     prompt. Fail-soft per file (a bad pull is logged and skipped, not
     fatal). `safeAttachmentFilename` jails the on-disk name (strips
     path separators / control chars; id-prefixed for collision safety).
-    Working-dir-less agents fall back to a temp dir.
+    Workdir-less sessions fall back to a temp dir.
 - `quota/` — per-CLI plan-quota prober. Runs on a 5-minute tick inside
   the daemon, reads each tool's OAuth file
   (`~/.claude/.credentials.json`, `~/.codex/auth.json`) and calls the
@@ -310,7 +344,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     `maxDepth` levels (reusing a single `listDirWith` core + one
     preloaded gitignore matcher) and returns a `path → entries` map
     so depth-N prefetch lands in one round trip. Both jail to the
-    agent's workingDir, always strip `.git` AND `.argus/`, and
+    request's workingDir, always strip `.git` AND `.argus/`, and
     respect gitignore. `fsWatcher` registers one fsnotify watch per
     non-ignored dir and coalesces events into 250 ms-debounced
     fs-changed emits (published on `agent:notify`, not `lifecycle` —
@@ -323,16 +357,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     `<workingDir>/.argus/progress/`, picking up the JSONL stream
     `argus-bg` writes when wrapping a long-running command. Each
     decoded line becomes one of the three
-    `BackgroundTask{Started,Progress,Ended}Event` lifecycle frames,
-    forwarded on `agent:lifecycle` so the dashboard's per-project
+    `BackgroundTask{Started,Progress,Ended}Event` frames, forwarded on
+    the `agent:background` stream so the dashboard's per-project
     Progress tab can render live status for detached background work
-    the agent's PTY would otherwise never see (anything backgrounded
-    with `&` / `nohup` flows only to the agent's log files, not to
-    the PTY the sidecar captures). `bgEvent` is the wire format on
-    disk; the supervisor decorates it with machineId / agentId /
-    workingDir before publishing. Soft-fails the same way fsw / gitw
-    do — a missing or read-only progress dir just means the tab
-    stays empty.
+    the CLI's PTY would otherwise never see (anything backgrounded
+    with `&` / `nohup` flows only to log files, not to the PTY the
+    sidecar captures). `bgEvent` is the wire format on disk; the
+    watcher decorates it with machineId / workingDir before publishing
+    (the events are scoped by `(machineId, workingDir, taskId)`).
+    Soft-fails the same way fsw / gitw do — a missing or read-only
+    progress dir just means the tab stays empty.
 - `bus/` — go-redis wrapper with `Publish`, `EnsureGroup`, `ReadMessage`, `Ack`.
 - `adapter/` — `Adapter` interface and process-level **registry**. Each
   adapter file calls `Register(type, &Plugin{Factory, DefaultBinary})`
@@ -351,7 +385,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     `codex debug models` JSON, `models_cursor.go` parses
     `cursor-agent models` lines and labels family/variant groups).
     Two paths: the daemon fires `PushModelCatalog` after every
-    supervisor spawn (unsolicited push, empty `requestId`, 30 s exec
+    runner spawn (unsolicited push, empty `requestId`, 30 s exec
     budget, errors logged-not-published so a boot hiccup can't clobber
     the server's stored copy), and `HandleListModels` answers the
     on-demand `list-models` RPC with a 12 s deadline so a wedged CLI
@@ -373,15 +407,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   with an **adaptive flush**: single keystrokes flush immediately
   (`idleGap` detection), active bursts get a 4 ms debounce, and 16 KB
   caps a single frame. Decoupled from any global config: takes a
-  `Settings` struct (shells, max-sessions) and an `AgentLookup`
-  interface so it can validate `terminal:open` against the daemon's
-  live agent registry (`Agent.supportsTerminal`, `Agent.workingDir`).
-  `buildShellEnv` augments the spawned shell's environment with two
-  hooks the Progress extension depends on: prepends the sidecar's own
+  `Settings` struct (shells, max-sessions). `terminal:open` carries the
+  explicit `cwd` (the project's workingDir); the runner opens the PTY
+  there. `buildShellEnv` augments the spawned shell's environment with
+  two hooks the Progress extension depends on: prepends the sidecar's own
   bin directory to `PATH` (so `argus-bg` is reachable without an
   absolute path) and exports `ARGUS_PROGRESS_DIR` pointing at the
-  agent's `<workingDir>/.argus/progress/`, which is also where the
-  per-agent `progressWatcher` is listening.
+  project's `<workingDir>/.argus/progress/`, which is also where the
+  per-workdir `progressWatcher` is listening.
 - `cmd/argus-bg/` — sibling binary shipped alongside the sidecar.
   Wraps any command (`argus-bg --label "training" -- python train.py`),
   runs the child in its own PTY so tqdm keeps its interactive
@@ -446,9 +479,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `lib/api.ts` — typed REST client.
 - `lib/ws.ts` — single Socket.IO connection with reconnect; broadcasts events
   to a small set of subscribed handlers.
-- `stores/` — Zustand slices: `authStore`, `agentStore`, `sessionStore`,
-  `uiStore`. Sessions are stored by id with their full `chunks` buffer; the
-  WS pushes new chunks via `appendChunk`, which guards duplicates by `id`.
+- `stores/` — Zustand slices: `authStore`, `machineStore`, `sessionStore`,
+  `projectStore`, `uiStore` (no `agentStore` — it was deleted with the
+  Agent entity). Sessions are stored by id with their full `chunks`
+  buffer; the WS pushes new chunks via `appendChunk`, which guards
+  duplicates by `id`.
 - `components/StreamViewer.tsx` — the streaming display. Groups chunks by
   command, concatenates `delta`s, renders tool pills, stdout, errors, and a
   cursor while running. Final-answer markdown is rendered with
@@ -498,67 +533,49 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   no awareness of them (see the "Task tools" gotcha). See the AGENTS.md
   note on stream-json drift.
 - `components/Sidebar.tsx` — flat project → session tree. Top level
-  groups agents by `(workingDir, machineId)` — same path on different
-  machines lives on different physical filesystems, so they get
-  separate rows. Each project row shows a folder icon + label +
-  small machine glyph; sessions whose agent has no `workingDir`
-  fall into a per-machine `no project` bucket. **A project expands
-  directly into its sessions** — there is no agent row in the tree.
-  Each `SessionRow` leads with the agent type icon
-  (`AgentTypeIcon` driven by `agents[s.agentId]?.type`), so the
-  user can tell a claude session from a codex one without the agent
-  layer being visible. **Creation hierarchy** mirrors the tree: the
-  bottom `MachineList`'s hover `+` opens `CreateProjectPopover`
-  (name + workingDir + terminal default — no adapter), which writes
-  a placeholder into `useProjectStore`; the project row's hover `+`
-  opens `CreateAgentPopover` in `asSession` mode, which collects
-  adapter + session name only, then **auto-vivifies** the agent —
-  reuses an `existingAgents` entry of the chosen type within the
-  project if there is one, otherwise creates a new agent with an
-  auto-generated `${type}-${randomHex}` name in the background,
-  then creates a session titled with the user's input and navigates
-  to it. The agent layer is implementation detail in the sidebar:
-  multiple sessions of the same type in one project share a single
-  supervisor process. Projects are derived in two passes by
-  `groupProjects()`: first from `agentStore.order` (so any agent's
-  workingDir surfaces a row even with no placeholder), then
-  overlaid with `useProjectStore` placeholders (which take over the
-  row's label and let empty projects render before their first
-  agent). Same `(machineId, workingDir)` key on both sides, so a
-  placeholder and its later agents collapse into one row.
-  Placeholders are client-only and persisted under `argus.projects`
-  — promote to a server entity when the flow stabilises. Archiving
-  a project from its hover action cascades client-side: every
-  non-archived session under every non-archived agent is archived
-  via REST (skipping items already archived individually), then
-  the agents themselves, then the placeholder's `archivedAt` is set
-  together with a snapshot of the IDs the cascade actually flipped
-  (`archivedAgentIds` + `archivedSessionIds`). Restore consults the
-  snapshot and only un-archives those IDs — so a session the user
-  archived individually BEFORE the project archive stays archived
-  after restore. `Promise.allSettled` is used on the archive path
-  so per-item failures don't poison the snapshot; the restore path
-  uses per-item `.catch` so a since-destroyed row 404s without
-  blocking the rest. The store auto-creates a placeholder for a
-  purely agent-derived row so the project keeps a stable identity
-  to restore from. Legacy placeholders archived before the
-  snapshot existed (both snapshot fields `undefined`) fall back to
-  a broad restore that un-archives everything currently archived
-  in the project — accept the bluntness for backward compatibility.
-  The `showArchivedAgents` toggle reveals archived placeholders as
-  well as archived agents. Per-project show-archived state (the
-  eye toggle, which moved from the agent row to the project row in
-  the flatten) lives in `uiStore.showArchived` keyed by
-  `project.key` — old agent-id-keyed entries from before the
-  flatten survive as harmless orphans. Expansion state lives in
-  `uiStore.expanded` keyed by `proj:<machineId>::<workingDir>`
-  (default open; the project popover force-opens its new row on
-  submit in case it was previously toggled closed). The synthetic
-  `no project` bucket hides the project-row `+` since it has no
-  path to anchor an agent against — agents without a workingDir
-  still get created through `MachinePanel`'s free-form popover,
-  which keeps using `CreateAgentPopover` directly in its default
-  (agent-mode) form. Each project row's folder icon is itself a
+  groups sessions by their pinned `(machineId, workingDir)` project —
+  same path on different machines lives on different physical
+  filesystems, so they get separate rows. Each project row shows a
+  folder icon + label + small machine glyph; sessions with no
+  `workingDir` fall into a per-machine `no project` bucket. **A project
+  expands directly into its sessions** — there is no agent layer in the
+  tree at all. Each `SessionRow` leads with the CLI type icon
+  (`AgentTypeIcon` driven by `session.cliType`), so the user can tell a
+  claude session from a codex one. **Creation hierarchy** mirrors the
+  tree: the bottom `MachineList`'s hover `+` opens `CreateProjectPopover`
+  (name + workingDir + terminal default — no adapter), which writes a
+  placeholder into `useProjectStore`; the project row's hover `+` opens
+  `CreateAgentPopover` (historical name — it only creates sessions now),
+  which collects adapter + session name and POSTs the project-first
+  `CreateSessionRequest` (`machineId` + `workingDir` + `cliType`). The
+  server pins the session to a `Project` row (`projectId` + `cliType`)
+  and returns it; the workingDir can never change afterwards (claude-code
+  and cursor keep resume state on disk keyed by the cwd). Projects are
+  derived by `groupProjects()` over the session list + the hydrated
+  `Project` rows (`useProjectStore`), keyed by the
+  `(machineId, workingDir)` pair — placeholders let an empty project
+  render before its first session. Placeholders are server-backed (POST
+  /projects, archive/rename endpoints; `argus.projects` localStorage is a
+  paint-instantly cache hydrated from GET /projects, with a one-shot boot
+  migration — `migrateLocalProjects.ts`). Archiving a project from its
+  hover action cascades client-side: every non-archived session under it
+  is archived via REST (skipping items already archived individually),
+  then the placeholder's `archivedAt` is set together with a snapshot of
+  the session IDs the cascade flipped (`archivedSessionIds`;
+  `archivedAgentIds` is retained in the wire snapshot as `[]`). Restore
+  consults the snapshot and only un-archives those IDs — so a session the
+  user archived individually BEFORE the project archive stays archived
+  after restore. `Promise.allSettled` on the archive path so per-item
+  failures don't poison the snapshot; restore uses per-item `.catch` so a
+  since-destroyed row 404s without blocking the rest. Legacy placeholders
+  archived before the snapshot existed fall back to a broad restore.
+  The `showArchivedAgents` toggle (historical name) reveals archived
+  placeholders. Per-project show-archived state lives in
+  `uiStore.showArchived` keyed by the project-group key. Expansion state
+  lives in `uiStore.expanded` keyed by `proj:<machineId>::<workingDir>`
+  (default open). The synthetic `no project` bucket hides the project-row
+  `+` since it has no path to anchor a session against. Each project
+  row's folder icon is itself a
   picker (`ProjectIcon`/`ProjectIconGlyph`) — clicking opens a
   6×5 letter grid plus a `reset to folder` action; the picked
   A-Z glyph persists to the server's `Project` row (PATCH
@@ -580,42 +597,48 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   stack and commits via `useProjectStore.add()` on the existing
   key (creates a placeholder for purely agent-derived rows).
 - `lib/projects.ts` — shared `groupProjects()` derivation +
-  `ProjectGroup` type consumed by both `Sidebar` and
-  `SidebarRail`. Pure function over `(agentOrder, agents,
-  localProjects, localOrder)`; callers pre-filter the orders for
-  whatever archived-visibility posture they want.
+  `ProjectGroup` type consumed by both `Sidebar` and `SidebarRail`, plus
+  `resolveProjectRef(session, projects)` which turns a session's
+  `projectId` into the `(machineId, workingDir)` pair. Pure functions;
+  callers pre-filter for whatever archived-visibility posture they want.
 - `components/SidebarRail.tsx` — collapsed-mode rail (48px wide).
   Renders one tile per project using the same `groupProjects()`
   derivation as the main sidebar, with `ProjectIconGlyph` for the
   glyph. Click jumps to the project's most-recent non-archived
-  session across any of its agents; hovering a tile for ~500ms
-  opens a session flyout (portaled to `<body>` to escape the
-  rail's `overflow-y-auto`, same trick as `CreateAgentPopover`)
-  listing the project's non-archived sessions so any session is
-  one click away without re-expanding the sidebar. A 200ms close
-  grace lets the pointer cross the tile→panel gap; the flyout
-  header replaces the tile's old native `title` tooltip (they'd
-  race each other on hover). Archived projects/agents and
-  the synthetic `no project` bucket are hidden — the rail is for
-  active-state navigation, not history. Machine strip + logout at
-  the bottom unchanged.
+  session; hovering a tile for ~500ms opens a session flyout (portaled
+  to `<body>` to escape the rail's `overflow-y-auto`, same trick as
+  `CreateAgentPopover`) listing the project's non-archived sessions so
+  any session is one click away without re-expanding the sidebar. A
+  200ms close grace lets the pointer cross the tile→panel gap; the
+  flyout header replaces the tile's old native `title` tooltip (they'd
+  race each other on hover). Archived projects and the synthetic
+  `no project` bucket are hidden — the rail is for active-state
+  navigation, not history. Machine strip + logout at the bottom
+  unchanged.
 - `components/ContextPane.tsx` — right-pane companion to a session. Header
-  shows agent identity + working dir + model. A collapsible `Details`
-  block surfaces agent + session metadata (machine, status, version,
-  working dir, registered, last seen, session title, external id,
-  updated, model). The bottom region is tabbed: **Commits** (`GitLogPanel`),
+  shows the session's cliType + working dir + model + machine status. A
+  collapsible `Details` block surfaces session + machine metadata
+  (machine, status, working dir, session title, external id, updated,
+  model). The bottom region is tabbed: **Commits** (`GitLogPanel`),
   **Files** (`FileTree`), **Terminal** (`<TerminalPane>`), and — only when
-  the Notes extension is on (`uiStore.notesExtensionEnabled`) and the agent
-  has a `workingDir` — **Note** (`<NotePane>`), plus two more extension tabs gated the same
-  way: **Progress** (`<ProgressPane>`, `progressExtensionEnabled`) and
-  **Diff** (`<DiffPane>`, `diffExtensionEnabled`). ContextPane receives
-  the session's `commands` (not just `chunks`) so the Diff tab can scope
-  its file diffs to the last turn.
+  the Notes extension is on (`uiStore.notesExtensionEnabled`) and the
+  session has a `workingDir` — **Note** (`<NotePane>`), plus two more
+  extension tabs gated the same way: **Progress** (`<ProgressPane>`,
+  `progressExtensionEnabled`) and **Diff** (`<DiffPane>`,
+  `diffExtensionEnabled`). ContextPane receives the session's `commands`
+  (not just `chunks`) so the Diff tab can scope its file diffs to the last
+  turn. Commits/Files render only when a `ProjectRef` resolves
+  (lib/projects.ts — session.projectId → the (machineId, workingDir)
+  pair): they fetch via the `/projects/:id/*` routes and join the project
+  WS room; file tabs are scoped by projectId (`fileTabsStore.scope`), and
+  the queue drainer's reachability check is machine-level, resolved
+  through the same ProjectRef.
 - `components/MachinePanel.tsx` — `/machines/:id` route. Header with
-  machine glyph + name + status dot + sidecar-update / new-agent buttons.
-  Below the header: 2:3 grid with Host KV + Supports adapters on the
-  left, agent list on the right. Each `AgentLine` shows `[type icon]
-  name [verb] [workingDir]` with a hover-only destroy action.
+  machine glyph + name + status dot + sidecar-update button. Below the
+  header: Host KV + a `Supports` footer of installed adapters (from
+  `availableAdapters`), then the machine's **projects** (grouped by
+  workingDir — the same unit sessions pin to). Soft-delete lives in the
+  header overflow.
 - `pages/UserPanel.tsx` — `/user` route, settings-page layout. Sticky
   account band at the top (email + role); below it a left section nav
   (Stats / Preferences) and a scroll column with Activity (a `Grid` /
@@ -637,15 +660,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   against the server on bootstrap (`App.tsx`). Each toggle PUTs the full
   flag set (no server-side merge), so all toggles forward every flag.
   Capped at `max-w-6xl`.
-- `components/TerminalPane.tsx` — xterm.js bound to one agent. Owns the
-  WebSocket plumbing, a debounced ResizeObserver for fit, base64 encoding
-  on input, and a duplicate-seq guard on output. Renders inside the
-  **Terminal** tab of `ContextPane` so we don't pay the xterm cost until
-  the user clicks the tab.
+- `components/TerminalPane.tsx` — xterm.js bound to one project (machine +
+  cwd). Owns the WebSocket plumbing, a debounced ResizeObserver for fit,
+  base64 encoding on input, and a duplicate-seq guard on output. Renders
+  inside the **Terminal** tab of `ContextPane` so we don't pay the xterm
+  cost until the user clicks the tab.
 - `components/NotePane.tsx` — free-form per-project scratchpad in the
-  **Note** tab of `ContextPane`. A "project" has no DB row of its own
-  (the sidebar derives projects from agents' `workingDir`s), so the note
-  is keyed by the `(userId, machineId, workingDir)` triple in the
+  **Note** tab of `ContextPane`. The note is keyed by the
+  `(userId, machineId, workingDir)` triple in the
   `ProjectNote` table and reached via `GET`/`PUT /me/project-notes`
   (machineId + workingDir as query params). Two sessions in the same
   working dir edit the same note. Debounced autosave (~700 ms) rather
@@ -678,29 +700,29 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   small editable/removable list `PromptQueue` shows directly above the
   input. **Draining is app-wide**, not per-panel: `useQueueDrainer()` is
   mounted once in `App.tsx` and sends queued follow-ups for ANY session as
-  its agent frees up, regardless of which session (if any) is open. A
-  manual submit while a backlog is still draining also queues (joins the
-  back) rather than jumping the FIFO.
-  - **Pacing clock = `session.status`, not the agent heartbeat.** Agent
-    online/busy is heartbeat-reported every 5s (too laggy for turn-to-turn
+  it frees up, regardless of which session (if any) is open. A manual
+  submit while a backlog is still draining also queues (joins the back)
+  rather than jumping the FIFO.
+  - **Pacing clock = `session.status`, not the machine heartbeat.** Machine
+    online is heartbeat-reported every 5s (too laggy for turn-to-turn
     pacing); `session.status` ('active' while streaming → 'idle'/'failed'
     when done) is event-driven AND broadcast to the whole `user:{id}` room,
     so `sessionStore.sessions[id].status` stays fresh for every session,
-    open or not. The drainer subscribes to the queue/session/agent stores
+    open or not. The drainer subscribes to the queue/session/machine stores
     (debounced ~120ms to coalesce chunk-append bursts) and re-evaluates.
-  - **Serialization is per SESSION, not per agent.** Each turn spawns its
-    own short-lived CLI process (`claude --resume <session-external-id>`)
-    and the sidecar dispatches them as independent goroutines with no
-    per-agent lock (`supervisor.go` `go handleCommand`, no `cliSlots` gate
-    on `Execute`) — so sessions sharing an agent run truly in parallel. The
+  - **Serialization is per SESSION.** Each turn spawns its own short-lived
+    CLI process (`claude --resume <session-external-id>`) and the runner
+    dispatches them as independent goroutines with no per-CLI lock
+    (`runner.go` `go handleCommand`, no `cliSlots` gate on `Execute`) — so
+    sessions of the same type on one machine run truly in parallel. The
     drainer therefore gates a session only on its OWN state: skip while
     `session.status === 'active'`, or while an `inFlight` guard is set (it
     bridges the dispatch→first-chunk window where the new turn isn't
     `active` yet; clears once it goes active or after a 30s timeout). The
     one invariant it protects: never two turns for the SAME session at once
     (they'd both resume the same id off the pre-turn transcript and corrupt
-    it). Agent heartbeat `busy` is ignored (laggy + wrong granularity);
-    agent status is used only for reachability (skip `offline`/`error`).
+    it). Reachability is machine-level: skip when the session's machine is
+    `offline`.
   - On a loaded (open) session the drainer also optimistically
     `upsertCommand`s the returned row for instant feedback. A failed
     `sendCommand` restores the head (`enqueueFront`) and stalls it with a
@@ -724,17 +746,32 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `.unknown`), and contract confidence comes from
   `scripts/capture-ios-fixtures.sh`: it captures sanitized live-server
   responses into the package's test fixtures, which CI decodes.
+- **Runner-refactor posture** (docs/plan-agent-to-runners.md, complete):
+  the Agent entity is retired, so there is no `agentId`, `AgentDTO`, or
+  fleet-agents store on the client. Sessions carry their own
+  `projectId`/`cliType`; `FleetStore.projectRef` resolves the
+  `(machineId, workingDir)` pair; session creation is project-first;
+  fs/git/note/progress/terminal panes are all project-addressed; the model
+  picker is keyed (machineId, cliType); and queue reachability is
+  machine-level. `ToleranceTests` still pins that a stray `agentId` from an
+  older server decodes as an ignored extra field (never a decode failure) —
+  keep that tolerance; never add strict decoding.
+- **Swift is CI-compiled.** The dev box is Linux (no toolchain), so
+  `.github/workflows/ios.yml` — `swift build`+`swift test` for ArgusKit
+  and an `xcodebuild` Simulator build for the app — IS the compiler for
+  Swift changes. It runs on push to main/dev/`feat/ios-*`, on PRs, and
+  via `workflow_dispatch` for refactor branches.
   **If you change a shared-types DTO, update the Swift mirror and
   re-capture the fixtures in the same PR.**
 - Swift is authored on Linux but only compiles on macOS —
   `.github/workflows/ios.yml` (macOS runner, `swift build` + `swift
   test`) is the primary verifier, not the dev box.
 - Wire gotcha the fixtures encode: REST-served chunks drop
-  `agentId`/`sessionId`/`isFinal` and serialize `ts` as an ISO string,
-  while the WS `chunk` event relays the full wire shape with numeric
-  millis; command rows carry a denormalized `usage` field shared-types
-  omits. `ResultChunk`'s custom decoder + Codable's ignore-unknown
-  default absorb all of this — don't add strict decoding.
+  `sessionId`/`isFinal` and serialize `ts` as an ISO string, while the WS
+  `chunk` event relays the full wire shape with numeric millis; command
+  rows carry a denormalized `usage` field shared-types omits.
+  `ResultChunk`'s custom decoder + Codable's ignore-unknown default absorb
+  all of this — don't add strict decoding.
 - Same family: the finalize/cancel `command:updated` events carry a
   CommandDTO **without `attachments`** (bare `CommandService.toDto`).
   Any client that replaces its command row on that event wipes the
@@ -763,20 +800,20 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 - **Path alias**: `@argus/shared-types` resolves to the package's source
   (Vite + tsconfig paths). Don't import from compiled `dist/` directly.
-- **Status vocab**: agents use `online | busy | error | offline`; sessions
-  use `active | idle | done | failed`; commands use the lifecycle in the
-  Prisma schema (`pending|sent|running|completed|failed|cancelled`).
+- **Status vocab**: machines use `online | offline`; sessions use
+  `active | idle | failed`; commands use the lifecycle in the Prisma
+  schema (`pending|sent|running|completed|failed|cancelled`).
 - **IDs**: sessions and commands use `cuid()`. Machine ids are minted
   once by `argus-sidecar init` and persisted to the cache (regenerated
-  only with `init --force`). Agent ids are server-issued at create
-  time and replayed back to the sidecar via `create-agent` /
-  `sync-agents`. Both are stable across restarts on both sides.
+  only with `init --force`), stable across restarts. Projects are keyed
+  by the `(machineId, workingDir)` pair.
 - **At-least-once delivery**: chunks may be redelivered after a server
   restart. The store de-dups by chunk `id`; the DB write swallows unique-key
   collisions.
 - **WS rooms**: clients join `session:{id}` to receive that session's chunks
-  and `command:*`/`session:*` updates. The server emits `agent:*` to
-  everyone; per-user events go to `user:{id}` only.
+  and `command:*`/`session:*` updates, and `project:{machineId}:{workingDir}`
+  for fs/git nudges + background tasks. `machine:*` is emitted to everyone;
+  per-user events go to `user:{id}` only.
 - **Streaming over batching**: never coalesce `delta` chunks server-side.
   Drop only when a *specific* socket is lagging (TODO — see follow-ups).
 
@@ -843,27 +880,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   separate package.
 - **Two Redis connections**: do **not** call `XREADGROUP` on the shared
   `cmd` ioredis client — it parks the socket and starves every other call.
-- **Sidecar command consumption is machine-wide, not per-agent**: the
-  daemon runs a single `commandReaderLoop` that `XREADGROUP`s across all
-  `agent:{id}:cmd` streams at once under one group,
-  `SidecarCommandGroup(machineID)` (`"sidecar-cmd-{mid}"`), and hands each
-  entry to the owning supervisor over its `cmdCh`. This replaced the old
-  per-agent reader (group `sidecar-{agentID}`), where every agent parked
-  its own blocking connection — the thing that blew up connection count
-  under N machines × N projects × N CLIs on a small Redis. Consequences to
-  keep in mind: (1) the consumer group is ensured in `spawnSupervisor`
-  *before* the supervisor enters the map and registers, so the reader
-  never hits `NOGROUP` on a live agent and no command lands ahead of the
-  group's start position; (2) the reader **self-heals** after a Redis
-  flush — a batch-wide `NOGROUP` triggers `ensureCommandGroups` + retry
-  (the old per-agent loop ensured once and would wedge forever after a
-  flush); (3) `cmdReadCount` is kept small because anything `XREADGROUP`'d
-  into a supervisor's `cmdCh` but not yet handled is lost (un-acked,
-  delivered to a dead consumer) if the daemon shuts down mid-drain — same
-  "delivered but unprocessed" loss class as before, just bounded here by
-  the per-read count; (4) `enqueue` selects on the supervisor's `runCtx`
-  so a destroyed/draining agent makes the reader ack-drop rather than
-  block the whole machine's command intake.
+- **Command consumption is per-CLI-runner, bounded per machine**: each
+  runner `XREADGROUP`s its own `machine:{mid}:cli:{type}:cmd` stream, so a
+  machine holds a *constant* number of blocking Redis connections (one per
+  installed CLI + the control reader), not one per session or project —
+  the whole point of the runner refactor, which killed the old per-agent
+  reader that blew up connection count under N machines × N projects × N
+  CLIs on a small Redis. The runner dispatches each decoded turn as an
+  independent goroutine and owns the `XACK` after the handler completes;
+  a `NOGROUP` after a Redis flush self-heals (re-ensure group + retry).
 - **Stream MAXLEN is silent message loss, not just memory pressure**:
   every `XADD` on both sides (`apps/server/src/infra/redis/redis.service.ts`
   and `packages/sidecar/internal/bus/bus.go`) trims with `MAXLEN ~ N`,
@@ -875,12 +900,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   ID but `XREADGROUP` can never replay it. Symptoms: missing result
   chunks mid-command, a sidecar that "didn't get" a control message,
   unrecoverable PEL growth. Current caps are sized for a ~30 MB Redis
-  with ~10 agents: `agent:lifecycle`=500, `agent:notify`=2000,
-  `agent:background`=5000, `agent:{id}:cmd`=200,
-  `agent:{id}:result`=500, `machine:{id}:control`=200. If you scale
-  past that — more agents, chunkier terminal output, longer expected
-  consumer outages — bump the relevant entry in *both* helpers and
-  re-budget against your Redis `maxmemory`. Related trap when deciding
+  with a handful of machines: `lifecycle`=500, `agent:notify`=2000,
+  `agent:background`=5000, `machine:{id}:cli:{type}:cmd`=200,
+  `machine:{id}:cli:{type}:result`=500, `machine:{id}:control`=200. If
+  you scale past that — more machines, chunkier terminal output, longer
+  expected consumer outages — bump the relevant entry in *both* helpers
+  and re-budget against your Redis `maxmemory`. Related trap when deciding
   which stream an event belongs on: `MAXLEN ~` only trims on `XADD`,
   so a *quiet* stream retains whatever it holds indefinitely. That's
   why the few-but-fat fs-list / fs-read / git-log responses stay on
@@ -892,26 +917,24 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   can briefly exceed N; that's the budget headroom, not slack to
   rely on.
 - **Lifecycle consumer throughput must out-pace heartbeat inflow —
-  per-entry awaits are the enemy**: heartbeat volume is linear in
-  agents (one per agent per 5s + one per machine), and every awaited
-  round trip inside the consume loop divides throughput. Observed live
-  (Jul 2026, ~144 ms RTT to a remote Redis): one awaited `XACK` + one
-  Prisma `update` per entry capped the consumer at ~2 entries/s
-  against ~2.4/s inflow — the backlog grew until MAXLEN trimmed
-  *undelivered* entries (group lag > stream length), so the fs/git/
-  model RPC responses riding `lifecycle` vanished and the dashboard
-  showed "agent did not respond — the machine may be offline" for
-  perfectly healthy sidecars, while `sweepStale` flapped live machines
-  offline. `MachineService.processBatch` therefore (1) acks each batch
-  with one variadic XACK, (2) handles no-DB events (`FAST_KINDS`: RPC
-  responses, watcher nudges) before DB-bound ones so a response never
-  waits behind heartbeats, and (3) coalesces heartbeats
-  newest-per-agent/machine into grouped `updateMany` writes (keeping
-  the newest *quota-carrying* machine-heartbeat separately, since
-  quotas ride only some heartbeats). Don't add per-entry awaits back;
-  if the loop ever lags again, measure entries/s consumed vs produced
-  first. The structural fix — per-machine×CLI runners instead of
-  per-agent heartbeats — is `docs/plan-agent-to-runners.md`.
+  per-entry awaits are the enemy**: every awaited round trip inside the
+  consume loop divides throughput. Observed live (Jul 2026, ~144 ms RTT
+  to a remote Redis, before the runner refactor cut heartbeat volume):
+  one awaited `XACK` + one Prisma `update` per entry capped the consumer
+  at ~2 entries/s against ~2.4/s inflow — the backlog grew until MAXLEN
+  trimmed *undelivered* entries (group lag > stream length), so the
+  fs/git/model RPC responses riding `lifecycle` vanished and the
+  dashboard showed "the machine may be offline" for perfectly healthy
+  sidecars, while `sweepStale` flapped live machines offline.
+  `MachineService.processBatch` therefore (1) acks each batch with one
+  variadic XACK, (2) handles no-DB events (`FAST_KINDS`: RPC responses,
+  watcher nudges) before DB-bound ones so a response never waits behind
+  heartbeats, and (3) coalesces machine-heartbeats newest-per-machine
+  into grouped `updateMany` writes (keeping the newest *quota-carrying*
+  heartbeat separately, since quotas ride only some heartbeats). The
+  structural fix landed with the runner refactor: only machine-heartbeats
+  hit this stream now (one per machine per 5s — no per-agent multiplier),
+  so inflow is bounded by machine count. Don't add per-entry awaits back.
 - **A multi-stream XREADGROUP fails as a unit on NOGROUP**: the
   lifecycle loop reads `agent:lifecycle` + `agent:notify` in one call;
   if the group is missing on *either* stream, Redis rejects the whole
@@ -930,8 +953,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   large tool result — e.g. an MCP tool like Penpot's `generateMarkup`
   returning ~1 MB of SVG per call, relayed whole as a
   `progress`/`content=mcp_tool_call` chunk — can sit at ~1 MB/entry. At
-  500 entries that's a *half-gigabyte* budget on one `agent:{id}:result`
-  stream, well within the count cap. This is exactly what OOM'd the
+  500 entries that's a *half-gigabyte* budget on one
+  `machine:{id}:cli:{type}:result` stream, well within the count cap.
+  This is exactly what OOM'd the
   30 MB prod Redis once (one Penpot session → a 10 MB result stream →
   eviction → all sidecars dropped). Redis has **no byte-based MAXLEN**,
   so the only real fix is at the producer: cap oversized `content`/`meta`
@@ -943,18 +967,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   if MCP/tool-heavy sessions keep pressuring Redis. Emergency reclaim
   while it's unfixed: `XTRIM <big>:result MAXLEN <small>` (safe — the read
   path is Postgres, not Redis).
-- **Destroyed agents' streams are reclaimed, don't leak**: Redis streams
-  have no TTL, so a hard-destroyed agent's `agent:{id}:cmd` /
-  `agent:{id}:result` would otherwise linger forever (empty but present,
-  plus their consumer groups), monotonically bloating a bridge that is
-  meant to hold no permanent data. `MachineService.deleteAgentStreams`
-  `DEL`s both at destroy time (covers a sidecar-offline destroy) and
-  again on the `agent-destroyed` ack (the DEL that *sticks* — the
-  supervisor is torn down by then, so no self-heal can resurrect them).
-  DEL takes the consumer groups with it; the result-ingestor
-  (`NOGROUP` branch → immediate `refreshStreams`) and the sidecar's
-  machine-wide command reader both self-heal from the transient
-  `NOGROUP`, so a destroy never stalls live streaming for other sessions.
+- **Runner streams are per machine × CLI, not per session — no
+  per-entity churn**: `machine:{id}:cli:{type}:{cmd,result}` streams are
+  keyed by the machine and the installed CLI, both long-lived, so nothing
+  creates or destroys a stream per session/project (the old per-agent
+  `agent:{id}:*` streams that had to be `DEL`-reclaimed on destroy are
+  gone with the Agent entity). The result-ingestor still self-heals a
+  transient `NOGROUP` (e.g. after an emergency `DEL` in the Redis-full
+  runbook) via its `NOGROUP` branch → immediate `refreshStreams`.
 - **Lifecycle PEL is reclaimed on boot, not leaked across restarts**:
   the `server-lifecycle` consumer reads with `'>'` under a fixed name
   (`server-1`), so entries delivered-but-unacked when the server
@@ -1074,16 +1094,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - **Attachments are two separate problems; S3 only solves one**. A file
   attached to a turn has to (a) be *persisted* so the transcript
   re-renders it, and (b) be *delivered* to the **sidecar host's disk** so
-  the CLI can read it — the CLI runs on the agent's machine, not the
+  the CLI can read it — the CLI runs on the sidecar's machine, not the
   server. S3/MinIO handles (a). For (b) the sidecar pulls each file over
   **HTTP from the server** (the server is the S3 gateway), NOT directly
   from MinIO — because Argus sidecars run on arbitrary remote hosts that
   typically can't reach a cluster-internal bucket, but already reach the
   server. The bytes **never ride Redis**: only `Command.attachments`
-  refs (id/filename/mime/size/token) travel the `agent:{id}:cmd` stream,
-  so the MAXLEN-trimming gotcha doesn't apply. If you ever want the
-  sidecar to pull presigned-direct from S3 (server out of the byte path),
-  gate it on the bucket being reachable from every agent host.
+  refs (id/filename/mime/size/token) travel the runner cmd stream, so the
+  MAXLEN-trimming gotcha doesn't apply. If you ever want the sidecar to
+  pull presigned-direct from S3 (server out of the byte path), gate it on
+  the bucket being reachable from every sidecar host.
 - **Image vision is uniform-prompt-path + one per-adapter flag**. The
   cross-adapter floor is the prompt preamble: every agentic CLI opens a
   file whose path it's told, and — verified empirically against the real
@@ -1100,8 +1120,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - **Attachment lifecycle is keep-for-session; S3 orphans are a TODO**.
   Files stay under `.argus/uploads/` and in S3 for the life of the
   session so `--resume` turns can re-reference them. Deleting a command
-  (e.g. agent hard-delete cascade) removes the `Attachment` rows but the
-  service only best-effort deletes the S3 object on the upload-failure
+  removes the `Attachment` rows but the service only best-effort deletes
+  the S3 object on the upload-failure
   path — a periodic orphan sweep (objects whose row is gone, and unlinked
   `commandId IS NULL` uploads abandoned before send) is a follow-up.
 - **Attachment viewing is unified with the file tree (frontend)**: a sent
@@ -1129,48 +1149,37 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - **`getSessionChunks` re-fetch on reconnect**: the client passes
   `afterSeq=lastSeq`; the server's REST endpoint hits Postgres, not Redis,
   so it works even after Redis stream trimming.
-- **Archive vs destroy vs delete**: agents, sessions, and machines all
-  support soft-archive via an `archivedAt DateTime?` column —
-  `POST /agents/:id/archive` / `POST /sessions/:id/archive` hide rows
-  from default lists without losing history. Pass
-  `?includeArchived=true` to bring them back. *Projects* don't exist
-  server-side yet; archive on a project row in the sidebar is a
-  client-side cascade that walks the project's sessions and agents
-  and POSTs `/archive` on each, then sets `archivedAt` on the
-  `useProjectStore` placeholder (creating one if the row was purely
-  agent-derived). Restore reverses the order. There is no project
-  hard-destroy.
-  *Hard-destroy* an agent via `DELETE /machines/:mid/agents/:agentId`:
-  the server publishes a `destroy-agent` command, the sidecar tears
-  the supervisor down and drops the cache entry, and the row is
-  removed from Postgres (cascading via `onDelete: Cascade` on
-  Session/Command/Result). This is the supported way to delete an
-  agent — the sidebar's per-agent "trash" hits this. There is no
-  separate destroy for sessions; archive and re-create instead.
+- **Archive vs destroy vs delete**: sessions and machines support
+  soft-archive via an `archivedAt DateTime?` column —
+  `POST /sessions/:id/archive` hides a row from default lists without
+  losing history. Pass `?includeArchived=true` to bring them back.
+  *Projects* are server-backed rows (`Project` table); archiving a
+  project from the sidebar cascades client-side — walk the project's
+  sessions and `POST /archive` on each, then set `archivedAt` on the
+  `Project` row (with a snapshot of the session IDs flipped, so restore
+  only un-archives those). There is no project or session hard-destroy;
+  archive and re-create instead. (There is no agent to archive or destroy
+  — the entity is retired.)
   Machines are **soft-deleted**, not destroyed: `DELETE /machines/:id`
   sets the sticky `Machine.deletedAt` tombstone, flips status offline,
-  archives the machine's agents (sets their `archivedAt`), suffixes
-  the `@unique` `name` (so a fresh install can reuse the human name),
-  and emits `machine:removed`. **No rows are deleted** — the agents'
-  sessions/commands/chunks/terminals survive untouched and stay
-  viewable through the user-scoped session list; only the *active*
-  surfaces (machine list, sidebar) hide them. Safe at any status, so
-  there's no online guard. `deletedAt` differs from `archivedAt`
-  precisely because the `machine-register` handler resets `archivedAt`
-  to null on every re-register: the lifecycle consumer instead
-  *ignores* any event (`machine-register` skips the upsert;
-  `machine-heartbeat` is an `updateMany` filtered on `deletedAt: null`)
-  from a tombstoned machine and never clears `deletedAt`, so a
-  still-running or restarting sidecar can no longer resurrect it. The
-  delete is terminal — there is no un-delete endpoint or UI. The
-  periodic sweeper only flips stale machines/agents to `offline` — it
-  never reaps rows. Known quirk: a deleted machine's sidecar keeps
-  running and its supervisors' per-*agent* register/heartbeat events
-  still update those (already-archived, hidden) Agent rows; harmless,
-  since they're filtered from every active view.
+  suffixes the `@unique` `name` (so a fresh install can reuse the human
+  name), and emits `machine:removed`. **No rows are deleted** — the
+  machine's projects/sessions/commands/chunks/terminals survive untouched
+  and stay viewable through the user-scoped session list; only the
+  *active* surfaces (machine list, sidebar) hide them. Safe at any status,
+  so there's no online guard. `deletedAt` differs from `archivedAt`
+  precisely because the `machine-register` handler resets `archivedAt` to
+  null on every re-register: the lifecycle consumer instead *ignores* any
+  event (`machine-register` skips the upsert; `machine-heartbeat` is an
+  `updateMany` filtered on `deletedAt: null`) from a tombstoned machine
+  and never clears `deletedAt`, so a still-running or restarting sidecar
+  can no longer resurrect it. The delete is terminal — there is no
+  un-delete endpoint or UI. The periodic sweeper only flips stale machines
+  to `offline` — it never reaps rows.
 - **Terminal == remote shell access**: ticking "attach interactive
-  terminal" when creating an agent lets *any* dashboard user spawn
-  shells on that host as the sidecar daemon's UID. Treat this as equivalent to handing out SSH; only
+  terminal" when creating a project/session lets *any* dashboard user
+  spawn shells on that host as the sidecar daemon's UID. Treat this as
+  equivalent to handing out SSH; only
   enable on hosts where every dashboard user is trusted to that level.
   Hardening hooks: the sidecar enforces a `shells` allowlist and a
   `maxSessions` cap; the server REST/WS layer requires JWT, scopes
@@ -1197,7 +1206,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   reaching `/sidecar-link`, not against a compromised sidecar host
   (which trivially has shell access anyway).
 - **Sidecar link drop semantics**: when a sidecar's WS drops, the
-  server force-closes every `opening|open` terminal for that agent
+  server force-closes every `opening|open` terminal for that machine
   with reason `"link disconnected: ..."`. We do NOT try to resume
   PTYs across reconnects — the bytes buffered on the sidecar side
   during the outage would desync from the browser's xterm state and
@@ -1207,8 +1216,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   metadata only — never the keystroke/output transcript. Adding one
   would balloon storage fast and risks capturing secrets typed into the
   shell. If you need replay, add a separate, opt-in `TerminalTranscript`
-  table gated behind a per-agent flag (mirror the existing
-  `supportsTerminal` plumbing).
+  table gated behind a per-project flag (mirror the existing
+  `Project.supportsTerminal` plumbing).
 - **Machine icons live on the Machine row, not in localStorage**: the
   picker in `MachineIcon.tsx` writes to `Machine.iconKey` via PATCH
   `/machines/:id/icon`, and the server emits `machine:upsert` so every
@@ -1463,9 +1472,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - Per-socket backpressure for `delta` chunks (drop-on-lag).
 - Real RBAC and multi-tenant isolation.
 - OpenTelemetry traces from web → server → sidecar (we already log structured).
-- Pool routing (`agents.{type}.commands` consumer group) for "any agent of
-  type X" — the protocol/streams support it; the dashboard doesn't expose it
-  yet.
+- Pool routing ("run this on any machine that has CLI type X") — would
+  need a type-scoped consumer group across machines; not exposed yet.
 - Pre-commit hooks (ruff/eslint).
 - **Attachments — known debt** (the file/image feature is complete and
   verified end-to-end for claude `-p`/stdin and codex `--image`; these are
@@ -1477,8 +1485,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     the composer before send.
   - **Sidecar `.argus/uploads/` pruning.** Pulled files are kept for the
     session (so `--resume` can re-reference them) but never deleted — in
-    practice keep-forever on the agent's disk. Add an age/size-bounded
-    prune (they're hidden + gitignored, so it's only disk usage).
+    practice keep-forever on the sidecar host's disk. Add an
+    age/size-bounded prune (they're hidden + gitignored, so it's only disk
+    usage).
   - **`cursor-cli` image vision unverified.** claude (path-in-prompt) and
     codex (`--image`) are confirmed against the real CLIs; cursor's
     path-mention vision is documented-but-unproven (no cursor-agent on the
@@ -1494,7 +1503,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   - **Server is in the byte path.** The sidecar pulls each file from the
     server (S3 gateway) and the browser displays from it; presigned
     direct-from-S3 is the scale path, gated on the bucket being reachable
-    from every agent host (see the two-leg gotcha).
+    from every sidecar host (see the two-leg gotcha).
 
 ## When you change something
 
@@ -1503,6 +1512,6 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - **Streaming UX** → update `StreamViewer.tsx` and (if you add a new chunk
   kind) every adapter mapper that should emit it.
 - **DB schema** → add a Prisma migration, regenerate the client, and update
-  the relevant DTO mappers (`AgentRegistryService.toDto`, `SessionService.toDto`,
-  `CommandService.toDto`).
+  the relevant DTO mappers (`SessionService.toDto`, `CommandService.toDto`,
+  `MachineService.toDto`).
 - **Architecture** → update this file.

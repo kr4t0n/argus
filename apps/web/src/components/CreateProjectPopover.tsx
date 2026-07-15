@@ -4,7 +4,6 @@ import { Loader2, X } from 'lucide-react';
 import type { MachineDTO } from '@argus/shared-types';
 import { useProjectStore, projectKey } from '../stores/projectStore';
 import { useUIStore } from '../stores/uiStore';
-import { useAgentStore } from '../stores/agentStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { api } from '../lib/api';
 import { cn } from '../lib/utils';
@@ -46,8 +45,7 @@ const VIEWPORT_MARGIN = 8;
 export function CreateProjectPopover({ machine, anchor, onClose }: Props) {
   const addProject = useProjectStore((s) => s.add);
   const projects = useProjectStore((s) => s.projects);
-  const setExpanded = useUIStore((s) => s.toggleAgentExpanded);
-  const upsertAgent = useAgentStore((s) => s.upsert);
+  const setExpanded = useUIStore((s) => s.toggleExpanded);
   const upsertSession = useSessionStore((s) => s.upsertSession);
 
   const [name, setName] = useState('');
@@ -137,41 +135,24 @@ export function CreateProjectPopover({ machine, anchor, onClose }: Props) {
       // restore if they want individually-archived items un-archived.
       if (isRestoring && existing) {
         const snapSessions = existing.archivedSessionIds;
-        const snapAgents = existing.archivedAgentIds;
-
         if (snapSessions !== undefined) {
           const sessionResults = await Promise.all(
             snapSessions.map((id) => api.unarchiveSession(id).catch(() => null)),
           );
           sessionResults.forEach((s) => s && upsertSession(s));
         }
-        if (snapAgents !== undefined) {
-          const agentResults = await Promise.all(
-            snapAgents.map((id) => api.unarchiveAgent(id).catch(() => null)),
-          );
-          agentResults.forEach((a) => a && upsertAgent(a));
-        }
       }
 
-      // Always pass archivedAt: null so creating against an archived
-      // workingDir un-archives the placeholder (the silent-failure
-      // case before this change). For non-archived merges it's a
-      // harmless reaffirmation.
-      const created = addProject({
+      // Server-side create upserts by (machineId, workingDir) and
+      // always clears archive state + snapshot, so creating against an
+      // archived pair un-archives it — the restore-via-recreate flow
+      // needs no separate setArchived call anymore.
+      const created = await addProject({
         machineId: machine.id,
         name: name.trim(),
         workingDir: trimmedDir,
         supportsTerminal,
-        archivedAt: null,
       });
-      // Snapshot is meaningful only while archived; clearing it here
-      // keeps the persisted placeholder tidy and matches the
-      // setArchived(false) cleanup semantics in projectStore.
-      if (isRestoring) {
-        useProjectStore
-          .getState()
-          .setArchived(projectKey(created.machineId, created.workingDir), false);
-      }
       // Force-open the project row so the user lands on a visible,
       // expanded project and can immediately click its `+` to add an
       // agent. The `expanded` map's default-open semantics aren't

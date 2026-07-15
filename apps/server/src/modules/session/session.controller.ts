@@ -30,9 +30,24 @@ import { CommandService } from '../command/command.service';
 type AuthedRequest = Request & { user: { id: string } };
 
 class CreateSessionDto {
+  /** Project-first addressing — the machine the session runs on. */
   @IsString()
   @MinLength(1)
-  agentId!: string;
+  machineId!: string;
+
+  /** Project anchor; empty/absent = the machine's "no project" bucket. */
+  @IsOptional()
+  @IsString()
+  workingDir?: string;
+
+  @IsString()
+  @MinLength(1)
+  cliType!: string;
+
+  /** Seeds Project.supportsTerminal when this create makes the row. */
+  @IsOptional()
+  @IsBoolean()
+  supportsTerminal?: boolean;
 
   @IsOptional()
   @IsString()
@@ -142,12 +157,14 @@ export class SessionController {
   @Post()
   async create(@Req() req: AuthedRequest, @Body() body: CreateSessionDto) {
     const title = body.title ?? body.prompt?.slice(0, 60) ?? 'New session';
-    const session = await this.sessions.create(
-      req.user.id,
-      body.agentId,
+    const session = await this.sessions.create(req.user.id, {
+      machineId: body.machineId,
+      workingDir: body.workingDir,
+      cliType: body.cliType,
+      supportsTerminal: body.supportsTerminal,
       title,
-      body.modelSelection,
-    );
+      modelSelection: body.modelSelection,
+    });
     let command = null;
     if (body.prompt) {
       command = await this.commands.dispatch(req.user.id, session.id, body.prompt);

@@ -2,8 +2,10 @@ import SwiftUI
 import ArgusKit
 
 /// Right inspector for a session — the iOS counterpart of the web's
-/// ContextPane: agent identity header + Files / Commits / Diff tabs.
-/// Joins the `agent:{id}` socket room while visible so fs/git change
+/// ContextPane: identity header + Files / Commits / Terminal / Diff
+/// tabs. Every pane is project-addressed (ProjectRef) since the runner
+/// refactor retired the Agent entity. Joins the project socket room
+/// while visible (runner sidecars nudge only that room) so fs/git change
 /// events refresh the panels live.
 struct InspectorPane: View {
     @Environment(AppModel.self) private var app
@@ -22,17 +24,33 @@ struct InspectorPane: View {
     @State private var terminalController: TerminalController?
 
     private var session: SessionDTO? { app.sessionList.sessions[sessionId] }
-    private var agent: AgentDTO? { session.flatMap { app.fleet.agents[$0.agentId] } }
+    /// Project addressing for Files/Commits/Note/Progress/Terminal; nil
+    /// for workdir-less sessions (those panes have no surface there).
+    private var projectRef: ProjectRef? { app.fleet.projectRef(for: session) }
+    /// The hydrated Project row for `projectRef` (pair-keyed store).
+    private var projectRow: ProjectDTO? {
+        projectRef.flatMap {
+            app.fleet.projects[FleetStore.projectKey(
+                machineId: $0.machineId, workingDir: $0.workingDir
+            )]
+        }
+    }
+    /// Terminal capability lives on the Project row (the runner opens
+    /// PTYs by cwd — the Agent entity that used to own them is retired).
+    private var supportsTerminal: Bool {
+        projectRow?.supportsTerminal == true
+    }
 
     /// Web ContextPane order: Commits, Files, Terminal, Note, Progress,
-    /// Diff. Terminal appears only for agents created with the PTY
+    /// Diff. Terminal appears only for projects whose runner has the PTY
     /// opt-in; extension tabs gate on the account-level flags, Note/
-    /// Progress additionally on a workingDir (both are project-scoped).
+    /// Progress additionally on a resolved project (both are
+    /// project-scoped).
     private var tabs: [Tab] {
         var result: [Tab] = [.commits, .files]
-        if agent?.supportsTerminal == true { result.append(.terminal) }
-        if app.extensions.notes, agent?.workingDir != nil { result.append(.note) }
-        if app.extensions.progress, agent?.workingDir != nil { result.append(.progress) }
+        if supportsTerminal { result.append(.terminal) }
+        if app.extensions.notes, projectRef != nil { result.append(.note) }
+        if app.extensions.progress, projectRef != nil { result.append(.progress) }
         if app.extensions.diff { result.append(.diff) }
         return result
     }
@@ -49,43 +67,61 @@ struct InspectorPane: View {
             .padding(.bottom, 8)
             Divider()
 
-            if let agent {
-                switch tab {
-                case .commits:
-                    CommitsPanel(agent: agent)
-                case .files:
-                    FileBrowserPanel(agent: agent)
-                case .terminal:
-                    // Lazy like the web: the PTY opens on first visit,
-                    // then the controller (and its scrollback) survives
-                    // tab switches for the inspector's lifetime.
-                    if let terminalController {
-                        TerminalPanel(controller: terminalController)
-                    } else {
-                        ProgressView()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .onAppear { makeTerminalController(agent: agent) }
-                    }
-                case .note:
-                    NotePanel(agent: agent)
-                case .progress:
-                    ProgressPanel(agent: agent)
-                case .diff:
-                    DiffPanel()
+            switch tab {
+            case .commits:
+                if let project = projectRef {
+                    CommitsPanel(project: project)
+                } else {
+                    noProjectPlaceholder
                 }
-            } else {
-                ContentUnavailableView(
-                    "Agent unavailable",
-                    systemImage: "questionmark.circle"
-                )
+            case .files:
+                if let project = projectRef {
+                    FileBrowserPanel(project: project)
+                } else {
+                    noProjectPlaceholder
+                }
+            case .terminal:
+                // Lazy like the web: the PTY opens on first visit,
+                // then the controller (and its scrollback) survives
+                // tab switches for the inspector's lifetime.
+                if let terminalController {
+                    TerminalPanel(controller: terminalController)
+                } else if projectRef != nil {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .onAppear { makeTerminalController() }
+                } else {
+                    noProjectPlaceholder
+                }
+            case .note:
+                if let project = projectRef {
+                    NotePanel(project: project)
+                } else {
+                    noProjectPlaceholder
+                }
+            case .progress:
+                if let project = projectRef {
+                    ProgressPanel(project: project)
+                } else {
+                    noProjectPlaceholder
+                }
+            case .diff:
+                DiffPanel()
             }
         }
-        .onAppear { if let agent { app.stream?.joinAgent(agent.id) } }
+        .onAppear { joinRooms(project: projectRef) }
         .onDisappear {
-            if let agent { app.stream?.leaveAgent(agent.id) }
+            leaveRooms(project: projectRef)
             terminalController?.shutdown()
             if app.activeTerminal === terminalController { app.activeTerminal = nil }
             terminalController = nil
+        }
+        // The stores may hydrate (or re-resolve) while the inspector is
+        // open — keep room membership in step, like the web effect's
+        // dependency array.
+        .onChange(of: projectRef) { old, new in
+            if let old { app.stream?.leaveProject(machineId: old.machineId, workingDir: old.workingDir) }
+            if let new { app.stream?.joinProject(machineId: new.machineId, workingDir: new.workingDir) }
         }
         .onChange(of: tabs) {
             // A toggled-off extension can strand the selection.
@@ -93,32 +129,56 @@ struct InspectorPane: View {
         }
     }
 
-    private func makeTerminalController(agent: AgentDTO) {
+    /// Join the project room — runner sidecars broadcast fs/git nudges
+    /// there (keyed by the `(machineId, workingDir)` pair). The Agent
+    /// entity is retired, so there's no agent room to join anymore.
+    private func joinRooms(project: ProjectRef?) {
+        if let project {
+            app.stream?.joinProject(machineId: project.machineId, workingDir: project.workingDir)
+        }
+    }
+
+    private func leaveRooms(project: ProjectRef?) {
+        if let project {
+            app.stream?.leaveProject(machineId: project.machineId, workingDir: project.workingDir)
+        }
+    }
+
+    private var noProjectPlaceholder: some View {
+        ContentUnavailableView(
+            "No project",
+            systemImage: "folder.badge.questionmark",
+            description: Text("This session isn't pinned to a working directory.")
+        )
+    }
+
+    /// Project-addressed open — the runner opens the PTY by cwd. A
+    /// session with no project has no terminal surface.
+    private func makeTerminalController() {
         guard terminalController == nil,
               let client = app.client, let stream = app.stream
         else { return }
-        let controller = TerminalController(agent: agent, client: client, stream: stream)
+        let controller = TerminalController(
+            project: projectRef, client: client, stream: stream
+        )
         terminalController = controller
         app.activeTerminal = controller
     }
 
+    /// Header identity: the session's pinned cliType + the project's
+    /// basename (the Agent row that used to enrich this is retired).
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                AgentTypeIcon(type: agent?.type ?? "custom")
-                Text(agent?.name ?? "agent")
+                AgentTypeIcon(type: session?.cliType ?? "custom")
+                Text(headerFallbackTitle)
                     .font(.headline)
                 Spacer()
-                if let status = agent?.status {
-                    Text(status.rawValue)
-                        .font(.caption2)
-                        .foregroundStyle(status == .online ? .green : .secondary)
-                }
             }
-            if let machineName = agent?.machineName, !machineName.isEmpty {
+            if let machineName = headerMachineName, !machineName.isEmpty {
                 Text(machineName).font(.caption).foregroundStyle(.secondary)
             }
-            if let workingDir = agent?.workingDir {
+            if let workingDir = projectRef?.workingDir {
                 Text(workingDir)
                     .font(.caption2.monospaced())
                     .foregroundStyle(.tertiary)
@@ -129,13 +189,24 @@ struct InspectorPane: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
     }
+
+    private var headerFallbackTitle: String {
+        if let workingDir = projectRef?.workingDir, !workingDir.isEmpty {
+            return (workingDir as NSString).lastPathComponent
+        }
+        return "session"
+    }
+
+    private var headerMachineName: String? {
+        projectRef.flatMap { app.fleet.machines[$0.machineId]?.name }
+    }
 }
 
 // MARK: - Files
 
 private struct FileBrowserPanel: View {
     @Environment(AppModel.self) private var app
-    let agent: AgentDTO
+    let project: ProjectRef
 
     /// Path relative to the workingDir ("" = root).
     @State private var path = ""
@@ -153,17 +224,24 @@ private struct FileBrowserPanel: View {
         .task(id: path) { await load() }
         .onChange(of: app.lastFSChange) {
             // The sidecar debounces; refetch when our directory changed.
-            guard let change = app.lastFSChange, change.agentId == agent.id else { return }
+            guard let change = app.lastFSChange, matches(change) else { return }
             if change.path == path || change.path.isEmpty || path.hasPrefix(change.path) {
                 Task { await load() }
             }
         }
         .sheet(item: fileSheetBinding) { box in
             FilePreviewSheet(
-                agent: agent,
+                project: project,
                 target: FilePreviewTarget(path: box.value, displayPath: box.value, line: nil)
             )
         }
+    }
+
+    /// Runner events carry the (machineId, workingDir) pair — match on
+    /// it. Same rule as the web FileTree.
+    private func matches(_ change: FSChangedPayload) -> Bool {
+        guard let workingDir = change.workingDir, !workingDir.isEmpty else { return false }
+        return change.machineId == project.machineId && workingDir == project.workingDir
     }
 
     private var breadcrumb: some View {
@@ -271,7 +349,7 @@ private struct FileBrowserPanel: View {
     private func load() async {
         guard let client = app.client else { return }
         do {
-            let response = try await client.listAgentDir(agentId: agent.id, path: path)
+            let response = try await client.listProjectDir(projectId: project.projectId, path: path)
             entries = response.entries
             git = response.git
             loadError = nil
@@ -296,7 +374,7 @@ private struct StringBox: Identifiable {
 
 private struct CommitsPanel: View {
     @Environment(AppModel.self) private var app
-    let agent: AgentDTO
+    let project: ProjectRef
 
     @State private var response: GitLogResponse?
     @State private var loadError: String?
@@ -351,15 +429,22 @@ private struct CommitsPanel: View {
         }
         .task { await load() }
         .onChange(of: app.lastGitChange) {
-            guard app.lastGitChange?.agentId == agent.id else { return }
+            guard let change = app.lastGitChange, matches(change) else { return }
             Task { await load() }
         }
+    }
+
+    /// Pair matching — the same rule as FileBrowserPanel / the web
+    /// GitLogPanel.
+    private func matches(_ change: GitChangedPayload) -> Bool {
+        guard let workingDir = change.workingDir, !workingDir.isEmpty else { return false }
+        return change.machineId == project.machineId && workingDir == project.workingDir
     }
 
     private func load() async {
         guard let client = app.client else { return }
         do {
-            response = try await client.getAgentGitLog(agentId: agent.id, limit: 50)
+            response = try await client.getProjectGitLog(projectId: project.projectId, limit: 50)
             loadError = nil
         } catch {
             app.handleAPIError(error)
@@ -376,7 +461,7 @@ private struct CommitsPanel: View {
 /// autosave like the web (~700 ms), no Save button.
 private struct NotePanel: View {
     @Environment(AppModel.self) private var app
-    let agent: AgentDTO
+    let project: ProjectRef
 
     @State private var text = ""
     @State private var loaded = false
@@ -412,14 +497,14 @@ private struct NotePanel: View {
     }
 
     private var projectName: String {
-        ((agent.workingDir ?? "") as NSString).lastPathComponent
+        (project.workingDir as NSString).lastPathComponent
     }
 
     private func load() async {
-        guard let client = app.client, let workingDir = agent.workingDir else { return }
+        guard let client = app.client else { return }
         do {
             text = try await client.getProjectNotes(
-                machineId: agent.machineId, workingDir: workingDir
+                machineId: project.machineId, workingDir: project.workingDir
             )
             loaded = true
         } catch {
@@ -435,12 +520,11 @@ private struct NotePanel: View {
         saveTask = Task {
             try? await Task.sleep(for: .milliseconds(700))
             guard !Task.isCancelled,
-                  let client = app.client,
-                  let workingDir = agent.workingDir
+                  let client = app.client
             else { return }
             do {
                 try await client.setProjectNotes(
-                    machineId: agent.machineId, workingDir: workingDir, notes: text
+                    machineId: project.machineId, workingDir: project.workingDir, notes: text
                 )
                 saveState = "saved"
             } catch {
@@ -453,17 +537,19 @@ private struct NotePanel: View {
 
 // MARK: - Progress (background tasks)
 
-/// Progress extension: live background tasks reported by `argus-bg` in
-/// the agent's shell. Joins the project room while visible; REST
+/// Progress extension: live background tasks reported by `argus-bg` on
+/// the project's machine. InspectorPane holds the project-room
+/// subscription for its whole lifetime (a per-panel leave here would
+/// also kill the Files/Commits nudges — the room is shared); REST
 /// hydrates, `background-task:*` events keep it fresh.
 private struct ProgressPanel: View {
     @Environment(AppModel.self) private var app
-    let agent: AgentDTO
+    let project: ProjectRef
 
     @State private var tasks: [String: BackgroundTaskDTO] = [:]
     @State private var loaded = false
 
-    private var workingDir: String { agent.workingDir ?? "" }
+    private var workingDir: String { project.workingDir }
 
     private var ordered: [BackgroundTaskDTO] {
         tasks.values.sorted { $0.startedAt > $1.startedAt }
@@ -490,21 +576,15 @@ private struct ProgressPanel: View {
             }
         }
         .task { await load() }
-        .onAppear {
-            app.stream?.joinProject(machineId: agent.machineId, workingDir: workingDir)
-        }
-        .onDisappear {
-            app.stream?.leaveProject(machineId: agent.machineId, workingDir: workingDir)
-        }
         .onChange(of: app.lastBackgroundTaskUpdate) {
             guard let update = app.lastBackgroundTaskUpdate,
-                  update.machineId == agent.machineId, update.workingDir == workingDir
+                  update.machineId == project.machineId, update.workingDir == workingDir
             else { return }
             tasks[update.taskId] = update
         }
         .onChange(of: app.lastBackgroundTaskRemoval) {
             guard let removal = app.lastBackgroundTaskRemoval,
-                  removal.machineId == agent.machineId, removal.workingDir == workingDir
+                  removal.machineId == project.machineId, removal.workingDir == workingDir
             else { return }
             tasks[removal.taskId] = nil
         }
@@ -514,7 +594,7 @@ private struct ProgressPanel: View {
         guard let client = app.client, !workingDir.isEmpty else { return }
         do {
             let list = try await client.listBackgroundTasks(
-                machineId: agent.machineId, workingDir: workingDir
+                machineId: project.machineId, workingDir: workingDir
             )
             tasks = Dictionary(uniqueKeysWithValues: list.map { ($0.taskId, $0) })
             loaded = true
@@ -529,7 +609,7 @@ private struct ProgressPanel: View {
         tasks[task.taskId] = nil
         Task {
             try? await client.dismissBackgroundTask(
-                machineId: agent.machineId, workingDir: workingDir, taskId: task.taskId
+                machineId: project.machineId, workingDir: workingDir, taskId: task.taskId
             )
         }
     }
@@ -656,12 +736,11 @@ private struct DiffPanel: View {
     }
 
     private func displayPath(_ path: String) -> String {
-        guard let session = app.activeSession,
-              let workingDir = app.fleet.agents[
-                  app.sessionList.sessions[session.sessionId]?.agentId ?? ""
-              ]?.workingDir,
-              path.hasPrefix(workingDir)
-        else { return path }
+        guard let active = app.activeSession else { return path }
+        let session = app.sessionList.sessions[active.sessionId]
+        // Resolved through the session's pinned project.
+        let workingDir = app.fleet.projectRef(for: session)?.workingDir
+        guard let workingDir, !workingDir.isEmpty, path.hasPrefix(workingDir) else { return path }
         return String(path.dropFirst(workingDir.count)).trimmingCharacters(
             in: CharacterSet(charactersIn: "/")
         )

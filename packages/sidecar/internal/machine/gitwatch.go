@@ -53,11 +53,11 @@ type gitWatcher struct {
 
 // newGitWatcher resolves the workingDir's .git location and starts
 // watching the relevant ref files. Returns (nil, nil) for non-repos
-// — the supervisor treats that as "no panel auto-refresh" and falls
+// — the caller treats that as "no panel auto-refresh" and falls
 // through silently.
 //
 // Failures during fsnotify registration are logged and surfaced as
-// errors so the supervisor can fall back to manual-refresh-only,
+// errors so the caller can fall back to manual-refresh-only,
 // matching how fsWatcher fails open.
 func newGitWatcher(ctx context.Context, workingDir string, emit func(), logger *log.Logger) (*gitWatcher, error) {
 	if workingDir == "" {

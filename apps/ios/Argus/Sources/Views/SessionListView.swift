@@ -27,7 +27,6 @@ struct SessionSidebar: View {
     @State private var renameTarget: SessionDTO?
     @State private var renameText = ""
     @State private var newSessionProject: ProjectGroup?
-    @State private var showNewProject = false
     /// Collapsed project keys, persisted like the web's uiStore.expanded
     /// (default expanded — a key is present only when collapsed).
     @State private var collapsed = SessionSidebar.loadCollapsed()
@@ -68,17 +67,10 @@ struct SessionSidebar: View {
         }
         .navigationTitle("Argus")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button("New project…", systemImage: "folder.badge.plus") {
-                        showNewProject = true
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                }
-            }
-        }
+        // No global "new project" button: projects are created from the
+        // machine they live on (machine panel → "…" → New project), which
+        // is also where the web puts it. A global button would just have
+        // to ask which machine anyway.
         .alert("Rename session", isPresented: renameAlertBinding) {
             TextField("Title", text: $renameText)
             Button("Cancel", role: .cancel) { renameTarget = nil }
@@ -86,9 +78,6 @@ struct SessionSidebar: View {
         }
         .sheet(item: $newSessionProject) { project in
             NewSessionSheet(project: project)
-        }
-        .sheet(isPresented: $showNewProject) {
-            NewProjectSheet()
         }
     }
 
@@ -163,7 +152,6 @@ struct SessionSidebar: View {
     private func sessionRow(_ session: SessionDTO, archived: Bool) -> some View {
         SessionRow(
             session: session,
-            agent: app.fleet.agents[session.agentId],
             archived: archived
         )
         .tag(DetailRoute.session(session.id))
@@ -317,9 +305,6 @@ private struct MachineRow: View {
                 .frame(width: 16)
             Text(machine.name).font(.subheadline).lineLimit(1)
             Spacer(minLength: 6)
-            Text("\(machine.agentCount)")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.tertiary)
             Circle()
                 .fill(machine.status == .online ? Color.green : Color.gray.opacity(0.4))
                 .frame(width: 6, height: 6)
@@ -329,15 +314,15 @@ private struct MachineRow: View {
 
 private struct SessionRow: View {
     let session: SessionDTO
-    let agent: AgentDTO?
     var archived = false
 
     var body: some View {
         // Single compact line — icon · title · dot · time (web parity).
         // Archived rows render dimmed with an archivebox in the dot slot
-        // (no live status to show).
+        // (no live status to show). The icon keys off the session's
+        // pinned cliType (Phase 1).
         HStack(spacing: 8) {
-            AgentTypeIcon(type: agent?.type ?? "custom", size: 13)
+            AgentTypeIcon(type: session.cliType ?? "custom", size: 13)
                 .frame(width: 16)
                 .opacity(archived ? 0.5 : 1)
             Text(session.title)

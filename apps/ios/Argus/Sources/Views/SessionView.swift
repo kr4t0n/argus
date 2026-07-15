@@ -42,8 +42,16 @@ struct SessionView: View {
     @State private var expandedActivity: Set<String> = []
 
     private var session: SessionDTO? { app.sessionList.sessions[sessionId] }
-    private var agent: AgentDTO? {
-        session.flatMap { app.fleet.agents[$0.agentId] }
+    /// Project addressing for file previews; nil for workdir-less
+    /// sessions (previews are disabled there).
+    private var projectRef: ProjectRef? { app.fleet.projectRef(for: session) }
+    /// The session's pinned workingDir, resolved through its project.
+    private var workingDir: String? { projectRef?.workingDir }
+    /// Adapter type keying the transcript parsers: pinned on the session
+    /// since Phase 1 (the Agent entity that used to back-fill this is
+    /// retired).
+    private var agentType: AgentType {
+        session?.cliType ?? "custom"
     }
 
     var body: some View {
@@ -77,12 +85,12 @@ struct SessionView: View {
         .toolbar { toolbarContent }
         .sheet(isPresented: $showModelPicker) {
             if let session {
-                ModelPickerSheet(session: session, agent: agent)
+                ModelPickerSheet(session: session)
             }
         }
         .sheet(item: $filePreview) { previewTarget in
-            if let agent {
-                FilePreviewSheet(agent: agent, target: previewTarget)
+            if let projectRef {
+                FilePreviewSheet(project: projectRef, target: previewTarget)
             }
         }
         .sheet(item: $attachmentPreview) { attachment in
@@ -122,7 +130,7 @@ struct SessionView: View {
             if model == nil {
                 model = app.sessionViewModel(
                     for: sessionId,
-                    agentType: agent?.type ?? "custom"
+                    agentType: agentType
                 )
             }
             guard let model else { return }
@@ -224,10 +232,9 @@ struct SessionView: View {
     }
 
     /// Open a preview for a raw tool/citation path — only when it
-    /// resolves inside the agent's workspace (the sidecar rejects reads
-    /// outside its jail).
+    /// resolves inside the session's workspace (the sidecar rejects
+    /// reads outside its jail).
     private func openFilePreview(_ rawPath: String, line: Int?) {
-        let workingDir = agent?.workingDir
         guard let relative = FileReferences.toAgentRelative(rawPath, workingDir: workingDir) else {
             return
         }
@@ -305,7 +312,7 @@ struct SessionView: View {
                             Section {
                                 TurnBody(
                                     turn: turn,
-                                    workingDir: agent?.workingDir,
+                                    workingDir: workingDir,
                                     timelineExpanded: expandedActivity.contains(turn.id),
                                     onFork: { fork(from: turn) },
                                     onOpenFile: { path, line in openFilePreview(path, line: line) }

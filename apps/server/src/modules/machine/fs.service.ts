@@ -47,6 +47,17 @@ interface PendingGitLog {
 
 type Pending = PendingList | PendingRead | PendingGitLog;
 
+/**
+ * Where an fs/git RPC is aimed: the (machineId, workingDir) pair. The
+ * runner sidecar (≥0.3) serves by `workingDir`, validating it against
+ * its allowlist — the Agent entity is retired, so nothing routes by
+ * agent anymore and the wire frame carries no agentId.
+ */
+interface RPCTarget {
+  machineId: string;
+  workingDir: string;
+}
+
 const FS_LIST_TIMEOUT_MS = 5_000;
 // File reads are heavier than listings (up to 1 MB across the wire +
 // base64 inflation for images), so we give them more headroom. Slow
@@ -97,27 +108,39 @@ export class FSService implements OnModuleDestroy {
   }
 
   /**
-   * Request one directory listing for `agentId`. Throws NotFound if
-   * the agent doesn't exist, BadRequest if its machine is offline and
-   * the sidecar doesn't pick up the request within the timeout, or
-   * the sidecar-side error (e.g. path escapes workingDir, permission
-   * denied) verbatim if the sidecar rejected the request.
+   * Resolve a project to its (machineId, workingDir) RPC target. Throws
+   * NotFound if the project is gone or its machine soft-deleted. The
+   * sidecar serves the request by workingDir (the runner is ≥0.3, so no
+   * agent addressing is involved).
    */
-  async listDir(
-    agentId: string,
+  private async projectTarget(projectId: string): Promise<RPCTarget> {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: {
+        machineId: true,
+        workingDir: true,
+        machine: { select: { deletedAt: true } },
+      },
+    });
+    if (!project || project.machine.deletedAt) throw new NotFoundException('project not found');
+    return { machineId: project.machineId, workingDir: project.workingDir };
+  }
+
+  async listDirForProject(
+    projectId: string,
     path: string,
     showAll: boolean,
     depth: number = 1,
   ): Promise<FSListResponse> {
-    const agent = await this.prisma.agent.findUnique({
-      where: { id: agentId },
-      select: { id: true, machineId: true, workingDir: true },
-    });
-    if (!agent) throw new NotFoundException('agent not found');
-    if (!agent.workingDir) {
-      throw new BadRequestException('agent has no working directory configured');
-    }
+    return this.listDirAt(await this.projectTarget(projectId), path, showAll, depth);
+  }
 
+  private async listDirAt(
+    target: RPCTarget,
+    path: string,
+    showAll: boolean,
+    depth: number,
+  ): Promise<FSListResponse> {
     const requestId = randomUUID();
     const promise = new Promise<FSListResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -128,10 +151,10 @@ export class FSService implements OnModuleDestroy {
     });
 
     try {
-      await this.redis.publish(streamKeys.machineControl(agent.machineId), {
+      await this.redis.publish(streamKeys.machineControl(target.machineId), {
         kind: 'fs-list',
         requestId,
-        agentId,
+        workingDir: target.workingDir,
         path: path ?? '',
         showAll: !!showAll,
         // Only send `depth` when the caller asked for a multi-level
@@ -160,15 +183,11 @@ export class FSService implements OnModuleDestroy {
    * so the dashboard can render a "file too large" placeholder
    * distinctly from a generic error.
    */
-  async readFile(agentId: string, path: string): Promise<FSReadResponse> {
-    const agent = await this.prisma.agent.findUnique({
-      where: { id: agentId },
-      select: { id: true, machineId: true, workingDir: true },
-    });
-    if (!agent) throw new NotFoundException('agent not found');
-    if (!agent.workingDir) {
-      throw new BadRequestException('agent has no working directory configured');
-    }
+  async readFileForProject(projectId: string, path: string): Promise<FSReadResponse> {
+    return this.readFileAt(await this.projectTarget(projectId), path);
+  }
+
+  private async readFileAt(target: RPCTarget, path: string): Promise<FSReadResponse> {
     if (!path || path === '.' || path === '/') {
       throw new BadRequestException('path is required');
     }
@@ -183,10 +202,10 @@ export class FSService implements OnModuleDestroy {
     });
 
     try {
-      await this.redis.publish(streamKeys.machineControl(agent.machineId), {
+      await this.redis.publish(streamKeys.machineControl(target.machineId), {
         kind: 'fs-read',
         requestId,
-        agentId,
+        workingDir: target.workingDir,
         path,
         ts: Date.now(),
       });
@@ -202,23 +221,17 @@ export class FSService implements OnModuleDestroy {
   }
 
   /**
-   * Request the recent commit history for `agentId`'s workingDir. Same
-   * timeout / pending-promise pattern as listDir / readFile. The
+   * Request the recent commit history for a project's workingDir. The
    * sidecar shells out to `git log` and replies with a
    * GitLogResponseEvent that carries both the commits and a fresh
    * GitStatus snapshot, so the dashboard panel can render its header
    * (branch / detached HEAD) without a parallel fs-list call.
    */
-  async listGitLog(agentId: string, limit: number): Promise<GitLogResponse> {
-    const agent = await this.prisma.agent.findUnique({
-      where: { id: agentId },
-      select: { id: true, machineId: true, workingDir: true },
-    });
-    if (!agent) throw new NotFoundException('agent not found');
-    if (!agent.workingDir) {
-      throw new BadRequestException('agent has no working directory configured');
-    }
+  async listGitLogForProject(projectId: string, limit: number): Promise<GitLogResponse> {
+    return this.listGitLogAt(await this.projectTarget(projectId), limit);
+  }
 
+  private async listGitLogAt(target: RPCTarget, limit: number): Promise<GitLogResponse> {
     // Clamp at the controller layer, but defend in depth: an over-large
     // limit clamped here means the sidecar's own cap (200) never kicks
     // in for legitimate clients.
@@ -237,10 +250,10 @@ export class FSService implements OnModuleDestroy {
     });
 
     try {
-      await this.redis.publish(streamKeys.machineControl(agent.machineId), {
+      await this.redis.publish(streamKeys.machineControl(target.machineId), {
         kind: 'git-log',
         requestId,
-        agentId,
+        workingDir: target.workingDir,
         limit: effectiveLimit,
         ts: Date.now(),
       });

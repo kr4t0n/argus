@@ -1,6 +1,5 @@
 import type {
   AgentQuota,
-  AgentStatus,
   AgentType,
   AvailableAdapter,
   CommandStatus,
@@ -53,8 +52,6 @@ export interface MachineDTO {
   registeredAt: string;
   /** ISO timestamp; null means the machine is visible/unarchived. */
   archivedAt: string | null;
-  /** Convenience count for the sidebar; full agent list lives in agentStore. */
-  agentCount: number;
   /** User-chosen icon glyph key (e.g. "server-cog"). Null = use the
    *  frontend's default. Set via PATCH /machines/:id/icon — the
    *  server stores it on the machine row so all dashboards see the
@@ -74,47 +71,37 @@ export interface ProjectDTO {
   id: string;
   machineId: string;
   workingDir: string;
+  /** User-picked label; null = client derives basename(workingDir).
+   *  Set at create or via PATCH /projects/:id. */
+  name: string | null;
+  /** Default for agents auto-vivified under this project. */
+  supportsTerminal: boolean;
+  /** ISO timestamp; null = active. Set via POST /projects/:id/archive. */
+  archivedAt: string | null;
+  /** Restore snapshot captured by the client-side archive cascade —
+   *  the ids the cascade actually flipped, so restore un-archives
+   *  only those and preserves individual archives made earlier.
+   *  Null when active or for legacy archives without a snapshot. */
+  archiveSnapshot: { archivedAgentIds: string[]; archivedSessionIds: string[] } | null;
   /** User-picked glyph (a single A-Z letter today). Null = use the
    *  frontend's default folder icon. Set via PATCH /projects/icon. */
   iconKey: string | null;
 }
 
-export interface AgentDTO {
-  id: string;
-  /** User-friendly label, unique within a machine. */
-  name: string;
-  type: AgentType;
-  machineId: string;
-  /** Denormalized for sidebar display; matches Machine.name at render time. */
-  machineName: string;
-  status: AgentStatus;
-  /**
-   * Whether this agent's supervisor has a PTY runner attached. Controls
-   * whether the dashboard exposes the Terminal pane; the server also
-   * rejects terminal-open requests for agents where this is false.
-   */
-  supportsTerminal: boolean;
-  version: string | null;
-  workingDir: string | null;
-  lastHeartbeatAt: string;
-  registeredAt: string;
-  /** ISO timestamp; null means the agent is visible/unarchived. */
-  archivedAt: string | null;
-}
-
-export interface CreateAgentRequest {
-  name: string;
-  type: AgentType;
-  workingDir?: string;
-  supportsTerminal?: boolean;
-  /** Optional adapter-specific options forwarded to the sidecar. */
-  adapter?: Record<string, unknown>;
-}
 
 export interface SessionDTO {
   id: string;
   userId: string;
-  agentId: string;
+  /** The (machineId, workingDir) Project row this session is pinned
+   *  to. Null for pre-backfill rows on workdir-less agents (the
+   *  per-machine "no project" bucket). Pinned at creation — claude-code
+   *  and cursor keep resume state on disk keyed by the cwd, so a
+   *  session can never move to another workingDir. */
+  projectId: string | null;
+  /** CLI adapter type this session runs on (denormalized from the
+   *  agent at creation). Null only for pre-backfill rows whose agent
+   *  vanished before the migration ran. */
+  cliType: AgentType | null;
   title: string;
   externalId: string | null;
   status: SessionStatus;
@@ -173,7 +160,6 @@ export interface AttachmentDTO {
 export interface CommandDTO {
   id: string;
   sessionId: string;
-  agentId: string;
   kind: 'execute' | 'cancel';
   prompt: string | null;
   status: CommandStatus;
@@ -190,7 +176,17 @@ export interface CommandDTO {
 export interface ResultChunkDTO extends ResultChunk {}
 
 export interface CreateSessionRequest {
-  agentId: string;
+  /** Project-first addressing: the server upserts the Project row for
+   *  (machineId, workingDir) and pins the session to it. `machineId`
+   *  and `cliType` are required (the Agent addressing shape retired in
+   *  Phase 4/5 — see docs/plan-agent-to-runners.md). */
+  machineId?: string;
+  /** Project anchor. Empty/absent = the machine's "no project" bucket
+   *  (a workdir-less session). */
+  workingDir?: string;
+  cliType?: AgentType;
+  /** Capability flag persisted on the Project row for terminal opens. */
+  supportsTerminal?: boolean;
   title?: string;
   prompt?: string;
   /** Session-default model choice from the new-session dialog. */
@@ -217,7 +213,10 @@ export interface CreateCommandRequest {
  * pass `?refresh=1` to bypass.
  */
 export interface ModelCatalogResponse {
-  agentId: string;
+  /** Catalog identity since Phase 2: a catalog belongs to the machine's
+   *  installed binary, not to a workdir-bound agent. */
+  machineId: string;
+  cliType: string;
   source: 'static' | 'cli';
   fetchedAt: string;
   models: ModelCatalogEntry[];
@@ -231,7 +230,11 @@ export type TerminalStatus = 'opening' | 'open' | 'closed' | 'error';
 
 export interface TerminalDTO {
   id: string;
-  agentId: string;
+  /** Routing key: the sidecar link is per-machine, and the PTY runner is
+   *  machine-wide. Terminals are (machine, cwd) pairs — no agent needed. */
+  machineId: string;
+  /** Project the terminal was opened under; null for workdir-less opens. */
+  projectId: string | null;
   userId: string;
   status: TerminalStatus;
   shell: string;
@@ -570,7 +573,6 @@ export interface BackgroundTaskDTO {
   taskId: string;
   machineId: string;
   workingDir: string;
-  agentId: string;
   label?: string;
   cmd?: string[];
   /** Latest progress reading, if any. Omitted when the task started

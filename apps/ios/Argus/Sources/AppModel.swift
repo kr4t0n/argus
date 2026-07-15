@@ -36,7 +36,8 @@ final class AppModel {
     }
 
     /// Latest fs/git change events — inspector panels watch these and
-    /// refetch when the agent matches theirs.
+    /// refetch when the event matches their project's
+    /// (machineId, workingDir) pair.
     private(set) var lastFSChange: FSChangedPayload?
     private(set) var lastGitChange: GitChangedPayload?
 
@@ -246,7 +247,8 @@ final class AppModel {
     /// Activities are off system-side).
     private func startLiveActivity(sessionId: String) {
         guard let session = sessionList.sessions[sessionId] else { return }
-        let agentType = fleet.agents[session.agentId]?.type ?? "custom"
+        // cliType is pinned on the session row since Phase 1.
+        let agentType = session.cliType ?? "custom"
         LiveActivityManager.shared.start(session: session, agentType: agentType)
     }
 
@@ -339,25 +341,20 @@ final class AppModel {
 
     func refreshAll() async {
         guard let client else { return }
-        do {
-            // includeArchived: archived sessions stay reachable (the
-            // sidebar's per-project eye toggle), and archived agents are
-            // needed so those sessions still group into their projects
-            // instead of falling into the orphan bucket.
-            async let agents = client.listAgents(includeArchived: true)
-            async let machines = client.listMachines()
-            async let projects = client.listProjects()
-            async let sessions = client.listSessions(includeArchived: true)
-            async let userExtensions = client.getMyExtensions()
-            fleet.setAgents(try await agents)
-            fleet.setMachines(try await machines)
-            fleet.setProjects(try await projects)
-            sessionList.setAll(try await sessions)
-            extensions = try await userExtensions
-            maybeDrainAllQueues()
-        } catch {
-            handleAPIError(error)
-        }
+        // Agents are retired (Phase 4): the sidebar groups sessions by
+        // projectId over the project store. includeArchived keeps
+        // archived sessions reachable via the per-project eye toggle.
+        // Each list applies independently so one transient failure can't
+        // abort the rest; 401s funnel through handleAPIError.
+        async let machines = client.listMachines()
+        async let projects = client.listProjects()
+        async let sessions = client.listSessions(includeArchived: true)
+        async let userExtensions = client.getMyExtensions()
+        do { fleet.setMachines(try await machines) } catch { handleAPIError(error) }
+        do { fleet.setProjects(try await projects) } catch { handleAPIError(error) }
+        do { sessionList.setAll(try await sessions) } catch { handleAPIError(error) }
+        do { extensions = try await userExtensions } catch { handleAPIError(error) }
+        maybeDrainAllQueues()
     }
 
     /// PUT the full extension flag set (no server-side merge), keeping
@@ -374,13 +371,13 @@ final class AppModel {
         }
     }
 
-    // MARK: Creation (auto-vivify, mirrors the web's CreateAgentPopover)
+    // MARK: Creation (project-first)
 
-    /// Create a session in a project: reuse an existing agent of the
-    /// chosen type within `(machineId, workingDir)` if one exists,
-    /// otherwise create one with an auto-generated name first — the
-    /// agent layer is implementation detail, exactly like the web
-    /// sidebar. Returns the new session (already upserted + routed).
+    /// Create a session in a project with ONE call: the request carries
+    /// the `(machineId, workingDir, cliType)` triple and the server
+    /// upserts the Project row and pins the session to it (the Agent
+    /// entity is retired — sessions route by `projectId → machine +
+    /// cliType`). Returns the new session (already upserted + routed).
     func createSession(
         machineId: String,
         workingDir: String?,
@@ -391,28 +388,10 @@ final class AppModel {
         guard let client else {
             throw APIError(status: 0, message: "Not connected")
         }
-        let agent: AgentDTO
-        if let existing = fleet.agents.values.first(where: {
-            $0.machineId == machineId
-                && $0.type == adapterType
-                && $0.workingDir == workingDir
-                && $0.archivedAt == nil
-        }) {
-            agent = existing
-        } else {
-            let suffix = String(UUID().uuidString.prefix(6)).lowercased()
-            agent = try await client.createAgent(
-                machineId: machineId,
-                CreateAgentRequest(
-                    name: "\(adapterType)-\(suffix)",
-                    type: adapterType,
-                    workingDir: workingDir
-                )
-            )
-            fleet.upsert(agent: agent)
-        }
         let created = try await client.createSession(CreateSessionRequest(
-            agentId: agent.id,
+            machineId: machineId,
+            workingDir: workingDir?.isEmpty == false ? workingDir : nil,
+            cliType: adapterType,
             title: title?.isEmpty == false ? title : nil,
             modelSelection: modelSelection?.isEmpty == false ? modelSelection : nil
         ))
@@ -446,9 +425,15 @@ final class AppModel {
         guard session.status != .active else { return }
         if let since = drainInFlight[sessionId], Date().timeIntervalSince(since) < 30 { return }
         if let until = drainCooldown[sessionId], Date() < until { return }
-        // Agent reachability only — busy is per-session, not per-agent.
-        if let agent = fleet.agents[session.agentId],
-           agent.status == .offline || agent.status == .error { return }
+        // Reachability is MACHINE-level since the runner refactor:
+        // liveness belongs to the sidecar process. Resolve the machine
+        // through the session's pinned project; a session with no
+        // resolvable machine (workdir-less, or Project row not hydrated
+        // yet) is left drainable rather than blocked. Busy stays
+        // per-session, never per-agent.
+        if let machineId = fleet.projectRef(for: session)?.machineId {
+            guard fleet.machines[machineId]?.status == .online else { return }
+        }
 
         drainInFlight[sessionId] = Date()
         Task {
@@ -549,15 +534,6 @@ final class AppModel {
                 maybeDrain(sessionId: status.id)
             }
         case .sessionCloneFailed:
-            break
-
-        case .agentUpsert(let agent):
-            fleet.upsert(agent: agent)
-        case .agentStatus(let payload):
-            fleet.applyAgentStatus(payload)
-        case .agentRemoved(let payload):
-            fleet.removeAgent(id: payload.id)
-        case .agentSpawnFailed:
             break
 
         case .machineUpsert(let machine):

@@ -69,9 +69,10 @@ import (
 // Returns the new chat id. Failures roll back any partially-written
 // dst directory so a retry starts clean.
 func (a *CursorCLIAdapter) CloneSession(
-	ctx context.Context, srcExternalID string, turnIndex int,
+	ctx context.Context, workingDir, srcExternalID string, turnIndex int,
 ) (string, error) {
-	if a.workingDir == "" {
+	wd := runDir(workingDir, a.workingDir)
+	if wd == "" {
 		return "", fmtCloneError("cursor-cli", srcExternalID,
 			errors.New("workingDir not set; cannot derive workspace hash"))
 	}
@@ -79,7 +80,7 @@ func (a *CursorCLIAdapter) CloneSession(
 	if err != nil {
 		return "", fmtCloneError("cursor-cli", srcExternalID, err)
 	}
-	srcDir := cursorChatDir(home, a.workingDir, srcExternalID)
+	srcDir := cursorChatDir(home, wd, srcExternalID)
 	if _, err := os.Stat(filepath.Join(srcDir, "store.db")); err != nil {
 		if os.IsNotExist(err) {
 			return "", fmtCloneError("cursor-cli", srcExternalID, errCloneSrcNotFound)
@@ -88,7 +89,7 @@ func (a *CursorCLIAdapter) CloneSession(
 	}
 
 	newID := newSessionUUID()
-	dstDir := cursorChatDir(home, a.workingDir, newID)
+	dstDir := cursorChatDir(home, wd, newID)
 	if err := os.MkdirAll(dstDir, 0o755); err != nil {
 		return "", fmtCloneError("cursor-cli", srcExternalID, err)
 	}

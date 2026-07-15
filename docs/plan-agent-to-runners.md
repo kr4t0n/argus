@@ -1,8 +1,19 @@
 # Plan: retire per-agent resources — Runners (machine × CLI) + first-class Projects
 
-Status: draft for discussion · 2026-07-13
+Status: ✅ COMPLETE (2026-07-15) · originally drafted 2026-07-13
 Owner: kyle
-Prereq: Phase 0 (lifecycle consumer fix) ships independently, before any of this.
+Prereq: Phase 0 (lifecycle consumer fix) shipped independently, before the rest.
+
+> **This refactor has landed in full.** The `Agent` entity is retired end to
+> end: no `Agent` table, no per-agent supervisor/heartbeat/stream, and no
+> `agentId` anywhere on the wire, in the DB, or in any client (server, web,
+> iOS, Go sidecar). Sessions route by `projectId → machine + cliType → runner
+> stream`; the whole fleet runs runner sidecars (≥ 0.3), and the legacy
+> pre-runner protocol has been deleted. The phase-by-phase plan below is kept
+> for historical context — see AGENTS.md for the current architecture. Landed
+> across: server Agent-table drop (migrations `9_phase5_*`, `9_phase6_*`),
+> web `AgentDTO` retirement, iOS agent rip-out, and the final legacy-wire +
+> `agentId`-attribution sweep once the fleet was confirmed all-≥0.3.
 
 ## 1. Motivation
 
@@ -126,7 +137,7 @@ sidecar is upgraded (it already handles pre-notify sidecars this way).
 
 Each phase ships independently and is individually revertable.
 
-### Phase 0 — lifecycle consumer fix (ships first, independent of refactor)
+### Phase 0 — lifecycle consumer fix ✅ SHIPPED (dev @ 4a7b8e7, verified in prod)
 
 In `machine.service.ts` consume loop: batch XACKs (one variadic call per
 stream per batch), handle RPC responses (`fs-*-response`, `git-log-response`,
@@ -137,21 +148,53 @@ the group on BOTH `agent:lifecycle` and `agent:notify`. Also mirror the
 NOGROUP fix anywhere a multi-stream XREADGROUP self-heals. Coalescing becomes
 mostly moot after Phase 3 but is correct and cheap insurance meanwhile.
 
-### Phase 1 — promote Project; Session absorbs workdir + cliType (server + web, no wire change)
+### Phase 1 — promote Project; Session absorbs workdir + cliType ✅ IMPLEMENTED (branch refactor/runners-phase1-projects)
 
-- Schema: `Session.projectId` (FK → Project) + `Session.cliType`; backfill
-  from `session.agent.{machineId,workingDir,type}`; agents with NULL
-  workingDir map to a per-machine synthetic "no project" row (mirrors the
-  sidebar bucket). Keep `Session.agentId` populated and authoritative for
-  dispatch — this phase is additive only.
-- Server: session create accepts `{projectId, cliType}` and auto-vivifies the
-  agent internally (move the logic out of `CreateAgentPopover.tsx:194-221`);
-  keep accepting `{agentId}` for iOS until it migrates.
-- Web: create sessions via the new shape; migrate `projectStore` client-only
-  placeholders to server Project rows (the documented "next step").
-- Docs: AGENTS.md architecture section updated (this file referenced).
+- Schema: `Session.projectId` (FK → Project, SetNull) + `Session.cliType`;
+  migration `20260713164250_session_project_clitype` backfills both from
+  `session.agent.{machineId,workingDir,type}` and reuses icon-path Project
+  rows via ON CONFLICT. Deviation from the original sketch: sessions on
+  workdir-less agents keep `projectId` NULL (the sidebar already renders a
+  synthetic per-machine bucket client-side) instead of a synthetic Project
+  row — one less sentinel to special-case. `Session.agentId` stays
+  populated and authoritative for dispatch — this phase is additive only.
+- Server: session create accepts `{machineId, workingDir, cliType,
+  supportsTerminal}` (not `{projectId}` — the client often doesn't have a
+  row id yet; the server upserts the Project row from the pair) and
+  auto-vivifies the agent internally (logic moved out of
+  `CreateAgentPopover.tsx`); the vivified AgentDTO rides the response so
+  the client seeds its store without racing `agent:upsert`. Legacy
+  `{agentId}` accepted for iOS — and it ALSO pins projectId/cliType.
+  Forks copy `projectId`/`cliType` from the source session.
+- Web: `CreateAgentPopover` asSession path posts the new shape.
+- Phase 1b ✅ IMPLEMENTED: placeholders promoted to server rows — Project
+  gains `name`, `supportsTerminal`, `archivedAt`, `archiveSnapshot`
+  (migration `20260714031024_project_placeholder_promotion`); POST
+  /projects + rename/archive/unarchive endpoints; the archive *cascade*
+  deliberately stays client-driven via existing per-item REST — the row
+  only persists the outcome + restore snapshot, so no new server-side
+  cascade semantics were introduced. Web `projectStore` is hydrated from
+  GET /projects (localStorage is a paint-instantly cache), and
+  `migrateLocalProjects.ts` one-shot-pushes pre-promotion local rows.
+- Docs: AGENTS.md `project/` module + sidebar sections updated.
 
-### Phase 2 — re-key read paths: fs/git/models RPC + WS rooms (server + web + sidecar-tolerant)
+### Phase 2 — re-key read paths ✅ IMPLEMENTED (branch refactor/agent-to-runners)
+
+Shipped: fs/git wire requests carry `workingDir` + representative
+`agentId` (old sidecars route by agent, new sidecars serve the workdir
+after allowlist validation — `daemon.workdirAllowed`, supervisors'
+specs for now, sync-projects in Phase 3); `/projects/:id/fs|git`
+routes; catalogs stored machine×CLI (`MachineCliCatalog`, backfilled
+from Agent.modelCatalog) with `/machines/:id/models?cliType=` and the
+picker re-keyed — cold-start hole fixed; watcher nudges carry
+workingDir and fan out to the existing project room (legacy agent room
+kept); sidebar groups sessions by `session.projectId` with agent-join
+fallback. Deferred to a follow-up: FileTree / GitLogPanel /
+fileTabsStore switching to the project routes — they keep using the
+agent routes, which stay fully functional through Phase 3 (only
+heartbeats/streams change there); must land before Phase 4.
+
+Original scope for reference:
 
 - fs/git RPC: routes gain project addressing
   (`/projects/:id/fs/*`, `/projects/:id/git/log`); the wire request to
@@ -168,7 +211,62 @@ mostly moot after Phase 3 but is correct and cheap insurance meanwhile.
   events already carry path; sidecar adds workingDir (most events carry it
   already).
 
-### Phase 3 — sidecar runners + stream consolidation (the wire change)
+### Phase 3 — sidecar runners + stream consolidation ✅ IMPLEMENTED (branch refactor/agent-to-runners)
+
+Verified end-to-end with the real sidecar binary (built as 0.3.0-test)
++ fake-claude against a local stack: machine-register → project-first
+session create → sync-projects reconcile → prompt dispatched on
+machine:{id}:cli:claude-code:cmd → 17 chunks ingested from the runner
+result stream → second turn resumed via the stable externalId; fs RPC
+served workdir-addressed in ~12ms; live model probe answered; ZERO
+per-agent heartbeat/register events on lifecycle; no per-agent streams
+created. Found-and-fixed during verification: the server's three
+blocking consumer loops (lifecycle, results, background) shared ONE
+ioredis connection, serializing behind each other's 5s BLOCK — masked
+for years by heartbeat chatter, exposed the moment the lifecycle
+stream went quiet. Each loop now owns a dedicated connection
+(redis.service.ts).
+
+Deploy order (STRICT): server first, then sidecars. A ≥0.3.0 sidecar
+against a pre-Phase-3 server has no command path. isRunnerSidecar()
+gates on MAJOR.MINOR ≥ 0.3 (prerelease-tolerant).
+
+Locked design decisions (as implemented):
+
+- **Clean cut, server-leading.** Sidecar ≥0.3.x drops supervisors
+  entirely: runners per installed CLI, no per-agent heartbeats, new
+  streams. It REQUIRES a Phase-3 server (deploy order: server first,
+  then sidecars self-update — Kyle's normal order). The server keeps
+  full legacy support for old sidecars, gated on `Machine.sidecarVersion`
+  (semver ≥ 0.3.0 ⇒ new-style). Old-server + new-sidecar is unsupported.
+- **Streams**: `machine:{id}:cli:{type}:cmd` / `:result`, MAXLEN mirrors
+  the per-agent caps (200/500) in both streamMaxLen helpers. Wire
+  `Command` gains `workingDir` (from Session, pinned at create) —
+  adapters take Dir per command; `CloneSession` gains a workdir arg.
+- **Dispatch** (`command.service.ts`): session → projectId/cliType →
+  machine; new-style ⇒ machine:cli stream + machine-level online gate;
+  legacy ⇒ agent stream as today. Result-ingestor consumes new-style
+  machines' (machine × availableAdapters) streams + old machines'
+  agent streams; ingest itself is unchanged (chunks carry
+  commandId/sessionId).
+- **Agent rows become routing records** on new-style machines: they
+  inherit machine liveness (machine-heartbeat handler bumps their
+  status/lastHeartbeatAt so sweepStale never false-flags them); busy is
+  already session-derived in the UI. Rows keep serving iOS + legacy
+  reads until Phase 4.
+- **Control plane**: new sidecars get `sync-projects` (full workdir
+  allowlist, idempotent, re-sent on every register and on any
+  vivify/create/destroy) instead of create/destroy/sync-agents. The
+  allowlist feeds `workdirAllowed` (Phase 2) and the watcher registry.
+- **Watchers**: refcounted per-workdir registry (fs/git/progress) built
+  from the allowlist; events carry workingDir (agentId empty) — the
+  server's project-room fanout (Phase 2) already routes them.
+- **Terminal**: server sends cwd explicitly in TerminalOpen (from the
+  agent row / project); sidecar drops its Lookup(agentID) dependency.
+  Capability check stays server-side.
+- **Catalog push**: once per runner spawn instead of per supervisor.
+
+Original scope for reference:
 
 - Sidecar: replace `supervisors map[agentID]` with runners per cliType;
   refcounted watcher registry keyed by workdir (start on first
@@ -187,7 +285,125 @@ mostly moot after Phase 3 but is correct and cheap insurance meanwhile.
   sidecars, new sidecars get `sync-projects` (the workdir allowlist).
 - Cleanup of drift folded in: delete dead TS `consumerGroups.sidecar`.
 
-### Phase 4 — retire Agent
+### Phase 4 — retire Agent ✅ IMPLEMENTED (branch refactor/agent-to-runners)
+
+DONE: server drops the Agent as a runtime entity (agentId → nullable
+attribution; sessions route by projectId→machine + cliType→runner);
+agent-registry + agent-addressed fs/git/models/terminal REST deleted;
+per-agent lifecycle handling gone. Web off agent identity (no /agents
+fetch; sidebar groups by projectId; MachinePanel shows projects). iOS
+Stage C drops agent client methods; MachineView shows projects.
+Verified e2e (agentless session create/dispatch/resume/fork/terminal;
+lifecycle stream = machine-heartbeats only) + web/iOS builds green.
+
+Deploy: server+web image first (fleet already ≥0.3); iOS ships on its
+App Store cadence (its Stage A tolerance means it survives either way).
+Follow-ups (non-blocking cosmetic): remove the fs.service dead agent
+methods, web agentStore + CreateAgentPopover agent branch + archive
+cascade agent calls, iOS FleetStore.agents + agent WS cases. Sweep the
+~41 leftover agent:{id}:* Redis streams once (Kyle-approved, data-safe).
+
+### Phase 5 — sweep the vestigial agentId ✅ IMPLEMENTED (branch refactor/agent-to-runners)
+
+Gate cleared by a prod check: `SELECT count(*) FROM "Session" WHERE
+"projectId" IS NULL` = 0, so no session still needs the resolveRouting
+agent fallback. DONE:
+- DB migration `9_phase5_drop_agent_columns` DROPS `Session.agentId` /
+  `Command.agentId` / `Terminal.agentId` (FKs + indexes + columns). Named
+  `9_…` so it sorts lexicographically AFTER `6/7/8_backfill_command_usage`
+  (which read `Command.agentId`) — a `2026…` timestamp name would sort
+  before them and break a fresh `migrate deploy`. Validated: full fresh
+  replay + `migrate diff` drift-free against schema.prisma.
+- Server: resolveRouting is projectId-only (agent fallback gone); DTO
+  mappers drop agentId; fork/dispatch stop writing/sending it;
+  computeCommandUsage uses `session.cliType` only; terminal
+  markAllForMachineClosed filters by `machineId` (was an Agent join).
+- shared-types: `agentId` removed from SessionDTO / CommandDTO /
+  TerminalDTO / CreateSessionRequest and wire `Command`; dead
+  `streamKeys.command/result` (per-agent) + `consumerGroups.sidecar`
+  removed.
+- Web: resolveProjectRef is projectId-only; SidebarRail re-keyed to
+  projectId (fixes a latent empty-grouping bug); queueDrainer reachability
+  is machine-level; dead `!asSession`/`api.createAgent` branch removed.
+- The `Agent` TABLE is intentionally KEPT (feeds agentCount + syncProjects
+  backfill + representative attribution — all keyed by machineId, not the
+  dropped FKs). iOS untouched (its Swift models are independent; the server
+  simply stops sending agentId; `decodeIfPresent` → nil).
+
+Still deferred (needs its own change): full Agent-table deletion (requires
+`Machine.agentCount` removed from web + iOS → iOS macOS build); the ~41
+leftover `agent:{id}:*` Redis streams (prod mutation, data-safe).
+
+Original gate (all cleared):
+
+- [x] Whole fleet runs sidecar ≥0.3.x (Kyle confirms after real-life
+      testing of rc.2+; `SELECT "sidecarVersion" FROM "Machine"`)
+- [ ] Phases 1–3 soak in prod without regressions (fs panel, turn
+      dispatch/streaming, archive flows, quota, terminals)
+- [x] Web FileTree / GitLogPanel / fileTabsStore switched to project
+      routes + project rooms (ProjectRef in lib/projects.ts; legacy
+      agent-room shim kept for the mixed-fleet window; queue drainer
+      reachability is machine-level; agent fs/git api methods deleted)
+- [x] iOS Stages A+B IMPLEMENTED (commit 8e6fae7) — macOS CI green
+      (ArgusKit swift build+test AND the app's xcodebuild Simulator
+      build). Stage A = the DTO relax that MUST be installed on devices
+      BEFORE the Phase-4 server nulls agentId; App Store propagation is
+      now the long pole of the gate, so cut a build early.
+- [ ] Kyle: build + ship the iOS app from a macOS window, confirm
+      on-device (sessions list, transcripts, project-first create,
+      Files/Commits live refresh on a ≥0.3 machine, model picker,
+      queued prompts).
+- [x] Terminals are (machine, cwd)-addressed — the last agent-addressed
+      surface. `POST|GET /projects/:id/terminals`; Terminal rows carry
+      machineId (routing) + projectId, agentId is attribution-only and
+      SetNull; the keystroke hot path no longer joins Agent. Capability
+      moved to Project.supportsTerminal (migration inherited it from
+      terminal-capable agents). Both clients prefer the project route,
+      falling back to the agent route only for workdir-less sessions.
+      Legacy machines (<0.3 sidecar) still need a terminal-capable agent
+      under the project — the server says so explicitly rather than
+      letting the sidecar reject silently.
+- [ ] KNOWN BUG until iOS Stage B: iOS Files/Commits live refresh is
+      already broken against ≥0.3 sidecars TODAY (it joins the agent
+      room and filters on agentId; runner watcher events carry empty
+      agentId and fan out to the project room only). Manual refresh
+      still works; web is unaffected.
+
+iOS migration plan (from the code inventory, apps/ios):
+- Stage A (additive, safe against current server): relax agentId to
+  optional on SessionDTO/CommandDTO/TerminalDTO/BackgroundTaskDTO/
+  ModelCatalogResponse and the fs/git WS payloads (+machineId/
+  workingDir fields); add SessionDTO.projectId/cliType; ProjectDTO
+  gains the promoted-row fields; CreateSessionRequest gains the
+  project shape; harden AppModel.refreshAll so a listAgents failure
+  can't abort sessions/machines/projects hydration (today one 404
+  = infinite sidebar spinner).
+- Stage B: AppModel.createSession drops its client-side vivify for one
+  project-first POST; ProjectRef resolver ported from the web;
+  FileBrowser/Commits/FilePreview/InspectorPane re-keyed to project
+  routes + project rooms (fixes the live-refresh bug); model picker →
+  /machines/:id/models?cliType=; agentType consumers → session.cliType
+  (VM cache, Live Activities, transcript parsers, icons); sidebar
+  groups by session.projectId with fleet.projects anchors (needs a new
+  deliberate sort rule — agentSortsBefore dies); queue gate →
+  machine-level.
+- Stage C (with Phase-4 removals): delete the 13 agent-addressed
+  client methods (getAgent/archive/unarchive/listTerminals have zero
+  call sites already), MachineView agent roster + NewAgentSheet,
+  FleetStore.agents + agent WS cases, fixtures/tests/capture script
+  vocabulary.
+
+Removal checklist when the gate clears: drop the auto-vivify +
+create/destroy-agent control path; Session.agentId / Command.agentId /
+Terminal.agentId → nullable attribution columns (migration; history
+keeps rendering); delete agent-registry REST + agent-addressed
+fs/git/models routes + legacy request shapes; retire per-agent
+register/heartbeat/deregister handling and the per-agent sweepStale
+arm; sweep leftover agent:{id}:* streams; drop Agent.modelCatalog
+columns; delete dead consumerGroups.sidecar; AGENTS.md/README to
+runner/project vocabulary.
+
+Original sketch:
 
 - iOS migrates to `{projectId, cliType}` session creation (needs a macOS
   build window per the iOS constraint).

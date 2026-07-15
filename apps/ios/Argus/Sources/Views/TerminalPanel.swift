@@ -21,7 +21,9 @@ final class TerminalController {
 
     private(set) var state: State = .idle
 
-    let agent: AgentDTO
+    /// The PTY's project (machine + cwd). Nil only for workdir-less
+    /// sessions, which have no terminal surface.
+    let project: ProjectRef?
     /// One UIKit view for the controller's lifetime — keeping it (not
     /// recreating per SwiftUI update) is what preserves scrollback
     /// across tab switches.
@@ -33,8 +35,8 @@ final class TerminalController {
     private var lastSeq = -1
     private let delegateBridge = TerminalDelegateBridge()
 
-    init(agent: AgentDTO, client: ArgusClient, stream: StreamClient) {
-        self.agent = agent
+    init(project: ProjectRef?, client: ArgusClient, stream: StreamClient) {
+        self.project = project
         self.client = client
         self.stream = stream
         self.terminalView = SwiftTerm.TerminalView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
@@ -56,10 +58,16 @@ final class TerminalController {
         state = .connecting
         do {
             let term = terminalView.getTerminal()
-            let dto = try await client.openTerminal(
-                agentId: agent.id,
-                cols: max(2, term.cols),
-                rows: max(2, term.rows)
+            let cols = max(2, term.cols)
+            let rows = max(2, term.rows)
+            // Terminals are project-addressed (a (machine, cwd) pair); a
+            // session with no project has no terminal surface.
+            guard let project else {
+                state = .failed("this session isn't pinned to a project")
+                return
+            }
+            let dto = try await client.openProjectTerminal(
+                projectId: project.projectId, cols: cols, rows: rows
             )
             terminalId = dto.id
             stream.joinTerminal(dto.id)
@@ -169,8 +177,9 @@ private struct TerminalHostView: UIViewRepresentable {
 }
 
 /// The inspector's Terminal tab. The PTY grants shell access as the
-/// sidecar user — it only exists for agents created with the terminal
-/// opt-in, and the server scopes each terminal to the opening user.
+/// sidecar user — it only exists for projects whose runner has the
+/// terminal opt-in, and the server scopes each terminal to the opening
+/// user.
 struct TerminalPanel: View {
     let controller: TerminalController
 

@@ -57,7 +57,7 @@ function useFetchFileContent(file: OpenWorkingFile) {
     let cancelled = false;
     setContent(file.key, { status: 'loading' });
     api
-      .readAgentFile(file.agentId, file.path)
+      .readProjectFile(file.project.projectId, file.path)
       .then((res) => {
         if (cancelled) return;
         setContent(file.key, { status: 'ready', result: res.result });
@@ -74,7 +74,7 @@ function useFetchFileContent(file: OpenWorkingFile) {
     // `cached` intentionally omitted — only re-run when the file
     // identity changes; the cache check above already gates the fetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [file.key, file.agentId, file.path]);
+  }, [file.key, file.project.projectId, file.path]);
 }
 
 /**

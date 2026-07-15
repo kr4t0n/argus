@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { AgentDTO, CommandDTO, ResultChunkDTO, SessionDTO } from '@argus/shared-types';
+import type { CommandDTO, MachineDTO, ResultChunkDTO, SessionDTO } from '@argus/shared-types';
 import { ChevronDown, Cpu, Folder, Info } from 'lucide-react';
 import { AgentTypeIcon } from './ui/AgentTypeIcon';
 import { StatusDot } from './ui/StatusDot';
@@ -11,11 +11,13 @@ import { ProgressPane } from './ProgressPane';
 import { DiffPane } from './DiffPane';
 import { TerminalPane } from './TerminalPane';
 import { cn, relativeTime } from '../lib/utils';
+import { basename, useProjectRef } from '../lib/projects';
+import { useProjectStore, projectKey } from '../stores/projectStore';
+import { useMachineStore } from '../stores/machineStore';
 import { useSessionModel } from '../lib/usage';
 import { useUIStore } from '../stores/uiStore';
 
 type Props = {
-  agent: AgentDTO | undefined;
   session: SessionDTO | undefined;
   /** Loaded commands for the active session — the Diff tab reads the most
    *  recent one to scope its file diffs to the last turn. */
@@ -30,11 +32,31 @@ type Props = {
 
 type TabKey = 'commits' | 'files' | 'terminal' | 'note' | 'progress' | 'diff';
 
-export function ContextPane({ agent, session, commands, chunks }: Props) {
+export function ContextPane({ session, commands, chunks }: Props) {
+  // Project identity drives every pane now that the Agent entity is
+  // retired (Phase 4). The session's pinned projectId resolves to a
+  // (machineId, workingDir) pair via the hydrated project rows; the
+  // machine row supplies reachability + version metadata that used to
+  // live on the agent. Null projectRef (panes hidden) only for
+  // workdir-less sessions or during the boot race before rows hydrate.
+  const projectRef = useProjectRef(session);
+  const projectRows = useProjectStore((st) => st.projects);
+  const machine = useMachineStore((st) =>
+    projectRef ? st.machines[projectRef.machineId] : undefined,
+  );
+  const projectRow = projectRef
+    ? projectRows[projectKey(projectRef.machineId, projectRef.workingDir)]
+    : undefined;
+  const workingDir = projectRef?.workingDir ?? null;
+  const cliType = session?.cliType ?? null;
+  // Terminal capability lives on the Project row (the terminal
+  // switchover migrated it off terminal-capable agents), so the
+  // project route gates without an agent.
+  const projectSupportsTerminal = projectRow?.supportsTerminal === true;
   // Notes / Progress / Diff extensions: when on, each adds a tab to the
   // pane. All gate on a workingDir (the project key for Notes/Progress;
-  // file diffs only exist when the agent has a working tree), matching
-  // the Commits/Files tabs.
+  // file diffs only exist when there's a working tree), matching the
+  // Commits/Files tabs.
   const notesEnabled = useUIStore((s) => s.notesExtensionEnabled);
   const progressEnabled = useUIStore((s) => s.progressExtensionEnabled);
   const diffEnabled = useUIStore((s) => s.diffExtensionEnabled);
@@ -46,24 +68,24 @@ export function ContextPane({ agent, session, commands, chunks }: Props) {
   const model = useSessionModel(chunks);
 
   const tabs = useMemo<Array<{ key: TabKey; label: string }>>(() => {
-    if (!agent) return [];
+    if (!session) return [];
     const t: Array<{ key: TabKey; label: string }> = [];
-    if (agent.workingDir) {
+    if (workingDir) {
       t.push({ key: 'commits', label: 'Commits' });
       t.push({ key: 'files', label: 'Files' });
     }
     t.push({ key: 'terminal', label: 'Terminal' });
-    if (notesEnabled && agent.workingDir) {
+    if (notesEnabled && workingDir) {
       t.push({ key: 'note', label: 'Note' });
     }
-    if (progressEnabled && agent.workingDir) {
+    if (progressEnabled && workingDir) {
       t.push({ key: 'progress', label: 'Progress' });
     }
-    if (diffEnabled && agent.workingDir) {
+    if (diffEnabled && workingDir) {
       t.push({ key: 'diff', label: 'Diff' });
     }
     return t;
-  }, [agent, notesEnabled, progressEnabled, diffEnabled]);
+  }, [session, workingDir, notesEnabled, progressEnabled, diffEnabled]);
 
   const [active, setActive] = useState<TabKey>('commits');
   useEffect(() => {
@@ -72,40 +94,48 @@ export function ContextPane({ agent, session, commands, chunks }: Props) {
     }
   }, [tabs, active]);
 
-  if (!agent) {
-    return <div className="h-full px-4 pt-6 text-sm text-fg-tertiary">no agent selected</div>;
+  if (!session) {
+    return <div className="h-full px-4 pt-6 text-sm text-fg-tertiary">no session selected</div>;
   }
+
+  // Pane identity line: the project (its user label, else the cwd
+  // basename), falling back to the machine or the session title for
+  // workdir-less sessions. The status dot + subtitle track the machine.
+  const title =
+    projectRow?.name || (workingDir ? basename(workingDir) : machine?.name || session.title);
 
   return (
     <aside className="flex h-full w-full flex-col border-l border-default bg-surface-0">
       <div className="space-y-4 px-4 pt-6">
         <header className="flex items-center gap-2.5">
-          <AgentTypeIcon type={agent.type} size={20} />
+          {cliType ? (
+            <AgentTypeIcon type={cliType} size={20} />
+          ) : (
+            <Folder className="h-5 w-5 shrink-0 text-fg-tertiary" />
+          )}
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
               <span className="truncate text-sm font-semibold tracking-tight text-fg-primary">
-                {agent.name || agent.id}
+                {title}
               </span>
-              <StatusDot status={agent.status} className="shrink-0" />
+              <StatusDot status={machine?.status ?? 'offline'} className="shrink-0" />
             </div>
-            <div className="truncate text-[11px] text-fg-tertiary">{agent.machineName}</div>
+            <div className="truncate text-[11px] text-fg-tertiary">{machine?.name ?? '—'}</div>
           </div>
-          {/* Session-default model picker. Lives on the agent row (the
-              pane's identity line) rather than the chat header — the
-              `model` line below shows what the last turn actually ran
-              on, while this chip sets what the NEXT turn will use. */}
-          {session && <SessionModelChip session={session} agentId={agent.id} />}
+          {/* Session-default model picker — sets what the NEXT turn will
+              use; the `model` line below shows what the last turn ran on. */}
+          <SessionModelChip session={session} machineId={projectRef?.machineId} />
         </header>
 
-        {(agent.workingDir || model) && (
+        {(workingDir || model) && (
           <div className="space-y-1">
-            {agent.workingDir && (
+            {workingDir && (
               <div
-                title={agent.workingDir}
+                title={workingDir}
                 className="flex items-center gap-1.5 truncate text-[11px] leading-[22px] text-fg-secondary"
               >
                 <Folder className="h-3 w-3 shrink-0 text-fg-tertiary" />
-                <span className="truncate">{agent.workingDir}</span>
+                <span className="truncate">{workingDir}</span>
               </div>
             )}
             {model && (
@@ -120,7 +150,7 @@ export function ContextPane({ agent, session, commands, chunks }: Props) {
           </div>
         )}
 
-        <DetailsSection agent={agent} session={session} />
+        <DetailsSection machine={machine} session={session} />
       </div>
 
       <div className="mt-4 flex min-h-0 flex-1 flex-col">
@@ -143,25 +173,36 @@ export function ContextPane({ agent, session, commands, chunks }: Props) {
           ))}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-3 no-scrollbar">
-          {active === 'commits' && agent.workingDir && (
-            <GitLogPanel key={agent.id} agentId={agent.id} hideHeader />
+          {active === 'commits' && projectRef && (
+            <GitLogPanel key={projectRef.projectId} project={projectRef} hideHeader />
           )}
-          {active === 'files' && agent.workingDir && (
-            <FileTree key={agent.id} agentId={agent.id} />
+          {active === 'files' && projectRef && (
+            <FileTree key={projectRef.projectId} project={projectRef} />
           )}
-          {active === 'terminal' && <TerminalPane key={agent.id} agent={agent} />}
-          {active === 'note' && agent.workingDir && (
-            <NotePane key={agent.id} machineId={agent.machineId} workingDir={agent.workingDir} />
+          {active === 'terminal' && (
+            <TerminalPane
+              key={projectRef?.projectId ?? session.id}
+              project={projectRef}
+              supported={projectSupportsTerminal}
+              machineName={machine?.name ?? ''}
+            />
           )}
-          {active === 'progress' && agent.workingDir && (
+          {active === 'note' && projectRef && (
+            <NotePane
+              key={projectRef.projectId}
+              machineId={projectRef.machineId}
+              workingDir={projectRef.workingDir}
+            />
+          )}
+          {active === 'progress' && projectRef && (
             <ProgressPane
-              key={`${agent.machineId}:${agent.workingDir}`}
-              machineId={agent.machineId}
-              workingDir={agent.workingDir}
+              key={projectRef.projectId}
+              machineId={projectRef.machineId}
+              workingDir={projectRef.workingDir}
             />
           )}
           {active === 'diff' && (
-            <DiffPane commands={commands} chunks={chunks} workingDir={agent.workingDir} />
+            <DiffPane commands={commands} chunks={chunks} workingDir={workingDir} />
           )}
         </div>
       </div>
@@ -170,10 +211,10 @@ export function ContextPane({ agent, session, commands, chunks }: Props) {
 }
 
 function DetailsSection({
-  agent,
+  machine,
   session,
 }: {
-  agent: AgentDTO;
+  machine: MachineDTO | undefined;
   session: SessionDTO | undefined;
 }) {
   const [open, setOpen] = useState(false);
@@ -194,15 +235,19 @@ function DetailsSection({
       </button>
       {open && (
         <div className="mt-2 space-y-1">
-          <KV k="version" v={agent.version ?? '—'} />
-          <KV
-            k="registered"
-            v={<span title={agent.registeredAt}>{relativeTime(agent.registeredAt)} ago</span>}
-          />
-          <KV
-            k="last seen"
-            v={<span title={agent.lastHeartbeatAt}>{relativeTime(agent.lastHeartbeatAt)} ago</span>}
-          />
+          <KV k="sidecar" v={machine?.sidecarVersion ?? '—'} />
+          {machine && (
+            <>
+              <KV
+                k="registered"
+                v={<span title={machine.registeredAt}>{relativeTime(machine.registeredAt)} ago</span>}
+              />
+              <KV
+                k="last seen"
+                v={<span title={machine.lastSeenAt}>{relativeTime(machine.lastSeenAt)} ago</span>}
+              />
+            </>
+          )}
           {session && (
             <>
               <div className="my-1.5 border-t border-default/50" />

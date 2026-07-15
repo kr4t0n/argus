@@ -13,18 +13,18 @@ import (
 	"github.com/kr4t0n/argus/sidecar/internal/protocol"
 )
 
-// uploadsSubdir is where pulled attachments land, relative to the agent's
-// workingDir. Kept under .argus/ so the file-tree walker and gitignore
-// stripping already hide it (see fs.go's hard-skip of .argus/), and it
-// sits beside .argus/progress.
+// uploadsSubdir is where pulled attachments land, relative to the
+// command's workingDir. Kept under .argus/ so the file-tree walker and
+// gitignore stripping already hide it (see fs.go's hard-skip of
+// .argus/), and it sits beside .argus/progress.
 const uploadsSubdir = ".argus/uploads"
 
 // attachmentSizeCeiling bounds a pull whose ref declares no size — a
-// safety net so a misbehaving/hostile server can't fill the agent's disk.
+// safety net so a misbehaving/hostile server can't fill the host's disk.
 const attachmentSizeCeiling int64 = 64 << 20 // 64 MiB
 
 // materializeAttachments pulls every file referenced by cmd.Attachments
-// from the server over HTTP, writes it under the agent's
+// from the server over HTTP, writes it under the command's
 // <workingDir>/.argus/uploads/, records the on-disk path on each ref, and
 // appends a uniform "attached files" preamble to the prompt so EVERY
 // adapter (and the model) can reference the files by path. Adapters with a
@@ -33,29 +33,29 @@ const attachmentSizeCeiling int64 = 64 << 20 // 64 MiB
 // Fail-soft, per file: a single failed pull is logged and skipped rather
 // than failing the whole turn — the model still gets the prompt plus
 // whatever files did land. Mutates *cmd in place.
-func (s *supervisor) materializeAttachments(ctx context.Context, cmd *protocol.Command) {
+func (r *runner) materializeAttachments(ctx context.Context, cmd *protocol.Command) {
 	if len(cmd.Attachments) == 0 {
 		return
 	}
-	if s.serverURL == "" || s.httpClient == nil {
-		s.log.Printf("agent %s: %d attachment(s) but no server link configured; skipping",
-			s.spec.AgentID, len(cmd.Attachments))
+	if r.serverURL == "" || r.httpClient == nil {
+		r.log.Printf("runner %s: %d attachment(s) but no server link configured; skipping",
+			r.cliType, len(cmd.Attachments))
 		return
 	}
 
-	dir := s.uploadsDir()
+	dir := r.uploadsDir(cmd.WorkingDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		s.log.Printf("agent %s: create uploads dir %q: %v", s.spec.AgentID, dir, err)
+		r.log.Printf("runner %s: create uploads dir %q: %v", r.cliType, dir, err)
 		return
 	}
 
 	landed := 0
 	for i := range cmd.Attachments {
 		ref := &cmd.Attachments[i]
-		path, err := s.pullAttachment(ctx, dir, ref)
+		path, err := r.pullAttachment(ctx, dir, ref)
 		if err != nil {
-			s.log.Printf("agent %s: pull attachment %s (%s): %v",
-				s.spec.AgentID, ref.ID, ref.Filename, err)
+			r.log.Printf("runner %s: pull attachment %s (%s): %v",
+				r.cliType, ref.ID, ref.Filename, err)
 			continue
 		}
 		ref.LocalPath = path
@@ -66,27 +66,26 @@ func (s *supervisor) materializeAttachments(ctx context.Context, cmd *protocol.C
 	}
 }
 
-// uploadsDir resolves the directory pulled files land in. For an agent
-// with a workingDir it's <workingDir>/.argus/uploads; for a working-dir-
-// less agent we fall back to a per-agent temp dir so the feature still
-// works (the CLI just gets an absolute path).
-func (s *supervisor) uploadsDir() string {
-	base := s.spec.WorkingDir
-	if base == "" {
-		return filepath.Join(os.TempDir(), "argus-uploads", s.spec.AgentID)
+// uploadsDir resolves the directory pulled files land in. For a command
+// with a workingDir it's <workingDir>/.argus/uploads; for a workdir-less
+// command we fall back to a per-CLI temp dir so the feature still works
+// (the CLI just gets an absolute path).
+func (r *runner) uploadsDir(workingDir string) string {
+	if workingDir == "" {
+		return filepath.Join(os.TempDir(), "argus-uploads", r.cliType)
 	}
-	return filepath.Join(base, uploadsSubdir)
+	return filepath.Join(workingDir, uploadsSubdir)
 }
 
 // pullAttachment GETs one attachment from the server and writes it into
 // dir, returning the absolute path written. The copy is bounded to the
 // ref's declared size (plus one byte to detect overflow) so a misbehaving
 // server can't fill the disk.
-func (s *supervisor) pullAttachment(
+func (r *runner) pullAttachment(
 	ctx context.Context, dir string, ref *protocol.AttachmentRef,
 ) (string, error) {
 	endpoint := fmt.Sprintf("%s/attachments/%s?t=%s",
-		strings.TrimRight(s.serverURL, "/"),
+		strings.TrimRight(r.serverURL, "/"),
 		url.PathEscape(ref.ID),
 		url.QueryEscape(ref.Token),
 	)
@@ -94,7 +93,7 @@ func (s *supervisor) pullAttachment(
 	if err != nil {
 		return "", err
 	}
-	resp, err := s.httpClient.Do(req)
+	resp, err := r.httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}

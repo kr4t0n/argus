@@ -137,30 +137,19 @@ public final class ArgusClient: @unchecked Sendable {
         try await send("POST", "/commands/\(id)/cancel")
     }
 
-    // MARK: Agents
+    // MARK: Models
 
-    public func listAgents(includeArchived: Bool = false) async throws -> [AgentDTO] {
-        try await send("GET", "/agents", query: flag("includeArchived", includeArchived))
-    }
-
-    public func getAgent(id: String) async throws -> AgentDTO {
-        try await send("GET", "/agents/\(id)")
-    }
-
-    public func archiveAgent(id: String) async throws -> AgentDTO {
-        try await send("POST", "/agents/\(id)/archive")
-    }
-
-    public func unarchiveAgent(id: String) async throws -> AgentDTO {
-        try await send("POST", "/agents/\(id)/unarchive")
-    }
-
-    /// Model catalog for an agent's CLI; `refresh` bypasses the server cache.
-    public func getModelCatalog(agentId: String, refresh: Bool = false) async throws -> ModelCatalogResponse {
-        try await send(
-            "GET", "/agents/\(agentId)/models",
-            query: refresh ? [URLQueryItem(name: "refresh", value: "1")] : []
-        )
+    /// Model catalog keyed (machineId, cliType) — catalogs belong to the
+    /// machine's installed binary, so the picker can load one before any
+    /// session of the type exists; `refresh` bypasses the server cache.
+    public func getMachineModelCatalog(
+        machineId: String,
+        cliType: String,
+        refresh: Bool = false
+    ) async throws -> ModelCatalogResponse {
+        var query = [URLQueryItem(name: "cliType", value: cliType)]
+        if refresh { query.append(URLQueryItem(name: "refresh", value: "1")) }
+        return try await send("GET", "/machines/\(machineId)/models", query: query)
     }
 
     // MARK: Machines / projects
@@ -173,25 +162,14 @@ public final class ArgusClient: @unchecked Sendable {
         try await send("GET", "/machines/\(id)")
     }
 
-    public func listMachineAgents(machineId: String) async throws -> [AgentDTO] {
-        try await send("GET", "/machines/\(machineId)/agents")
-    }
-
-    public func createAgent(machineId: String, _ request: CreateAgentRequest) async throws -> AgentDTO {
-        try await send("POST", "/machines/\(machineId)/agents", body: request)
-    }
-
-    public func destroyAgent(machineId: String, agentId: String) async throws {
-        try await sendVoid("DELETE", "/machines/\(machineId)/agents/\(agentId)")
-    }
-
     // MARK: Terminals (interactive PTY)
 
-    /// Open a PTY on the agent's machine. Rejected when the agent is
-    /// offline, lacks a PTY runner (`supportsTerminal == false`), or the
+    /// Open a PTY in the project's working dir — a terminal is a
+    /// (machine, cwd) pair, so no agent is involved. Rejected when the
+    /// project has terminals disabled, its machine is offline, or the
     /// sidecar link is down.
-    public func openTerminal(
-        agentId: String,
+    public func openProjectTerminal(
+        projectId: String,
         shell: String? = nil,
         cwd: String? = nil,
         cols: Int? = nil,
@@ -204,13 +182,9 @@ public final class ArgusClient: @unchecked Sendable {
             let rows: Int?
         }
         return try await send(
-            "POST", "/agents/\(agentId)/terminals",
+            "POST", "/projects/\(projectId)/terminals",
             body: Body(shell: shell, cwd: cwd, cols: cols, rows: rows)
         )
-    }
-
-    public func listTerminals(agentId: String) async throws -> [TerminalDTO] {
-        try await send("GET", "/agents/\(agentId)/terminals")
     }
 
     @discardableResult
@@ -243,8 +217,13 @@ public final class ArgusClient: @unchecked Sendable {
 
     // MARK: Files / git (right-pane data)
 
-    public func listAgentDir(
-        agentId: String,
+    // Project-addressed routes — the runner-era read path (the wire
+    // request carries the workingDir; the sidecar serves it after an
+    // allowlist check). The agent-addressed variants below stay for the
+    // mixed-fleet window and die with Stage C.
+
+    public func listProjectDir(
+        projectId: String,
         path: String = "",
         showAll: Bool = false,
         depth: Int? = nil
@@ -253,20 +232,20 @@ public final class ArgusClient: @unchecked Sendable {
         if !path.isEmpty { query.append(URLQueryItem(name: "path", value: path)) }
         if showAll { query.append(URLQueryItem(name: "showAll", value: "true")) }
         if let depth, depth > 1 { query.append(URLQueryItem(name: "depth", value: String(depth))) }
-        return try await send("GET", "/agents/\(agentId)/fs/list", query: query)
+        return try await send("GET", "/projects/\(projectId)/fs/list", query: query)
     }
 
-    public func readAgentFile(agentId: String, path: String) async throws -> FSReadResponse {
+    public func readProjectFile(projectId: String, path: String) async throws -> FSReadResponse {
         try await send(
-            "GET", "/agents/\(agentId)/fs/read",
+            "GET", "/projects/\(projectId)/fs/read",
             query: [URLQueryItem(name: "path", value: path)]
         )
     }
 
-    public func getAgentGitLog(agentId: String, limit: Int? = nil) async throws -> GitLogResponse {
+    public func getProjectGitLog(projectId: String, limit: Int? = nil) async throws -> GitLogResponse {
         var query: [URLQueryItem] = []
         if let limit, limit > 0 { query.append(URLQueryItem(name: "limit", value: String(limit))) }
-        return try await send("GET", "/agents/\(agentId)/git/log", query: query)
+        return try await send("GET", "/projects/\(projectId)/git/log", query: query)
     }
 
     // MARK: /me views

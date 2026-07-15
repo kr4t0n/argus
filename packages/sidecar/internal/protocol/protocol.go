@@ -4,15 +4,6 @@ package protocol
 
 import "strings"
 
-type AgentStatus string
-
-const (
-	StatusOnline  AgentStatus = "online"
-	StatusOffline AgentStatus = "offline"
-	StatusBusy    AgentStatus = "busy"
-	StatusError   AgentStatus = "error"
-)
-
 type ResultKind string
 
 const (
@@ -25,38 +16,11 @@ const (
 	KindError    ResultKind = "error"
 )
 
-// RegisterEvent is emitted by an agent supervisor inside the machine
-// daemon when it (re-)spawns. The Agent row already exists in Postgres
-// (created by the dashboard via POST /machines/:id/agents); the server
-// uses this to flip status and refresh metadata.
-type RegisterEvent struct {
-	Kind             string `json:"kind"` // "register"
-	ID               string `json:"id"`
-	MachineID        string `json:"machineId"`
-	Type             string `json:"type"`
-	SupportsTerminal bool   `json:"supportsTerminal"`
-	Version          string `json:"version"`
-	WorkingDir       string `json:"workingDir,omitempty"`
-	TS               int64  `json:"ts"`
-}
-
-type HeartbeatEvent struct {
-	Kind   string      `json:"kind"` // "heartbeat"
-	ID     string      `json:"id"`
-	Status AgentStatus `json:"status"`
-	TS     int64       `json:"ts"`
-}
-
-type DeregisterEvent struct {
-	Kind string `json:"kind"` // "deregister"
-	ID   string `json:"id"`
-	TS   int64  `json:"ts"`
-}
-
 // ─────────── Machine lifecycle ───────────
 //
-// The sidecar daemon emits these on the same agent:lifecycle stream
-// that agent supervisors use, discriminated by Kind.
+// The sidecar daemon emits these on the lifecycle stream, discriminated
+// by Kind. Runner-mode sidecars (≥ 0.3) have no per-agent supervisors —
+// the machine is the only lifecycle actor.
 
 // AvailableAdapter is one CLI adapter the sidecar found on PATH at boot.
 type AvailableAdapter struct {
@@ -116,33 +80,16 @@ type AgentQuota struct {
 
 // ─────────── Machine control commands (server → sidecar) ───────────
 
-// AgentSpec is the canonical shape both Create and Sync embed; mirrors
-// what the sidecar persists in its on-disk cache.
-type AgentSpec struct {
-	AgentID          string         `json:"agentId"`
-	Name             string         `json:"name"`
-	Type             string         `json:"type"`
-	WorkingDir       string         `json:"workingDir,omitempty"`
-	SupportsTerminal bool           `json:"supportsTerminal"`
-	Adapter          map[string]any `json:"adapter,omitempty"`
-}
-
-type CreateAgentCommand struct {
-	Kind  string    `json:"kind"` // "create-agent"
-	Agent AgentSpec `json:"agent"`
-	TS    int64     `json:"ts"`
-}
-
-type DestroyAgentCommand struct {
-	Kind    string `json:"kind"` // "destroy-agent"
-	AgentID string `json:"agentId"`
-	TS      int64  `json:"ts"`
-}
-
-type SyncAgentsCommand struct {
-	Kind   string      `json:"kind"` // "sync-agents"
-	Agents []AgentSpec `json:"agents"`
-	TS     int64       `json:"ts"`
+// SyncProjectsCommand replaces create/destroy/sync-agents for runner-mode
+// sidecars (Phase 3 of docs/plan-agent-to-runners.md): the full workdir
+// allowlist as an idempotent snapshot, re-sent on every machine-register
+// and on any project/agent change server-side. The allowlist is the
+// security boundary for workdir-addressed fs/git RPCs (plan §4.3) and
+// drives the per-workdir watcher registry.
+type SyncProjectsCommand struct {
+	Kind     string   `json:"kind"` // "sync-projects"
+	Workdirs []string `json:"workdirs"`
+	TS       int64    `json:"ts"`
 }
 
 // UpdateSidecarCommand asks the sidecar to run its self-updater (same
@@ -247,9 +194,11 @@ type GitStatus struct {
 type FSListRequestCommand struct {
 	Kind      string `json:"kind"` // "fs-list"
 	RequestID string `json:"requestId"`
-	AgentID   string `json:"agentId"`
-	Path      string `json:"path"`
-	ShowAll   bool   `json:"showAll"`
+	// WorkingDir is what the daemon serves from, after validating it
+	// against the sync-projects allowlist.
+	WorkingDir string `json:"workingDir,omitempty"`
+	Path       string `json:"path"`
+	ShowAll    bool   `json:"showAll"`
 	// Depth is the number of directory levels to include in the
 	// response, counting Path itself as level 1. 0 or 1 means the
 	// historical single-level listing. >1 asks the sidecar to walk
@@ -267,11 +216,11 @@ type FSListRequestCommand struct {
 // jail; over the cap is returned as Result="error" rather than
 // truncated. See FSReadResponseEvent for the wire-flat reply shape.
 type FSReadRequestCommand struct {
-	Kind      string `json:"kind"` // "fs-read"
-	RequestID string `json:"requestId"`
-	AgentID   string `json:"agentId"`
-	Path      string `json:"path"`
-	TS        int64  `json:"ts"`
+	Kind       string `json:"kind"` // "fs-read"
+	RequestID  string `json:"requestId"`
+	WorkingDir string `json:"workingDir,omitempty"`
+	Path       string `json:"path"`
+	TS         int64  `json:"ts"`
 }
 
 // FSReadMaxBytes mirrors FS_READ_MAX_BYTES on the TS side. Keep in sync.
@@ -283,9 +232,9 @@ const FSReadMaxBytes = 1_048_576
 // control stream, sidecar replies on the lifecycle stream with a
 // matching GitLogResponseEvent.
 type GitLogRequestCommand struct {
-	Kind      string `json:"kind"` // "git-log"
-	RequestID string `json:"requestId"`
-	AgentID   string `json:"agentId"`
+	Kind       string `json:"kind"` // "git-log"
+	RequestID  string `json:"requestId"`
+	WorkingDir string `json:"workingDir,omitempty"`
 	// Limit caps how many commits to return (1-based). 0 or negative
 	// means "use the sidecar's default" (50). The server caps at 200
 	// at the controller layer.
@@ -318,7 +267,6 @@ type GitCommit struct {
 type GitLogResponseEvent struct {
 	Kind      string      `json:"kind"` // "git-log-response"
 	MachineID string      `json:"machineId"`
-	AgentID   string      `json:"agentId"`
 	RequestID string      `json:"requestId"`
 	Commits   []GitCommit `json:"commits,omitempty"`
 	Git       *GitStatus  `json:"git,omitempty"`
@@ -382,8 +330,11 @@ type ModelCatalogEntry struct {
 type ListModelsRequestCommand struct {
 	Kind      string `json:"kind"` // "list-models"
 	RequestID string `json:"requestId"`
-	AgentID   string `json:"agentId"`
-	TS        int64  `json:"ts"`
+	// The daemon routes by CliType to the matching runner — the catalog
+	// is a property of the installed binary, not the workdir.
+	// Missing/unknown CliType gets a synthetic error response.
+	CliType string `json:"cliType,omitempty"`
+	TS      int64  `json:"ts"`
 }
 
 // ModelCatalogResponseEvent is the sidecar's reply — or unsolicited
@@ -391,14 +342,18 @@ type ListModelsRequestCommand struct {
 // CLI output). On failure Error is set and Models nil — the dashboard
 // degrades to a free-text model input rather than blocking the picker.
 //
-// RequestID == "" marks an UNSOLICITED push: published after every
-// supervisor spawn/register so the server's stored catalog is warm
-// before any picker opens. Error pushes are not published — a
+// RequestID == "" marks an UNSOLICITED push: published once per runner
+// spawn (one probe per installed CLI) so the server's stored catalog is
+// warm before any picker opens. Error pushes are not published — a
 // boot-time CLI hiccup must not clobber a stored good catalog.
 type ModelCatalogResponseEvent struct {
-	Kind      string              `json:"kind"` // "model-catalog-response"
-	MachineID string              `json:"machineId"`
-	AgentID   string              `json:"agentId"`
+	Kind      string `json:"kind"` // "model-catalog-response"
+	MachineID string `json:"machineId"`
+	// CliType self-describes the catalog's adapter type (Phase 2:
+	// catalogs are stored machine×CLI server-side); old servers ignore
+	// it and old sidecars omit it (the server then resolves the type
+	// from the agent row).
+	CliType   string              `json:"cliType,omitempty"`
 	RequestID string              `json:"requestId"` // "" = unsolicited push
 	Source    string              `json:"source,omitempty"`
 	Models    []ModelCatalogEntry `json:"models,omitempty"`
@@ -406,7 +361,7 @@ type ModelCatalogResponseEvent struct {
 	TS        int64               `json:"ts"`
 }
 
-// GitChangedEvent is the unsolicited push from the sidecar's per-agent
+// GitChangedEvent is the unsolicited push from the sidecar's per-workdir
 // secondary fsnotify watcher when the repo's HEAD or a ref under
 // refs/heads/ moved (commit, checkout, reset, etc). The dashboard's
 // GitLogPanel uses this to refresh without polling. Debounced on the
@@ -414,8 +369,10 @@ type ModelCatalogResponseEvent struct {
 type GitChangedEvent struct {
 	Kind      string `json:"kind"` // "git-changed"
 	MachineID string `json:"machineId"`
-	AgentID   string `json:"agentId"`
-	TS        int64  `json:"ts"`
+	// WorkingDir is what the server routes on — nudges are project-scoped,
+	// and two runners sharing a workdir emit interchangeable ones.
+	WorkingDir string `json:"workingDir,omitempty"`
+	TS         int64  `json:"ts"`
 }
 
 // ─────────── Background task progress (sidecar → server) ───────────
@@ -423,15 +380,14 @@ type GitChangedEvent struct {
 // Commands wrapped by `argus-bg` (the sidecar's tqdm-aware shell
 // wrapper) write a JSONL event stream into
 // <workingDir>/.argus/progress/<taskId>.jsonl as they run. The sidecar's
-// per-agent progress watcher tails those files (parallel to the fs and
+// per-workdir progress watcher tails those files (parallel to the fs and
 // git watchers) and forwards each line on the lifecycle stream as one
 // of the three events below.
 //
-// Scoped by (machineId, workingDir, taskId). WorkingDir — not agentId —
-// is the project key, because multiple agents in the same project share
-// one .argus/progress/ directory and the dashboard's Progress tab is
-// per-project. AgentID is included for attribution / debugging only
-// (which agent supervisor observed the file).
+// Scoped by (machineId, workingDir, taskId). WorkingDir is the project
+// key, because multiple sessions in the same project share one
+// .argus/progress/ directory and the dashboard's Progress tab is
+// per-project. The watcher is workdir-owned, not agent-owned.
 
 // BackgroundTaskStartedEvent fires once per task when argus-bg writes
 // its "start" JSONL line. Cmd is the wrapped argv (after the `--`
@@ -439,7 +395,6 @@ type GitChangedEvent struct {
 type BackgroundTaskStartedEvent struct {
 	Kind       string   `json:"kind"` // "background-task-started"
 	MachineID  string   `json:"machineId"`
-	AgentID    string   `json:"agentId"`
 	WorkingDir string   `json:"workingDir"`
 	TaskID     string   `json:"taskId"`
 	Label      string   `json:"label,omitempty"`
@@ -464,7 +419,6 @@ type BackgroundTaskStartedEvent struct {
 type BackgroundTaskProgressEvent struct {
 	Kind       string   `json:"kind"` // "background-task-progress"
 	MachineID  string   `json:"machineId"`
-	AgentID    string   `json:"agentId"`
 	WorkingDir string   `json:"workingDir"`
 	TaskID     string   `json:"taskId"`
 	Label      string   `json:"label,omitempty"`
@@ -486,7 +440,6 @@ type BackgroundTaskProgressEvent struct {
 type BackgroundTaskEndedEvent struct {
 	Kind       string   `json:"kind"` // "background-task-ended"
 	MachineID  string   `json:"machineId"`
-	AgentID    string   `json:"agentId"`
 	WorkingDir string   `json:"workingDir"`
 	TaskID     string   `json:"taskId"`
 	Label      string   `json:"label,omitempty"`
@@ -500,7 +453,6 @@ type BackgroundTaskEndedEvent struct {
 type FSListResponseEvent struct {
 	Kind      string    `json:"kind"` // "fs-list-response"
 	MachineID string    `json:"machineId"`
-	AgentID   string    `json:"agentId"`
 	RequestID string    `json:"requestId"`
 	Path      string    `json:"path"`
 	Entries   []FSEntry `json:"entries,omitempty"`
@@ -529,9 +481,10 @@ const FSListRecursiveDescentBudget = 5000
 type FSChangedEvent struct {
 	Kind      string `json:"kind"` // "fs-changed"
 	MachineID string `json:"machineId"`
-	AgentID   string `json:"agentId"`
-	Path      string `json:"path"`
-	TS        int64  `json:"ts"`
+	// WorkingDir is what the server routes on — see GitChangedEvent.
+	WorkingDir string `json:"workingDir,omitempty"`
+	Path       string `json:"path"`
+	TS         int64  `json:"ts"`
 }
 
 // FSReadResponseEvent is the sidecar's reply to FSReadRequestCommand.
@@ -540,7 +493,6 @@ type FSChangedEvent struct {
 type FSReadResponseEvent struct {
 	Kind      string `json:"kind"` // "fs-read-response"
 	MachineID string `json:"machineId"`
-	AgentID   string `json:"agentId"`
 	RequestID string `json:"requestId"`
 	Path      string `json:"path"`
 	Result    string `json:"result"` // "text" | "image" | "binary" | "error"
@@ -549,30 +501,6 @@ type FSReadResponseEvent struct {
 	Base64    string `json:"base64,omitempty"`
 	Size      int64  `json:"size,omitempty"`
 	Error     string `json:"error,omitempty"`
-	TS        int64  `json:"ts"`
-}
-
-// ─────────── Sidecar acks (sidecar → server, on agent:lifecycle) ───────────
-
-type AgentSpawnedEvent struct {
-	Kind      string `json:"kind"` // "agent-spawned"
-	MachineID string `json:"machineId"`
-	AgentID   string `json:"agentId"`
-	TS        int64  `json:"ts"`
-}
-
-type AgentSpawnFailedEvent struct {
-	Kind      string `json:"kind"` // "agent-spawn-failed"
-	MachineID string `json:"machineId"`
-	AgentID   string `json:"agentId"`
-	Reason    string `json:"reason"`
-	TS        int64  `json:"ts"`
-}
-
-type AgentDestroyedEvent struct {
-	Kind      string `json:"kind"` // "agent-destroyed"
-	MachineID string `json:"machineId"`
-	AgentID   string `json:"agentId"`
 	TS        int64  `json:"ts"`
 }
 
@@ -588,7 +516,7 @@ type CloneSpec struct {
 }
 
 // AttachmentRef mirrors the shared-types AttachmentRef: one file the user
-// attached to a turn. The supervisor pulls the bytes over HTTP from the
+// attached to a turn. The runner pulls the bytes over HTTP from the
 // server, writes them under <workingDir>/.argus/uploads/, and records the
 // resulting path in LocalPath so adapters can reference it (in the prompt,
 // or via a native image flag). LocalPath is sidecar-internal and never
@@ -603,9 +531,18 @@ type AttachmentRef struct {
 }
 
 type Command struct {
-	ID          string          `json:"id"`
-	AgentID     string          `json:"agentId"`
-	SessionID   string          `json:"sessionId"`
+	ID        string `json:"id"`
+	SessionID string `json:"sessionId"`
+	// WorkingDir is the session's pinned working directory (Phase 3 of
+	// docs/plan-agent-to-runners.md); the server sends it on every
+	// execute / cancel / clone-session addressed to a runner sidecar.
+	// Adapters resolve their per-run Dir from it, falling back to the
+	// legacy construction-time workingDir when empty.
+	WorkingDir string `json:"workingDir,omitempty"`
+	// CliType self-describes the target adapter type. Informational on
+	// the sidecar side — routing already happened via the per-CLI
+	// command stream the entry arrived on.
+	CliType     string          `json:"cliType,omitempty"`
 	ExternalID  string          `json:"externalId,omitempty"`
 	Kind        string          `json:"kind"` // "execute" | "cancel" | "clone-session"
 	Prompt      string          `json:"prompt,omitempty"`
@@ -619,7 +556,6 @@ type Command struct {
 type ResultChunk struct {
 	ID        string         `json:"id"`
 	CommandID string         `json:"commandId"`
-	AgentID   string         `json:"agentId"`
 	SessionID string         `json:"sessionId"`
 	Seq       int            `json:"seq"`
 	Kind      ResultKind     `json:"kind"`
@@ -670,7 +606,6 @@ const (
 type TerminalOpen struct {
 	Kind       string `json:"kind"`
 	TerminalID string `json:"terminalId"`
-	AgentID    string `json:"agentId"`
 	Shell      string `json:"shell,omitempty"`
 	Cwd        string `json:"cwd,omitempty"`
 	Cols       int    `json:"cols"`
@@ -762,11 +697,29 @@ func BackgroundTaskStream() string { return "agent:background" }
 // git-log responses deliberately stay on lifecycle — see
 // streamKeys.notify in packages/shared-types/src/protocol.ts for the
 // byte-retention gotcha.
-func NotifyStream() string                         { return "agent:notify" }
+func NotifyStream() string { return "agent:notify" }
+
+// CommandStream / ResultStream are the LEGACY per-agent streams
+// (pre-runner sidecars). Runner-mode sidecars use RunnerCommandStream /
+// RunnerResultStream below; the helpers stay as part of the protocol.ts
+// mirror.
 func CommandStream(id string) string               { return "agent:" + id + ":cmd" }
 func ResultStream(id string) string                { return "agent:" + id + ":result" }
 func MachineControlStream(machineID string) string { return "machine:" + machineID + ":control" }
 func MachineConsumerGroup(machineID string) string { return "machine-" + machineID }
+
+// RunnerCommandStream / RunnerResultStream are the machine×CLI streams
+// runner-mode sidecars (≥0.3.x, Phase 3 of docs/plan-agent-to-runners.md)
+// consume and publish instead of the per-agent agent:{id}:cmd/:result
+// pair. One pair per installed CLI keeps the stream count O(M·C) — the
+// bounded dimensions — no matter how many projects a machine hosts.
+func RunnerCommandStream(machineID, cliType string) string {
+	return "machine:" + machineID + ":cli:" + cliType + ":cmd"
+}
+
+func RunnerResultStream(machineID, cliType string) string {
+	return "machine:" + machineID + ":cli:" + cliType + ":result"
+}
 
 // StreamMaxLen returns the per-stream MAXLEN cap (entries) used with
 // `XADD ... MAXLEN ~ N`. Mirror of `streamMaxLen` in
@@ -788,6 +741,9 @@ func StreamMaxLen(streamKey string) int64 {
 		// 1 MB while absorbing a multi-agent build burst without
 		// evicting unread git nudges.
 		return 2000
+	// The :cmd / :result suffix branches cover BOTH the legacy per-agent
+	// streams (agent:{id}:cmd/:result) and the Phase-3 runner streams
+	// (machine:{id}:cli:{type}:cmd/:result) — same caps by design.
 	case strings.HasSuffix(streamKey, ":cmd"):
 		return 200
 	case strings.HasSuffix(streamKey, ":result"):
@@ -800,11 +756,11 @@ func StreamMaxLen(streamKey string) int64 {
 }
 
 // SidecarCommandGroup is the consumer group the sidecar's single,
-// machine-wide command reader uses across every agent's per-agent
-// command stream (agent:{id}:cmd). One group per machine — not one per
-// agent — is what lets a single XREADGROUP fan in over all of a
-// machine's command streams on one Redis connection, instead of parking
-// a blocking connection per agent.
+// machine-wide command reader uses across every command stream it fans
+// in — the Phase-3 runner streams (machine:{id}:cli:{type}:cmd), and
+// historically the per-agent agent:{id}:cmd streams. One group per
+// machine — not one per stream — is what lets a single XREADGROUP fan
+// in over all of a machine's command streams on one Redis connection.
 //
 // Keyed off the (stable, cache-persisted) machineID so a daemon restart
 // rejoins the same group on each stream and cooperatively drains pending

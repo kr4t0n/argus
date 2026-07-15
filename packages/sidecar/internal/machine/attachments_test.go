@@ -82,9 +82,9 @@ func TestAppendAttachmentPreamble(t *testing.T) {
 	})
 }
 
-func newTestSupervisor() *supervisor {
-	return &supervisor{
-		spec:       AgentRecord{AgentID: "agent-test"},
+func newTestRunner() *runner {
+	return &runner{
+		cliType:    "claude-code",
 		log:        log.New(io.Discard, "", 0),
 		httpClient: &http.Client{},
 	}
@@ -103,7 +103,7 @@ func TestPullAttachmentWritesFile(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := newTestSupervisor()
+	s := newTestRunner()
 	s.serverURL = srv.URL
 	dir := t.TempDir()
 	ref := &protocol.AttachmentRef{ID: "att-1", Filename: "fox.txt", Mime: "text/plain", Size: int64(len(body)), Token: "tok-xyz"}
@@ -130,7 +130,7 @@ func TestPullAttachmentRejectsOversizeBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := newTestSupervisor()
+	s := newTestRunner()
 	s.serverURL = srv.URL
 	dir := t.TempDir()
 	// Declare a tiny size; the server sends far more → guard must trip.
@@ -151,7 +151,7 @@ func TestPullAttachmentServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := newTestSupervisor()
+	s := newTestRunner()
 	s.serverURL = srv.URL
 	ref := &protocol.AttachmentRef{ID: "att-3", Filename: "x", Size: 1, Token: "bad"}
 

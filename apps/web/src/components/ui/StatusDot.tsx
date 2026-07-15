@@ -1,7 +1,8 @@
-import type { AgentDTO, SessionDTO } from '@argus/shared-types';
 import { cn } from '../../lib/utils';
 
-type Status = AgentDTO['status'] | SessionDTO['status'];
+// Union of every status the dot renders: machine ('online'/'offline'),
+// the legacy busy/error tints, and session ('active'/'idle'/'failed').
+type Status = 'online' | 'offline' | 'busy' | 'error' | 'active' | 'idle' | 'failed';
 
 const map: Record<Status, string> = {
   online: 'status-online',

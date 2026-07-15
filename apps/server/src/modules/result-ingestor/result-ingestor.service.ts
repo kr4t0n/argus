@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import type {
   AgentType,
+  AvailableAdapter,
   ResultChunk,
   ResultChunkDTO,
   SessionCloneFailedEvent,
@@ -21,10 +22,11 @@ const REFRESH_AGENT_STREAMS_MS = 5_000;
 type ResultEnvelope = ResultChunk | SessionExternalIdEvent | SessionCloneFailedEvent;
 
 /**
- * Consumes every agent's `agent:{id}:result` stream, persists each chunk,
- * and relays it to the WS room `session:{sessionId}` for the live UI.
+ * Consumes every runner result stream (`machine:{id}:cli:{type}:result`,
+ * one per installed CLI on each machine), persists each chunk, and relays
+ * it to the WS room `session:{sessionId}` for the live UI.
  *
- * We maintain a single XREADGROUP call across all agent streams. The list of
+ * We maintain a single XREADGROUP call across all result streams. The list of
  * streams is refreshed every few seconds so newly registered sidecars are
  * picked up automatically.
  */
@@ -58,8 +60,23 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async refreshStreams() {
-    const agents = await this.prisma.agent.findMany({ select: { id: true } });
-    const next = agents.map((a) => streamKeys.result(a.id));
+    // Since Phase 4 every machine is a runner: results arrive per
+    // machine × installed CLI (`machine:{id}:cli:{type}:result`). The
+    // stream set is a function of the machine roster alone — no more
+    // per-agent streams, no Agent-table poll. Ingest is shape-agnostic
+    // (chunks carry commandId/sessionId).
+    const machines = await this.prisma.machine.findMany({
+      where: { deletedAt: null },
+      select: { id: true, availableAdapters: true },
+    });
+    const next: string[] = [];
+    for (const m of machines) {
+      const adapters = (m.availableAdapters ?? []) as unknown as AvailableAdapter[];
+      if (!Array.isArray(adapters)) continue;
+      for (const ad of adapters) {
+        if (ad?.type) next.push(streamKeys.runnerResult(m.id, ad.type));
+      }
+    }
     for (const s of next) {
       await this.redis.ensureGroup(s, consumerGroups.server);
     }
@@ -85,7 +102,7 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
           ...this.streams,
           ...this.streams.map(() => '>'),
         ] as unknown as [string, ...string[]];
-        const res = (await (this.redis.read as any).xreadgroup(...args)) as Array<
+        const res = (await (this.redis.readResults as any).xreadgroup(...args)) as Array<
           [string, Array<[string, string[]]>]
         > | null;
         if (!res) continue;
@@ -144,10 +161,13 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
     if (!meta) return undefined;
     const cmd = await this.prisma.command.findUnique({
       where: { id: chunk.commandId },
-      select: { agent: { select: { type: true } } },
+      select: { session: { select: { cliType: true } } },
     });
     if (!cmd) return undefined;
-    const parsed = parseUsage(cmd.agent.type as AgentType, meta);
+    // Session.cliType is the pinned CLI (Phase 1). Pre-backfill rows
+    // whose session predates cliType simply yield no usage type — the
+    // Agent-derived fallback retired with the agentId columns (Phase 5).
+    const parsed = parseUsage(cmd.session.cliType as AgentType, meta);
     if (!parsed) return undefined;
     return parsed as unknown as Prisma.InputJsonValue;
   }

@@ -45,18 +45,6 @@ public enum SessionStatus: String, Codable, Equatable, Sendable {
     }
 }
 
-public enum AgentStatus: String, Codable, Equatable, Sendable {
-    case online
-    case offline
-    case busy
-    case error
-    case unknown
-
-    public init(from decoder: Decoder) throws {
-        self = decodeTolerant(decoder, fallback: .unknown)
-    }
-}
-
 public enum MachineStatus: String, Codable, Equatable, Sendable {
     case online
     case offline
