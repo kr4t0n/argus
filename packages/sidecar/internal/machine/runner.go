@@ -294,9 +294,8 @@ func (r *runner) handleCommand(parent context.Context, cmd protocol.Command) {
 	r.cancels.Store(cmd.ID, cancel)
 	defer r.cancels.Delete(cmd.ID)
 
-	// ResultChunk.AgentID is attribution-only on runner streams (may be
-	// empty) — routing already happened via the machine×CLI stream, and
-	// chunks carry commandId/sessionId for ingestion.
+	// Routing already happened via the machine×CLI stream, and chunks
+	// carry commandId/sessionId for ingestion.
 	resultStream := protocol.RunnerResultStream(r.machine, r.cliType)
 	seq := 0
 	publishExternalIDOnce := false
@@ -314,7 +313,6 @@ func (r *runner) handleCommand(parent context.Context, cmd protocol.Command) {
 		_ = r.bus.Publish(parent, resultStream, protocol.ResultChunk{
 			ID:        uuid.NewString(),
 			CommandID: cmd.ID,
-			AgentID:   cmd.AgentID,
 			SessionID: cmd.SessionID,
 			Seq:       seq,
 			Kind:      protocol.KindError,
@@ -340,7 +338,6 @@ func (r *runner) handleCommand(parent context.Context, cmd protocol.Command) {
 		_ = r.bus.Publish(parent, resultStream, protocol.ResultChunk{
 			ID:        uuid.NewString(),
 			CommandID: cmd.ID,
-			AgentID:   cmd.AgentID,
 			SessionID: cmd.SessionID,
 			Seq:       seq,
 			Kind:      c.Kind,
@@ -360,14 +357,11 @@ func (r *runner) handleCommand(parent context.Context, cmd protocol.Command) {
 // so the exec gets its own deadline well under the server-side request
 // timeout — a wedged CLI must surface as a catalog error, not a server
 // timeout the dashboard can't tell apart from an offline machine.
-//
-// AgentID echoes whatever the request carried (attribution only; the
-// server's pending map is keyed by RequestID).
+// The server's pending map is keyed by RequestID.
 func (r *runner) HandleListModels(ctx context.Context, req protocol.ListModelsRequestCommand) {
 	resp := protocol.ModelCatalogResponseEvent{
 		Kind:      "model-catalog-response",
 		MachineID: r.machine,
-		AgentID:   req.AgentID,
 		CliType:   r.cliType,
 		RequestID: req.RequestID,
 		TS:        time.Now().UnixMilli(),

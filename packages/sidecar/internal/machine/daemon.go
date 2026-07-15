@@ -166,13 +166,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.spawnRunner(ctx, a.Type)
 	}
 
-	// Seed the workdir allowlist from the cache: the persisted Phase-3
-	// allowlist, unioned with the workdirs of any pre-runner cached
-	// agent records (one-way migration — Agents is never written again).
-	// The server re-sends sync-projects on every machine-register, so
-	// any drift reconciles within one round trip.
+	// Seed the workdir allowlist from the persisted sync-projects
+	// snapshot. The server re-sends sync-projects on every
+	// machine-register, so any drift reconciles within one round trip.
 	d.watchers = newWatchRegistry(d.cache.MachineID, d.bus, d.log)
-	boot := append(append([]string(nil), d.cache.Workdirs...), agentWorkdirs(d.cache.Agents)...)
+	boot := append([]string(nil), d.cache.Workdirs...)
 	d.setWorkdirs(ctx, boot)
 
 	d.startTerminalLink(ctx)
@@ -471,18 +469,6 @@ func normalizeWorkdirs(in []string) []string {
 	return out
 }
 
-// agentWorkdirs extracts the workingDirs from a pre-runner cached agent
-// set (the boot-time migration source; see Cache.Agents).
-func agentWorkdirs(agents []AgentRecord) []string {
-	out := make([]string, 0, len(agents))
-	for _, a := range agents {
-		if a.WorkingDir != "" {
-			out = append(out, a.WorkingDir)
-		}
-	}
-	return out
-}
-
 // workdirAllowed reports whether wd is on the sync-projects allowlist.
 // The allowlist is the security boundary for workdir-addressed fs/git
 // RPCs (plan §4.3): the daemon must never serve a path the server
@@ -526,7 +512,6 @@ func (d *Daemon) handleFSList(ctx context.Context, req protocol.FSListRequestCom
 		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSListResponseEvent{
 			Kind:      "fs-list-response",
 			MachineID: d.cache.MachineID,
-			AgentID:   req.AgentID,
 			RequestID: req.RequestID,
 			Path:      req.Path,
 			Error:     legacyAgentAddressingError,
@@ -538,7 +523,6 @@ func (d *Daemon) handleFSList(ctx context.Context, req protocol.FSListRequestCom
 		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSListResponseEvent{
 			Kind:      "fs-list-response",
 			MachineID: d.cache.MachineID,
-			AgentID:   req.AgentID,
 			RequestID: req.RequestID,
 			Path:      req.Path,
 			Error:     "workingDir is not a known project on this machine",
@@ -549,7 +533,7 @@ func (d *Daemon) handleFSList(ctx context.Context, req protocol.FSListRequestCom
 	go func() {
 		d.fsSlots <- struct{}{}
 		defer func() { <-d.fsSlots }()
-		serveFSList(ctx, d.bus, d.log, d.cache.MachineID, req.AgentID, req.WorkingDir, req)
+		serveFSList(ctx, d.bus, d.log, d.cache.MachineID, req.WorkingDir, req)
 	}()
 }
 
@@ -561,7 +545,6 @@ func (d *Daemon) handleFSRead(ctx context.Context, req protocol.FSReadRequestCom
 		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSReadResponseEvent{
 			Kind:      "fs-read-response",
 			MachineID: d.cache.MachineID,
-			AgentID:   req.AgentID,
 			RequestID: req.RequestID,
 			Path:      req.Path,
 			Result:    "error",
@@ -574,7 +557,6 @@ func (d *Daemon) handleFSRead(ctx context.Context, req protocol.FSReadRequestCom
 		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.FSReadResponseEvent{
 			Kind:      "fs-read-response",
 			MachineID: d.cache.MachineID,
-			AgentID:   req.AgentID,
 			RequestID: req.RequestID,
 			Path:      req.Path,
 			Result:    "error",
@@ -586,7 +568,7 @@ func (d *Daemon) handleFSRead(ctx context.Context, req protocol.FSReadRequestCom
 	go func() {
 		d.fsSlots <- struct{}{}
 		defer func() { <-d.fsSlots }()
-		serveFSRead(ctx, d.bus, d.log, d.cache.MachineID, req.AgentID, req.WorkingDir, req)
+		serveFSRead(ctx, d.bus, d.log, d.cache.MachineID, req.WorkingDir, req)
 	}()
 }
 
@@ -600,7 +582,6 @@ func (d *Daemon) handleGitLog(ctx context.Context, req protocol.GitLogRequestCom
 		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.GitLogResponseEvent{
 			Kind:      "git-log-response",
 			MachineID: d.cache.MachineID,
-			AgentID:   req.AgentID,
 			RequestID: req.RequestID,
 			Error:     legacyAgentAddressingError,
 			TS:        time.Now().UnixMilli(),
@@ -611,7 +592,6 @@ func (d *Daemon) handleGitLog(ctx context.Context, req protocol.GitLogRequestCom
 		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.GitLogResponseEvent{
 			Kind:      "git-log-response",
 			MachineID: d.cache.MachineID,
-			AgentID:   req.AgentID,
 			RequestID: req.RequestID,
 			Error:     "workingDir is not a known project on this machine",
 			TS:        time.Now().UnixMilli(),
@@ -621,14 +601,14 @@ func (d *Daemon) handleGitLog(ctx context.Context, req protocol.GitLogRequestCom
 	go func() {
 		d.fsSlots <- struct{}{}
 		defer func() { <-d.fsSlots }()
-		serveGitLog(ctx, d.bus, d.log, d.cache.MachineID, req.AgentID, req.WorkingDir, req)
+		serveGitLog(ctx, d.bus, d.log, d.cache.MachineID, req.WorkingDir, req)
 	}()
 }
 
 // handleListModels routes a list-models request to the runner for the
 // requested CLI type — the catalog is a property of the installed
 // binary. Unknown or missing cliType gets a synthetic error response
-// (echoing AgentID / RequestID) so the server-side pending request
+// (echoing RequestID) so the server-side pending request
 // resolves instead of timing out. Gated by cliSlots (not fsSlots) so
 // catalog probes and tree walks can't queue behind each other.
 func (d *Daemon) handleListModels(ctx context.Context, req protocol.ListModelsRequestCommand) {
@@ -643,7 +623,6 @@ func (d *Daemon) handleListModels(ctx context.Context, req protocol.ListModelsRe
 		_ = d.bus.Publish(ctx, protocol.LifecycleStream(), protocol.ModelCatalogResponseEvent{
 			Kind:      "model-catalog-response",
 			MachineID: d.cache.MachineID,
-			AgentID:   req.AgentID,
 			CliType:   req.CliType,
 			RequestID: req.RequestID,
 			Error:     reason,

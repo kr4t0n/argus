@@ -21,7 +21,8 @@ import (
 // CacheSchemaVersion is bumped whenever the on-disk cache shape changes.
 // Older versions are migrated forward in Load(); incompatible bumps
 // trigger an outright rewrite (the sidecar can always re-derive
-// machineId/availableAdapters; only the agent set is operator-defined).
+// machineId/availableAdapters). Removing a field stays at the same
+// version — old caches with the dropped key just decode without it.
 const CacheSchemaVersion = 1
 
 // Cache is the on-disk JSON the sidecar stores at ~/.config/argus/sidecar.json.
@@ -37,11 +38,6 @@ type Cache struct {
 	Name          string       `json:"name"`
 	Bus           string       `json:"bus"`
 	Server        ServerConfig `json:"server"`
-	// Agents is the pre-runner (< 0.3.x) agent set. Read-only migration
-	// source: boot seeds the workdir allowlist from these records'
-	// workingDirs, but the field is never written again — sync-projects
-	// owns the allowlist now.
-	Agents []AgentRecord `json:"agents"`
 	// Workdirs is the persisted sync-projects allowlist (Phase 3): the
 	// project directories this machine serves fs/git RPCs and watchers
 	// for. Kept on disk so the fs jail and watchers come up on reboot
@@ -54,18 +50,6 @@ type Cache struct {
 type ServerConfig struct {
 	URL   string `json:"url"`
 	Token string `json:"token,omitempty"`
-}
-
-// AgentRecord is the cached canonical form of a server-managed agent.
-// Mirrors protocol.AgentSpec — duplicated rather than aliased so we
-// can evolve the on-disk shape independently of the wire shape.
-type AgentRecord struct {
-	AgentID          string         `json:"agentId"`
-	Name             string         `json:"name"`
-	Type             string         `json:"type"`
-	WorkingDir       string         `json:"workingDir,omitempty"`
-	SupportsTerminal bool           `json:"supportsTerminal"`
-	Adapter          map[string]any `json:"adapter,omitempty"`
 }
 
 // DefaultPath returns the canonical cache location, honoring

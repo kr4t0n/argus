@@ -338,15 +338,12 @@ func runInit(args []string) {
 		Name:      *name,
 		Bus:       *bus,
 		Server:    machine.ServerConfig{URL: *server, Token: *token},
-		Agents:    nil,
 	}
 	if existing != nil && *force {
 		// Preserve the server-managed state across re-init: the operator
 		// probably wants a fresh server URL or rotated bus credentials,
-		// not to nuke the workdir allowlist (or the legacy agent set an
-		// un-upgraded cache still carries) and risk an out-of-sync
+		// not to nuke the workdir allowlist and risk an out-of-sync
 		// sidecar↔server view until the next sync.
-		cache.Agents = existing.Agents
 		cache.Workdirs = existing.Workdirs
 	}
 

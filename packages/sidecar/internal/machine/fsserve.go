@@ -15,9 +15,7 @@ import (
 // it against the machine's sync-projects allowlist, so a buggy or
 // compromised server can't list arbitrary paths (see plan §4.3).
 //
-// `agentID` is attribution only: responses echo whatever id the
-// request carried (possibly empty for project-addressed requests) —
-// the server's pending map is keyed by RequestID alone.
+// The server's pending map is keyed by RequestID alone.
 
 func toProtocolEntries(entries []FSEntry) []protocol.FSEntry {
 	out := make([]protocol.FSEntry, len(entries))
@@ -37,13 +35,12 @@ func serveFSList(
 	ctx context.Context,
 	b *bus.Bus,
 	logger *log.Logger,
-	machineID, agentID, workingDir string,
+	machineID, workingDir string,
 	req protocol.FSListRequestCommand,
 ) {
 	resp := protocol.FSListResponseEvent{
 		Kind:      "fs-list-response",
 		MachineID: machineID,
-		AgentID:   agentID,
 		RequestID: req.RequestID,
 		Path:      req.Path,
 		TS:        time.Now().UnixMilli(),
@@ -97,7 +94,7 @@ func serveFSRead(
 	ctx context.Context,
 	b *bus.Bus,
 	logger *log.Logger,
-	machineID, agentID, workingDir string,
+	machineID, workingDir string,
 	req protocol.FSReadRequestCommand,
 ) {
 	res, err := ReadFile(ReadFileRequest{
@@ -108,7 +105,6 @@ func serveFSRead(
 	resp := protocol.FSReadResponseEvent{
 		Kind:      "fs-read-response",
 		MachineID: machineID,
-		AgentID:   agentID,
 		RequestID: req.RequestID,
 		Path:      req.Path,
 		TS:        time.Now().UnixMilli(),
@@ -133,13 +129,12 @@ func serveGitLog(
 	ctx context.Context,
 	b *bus.Bus,
 	logger *log.Logger,
-	machineID, agentID, workingDir string,
+	machineID, workingDir string,
 	req protocol.GitLogRequestCommand,
 ) {
 	resp := protocol.GitLogResponseEvent{
 		Kind:      "git-log-response",
 		MachineID: machineID,
-		AgentID:   agentID,
 		RequestID: req.RequestID,
 		TS:        time.Now().UnixMilli(),
 	}

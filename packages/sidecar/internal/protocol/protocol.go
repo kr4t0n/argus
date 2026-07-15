@@ -4,15 +4,6 @@ package protocol
 
 import "strings"
 
-type AgentStatus string
-
-const (
-	StatusOnline  AgentStatus = "online"
-	StatusOffline AgentStatus = "offline"
-	StatusBusy    AgentStatus = "busy"
-	StatusError   AgentStatus = "error"
-)
-
 type ResultKind string
 
 const (
@@ -25,40 +16,11 @@ const (
 	KindError    ResultKind = "error"
 )
 
-// RegisterEvent is the LEGACY per-agent registration (pre-runner
-// sidecars < 0.3.x). Runner-mode sidecars never emit it — machine
-// liveness is the only presence signal; the shape is kept because this
-// package mirrors protocol.ts, where the server retains legacy-sidecar
-// support. Same applies to HeartbeatEvent / DeregisterEvent below.
-type RegisterEvent struct {
-	Kind             string `json:"kind"` // "register"
-	ID               string `json:"id"`
-	MachineID        string `json:"machineId"`
-	Type             string `json:"type"`
-	SupportsTerminal bool   `json:"supportsTerminal"`
-	Version          string `json:"version"`
-	WorkingDir       string `json:"workingDir,omitempty"`
-	TS               int64  `json:"ts"`
-}
-
-type HeartbeatEvent struct {
-	Kind   string      `json:"kind"` // "heartbeat"
-	ID     string      `json:"id"`
-	Status AgentStatus `json:"status"`
-	TS     int64       `json:"ts"`
-}
-
-type DeregisterEvent struct {
-	Kind string `json:"kind"` // "deregister"
-	ID   string `json:"id"`
-	TS   int64  `json:"ts"`
-}
-
 // ─────────── Machine lifecycle ───────────
 //
-// The sidecar daemon emits these on the shared agent:lifecycle stream
-// (the historical name predates the runner refactor), discriminated by
-// Kind.
+// The sidecar daemon emits these on the lifecycle stream, discriminated
+// by Kind. Runner-mode sidecars (≥ 0.3) have no per-agent supervisors —
+// the machine is the only lifecycle actor.
 
 // AvailableAdapter is one CLI adapter the sidecar found on PATH at boot.
 type AvailableAdapter struct {
@@ -117,37 +79,6 @@ type AgentQuota struct {
 }
 
 // ─────────── Machine control commands (server → sidecar) ───────────
-
-// AgentSpec is the shape the LEGACY create/sync-agents commands embed.
-// Runner-mode sidecars warn-and-ignore those commands (a Phase-3 server
-// sends SyncProjectsCommand instead); the types stay because this
-// package mirrors protocol.ts, where legacy-sidecar support lives on.
-type AgentSpec struct {
-	AgentID          string         `json:"agentId"`
-	Name             string         `json:"name"`
-	Type             string         `json:"type"`
-	WorkingDir       string         `json:"workingDir,omitempty"`
-	SupportsTerminal bool           `json:"supportsTerminal"`
-	Adapter          map[string]any `json:"adapter,omitempty"`
-}
-
-type CreateAgentCommand struct {
-	Kind  string    `json:"kind"` // "create-agent"
-	Agent AgentSpec `json:"agent"`
-	TS    int64     `json:"ts"`
-}
-
-type DestroyAgentCommand struct {
-	Kind    string `json:"kind"` // "destroy-agent"
-	AgentID string `json:"agentId"`
-	TS      int64  `json:"ts"`
-}
-
-type SyncAgentsCommand struct {
-	Kind   string      `json:"kind"` // "sync-agents"
-	Agents []AgentSpec `json:"agents"`
-	TS     int64       `json:"ts"`
-}
 
 // SyncProjectsCommand replaces create/destroy/sync-agents for runner-mode
 // sidecars (Phase 3 of docs/plan-agent-to-runners.md): the full workdir
@@ -263,12 +194,8 @@ type GitStatus struct {
 type FSListRequestCommand struct {
 	Kind      string `json:"kind"` // "fs-list"
 	RequestID string `json:"requestId"`
-	// AgentID addressing is legacy (pre-Phase-2 of the agent→runner
-	// refactor); echoed for attribution. WorkingDir is what the daemon
-	// serves from, after validating it against the sync-projects
-	// allowlist; runner-mode sidecars answer agentId-only requests
-	// with a synthetic "upgrade the server" error.
-	AgentID    string `json:"agentId,omitempty"`
+	// WorkingDir is what the daemon serves from, after validating it
+	// against the sync-projects allowlist.
 	WorkingDir string `json:"workingDir,omitempty"`
 	Path       string `json:"path"`
 	ShowAll    bool   `json:"showAll"`
@@ -289,11 +216,8 @@ type FSListRequestCommand struct {
 // jail; over the cap is returned as Result="error" rather than
 // truncated. See FSReadResponseEvent for the wire-flat reply shape.
 type FSReadRequestCommand struct {
-	Kind      string `json:"kind"` // "fs-read"
-	RequestID string `json:"requestId"`
-	// See FSListRequestCommand: WorkingDir addressing wins over the
-	// legacy AgentID when both are present.
-	AgentID    string `json:"agentId,omitempty"`
+	Kind       string `json:"kind"` // "fs-read"
+	RequestID  string `json:"requestId"`
 	WorkingDir string `json:"workingDir,omitempty"`
 	Path       string `json:"path"`
 	TS         int64  `json:"ts"`
@@ -308,11 +232,8 @@ const FSReadMaxBytes = 1_048_576
 // control stream, sidecar replies on the lifecycle stream with a
 // matching GitLogResponseEvent.
 type GitLogRequestCommand struct {
-	Kind      string `json:"kind"` // "git-log"
-	RequestID string `json:"requestId"`
-	// See FSListRequestCommand: WorkingDir addressing wins over the
-	// legacy AgentID when both are present.
-	AgentID    string `json:"agentId,omitempty"`
+	Kind       string `json:"kind"` // "git-log"
+	RequestID  string `json:"requestId"`
 	WorkingDir string `json:"workingDir,omitempty"`
 	// Limit caps how many commits to return (1-based). 0 or negative
 	// means "use the sidecar's default" (50). The server caps at 200
@@ -346,7 +267,6 @@ type GitCommit struct {
 type GitLogResponseEvent struct {
 	Kind      string      `json:"kind"` // "git-log-response"
 	MachineID string      `json:"machineId"`
-	AgentID   string      `json:"agentId"`
 	RequestID string      `json:"requestId"`
 	Commits   []GitCommit `json:"commits,omitempty"`
 	Git       *GitStatus  `json:"git,omitempty"`
@@ -410,12 +330,9 @@ type ModelCatalogEntry struct {
 type ListModelsRequestCommand struct {
 	Kind      string `json:"kind"` // "list-models"
 	RequestID string `json:"requestId"`
-	// AgentID addressing is legacy (Phase 2 of the agent→runner
-	// refactor moved catalogs to machine×CLI); echoed for attribution.
-	// The daemon routes by CliType to the matching runner — the
-	// catalog is a property of the installed binary, not the workdir.
+	// The daemon routes by CliType to the matching runner — the catalog
+	// is a property of the installed binary, not the workdir.
 	// Missing/unknown CliType gets a synthetic error response.
-	AgentID string `json:"agentId,omitempty"`
 	CliType string `json:"cliType,omitempty"`
 	TS      int64  `json:"ts"`
 }
@@ -432,7 +349,6 @@ type ListModelsRequestCommand struct {
 type ModelCatalogResponseEvent struct {
 	Kind      string `json:"kind"` // "model-catalog-response"
 	MachineID string `json:"machineId"`
-	AgentID   string `json:"agentId"`
 	// CliType self-describes the catalog's adapter type (Phase 2:
 	// catalogs are stored machine×CLI server-side); old servers ignore
 	// it and old sidecars omit it (the server then resolves the type
@@ -537,7 +453,6 @@ type BackgroundTaskEndedEvent struct {
 type FSListResponseEvent struct {
 	Kind      string    `json:"kind"` // "fs-list-response"
 	MachineID string    `json:"machineId"`
-	AgentID   string    `json:"agentId"`
 	RequestID string    `json:"requestId"`
 	Path      string    `json:"path"`
 	Entries   []FSEntry `json:"entries,omitempty"`
@@ -578,7 +493,6 @@ type FSChangedEvent struct {
 type FSReadResponseEvent struct {
 	Kind      string `json:"kind"` // "fs-read-response"
 	MachineID string `json:"machineId"`
-	AgentID   string `json:"agentId"`
 	RequestID string `json:"requestId"`
 	Path      string `json:"path"`
 	Result    string `json:"result"` // "text" | "image" | "binary" | "error"
@@ -587,30 +501,6 @@ type FSReadResponseEvent struct {
 	Base64    string `json:"base64,omitempty"`
 	Size      int64  `json:"size,omitempty"`
 	Error     string `json:"error,omitempty"`
-	TS        int64  `json:"ts"`
-}
-
-// ─────────── Sidecar acks (sidecar → server, on agent:lifecycle) ───────────
-
-type AgentSpawnedEvent struct {
-	Kind      string `json:"kind"` // "agent-spawned"
-	MachineID string `json:"machineId"`
-	AgentID   string `json:"agentId"`
-	TS        int64  `json:"ts"`
-}
-
-type AgentSpawnFailedEvent struct {
-	Kind      string `json:"kind"` // "agent-spawn-failed"
-	MachineID string `json:"machineId"`
-	AgentID   string `json:"agentId"`
-	Reason    string `json:"reason"`
-	TS        int64  `json:"ts"`
-}
-
-type AgentDestroyedEvent struct {
-	Kind      string `json:"kind"` // "agent-destroyed"
-	MachineID string `json:"machineId"`
-	AgentID   string `json:"agentId"`
 	TS        int64  `json:"ts"`
 }
 
@@ -642,7 +532,6 @@ type AttachmentRef struct {
 
 type Command struct {
 	ID        string `json:"id"`
-	AgentID   string `json:"agentId"`
 	SessionID string `json:"sessionId"`
 	// WorkingDir is the session's pinned working directory (Phase 3 of
 	// docs/plan-agent-to-runners.md); the server sends it on every
@@ -667,7 +556,6 @@ type Command struct {
 type ResultChunk struct {
 	ID        string         `json:"id"`
 	CommandID string         `json:"commandId"`
-	AgentID   string         `json:"agentId"`
 	SessionID string         `json:"sessionId"`
 	Seq       int            `json:"seq"`
 	Kind      ResultKind     `json:"kind"`
@@ -718,7 +606,6 @@ const (
 type TerminalOpen struct {
 	Kind       string `json:"kind"`
 	TerminalID string `json:"terminalId"`
-	AgentID    string `json:"agentId"`
 	Shell      string `json:"shell,omitempty"`
 	Cwd        string `json:"cwd,omitempty"`
 	Cols       int    `json:"cols"`
