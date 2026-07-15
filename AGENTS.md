@@ -601,6 +601,17 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `resolveProjectRef(session, projects)` which turns a session's
   `projectId` into the `(machineId, workingDir)` pair. Pure functions;
   callers pre-filter for whatever archived-visibility posture they want.
+  `groupProjects()` takes the `machineStore.machines` map and sorts the
+  rows via `sortProjectGroups()` — a verbatim port of the iOS client's
+  `projectGroups(fleet:)` order: online machines first, then machine name
+  (case-insensitive), then the per-machine `no project` bucket sinks,
+  then project label (case-insensitive), then group key as tiebreaker.
+  (The agent→runner refactor had flattened the tree to raw `projectStore`
+  arrival order, dropping the machine/project grouping; iOS kept it, so it
+  was ported back here.) `localOrder` now only selects *which* rows appear
+  (and their archived-visibility filter); the machine→project sort owns
+  display order. Sessions within a project stay newest-first — that sort
+  lives in the callers, not here.
 - `components/SidebarRail.tsx` — collapsed-mode rail (48px wide).
   Renders one tile per project using the same `groupProjects()`
   derivation as the main sidebar, with `ProjectIconGlyph` for the

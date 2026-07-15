@@ -59,7 +59,7 @@ export function Sidebar() {
   const visibleLocalOrder = showArchivedProjects
     ? localProjectOrder
     : localProjectOrder.filter((k) => !localProjects[k]?.archivedAt);
-  const projects = groupProjects(localProjects, visibleLocalOrder);
+  const projects = groupProjects(localProjects, visibleLocalOrder, machines);
   // Projects (placeholders) are the unit of navigation in the flat tree,
   // so the toggle counts archived placeholders.
   const archivedProjectCount = Object.values(localProjects).filter(

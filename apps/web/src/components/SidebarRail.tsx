@@ -55,7 +55,7 @@ export function SidebarRail() {
   const visibleLocalOrder = localProjectOrder.filter(
     (k) => !localProjects[k]?.archivedAt,
   );
-  const projects = groupProjects(localProjects, visibleLocalOrder).filter(
+  const projects = groupProjects(localProjects, visibleLocalOrder, machines).filter(
     (p) => !!p.fullPath,
   );
 

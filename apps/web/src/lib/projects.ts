@@ -1,4 +1,4 @@
-import type { SessionDTO } from '@argus/shared-types';
+import type { MachineDTO, SessionDTO } from '@argus/shared-types';
 import { useProjectStore, type LocalProject } from '../stores/projectStore';
 
 /**
@@ -72,10 +72,16 @@ export interface ProjectGroup {
  * `Sidebar` and the collapsed `SidebarRail` consume this so the two views
  * agree on what counts as a project. Callers pre-filter `localOrder` for
  * the archived-visibility posture they want.
+ *
+ * `localOrder` now only selects *which* projects appear (and the
+ * archived-visibility filter callers apply to it); the display order is
+ * the machine→project sort of `sortProjectGroups`, so both views group
+ * projects under their host the way the iOS client does.
  */
 export function groupProjects(
   localProjects: Record<string, LocalProject>,
   localOrder: string[],
+  machines: Record<string, MachineDTO>,
 ): ProjectGroup[] {
   const projects: ProjectGroup[] = [];
 
@@ -92,5 +98,46 @@ export function groupProjects(
     });
   }
 
-  return projects;
+  return sortProjectGroups(projects, machines);
+}
+
+/**
+ * Order the sidebar's project rows by their host, ported verbatim from
+ * the iOS client's `projectGroups(fleet:)` sort — the machine/project
+ * ordering the web lost in the agent→runner refactor (the old tree
+ * piggybacked on the retired agent arrival order). Precedence, top to
+ * bottom:
+ *   1. projects on ONLINE machines before those on offline ones,
+ *   2. then machine name (case-insensitive),
+ *   3. the per-machine "no project" bucket (`fullPath == null`) sinks
+ *      below that machine's named projects,
+ *   4. then project label (case-insensitive),
+ *   5. group key as the deterministic tiebreaker.
+ * Sessions *within* a project stay newest-first — that ordering is the
+ * callers' responsibility and is untouched here. Missing machine rows
+ * (pre-hydration) sort as offline with an empty name, matching iOS.
+ */
+export function sortProjectGroups(
+  groups: ProjectGroup[],
+  machines: Record<string, MachineDTO>,
+): ProjectGroup[] {
+  const onlineRank = (machineId: string) =>
+    machines[machineId]?.status === 'online' ? 0 : 1;
+  const machineName = (machineId: string) => machines[machineId]?.name ?? '';
+  // Case-insensitive but accent-sensitive, matching iOS's
+  // `localizedCaseInsensitiveCompare`.
+  const ci = (a: string, b: string) =>
+    a.localeCompare(b, undefined, { sensitivity: 'accent' });
+
+  return [...groups].sort((a, b) => {
+    const online = onlineRank(a.machineId) - onlineRank(b.machineId);
+    if (online !== 0) return online;
+    const byMachine = ci(machineName(a.machineId), machineName(b.machineId));
+    if (byMachine !== 0) return byMachine;
+    const noProject = (a.fullPath == null ? 1 : 0) - (b.fullPath == null ? 1 : 0);
+    if (noProject !== 0) return noProject;
+    const byLabel = ci(a.label, b.label);
+    if (byLabel !== 0) return byLabel;
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+  });
 }
