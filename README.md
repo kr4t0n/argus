@@ -1,4 +1,8 @@
-# Argus
+<p align="center">
+  <img src="assets/argus-icon.png" alt="Argus" width="128" height="128" />
+</p>
+
+<h1 align="center">Argus</h1>
 
 A multi-machine **agent management dashboard**. Argus lets you talk to one or
 more CLI agents — Claude Code, Codex, Cursor CLI, or your own — running on any
