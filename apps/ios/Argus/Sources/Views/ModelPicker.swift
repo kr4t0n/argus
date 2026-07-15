@@ -200,22 +200,19 @@ struct ModelPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let session: SessionDTO
-    /// Legacy fallback identity when the session predates the Phase-1
-    /// projectId/cliType backfill.
-    let agent: AgentDTO?
 
     @State private var selection = ModelSelection()
     @State private var seeded = false
     @State private var saving = false
     @State private var saveError: String?
 
-    /// Machine through the pinned project (agent row fallback).
+    /// Machine through the session's pinned project.
     private var machineId: String? {
-        app.fleet.projectRef(for: session)?.machineId ?? agent?.machineId
+        app.fleet.projectRef(for: session)?.machineId
     }
 
     private var cliType: AgentType {
-        session.cliType ?? agent?.type ?? ""
+        session.cliType ?? ""
     }
 
     var body: some View {

@@ -22,10 +22,8 @@ final class TerminalController {
     private(set) var state: State = .idle
 
     /// The PTY's project (machine + cwd). Nil only for workdir-less
-    /// sessions, which fall back to the legacy agent route.
+    /// sessions, which have no terminal surface.
     let project: ProjectRef?
-    /// Legacy fallback identity; nil once agent rows retire.
-    let agent: AgentDTO?
     /// One UIKit view for the controller's lifetime — keeping it (not
     /// recreating per SwiftUI update) is what preserves scrollback
     /// across tab switches.
@@ -37,9 +35,8 @@ final class TerminalController {
     private var lastSeq = -1
     private let delegateBridge = TerminalDelegateBridge()
 
-    init(project: ProjectRef?, agent: AgentDTO?, client: ArgusClient, stream: StreamClient) {
+    init(project: ProjectRef?, client: ArgusClient, stream: StreamClient) {
         self.project = project
-        self.agent = agent
         self.client = client
         self.stream = stream
         self.terminalView = SwiftTerm.TerminalView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
@@ -180,8 +177,9 @@ private struct TerminalHostView: UIViewRepresentable {
 }
 
 /// The inspector's Terminal tab. The PTY grants shell access as the
-/// sidecar user — it only exists for agents created with the terminal
-/// opt-in, and the server scopes each terminal to the opening user.
+/// sidecar user — it only exists for projects whose runner has the
+/// terminal opt-in, and the server scopes each terminal to the opening
+/// user.
 struct TerminalPanel: View {
     let controller: TerminalController
 

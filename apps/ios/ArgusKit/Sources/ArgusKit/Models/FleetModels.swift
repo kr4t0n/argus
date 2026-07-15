@@ -1,7 +1,8 @@
 import Foundation
 
-// Mirrors packages/shared-types/src/api.ts (machines / agents / projects)
-// and protocol.ts (AvailableAdapter).
+// Mirrors packages/shared-types/src/api.ts (machines / projects) and
+// protocol.ts (AvailableAdapter). The Agent entity was retired in the
+// agent→runner refactor, so there is no AgentDTO here anymore.
 
 public struct AvailableAdapter: Codable, Equatable, Sendable {
     public var type: AgentType
@@ -25,21 +26,6 @@ public struct MachineDTO: Codable, Equatable, Sendable, Identifiable {
     public var iconKey: String?
 }
 
-public struct AgentDTO: Codable, Equatable, Sendable, Identifiable {
-    public var id: String
-    public var name: String
-    public var type: AgentType
-    public var machineId: String
-    public var machineName: String
-    public var status: AgentStatus
-    public var supportsTerminal: Bool
-    public var version: String?
-    public var workingDir: String?
-    public var lastHeartbeatAt: String
-    public var registeredAt: String
-    public var archivedAt: String?
-}
-
 /// Server-side metadata for a "project" — the `(machineId, workingDir)`
 /// pair the sidebar groups sessions under. Promoted to a first-class row
 /// in Phase 1b (docs/plan-agent-to-runners.md): name/archive state now
@@ -59,7 +45,7 @@ public struct ProjectDTO: Codable, Equatable, Sendable, Identifiable {
     public var workingDir: String
     /// User-picked label; nil = client derives basename(workingDir).
     public var name: String?
-    /// Default for agents auto-vivified under this project.
+    /// Whether the project's runner exposes a PTY (drives the Terminal tab).
     public var supportsTerminal: Bool?
     /// ISO timestamp; nil = active.
     public var archivedAt: String?
@@ -68,25 +54,3 @@ public struct ProjectDTO: Codable, Equatable, Sendable, Identifiable {
     public var iconKey: String?
 }
 
-public struct CreateAgentRequest: Encodable, Sendable {
-    public var name: String
-    public var type: AgentType
-    public var workingDir: String?
-    public var supportsTerminal: Bool?
-    /// Adapter-specific options forwarded opaquely to the sidecar.
-    public var adapter: [String: JSONValue]?
-
-    public init(
-        name: String,
-        type: AgentType,
-        workingDir: String? = nil,
-        supportsTerminal: Bool? = nil,
-        adapter: [String: JSONValue]? = nil
-    ) {
-        self.name = name
-        self.type = type
-        self.workingDir = workingDir
-        self.supportsTerminal = supportsTerminal
-        self.adapter = adapter
-    }
-}

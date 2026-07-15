@@ -2,24 +2,20 @@ import Foundation
 import Observation
 import ArgusKit
 
-/// Machines / agents / projects — the fleet the sidebar derives its
-/// grouping from. Swift counterpart of the web's agent/machine stores.
+/// Machines / projects — the fleet the sidebar derives its grouping
+/// from. Swift counterpart of the web's machine store. The Agent entity
+/// was retired in the agent→runner refactor, so nothing keys on agents
+/// anymore — sessions route by `projectId → machine + cliType`.
 @MainActor
 @Observable
 final class FleetStore {
-    private(set) var agents: [String: AgentDTO] = [:]
     private(set) var machines: [String: MachineDTO] = [:]
     /// Keyed "machineId::workingDir", mirrors the web's project key.
     private(set) var projects: [String: ProjectDTO] = [:]
 
     func reset() {
-        agents = [:]
         machines = [:]
         projects = [:]
-    }
-
-    func setAgents(_ list: [AgentDTO]) {
-        agents = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
     }
 
     func setMachines(_ list: [MachineDTO]) {
@@ -31,15 +27,6 @@ final class FleetStore {
             list.map { (Self.projectKey(machineId: $0.machineId, workingDir: $0.workingDir), $0) },
             uniquingKeysWith: { _, new in new }
         )
-    }
-
-    func upsert(agent: AgentDTO) { agents[agent.id] = agent }
-    func removeAgent(id: String) { agents[id] = nil }
-
-    func applyAgentStatus(_ payload: IdStatusPayload) {
-        guard var agent = agents[payload.id] else { return }
-        agent.status = AgentStatus(rawValue: payload.status) ?? .unknown
-        agents[payload.id] = agent
     }
 
     func upsert(machine: MachineDTO) { machines[machine.id] = machine }
@@ -61,21 +48,13 @@ final class FleetStore {
 
     /// Resolve a session's ProjectRef (port of the web's
     /// `resolveProjectRef`). `session.projectId` is authoritative —
-    /// pinned at create; the `(machineId, workingDir)` pair comes from
-    /// the agent row when loaded (same pair by construction), else from
-    /// the hydrated Project rows via an id reverse lookup. Nil for
-    /// workdir-less sessions (the "no project" bucket has no fs/git
-    /// surface) and during the boot race before either store has the row.
+    /// pinned at create — and the `(machineId, workingDir)` pair is
+    /// recovered from the hydrated Project rows via an id reverse lookup.
+    /// Nil for workdir-less sessions (the "no project" bucket has no
+    /// fs/git surface) and during the boot race before the store has the
+    /// row.
     func projectRef(for session: SessionDTO?) -> ProjectRef? {
         guard let session, let projectId = session.projectId else { return nil }
-        if let agent = session.agentId.flatMap({ agents[$0] }),
-           let workingDir = agent.workingDir, !workingDir.isEmpty {
-            return ProjectRef(
-                projectId: projectId,
-                machineId: agent.machineId,
-                workingDir: workingDir
-            )
-        }
         for project in projects.values where project.id == projectId {
             return ProjectRef(
                 projectId: projectId,
@@ -106,8 +85,8 @@ struct ProjectGroup: Identifiable {
     /// "no project".
     let title: String
     /// nil ONLY for the orphan bucket (can't anchor creation there);
-    /// groups resolved via a Project row or an agent join always carry it
-    /// so the header's "+" stays enabled.
+    /// groups resolved via a Project row always carry it so the header's
+    /// "+" stays enabled.
     let machineId: String?
     let workingDir: String?
     let machineName: String
@@ -173,12 +152,11 @@ final class SessionListStore {
 
     /// Group visible sessions into projects. Since the runner refactor
     /// the grouping key is `session.projectId` resolved through the
-    /// server's Project rows; the agent join remains as a fallback for
-    /// pre-backfill sessions (nil projectId) and for rows the project
-    /// list hasn't hydrated yet. Sessions with neither anchor land in a
-    /// trailing "__orphan__" bucket so they stay reachable. A group
-    /// resolved through either path carries a non-nil machineId, which
-    /// keeps the header's "+" (new session) enabled.
+    /// server's Project rows. Sessions whose Project row hasn't hydrated
+    /// yet (boot race) or that carry no projectId land in a trailing
+    /// "__orphan__" bucket so they stay reachable. A group resolved
+    /// through a Project row carries a non-nil machineId, which keeps the
+    /// header's "+" (new session) enabled.
     ///
     /// Ordering rule (deliberate — replaces the old piggyback on the
     /// agent sort, which died with per-agent status):
@@ -201,18 +179,13 @@ final class SessionListStore {
         var orphans: [SessionDTO] = []
 
         for session in sessions.values {
-            // Resolve the (machineId, workingDir) anchor: projectId →
-            // Project row is authoritative, agent join is the fallback.
+            // Resolve the (machineId, workingDir) anchor via the session's
+            // projectId → Project row.
             var machineId: String?
             var workingDir: String?
-            var agentMachineName: String?
             if let projectId = session.projectId, let project = projectsById[projectId] {
                 machineId = project.machineId
                 workingDir = project.workingDir
-            } else if let agent = session.agentId.flatMap({ fleet.agents[$0] }) {
-                machineId = agent.machineId
-                workingDir = agent.workingDir ?? ""
-                agentMachineName = agent.machineName
             }
             guard let machineId else {
                 orphans.append(session)
@@ -234,7 +207,7 @@ final class SessionListStore {
                     title: name ?? fallbackTitle,
                     machineId: machineId,
                     workingDir: wd.isEmpty ? nil : wd,
-                    machineName: fleet.machines[machineId]?.name ?? agentMachineName ?? "",
+                    machineName: fleet.machines[machineId]?.name ?? "",
                     sessions: [],
                     archivedSessions: []
                 )
@@ -246,8 +219,9 @@ final class SessionListStore {
             }
         }
 
-        // Sessions with no projectId AND no live agent row — keep them
-        // reachable in a trailing "no project" bucket.
+        // Sessions with no projectId (or whose Project row hasn't
+        // hydrated yet) — keep them reachable in a trailing "no project"
+        // bucket.
         if !orphans.isEmpty {
             groups["__orphan__"] = ProjectGroup(
                 id: "__orphan__", title: "no project", machineId: nil, workingDir: nil,

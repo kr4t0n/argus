@@ -2,13 +2,11 @@ import SwiftUI
 import ArgusKit
 
 /// Right inspector for a session — the iOS counterpart of the web's
-/// ContextPane: identity header + Files / Commits / Diff tabs. Files,
-/// Commits, Note and Progress are project-addressed (ProjectRef) since
-/// the runner refactor; the agent row only drives the Terminal tab and
-/// enriches the header when it still exists. Joins the project socket
-/// room while visible (runner sidecars nudge only that room) PLUS the
-/// legacy `agent:{id}` room during the mixed-fleet window, so fs/git
-/// change events refresh the panels live on both sidecar generations.
+/// ContextPane: identity header + Files / Commits / Terminal / Diff
+/// tabs. Every pane is project-addressed (ProjectRef) since the runner
+/// refactor retired the Agent entity. Joins the project socket room
+/// while visible (runner sidecars nudge only that room) so fs/git change
+/// events refresh the panels live.
 struct InspectorPane: View {
     @Environment(AppModel.self) private var app
     let sessionId: String
@@ -26,14 +24,8 @@ struct InspectorPane: View {
     @State private var terminalController: TerminalController?
 
     private var session: SessionDTO? { app.sessionList.sessions[sessionId] }
-    /// Legacy agent row — still owns the PTY (the terminal-open route is
-    /// agent-addressed) and the header identity when present. Every
-    /// fs/git surface below works without it.
-    private var agent: AgentDTO? {
-        session?.agentId.flatMap { app.fleet.agents[$0] }
-    }
-    /// Project addressing for Files/Commits/Note/Progress; nil for
-    /// workdir-less sessions (those panes have no surface there).
+    /// Project addressing for Files/Commits/Note/Progress/Terminal; nil
+    /// for workdir-less sessions (those panes have no surface there).
     private var projectRef: ProjectRef? { app.fleet.projectRef(for: session) }
     /// The hydrated Project row for `projectRef` (pair-keyed store).
     private var projectRow: ProjectDTO? {
@@ -43,16 +35,14 @@ struct InspectorPane: View {
             )]
         }
     }
-    /// Terminal capability moved to the Project row with the terminal
-    /// switchover (the migration inherited it from terminal-capable
-    /// agents); the agent flag remains for workdir-less sessions still
-    /// on the legacy open route.
+    /// Terminal capability lives on the Project row (the runner opens
+    /// PTYs by cwd — the Agent entity that used to own them is retired).
     private var supportsTerminal: Bool {
-        projectRow?.supportsTerminal == true || agent?.supportsTerminal == true
+        projectRow?.supportsTerminal == true
     }
 
     /// Web ContextPane order: Commits, Files, Terminal, Note, Progress,
-    /// Diff. Terminal appears only for agents created with the PTY
+    /// Diff. Terminal appears only for projects whose runner has the PTY
     /// opt-in; extension tabs gate on the account-level flags, Note/
     /// Progress additionally on a resolved project (both are
     /// project-scoped).
@@ -80,13 +70,13 @@ struct InspectorPane: View {
             switch tab {
             case .commits:
                 if let project = projectRef {
-                    CommitsPanel(project: project, legacyAgentId: agent?.id)
+                    CommitsPanel(project: project)
                 } else {
                     noProjectPlaceholder
                 }
             case .files:
                 if let project = projectRef {
-                    FileBrowserPanel(project: project, legacyAgentId: agent?.id)
+                    FileBrowserPanel(project: project)
                 } else {
                     noProjectPlaceholder
                 }
@@ -96,7 +86,7 @@ struct InspectorPane: View {
                 // tab switches for the inspector's lifetime.
                 if let terminalController {
                     TerminalPanel(controller: terminalController)
-                } else if projectRef != nil || agent != nil {
+                } else if projectRef != nil {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .onAppear { makeTerminalController() }
@@ -119,9 +109,9 @@ struct InspectorPane: View {
                 DiffPanel()
             }
         }
-        .onAppear { joinRooms(project: projectRef, agentId: agent?.id) }
+        .onAppear { joinRooms(project: projectRef) }
         .onDisappear {
-            leaveRooms(project: projectRef, agentId: agent?.id)
+            leaveRooms(project: projectRef)
             terminalController?.shutdown()
             if app.activeTerminal === terminalController { app.activeTerminal = nil }
             terminalController = nil
@@ -133,32 +123,25 @@ struct InspectorPane: View {
             if let old { app.stream?.leaveProject(machineId: old.machineId, workingDir: old.workingDir) }
             if let new { app.stream?.joinProject(machineId: new.machineId, workingDir: new.workingDir) }
         }
-        .onChange(of: agent?.id) { old, new in
-            if let old { app.stream?.leaveAgent(old) }
-            if let new { app.stream?.joinAgent(new) }
-        }
         .onChange(of: tabs) {
             // A toggled-off extension can strand the selection.
             if !tabs.contains(tab) { tab = .commits }
         }
     }
 
-    /// Join the project room (runner sidecars broadcast fs/git nudges
-    /// there — this is what fixes live refresh against ≥0.3 sidecars)
-    /// and KEEP the legacy agent-room join for pre-Phase-2 sidecars,
-    /// exactly like the web FileTree. The shim dies with Phase 4.
-    private func joinRooms(project: ProjectRef?, agentId: String?) {
+    /// Join the project room — runner sidecars broadcast fs/git nudges
+    /// there (keyed by the `(machineId, workingDir)` pair). The Agent
+    /// entity is retired, so there's no agent room to join anymore.
+    private func joinRooms(project: ProjectRef?) {
         if let project {
             app.stream?.joinProject(machineId: project.machineId, workingDir: project.workingDir)
         }
-        if let agentId { app.stream?.joinAgent(agentId) }
     }
 
-    private func leaveRooms(project: ProjectRef?, agentId: String?) {
+    private func leaveRooms(project: ProjectRef?) {
         if let project {
             app.stream?.leaveProject(machineId: project.machineId, workingDir: project.workingDir)
         }
-        if let agentId { app.stream?.leaveAgent(agentId) }
     }
 
     private var noProjectPlaceholder: some View {
@@ -169,39 +152,33 @@ struct InspectorPane: View {
         )
     }
 
-    /// Project-addressed open when the session is pinned to one (works
-    /// with no agent row); the agent route covers workdir-less sessions.
+    /// Project-addressed open — the runner opens the PTY by cwd. A
+    /// session with no project has no terminal surface.
     private func makeTerminalController() {
         guard terminalController == nil,
               let client = app.client, let stream = app.stream
         else { return }
         let controller = TerminalController(
-            project: projectRef, agent: agent, client: client, stream: stream
+            project: projectRef, client: client, stream: stream
         )
         terminalController = controller
         app.activeTerminal = controller
     }
 
-    /// Agent identity when the row still exists; otherwise the project's
-    /// basename carries the header, so nothing blanks once agent rows
-    /// retire.
+    /// Header identity: the session's pinned cliType + the project's
+    /// basename (the Agent row that used to enrich this is retired).
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                AgentTypeIcon(type: session?.cliType ?? agent?.type ?? "custom")
-                Text(agent?.name ?? headerFallbackTitle)
+                AgentTypeIcon(type: session?.cliType ?? "custom")
+                Text(headerFallbackTitle)
                     .font(.headline)
                 Spacer()
-                if let status = agent?.status {
-                    Text(status.rawValue)
-                        .font(.caption2)
-                        .foregroundStyle(status == .online ? .green : .secondary)
-                }
             }
             if let machineName = headerMachineName, !machineName.isEmpty {
                 Text(machineName).font(.caption).foregroundStyle(.secondary)
             }
-            if let workingDir = projectRef?.workingDir ?? agent?.workingDir {
+            if let workingDir = projectRef?.workingDir {
                 Text(workingDir)
                     .font(.caption2.monospaced())
                     .foregroundStyle(.tertiary)
@@ -221,8 +198,7 @@ struct InspectorPane: View {
     }
 
     private var headerMachineName: String? {
-        if let name = agent?.machineName, !name.isEmpty { return name }
-        return projectRef.flatMap { app.fleet.machines[$0.machineId]?.name }
+        projectRef.flatMap { app.fleet.machines[$0.machineId]?.name }
     }
 }
 
@@ -231,10 +207,6 @@ struct InspectorPane: View {
 private struct FileBrowserPanel: View {
     @Environment(AppModel.self) private var app
     let project: ProjectRef
-    /// Pre-Phase-2 sidecars nudge the agent room only (no workingDir on
-    /// the event) — match on this when the event carries no pair. Dies
-    /// with Phase 4.
-    let legacyAgentId: String?
 
     /// Path relative to the workingDir ("" = root).
     @State private var path = ""
@@ -265,14 +237,11 @@ private struct FileBrowserPanel: View {
         }
     }
 
-    /// Runner events carry the (machineId, workingDir) pair (agentId is
-    /// empty) — match on the pair; legacy events carry only agentId.
-    /// Same rule as the web FileTree.
+    /// Runner events carry the (machineId, workingDir) pair — match on
+    /// it. Same rule as the web FileTree.
     private func matches(_ change: FSChangedPayload) -> Bool {
-        if let workingDir = change.workingDir, !workingDir.isEmpty {
-            return change.machineId == project.machineId && workingDir == project.workingDir
-        }
-        return legacyAgentId != nil && change.agentId == legacyAgentId
+        guard let workingDir = change.workingDir, !workingDir.isEmpty else { return false }
+        return change.machineId == project.machineId && workingDir == project.workingDir
     }
 
     private var breadcrumb: some View {
@@ -406,8 +375,6 @@ private struct StringBox: Identifiable {
 private struct CommitsPanel: View {
     @Environment(AppModel.self) private var app
     let project: ProjectRef
-    /// Legacy agent-room matching — same shim as FileBrowserPanel.
-    let legacyAgentId: String?
 
     @State private var response: GitLogResponse?
     @State private var loadError: String?
@@ -467,13 +434,11 @@ private struct CommitsPanel: View {
         }
     }
 
-    /// Pair-first matching, legacy agentId fallback — the same rule as
-    /// FileBrowserPanel / the web GitLogPanel.
+    /// Pair matching — the same rule as FileBrowserPanel / the web
+    /// GitLogPanel.
     private func matches(_ change: GitChangedPayload) -> Bool {
-        if let workingDir = change.workingDir, !workingDir.isEmpty {
-            return change.machineId == project.machineId && workingDir == project.workingDir
-        }
-        return legacyAgentId != nil && change.agentId == legacyAgentId
+        guard let workingDir = change.workingDir, !workingDir.isEmpty else { return false }
+        return change.machineId == project.machineId && workingDir == project.workingDir
     }
 
     private func load() async {
@@ -773,10 +738,8 @@ private struct DiffPanel: View {
     private func displayPath(_ path: String) -> String {
         guard let active = app.activeSession else { return path }
         let session = app.sessionList.sessions[active.sessionId]
-        // Project row first (survives the agent's retirement), agent row
-        // as the legacy fallback for pre-backfill sessions.
+        // Resolved through the session's pinned project.
         let workingDir = app.fleet.projectRef(for: session)?.workingDir
-            ?? session?.agentId.flatMap { app.fleet.agents[$0]?.workingDir }
         guard let workingDir, !workingDir.isEmpty, path.hasPrefix(workingDir) else { return path }
         return String(path.dropFirst(workingDir.count)).trimmingCharacters(
             in: CharacterSet(charactersIn: "/")

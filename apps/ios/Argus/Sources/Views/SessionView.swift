@@ -42,21 +42,16 @@ struct SessionView: View {
     @State private var expandedActivity: Set<String> = []
 
     private var session: SessionDTO? { app.sessionList.sessions[sessionId] }
-    /// Legacy agent row — a fallback identity source only; may be nil
-    /// once agent rows retire (Phase 4), so nothing here requires it.
-    private var agent: AgentDTO? {
-        session?.agentId.flatMap { app.fleet.agents[$0] }
-    }
     /// Project addressing for file previews; nil for workdir-less
     /// sessions (previews are disabled there).
     private var projectRef: ProjectRef? { app.fleet.projectRef(for: session) }
-    /// The session's pinned workingDir — project row first, agent row as
-    /// the pre-backfill fallback.
-    private var workingDir: String? { projectRef?.workingDir ?? agent?.workingDir }
+    /// The session's pinned workingDir, resolved through its project.
+    private var workingDir: String? { projectRef?.workingDir }
     /// Adapter type keying the transcript parsers: pinned on the session
-    /// since Phase 1; the agent row covers pre-backfill rows only.
+    /// since Phase 1 (the Agent entity that used to back-fill this is
+    /// retired).
     private var agentType: AgentType {
-        session?.cliType ?? agent?.type ?? "custom"
+        session?.cliType ?? "custom"
     }
 
     var body: some View {
@@ -90,7 +85,7 @@ struct SessionView: View {
         .toolbar { toolbarContent }
         .sheet(isPresented: $showModelPicker) {
             if let session {
-                ModelPickerSheet(session: session, agent: agent)
+                ModelPickerSheet(session: session)
             }
         }
         .sheet(item: $filePreview) { previewTarget in

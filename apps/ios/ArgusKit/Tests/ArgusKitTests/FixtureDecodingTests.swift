@@ -26,13 +26,6 @@ struct FixtureDecodingTests {
         }
     }
 
-    @Test("agents.json → [AgentDTO]")
-    func agents() throws {
-        let agents = try TestSupport.decodeFixture("agents", as: [AgentDTO].self)
-        #expect(!agents.isEmpty)
-        #expect(agents.allSatisfy { !$0.machineId.isEmpty })
-    }
-
     @Test("machines.json → [MachineDTO]")
     func machines() throws {
         let machines = try TestSupport.decodeFixture("machines", as: [MachineDTO].self)

@@ -23,12 +23,6 @@ public struct IdPayload: Decodable, Equatable, Sendable {
     public let id: String
 }
 
-public struct AgentSpawnFailedPayload: Decodable, Equatable, Sendable {
-    public let machineId: String
-    public let agentId: String
-    public let reason: String
-}
-
 public struct SessionCloneFailedPayload: Decodable, Equatable, Sendable {
     public let sessionId: String
     public let reason: String
@@ -91,11 +85,6 @@ public enum ServerEvent: Sendable {
     case sessionUpdated(SessionDTO)
     case sessionStatus(SessionStatusEvent)
     case sessionCloneFailed(SessionCloneFailedPayload)
-
-    case agentUpsert(AgentDTO)
-    case agentStatus(IdStatusPayload)
-    case agentRemoved(IdPayload)
-    case agentSpawnFailed(AgentSpawnFailedPayload)
 
     case machineUpsert(MachineDTO)
     case machineStatus(IdStatusPayload)
@@ -175,8 +164,6 @@ public final class StreamClient {
 
     public func joinSession(_ id: String) { socket?.emit("subscribe:session", id) }
     public func leaveSession(_ id: String) { socket?.emit("unsubscribe:session", id) }
-    public func joinAgent(_ id: String) { socket?.emit("subscribe:agent", id) }
-    public func leaveAgent(_ id: String) { socket?.emit("unsubscribe:agent", id) }
 
     public func joinProject(machineId: String, workingDir: String) {
         socket?.emit("subscribe:project", ["machineId": machineId, "workingDir": workingDir])
@@ -223,10 +210,6 @@ public final class StreamClient {
         on(socket, "session:updated", ServerEvent.sessionUpdated)
         on(socket, "session:status", ServerEvent.sessionStatus)
         on(socket, "session:clone-failed", ServerEvent.sessionCloneFailed)
-        on(socket, "agent:upsert", ServerEvent.agentUpsert)
-        on(socket, "agent:status", ServerEvent.agentStatus)
-        on(socket, "agent:removed", ServerEvent.agentRemoved)
-        on(socket, "agent:spawn-failed", ServerEvent.agentSpawnFailed)
         on(socket, "machine:upsert", ServerEvent.machineUpsert)
         on(socket, "machine:status", ServerEvent.machineStatus)
         on(socket, "machine:removed", ServerEvent.machineRemoved)

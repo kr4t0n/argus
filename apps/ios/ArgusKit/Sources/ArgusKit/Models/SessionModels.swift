@@ -165,28 +165,23 @@ public typealias ResultChunkDTO = ResultChunk
 
 // MARK: Requests
 
-/// Two addressing shapes, mirroring shared-types: legacy `{agentId}`
-/// (wins when both are sent) or project-first `{machineId, workingDir,
-/// cliType}` — the server upserts the Project row for the pair and
-/// reuses-or-vivifies the agent internally. Optionals encode as absent
-/// keys, so each caller sends only its shape.
+/// Project-first addressing `{machineId, workingDir, cliType}` — the
+/// server upserts the Project row for the pair and pins the session to
+/// it. The Agent entity is retired, so there's no agent-addressed shape
+/// anymore. Optionals encode as absent keys.
 public struct CreateSessionRequest: Encodable, Sendable {
-    /// Legacy addressing: an explicit agent.
-    public var agentId: String?
-    /// Project-first addressing: the target machine.
+    /// The target machine.
     public var machineId: String?
     /// Project anchor. Empty/absent = the machine's "no project" bucket.
     public var workingDir: String?
     public var cliType: AgentType?
-    /// Capability flag for an auto-vivified agent; ignored when an
-    /// existing agent is reused.
+    /// Capability flag for the project's runner (drives the Terminal tab).
     public var supportsTerminal: Bool?
     public var title: String?
     public var prompt: String?
     public var modelSelection: ModelSelection?
 
     public init(
-        agentId: String? = nil,
         machineId: String? = nil,
         workingDir: String? = nil,
         cliType: AgentType? = nil,
@@ -195,7 +190,6 @@ public struct CreateSessionRequest: Encodable, Sendable {
         prompt: String? = nil,
         modelSelection: ModelSelection? = nil
     ) {
-        self.agentId = agentId
         self.machineId = machineId
         self.workingDir = workingDir
         self.cliType = cliType
@@ -264,12 +258,9 @@ public struct SessionHistoryResponse: Decodable, Sendable {
 }
 
 /// `POST /sessions` — `command` is non-nil when the request carried an
-/// initial prompt (the first turn is dispatched inline). `agent` is the
-/// auto-vivified (or reused) AgentDTO for project-first requests, so the
-/// client can seed its fleet store without racing `agent:upsert`; null
-/// when the server created no row.
+/// initial prompt (the first turn is dispatched inline). The Agent
+/// entity was retired, so the response no longer carries an agent row.
 public struct CreateSessionResponse: Decodable, Sendable {
     public var session: SessionDTO
     public var command: CommandDTO?
-    public var agent: AgentDTO?
 }

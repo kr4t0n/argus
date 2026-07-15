@@ -152,7 +152,6 @@ struct SessionSidebar: View {
     private func sessionRow(_ session: SessionDTO, archived: Bool) -> some View {
         SessionRow(
             session: session,
-            agent: session.agentId.flatMap { app.fleet.agents[$0] },
             archived: archived
         )
         .tag(DetailRoute.session(session.id))
@@ -315,17 +314,15 @@ private struct MachineRow: View {
 
 private struct SessionRow: View {
     let session: SessionDTO
-    let agent: AgentDTO?
     var archived = false
 
     var body: some View {
         // Single compact line — icon · title · dot · time (web parity).
         // Archived rows render dimmed with an archivebox in the dot slot
         // (no live status to show). The icon keys off the session's
-        // pinned cliType (Phase 1); the agent row only covers
-        // pre-backfill sessions.
+        // pinned cliType (Phase 1).
         HStack(spacing: 8) {
-            AgentTypeIcon(type: session.cliType ?? agent?.type ?? "custom", size: 13)
+            AgentTypeIcon(type: session.cliType ?? "custom", size: 13)
                 .frame(width: 16)
                 .opacity(archived ? 0.5 : 1)
             Text(session.title)

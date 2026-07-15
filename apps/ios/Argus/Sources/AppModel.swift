@@ -248,11 +248,8 @@ final class AppModel {
     /// Activities are off system-side).
     private func startLiveActivity(sessionId: String) {
         guard let session = sessionList.sessions[sessionId] else { return }
-        // cliType is pinned on the session row since Phase 1; the agent
-        // row is only the fallback for pre-backfill sessions.
-        let agentType = session.cliType
-            ?? session.agentId.flatMap { fleet.agents[$0]?.type }
-            ?? "custom"
+        // cliType is pinned on the session row since Phase 1.
+        let agentType = session.cliType ?? "custom"
         LiveActivityManager.shared.start(session: session, agentType: agentType)
     }
 
@@ -375,16 +372,13 @@ final class AppModel {
         }
     }
 
-    // MARK: Creation (project-first, mirrors the web's CreateAgentPopover)
+    // MARK: Creation (project-first)
 
     /// Create a session in a project with ONE call: the request carries
     /// the `(machineId, workingDir, cliType)` triple and the server
-    /// upserts the Project row, then reuses-or-vivifies the agent
-    /// internally (Phase 1 of docs/plan-agent-to-runners.md — the old
-    /// client-side find-or-createAgent dance is gone). The vivified
-    /// AgentDTO rides the response, so the fleet store is seeded without
-    /// racing `agent:upsert` and the mixed-window UI stays warm.
-    /// Returns the new session (already upserted + routed).
+    /// upserts the Project row and pins the session to it (the Agent
+    /// entity is retired — sessions route by `projectId → machine +
+    /// cliType`). Returns the new session (already upserted + routed).
     func createSession(
         machineId: String,
         workingDir: String?,
@@ -402,9 +396,6 @@ final class AppModel {
             title: title?.isEmpty == false ? title : nil,
             modelSelection: modelSelection?.isEmpty == false ? modelSelection : nil
         ))
-        if let agent = created.agent {
-            fleet.upsert(agent: agent)
-        }
         sessionList.upsert(created.session)
         route = .session(created.session.id)
         return created.session
@@ -436,19 +427,13 @@ final class AppModel {
         if let since = drainInFlight[sessionId], Date().timeIntervalSince(since) < 30 { return }
         if let until = drainCooldown[sessionId], Date() < until { return }
         // Reachability is MACHINE-level since the runner refactor:
-        // liveness belongs to the sidecar process, and runner sidecars
-        // send no per-agent signal at all. Resolve the machine through
-        // the session's pinned project (agent-row fallback for
-        // workdir-less sessions); only when no machine is resolvable
-        // fall back to the legacy agent-status check. Busy stays
+        // liveness belongs to the sidecar process. Resolve the machine
+        // through the session's pinned project; a session with no
+        // resolvable machine (workdir-less, or Project row not hydrated
+        // yet) is left drainable rather than blocked. Busy stays
         // per-session, never per-agent.
-        let machineId = fleet.projectRef(for: session)?.machineId
-            ?? session.agentId.flatMap { fleet.agents[$0]?.machineId }
-        if let machineId {
+        if let machineId = fleet.projectRef(for: session)?.machineId {
             guard fleet.machines[machineId]?.status == .online else { return }
-        } else if let agent = session.agentId.flatMap({ fleet.agents[$0] }),
-                  agent.status == .offline || agent.status == .error {
-            return
         }
 
         drainInFlight[sessionId] = Date()
@@ -550,15 +535,6 @@ final class AppModel {
                 maybeDrain(sessionId: status.id)
             }
         case .sessionCloneFailed:
-            break
-
-        case .agentUpsert(let agent):
-            fleet.upsert(agent: agent)
-        case .agentStatus(let payload):
-            fleet.applyAgentStatus(payload)
-        case .agentRemoved(let payload):
-            fleet.removeAgent(id: payload.id)
-        case .agentSpawnFailed:
             break
 
         case .machineUpsert(let machine):
