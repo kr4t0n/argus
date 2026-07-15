@@ -33,6 +33,10 @@ struct SessionSidebar: View {
     /// Projects with archived sessions revealed — the web's per-project
     /// eye toggle (uiStore.showArchived). Present = shown.
     @State private var showArchived = SessionSidebar.loadShowArchived()
+    /// Global toggle: reveal archived *projects* in the sidebar (the web's
+    /// uiStore.showArchivedProjects). Off by default — archived projects
+    /// are hidden until the user opts in.
+    @State private var showArchivedProjects = SessionSidebar.loadShowArchivedProjects()
 
     private static let collapsedKey = "argus.collapsedProjects"
     private static func loadCollapsed() -> Set<String> {
@@ -60,6 +64,20 @@ struct SessionSidebar: View {
         UserDefaults.standard.set(Array(showArchived), forKey: Self.showArchivedKey)
     }
 
+    // Distinct key from `showArchivedKey` above — that one stores the set
+    // of project keys whose archived *sessions* are revealed; this is the
+    // single global boolean for archived *projects*. Default false.
+    private static let showArchivedProjectsKey = "argus.showArchivedProjectsGlobal"
+    private static func loadShowArchivedProjects() -> Bool {
+        UserDefaults.standard.bool(forKey: showArchivedProjectsKey)
+    }
+    private func toggleShowArchivedProjects() {
+        withAnimation(.easeOut(duration: 0.15)) {
+            showArchivedProjects.toggle()
+        }
+        UserDefaults.standard.set(showArchivedProjects, forKey: Self.showArchivedProjectsKey)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ConnectionBanner()
@@ -83,7 +101,14 @@ struct SessionSidebar: View {
 
     @ViewBuilder
     private var content: some View {
-        let groups = app.sessionList.projectGroups(fleet: app.fleet)
+        let allGroups = app.sessionList.projectGroups(fleet: app.fleet)
+        // Hide archived projects behind the global toggle (web parity:
+        // uiStore.showArchivedProjects). The count drives the toggle row's
+        // label — archived groups are the renderable unit on iOS, so an
+        // archived Project with no sessions (no group) isn't counted, same
+        // as it wouldn't show a row either way.
+        let archivedProjectCount = allGroups.filter { $0.archived }.count
+        let groups = showArchivedProjects ? allGroups : allGroups.filter { !$0.archived }
         if !app.sessionList.loaded {
             Spacer()
             ProgressView()
@@ -115,6 +140,11 @@ struct SessionSidebar: View {
                                 }
                             }
                         }
+                    }
+                    if archivedProjectCount > 0 {
+                        archivedProjectsToggle(count: archivedProjectCount)
+                            .listRowInsets(headerInsets)
+                            .listRowSeparator(.hidden)
                     }
                 }
 
@@ -234,6 +264,29 @@ struct SessionSidebar: View {
                 .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// The "N archived projects" / "Hide archived projects" row that
+    /// gates archived-project visibility — the web's toggle at the bottom
+    /// of its project list. Neutral gray when collapsed, emerald when the
+    /// archive is revealed (matching the per-project eye's language).
+    @ViewBuilder
+    private func archivedProjectsToggle(count: Int) -> some View {
+        Button {
+            toggleShowArchivedProjects()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "archivebox").font(.caption2)
+                Text(showArchivedProjects
+                    ? "Hide archived projects"
+                    : "\(count) archived project\(count == 1 ? "" : "s")")
+                    .font(.caption)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(showArchivedProjects ? Color(hex: 0x10B981) : Color(.secondaryLabel))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var machines: [MachineDTO] {

@@ -90,6 +90,11 @@ struct ProjectGroup: Identifiable {
     let machineId: String?
     let workingDir: String?
     let machineName: String
+    /// True when the backing Project row is archived (`ProjectDTO.archivedAt`
+    /// set). The sidebar hides these behind the global "show archived
+    /// projects" toggle, mirroring the web's `showArchivedProjects`. Always
+    /// false for the orphan bucket (no Project row to archive).
+    let archived: Bool
     /// Active (non-archived) sessions, newest-first.
     var sessions: [SessionDTO]
     /// Archived sessions, newest-first — rendered only when the
@@ -208,6 +213,7 @@ final class SessionListStore {
                     machineId: machineId,
                     workingDir: wd.isEmpty ? nil : wd,
                     machineName: fleet.machines[machineId]?.name ?? "",
+                    archived: row?.archivedAt != nil,
                     sessions: [],
                     archivedSessions: []
                 )
@@ -226,6 +232,7 @@ final class SessionListStore {
             groups["__orphan__"] = ProjectGroup(
                 id: "__orphan__", title: "no project", machineId: nil, workingDir: nil,
                 machineName: "",
+                archived: false,
                 sessions: orphans.filter { $0.archivedAt == nil },
                 archivedSessions: orphans.filter { $0.archivedAt != nil }
             )

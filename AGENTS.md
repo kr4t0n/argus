@@ -806,6 +806,20 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   replaces a VM cached with the `"custom"` fallback once the real agent
   type is known (and conversely keeps a cached real type when the
   caller only knows `"custom"`).
+- **Sidebar archive toggles — two look-alike keys, keep them distinct.**
+  `SessionSidebar` mirrors the web's two independent archive controls,
+  and their persistence keys are confusingly close: `argus.showArchived`
+  is the wire-name misnomer (`showArchivedKey`) holding the SET of project
+  keys whose archived *sessions* are revealed (the per-project eye,
+  `uiStore.showArchived`); `argus.showArchivedProjectsGlobal`
+  (`showArchivedProjectsKey`) is the single global boolean that hides
+  archived *projects* (`uiStore.showArchivedProjects`). Archived-ness of a
+  project rides on `ProjectGroup.archived` (from `ProjectDTO.archivedAt`);
+  the orphan bucket is always `archived: false`. Because iOS groups are
+  derived from sessions (no empty-project placeholders like the web), the
+  hide toggle's count is over renderable archived *groups*, not project
+  rows — an archived project with no sessions has no group and isn't
+  counted, which is fine since it wouldn't render either way.
 
 ## Conventions
 
