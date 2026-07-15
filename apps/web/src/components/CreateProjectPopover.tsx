@@ -4,7 +4,6 @@ import { Loader2, X } from 'lucide-react';
 import type { MachineDTO } from '@argus/shared-types';
 import { useProjectStore, projectKey } from '../stores/projectStore';
 import { useUIStore } from '../stores/uiStore';
-import { useAgentStore } from '../stores/agentStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { api } from '../lib/api';
 import { cn } from '../lib/utils';
@@ -47,7 +46,6 @@ export function CreateProjectPopover({ machine, anchor, onClose }: Props) {
   const addProject = useProjectStore((s) => s.add);
   const projects = useProjectStore((s) => s.projects);
   const setExpanded = useUIStore((s) => s.toggleAgentExpanded);
-  const upsertAgent = useAgentStore((s) => s.upsert);
   const upsertSession = useSessionStore((s) => s.upsertSession);
 
   const [name, setName] = useState('');
@@ -137,19 +135,11 @@ export function CreateProjectPopover({ machine, anchor, onClose }: Props) {
       // restore if they want individually-archived items un-archived.
       if (isRestoring && existing) {
         const snapSessions = existing.archivedSessionIds;
-        const snapAgents = existing.archivedAgentIds;
-
         if (snapSessions !== undefined) {
           const sessionResults = await Promise.all(
             snapSessions.map((id) => api.unarchiveSession(id).catch(() => null)),
           );
           sessionResults.forEach((s) => s && upsertSession(s));
-        }
-        if (snapAgents !== undefined) {
-          const agentResults = await Promise.all(
-            snapAgents.map((id) => api.unarchiveAgent(id).catch(() => null)),
-          );
-          agentResults.forEach((a) => a && upsertAgent(a));
         }
       }
 

@@ -794,7 +794,7 @@ function CreatedKeyReveal({
     setTest({ state: 'running' });
     try {
       const count = await api.testApiKey(created.key);
-      setTest({ state: 'ok', msg: `Works — ${count} agent${count === 1 ? '' : 's'} visible` });
+      setTest({ state: 'ok', msg: `Works — ${count} machine${count === 1 ? '' : 's'} visible` });
     } catch (err) {
       setTest({ state: 'err', msg: err instanceof ApiError ? err.message : 'request failed' });
     }

@@ -12,8 +12,7 @@ import {
   Pencil,
   Plus,
 } from 'lucide-react';
-import type { AgentDTO, AgentType, MachineDTO, SessionDTO } from '@argus/shared-types';
-import { useAgentStore } from '../stores/agentStore';
+import type { AgentType, MachineDTO, SessionDTO } from '@argus/shared-types';
 import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
@@ -35,8 +34,6 @@ import { api } from '../lib/api';
 
 export function Sidebar() {
   const { sessionId } = useParams();
-  const agents = useAgentStore((s) => s.agents);
-  const order = useAgentStore((s) => s.order);
   const machines = useMachineStore((s) => s.machines);
   const sessions = useSessionStore((s) => s.sessions);
   const expanded = useUIStore((s) => s.expanded);
@@ -45,35 +42,24 @@ export function Sidebar() {
   const toggleShowArchived = useUIStore((s) => s.toggleShowArchived);
   const showArchivedAgents = useUIStore((s) => s.showArchivedAgents);
   const toggleShowArchivedAgents = useUIStore((s) => s.toggleShowArchivedAgents);
-  const upsertAgent = useAgentStore((s) => s.upsert);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const localProjects = useProjectStore((s) => s.projects);
   const localProjectOrder = useProjectStore((s) => s.order);
 
-  const sessionsByAgent: Record<string, SessionDTO[]> = {};
-  // Phase 2: sessions carry their own projectId — group by it directly
-  // so a row no longer depends on its (auto-vivified) agent being in
-  // the store. The agent map stays as the fallback for pre-backfill
-  // sessions (projectId null) and for rows whose server Project hasn't
-  // hydrated yet.
+  // Sessions group under their pinned project (Phase 2+); with agents
+  // retired this is the only grouping key.
   const sessionsByProject: Record<string, SessionDTO[]> = {};
   for (const s of Object.values(sessions)) {
     if (s.projectId) (sessionsByProject[s.projectId] ||= []).push(s);
-  }
-  for (const list of Object.values(sessionsByAgent)) {
-    list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
   for (const list of Object.values(sessionsByProject)) {
     list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
-  const visibleOrder = showArchivedAgents
-    ? order
-    : order.filter((id) => !agents[id]?.archivedAt);
   const visibleLocalOrder = showArchivedAgents
     ? localProjectOrder
     : localProjectOrder.filter((k) => !localProjects[k]?.archivedAt);
-  const projects = groupProjects(visibleOrder, agents, localProjects, visibleLocalOrder);
+  const projects = groupProjects(localProjects, visibleLocalOrder);
   // In the flat tree projects (placeholders) are the unit of
   // navigation, not agents — so the toggle counts archived
   // placeholders. Agents archived individually via MachinePanel
@@ -116,13 +102,10 @@ export function Sidebar() {
               open={projOpen}
               onToggle={() => toggle(`proj:${p.key}`)}
               machine={machines[p.machineId]}
-              agents={agents}
-              sessionsByAgent={sessionsByAgent}
               sessionsByProject={sessionsByProject}
               activeSessionId={sessionId}
               showArchivedMap={showArchived}
               onToggleShowArchived={toggleShowArchived}
-              onAgentArchived={upsertAgent}
             />
           );
         })}
@@ -158,20 +141,15 @@ function ProjectRow({
   open,
   onToggle,
   machine,
-  agents,
-  sessionsByAgent,
   sessionsByProject,
   activeSessionId,
   showArchivedMap,
   onToggleShowArchived,
-  onAgentArchived,
 }: {
   project: ProjectGroup;
   open: boolean;
   onToggle: () => void;
   machine: MachineDTO | undefined;
-  agents: Record<string, AgentDTO>;
-  sessionsByAgent: Record<string, SessionDTO[]>;
   sessionsByProject: Record<string, SessionDTO[]>;
   activeSessionId: string | undefined;
   /**
@@ -181,12 +159,9 @@ function ProjectRow({
    */
   showArchivedMap: Record<string, boolean>;
   onToggleShowArchived: (projectKey: string) => void;
-  onAgentArchived: (agent: AgentDTO) => void;
 }) {
-  // Fall back to the agent's denormalized machine name if the Machine
-  // row hasn't loaded yet (boot race between /agents and /machines).
-  const fallbackMachineName = agents[project.agentIds[0]]?.machineName ?? project.machineId;
-  const machineName = machine?.name ?? fallbackMachineName;
+  // Machine name falls back to the machineId until the Machine row loads.
+  const machineName = machine?.name ?? project.machineId;
   const machineMeta = machine
     ? `${machine.hostname} · ${machine.os}/${machine.arch} · sidecar ${machine.sidecarVersion}`
     : machineName;
@@ -242,10 +217,7 @@ function ProjectRow({
       machineId: project.machineId,
       name: next,
       workingDir: project.fullPath,
-      supportsTerminal:
-        project.local?.supportsTerminal ??
-        agents[project.agentIds[0]]?.supportsTerminal ??
-        false,
+      supportsTerminal: project.local?.supportsTerminal ?? false,
     });
   }
   function cancelRename() {
@@ -253,47 +225,29 @@ function ProjectRow({
     setEditing(false);
   }
 
-  // Flatten: every session in the project, most-recent first. Since
-  // Phase 2 the primary source is `session.projectId` (the row shows
-  // even before its auto-vivified agent lands in the store); the agent
-  // join remains for pre-backfill sessions and for rows whose server
-  // Project hasn't hydrated yet — those are excluded from the direct
-  // source by construction, so the union can't double-count. Agents
-  // are no longer rendered as their own rows in the tree — the
-  // AgentTypeIcon prefix on each SessionRow carries the identity.
+  // Every session in the project, most-recent first. Sessions are keyed
+  // by `session.projectId` (agents are retired, so there's no agent join
+  // anymore). The AgentTypeIcon prefix on each SessionRow still carries
+  // the CLI identity via `session.cliType`.
   const serverProjectId = project.local?.serverId;
-  const directSessions = serverProjectId ? (sessionsByProject[serverProjectId] ?? []) : [];
-  const agentJoined = project.agentIds
-    .flatMap((id) => sessionsByAgent[id] ?? [])
-    .filter((s) => (serverProjectId ? s.projectId !== serverProjectId : true));
-  const allSessions = [...directSessions, ...agentJoined].sort((a, b) =>
-    b.updatedAt.localeCompare(a.updatedAt),
-  );
+  const allSessions = serverProjectId ? (sessionsByProject[serverProjectId] ?? []) : [];
   const archivedVisible = showArchivedMap[project.key] ?? false;
   const visibleSessions = archivedVisible
     ? allSessions
     : allSessions.filter((s) => !s.archivedAt);
   const hiddenArchivedCount = allSessions.length - visibleSessions.length;
   const hasArchivedSessions = allSessions.some((s) => !!s.archivedAt);
-  // Resolve a usable list of project-context agents for the session
-  // popover's auto-vivify lookup.
-  const projectAgents = project.agentIds
-    .map((id) => agents[id])
-    .filter((a): a is AgentDTO => !!a);
 
-  // The `+` opens the session popover. Only meaningful when we have
-  // a real workingDir to anchor a (possibly new) agent against and
-  // the machine is online. The synthetic "no project" bucket has no
-  // path, so we hide the action there.
+  // The `+` opens the session popover. Only meaningful when we have a
+  // real workingDir to anchor the project against and the machine is
+  // online. The synthetic "no project" bucket has no path, so we hide it.
   const canCreateSession =
     !!project.fullPath &&
     !!machine &&
     machine.status !== 'offline' &&
     !project.archived;
-  // Archive cascades through agents + sessions. Hidden on the "no
-  // project" bucket — there's no path to anchor a placeholder
-  // against, and the action would affect every machine's working-
-  // dir-less agents together.
+  // Archive cascades to the project's sessions. Hidden on the "no
+  // project" bucket — there's no path to anchor a placeholder against.
   const canArchive = !!project.fullPath;
 
   async function toggleProjectArchive(e: React.MouseEvent) {
@@ -303,65 +257,31 @@ function ProjectRow({
     setArchiveBusy(true);
     try {
       if (project.archived) {
-        // Restore. Prefer the snapshot — un-archive only what this
-        // cascade originally archived, so any individual archives the
-        // user made BEFORE the cascade stay archived. Fall through to
-        // a broad restore (un-archive everything currently archived
-        // in the project) only for legacy placeholders that pre-date
-        // the snapshot — those can't distinguish the two cases.
-        const snapAgents = project.local?.archivedAgentIds;
+        // Restore. Prefer the snapshot — un-archive only the sessions
+        // this cascade originally archived, so any individual archives
+        // the user made BEFORE the cascade stay archived. Fall through
+        // to a broad restore (un-archive every currently-archived
+        // session in the project) only for legacy placeholders that
+        // pre-date the snapshot.
         const snapSessions = project.local?.archivedSessionIds;
-        const hasSnapshot = snapAgents !== undefined || snapSessions !== undefined;
-
-        if (hasSnapshot) {
-          const sessionResults = await Promise.all(
-            (snapSessions ?? []).map((id) =>
-              api.unarchiveSession(id).catch(() => null),
-            ),
-          );
-          sessionResults.forEach((s) => s && upsertSession(s));
-
-          const agentResults = await Promise.all(
-            (snapAgents ?? []).map((id) =>
-              api.unarchiveAgent(id).catch(() => null),
-            ),
-          );
-          agentResults.forEach((a) => a && onAgentArchived(a));
-        } else {
-          const sessionRestores: Promise<SessionDTO | null>[] = [];
-          for (const agentId of project.agentIds) {
-            for (const s of sessionsByAgent[agentId] ?? []) {
-              if (s.archivedAt) {
-                sessionRestores.push(api.unarchiveSession(s.id).catch(() => null));
-              }
-            }
-          }
-          const sessionResults = await Promise.all(sessionRestores);
-          sessionResults.forEach((s) => s && upsertSession(s));
-
-          const agentRestores = project.agentIds
-            .filter((id) => agents[id]?.archivedAt)
-            .map((id) => api.unarchiveAgent(id).catch(() => null));
-          const agentResults = await Promise.all(agentRestores);
-          agentResults.forEach((a) => a && onAgentArchived(a));
-        }
+        const toRestore =
+          snapSessions !== undefined
+            ? snapSessions
+            : allSessions.filter((s) => s.archivedAt).map((s) => s.id);
+        const sessionResults = await Promise.all(
+          toRestore.map((id) => api.unarchiveSession(id).catch(() => null)),
+        );
+        sessionResults.forEach((s) => s && upsertSession(s));
 
         await setProjectArchived(project.key, false);
       } else {
-        // Archive: snapshot the items we actually flip (skipping ones
-        // already archived) so restore can be surgical. Sessions
-        // first, then agents, then persist the placeholder + snapshot.
-        // Auto-create the placeholder for purely agent-derived rows
-        // so the project keeps a stable identity to restore from.
-        const sessionIdsToArchive: string[] = [];
-        for (const agentId of project.agentIds) {
-          for (const s of sessionsByAgent[agentId] ?? []) {
-            if (!s.archivedAt) sessionIdsToArchive.push(s.id);
-          }
-        }
-        const agentIdsToArchive = project.agentIds.filter(
-          (id) => agents[id] && !agents[id]?.archivedAt,
-        );
+        // Archive: snapshot the sessions we actually flip (skipping ones
+        // already archived) so restore can be surgical, then persist the
+        // placeholder + snapshot. Auto-create the placeholder for a
+        // server-derived row so the project keeps a stable restore id.
+        const sessionIdsToArchive = allSessions
+          .filter((s) => !s.archivedAt)
+          .map((s) => s.id);
 
         const sessionResults = await Promise.allSettled(
           sessionIdsToArchive.map((id) => api.archiveSession(id)),
@@ -374,31 +294,19 @@ function ProjectRow({
           }
         });
 
-        const agentResults = await Promise.allSettled(
-          agentIdsToArchive.map((id) => api.archiveAgent(id)),
-        );
-        const archivedAgentIds: string[] = [];
-        agentResults.forEach((r, i) => {
-          if (r.status === 'fulfilled') {
-            onAgentArchived(r.value);
-            archivedAgentIds.push(agentIdsToArchive[i]);
-          }
-        });
-
         if (!project.local) {
           await addProject({
             machineId: project.machineId,
             name: project.label,
             workingDir: project.fullPath,
-            supportsTerminal:
-              agents[project.agentIds[0]]?.supportsTerminal ?? false,
+            supportsTerminal: false,
             archivedAt: new Date().toISOString(),
-            archivedAgentIds,
+            archivedAgentIds: [],
             archivedSessionIds,
           });
         } else {
           await setProjectArchived(project.key, true, {
-            archivedAgentIds,
+            archivedAgentIds: [],
             archivedSessionIds,
           });
         }
@@ -581,17 +489,9 @@ function ProjectRow({
             anchor={rowRef}
             onClose={() => setCreateSessionOpen(false)}
             asSession
-            existingAgents={projectAgents}
             defaults={{
               workingDir: project.fullPath ?? undefined,
-              // Prefer the placeholder's terminal default; if this row
-              // is purely agent-derived, fall back to whatever the
-              // first existing agent in the project uses so new
-              // agents match the established convention.
-              supportsTerminal:
-                project.local?.supportsTerminal ??
-                agents[project.agentIds[0]]?.supportsTerminal ??
-                false,
+              supportsTerminal: project.local?.supportsTerminal ?? false,
             }}
           />
         )}
@@ -784,8 +684,7 @@ function MachineRow({
           {machine.name}
         </div>
         <div className="truncate text-meta text-fg-muted">
-          {machine.agentCount} agent{machine.agentCount === 1 ? '' : 's'} · {adapters.length}{' '}
-          adapter{adapters.length === 1 ? '' : 's'}
+          {adapters.length} adapter{adapters.length === 1 ? '' : 's'}
         </div>
       </Link>
       <button

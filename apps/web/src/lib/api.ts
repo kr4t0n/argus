@@ -94,11 +94,12 @@ export const api = {
   revokeMyApiKey: (id: string) =>
     http<{ revoked: boolean }>(`/auth/api-keys/${id}`, { method: 'DELETE' }),
   /** Smoke-test a freshly-minted key by hitting a read endpoint with it in
-   *  the `X-API-Key` header (NOT the JWT). Returns the visible agent count
-   *  on success. Only usable right after creation, while the plaintext is
-   *  still in hand — stored keys are hashes and can't be replayed. */
+   *  the `X-API-Key` header (NOT the JWT). Returns the visible machine
+   *  count on success. Only usable right after creation, while the
+   *  plaintext is still in hand — stored keys are hashes and can't be
+   *  replayed. (Probes `/machines` since `/agents` retired in Phase 4.) */
   testApiKey: async (secret: string): Promise<number> => {
-    const res = await fetch(`${BASE}/agents`, { headers: { 'X-API-Key': secret } });
+    const res = await fetch(`${BASE}/machines`, { headers: { 'X-API-Key': secret } });
     if (!res.ok) {
       let msg = res.statusText;
       try {
@@ -109,16 +110,9 @@ export const api = {
       }
       throw new ApiError(msg, res.status);
     }
-    const agents = (await res.json()) as unknown;
-    return Array.isArray(agents) ? agents.length : 0;
+    const machines = (await res.json()) as unknown;
+    return Array.isArray(machines) ? machines.length : 0;
   },
-
-  // Agent archive endpoints: kept for the sidebar's project-archive
-  // cascade. Post-Phase-4 a project has no live agents, so these are a
-  // runtime no-op (the cascade's agent loop iterates nothing), but the
-  // call sites still reference them.
-  archiveAgent: (id: string) => http<AgentDTO>(`/agents/${id}/archive`, { method: 'POST' }),
-  unarchiveAgent: (id: string) => http<AgentDTO>(`/agents/${id}/unarchive`, { method: 'POST' }),
 
   // Projects (server-backed since Phase 1b — see projectStore)
   createProject: (body: {

@@ -2,10 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router-dom';
 import { LogOut, PanelLeftOpen } from 'lucide-react';
-import type { AgentDTO, MachineDTO, SessionDTO } from '@argus/shared-types';
+import type { MachineDTO, SessionDTO } from '@argus/shared-types';
 import { MachineIconGlyph } from './MachineIcon';
 import { ProjectIconGlyph } from './ProjectIcon';
-import { useAgentStore } from '../stores/agentStore';
 import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
@@ -43,8 +42,6 @@ const VIEWPORT_MARGIN = 8;
  */
 export function SidebarRail() {
   const { sessionId, machineId } = useParams();
-  const agents = useAgentStore((s) => s.agents);
-  const agentOrder = useAgentStore((s) => s.order);
   const sessions = useSessionStore((s) => s.sessions);
   const machines = useMachineStore((s) => s.machines);
   const machineOrder = useMachineStore((s) => s.order);
@@ -55,16 +52,12 @@ export function SidebarRail() {
   const user = useAuthStore((s) => s.user);
 
   // Rail is "active state" only — no archive visibility toggle.
-  const visibleAgentOrder = agentOrder.filter((id) => !agents[id]?.archivedAt);
   const visibleLocalOrder = localProjectOrder.filter(
     (k) => !localProjects[k]?.archivedAt,
   );
-  const projects = groupProjects(
-    visibleAgentOrder,
-    agents,
-    localProjects,
-    visibleLocalOrder,
-  ).filter((p) => !!p.fullPath);
+  const projects = groupProjects(localProjects, visibleLocalOrder).filter(
+    (p) => !!p.fullPath,
+  );
 
   // Non-archived sessions per project, most-recent first. [0] is the
   // tile's click target ("land where they'd expect"); the full list
@@ -115,7 +108,6 @@ export function SidebarRail() {
             active={p.key === activeProjectKey}
             activeSessionId={sessionId}
             machine={machines[p.machineId]}
-            agents={agents}
           />
         ))}
       </div>
@@ -177,7 +169,6 @@ function RailProjectTile({
   active,
   activeSessionId,
   machine,
-  agents,
 }: {
   project: ProjectGroup;
   /** Non-archived sessions, most-recent first. */
@@ -185,7 +176,6 @@ function RailProjectTile({
   active: boolean;
   activeSessionId: string | undefined;
   machine: MachineDTO | undefined;
-  agents: Record<string, AgentDTO>;
 }) {
   const tileRef = useRef<HTMLDivElement>(null);
   const iconKey = useProjectIconKey(project.key);
@@ -260,7 +250,6 @@ function RailProjectTile({
           project={project}
           sessions={sessions}
           machine={machine}
-          agents={agents}
           activeSessionId={activeSessionId}
           anchor={tileRef}
           onPointerEnter={pointerEnter}
@@ -284,7 +273,6 @@ function RailSessionFlyout({
   project,
   sessions,
   machine,
-  agents,
   activeSessionId,
   anchor,
   onPointerEnter,
@@ -294,7 +282,6 @@ function RailSessionFlyout({
   project: ProjectGroup;
   sessions: SessionDTO[];
   machine: MachineDTO | undefined;
-  agents: Record<string, AgentDTO>;
   activeSessionId: string | undefined;
   anchor: React.RefObject<HTMLDivElement | null>;
   onPointerEnter: () => void;

@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 import { api } from './api';
 import { useQueueStore } from '../stores/queueStore';
 import { useSessionStore } from '../stores/sessionStore';
-import { useAgentStore } from '../stores/agentStore';
 import { useMachineStore } from '../stores/machineStore';
 import { useProjectStore } from '../stores/projectStore';
 import { resolveProjectRef } from './projects';
@@ -156,7 +155,6 @@ export function useQueueDrainer() {
     const unsubscribes = [
       useQueueStore.subscribe(schedule),
       useSessionStore.subscribe(schedule),
-      useAgentStore.subscribe(schedule),
       useMachineStore.subscribe(schedule),
       useProjectStore.subscribe(schedule),
     ];

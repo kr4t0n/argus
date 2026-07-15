@@ -6,16 +6,13 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
-import type { Agent as PAgent, Machine as PMachine, Prisma } from '@prisma/client';
+import type { Machine as PMachine, Prisma } from '@prisma/client';
 import {
   consumerGroups,
   streamKeys,
-  type AgentDTO,
   type AgentQuota,
-  type AgentSpec,
   type AnyLifecycleEvent,
   type AvailableAdapter,
-  type CreateAgentRequest,
   type HeartbeatEvent,
   type MachineDTO,
   type MachineHeartbeatEvent,
@@ -174,18 +171,16 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
       // is a separate, reversible concept).
       where: { deletedAt: null, ...(includeArchived ? {} : { archivedAt: null }) },
       orderBy: [{ status: 'asc' }, { name: 'asc' }],
-      include: { _count: { select: { agents: true } } },
     });
-    return rows.map((r) => MachineService.toDto(r, r._count.agents));
+    return rows.map((r) => MachineService.toDto(r));
   }
 
   async getMachine(id: string): Promise<MachineDTO> {
     const row = await this.prisma.machine.findUnique({
       where: { id },
-      include: { _count: { select: { agents: true } } },
     });
     if (!row || row.deletedAt) throw new NotFoundException('machine not found');
-    return MachineService.toDto(row, row._count.agents);
+    return MachineService.toDto(row);
   }
 
   /**
@@ -209,9 +204,8 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     const updated = await this.prisma.machine.update({
       where: { id: machineId },
       data: { iconKey: next },
-      include: { _count: { select: { agents: true } } },
     });
-    const dto = MachineService.toDto(updated, updated._count.agents);
+    const dto = MachineService.toDto(updated);
     this.gateway.emitMachineUpsert(dto);
     return dto;
   }
@@ -562,8 +556,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
             archivedAt: null,
           },
         });
-        const count = await this.prisma.agent.count({ where: { machineId: saved.id } });
-        this.gateway.emitMachineUpsert(MachineService.toDto(saved, count));
+        this.gateway.emitMachineUpsert(MachineService.toDto(saved));
         this.logger.log(
           `machine-register ${ev.machineId} (${ev.name} / ${ev.os}/${ev.arch}, sidecar ${sidecarVersion}, ${adapters.length} adapter(s))`,
         );
@@ -723,7 +716,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
 
   // ───────────────────── DTOs ─────────────────────
 
-  static toDto(m: PMachine, agentCount: number): MachineDTO {
+  static toDto(m: PMachine): MachineDTO {
     return {
       id: m.id,
       name: m.name,
@@ -736,27 +729,10 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
       lastSeenAt: m.lastSeenAt.toISOString(),
       registeredAt: m.registeredAt.toISOString(),
       archivedAt: m.archivedAt ? m.archivedAt.toISOString() : null,
-      agentCount,
       iconKey: m.iconKey ?? null,
     };
   }
 
-  static agentToDto(a: PAgent, machineName: string): AgentDTO {
-    return {
-      id: a.id,
-      name: a.name,
-      type: a.type,
-      machineId: a.machineId,
-      machineName,
-      status: a.status as AgentDTO['status'],
-      supportsTerminal: a.supportsTerminal,
-      version: a.version,
-      workingDir: a.workingDir,
-      lastHeartbeatAt: a.lastHeartbeatAt.toISOString(),
-      registeredAt: a.registeredAt.toISOString(),
-      archivedAt: a.archivedAt ? a.archivedAt.toISOString() : null,
-    };
-  }
 }
 
 function parseData(fields: string[]): unknown | null {

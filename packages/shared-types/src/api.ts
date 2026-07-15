@@ -53,8 +53,6 @@ export interface MachineDTO {
   registeredAt: string;
   /** ISO timestamp; null means the machine is visible/unarchived. */
   archivedAt: string | null;
-  /** Convenience count for the sidebar; full agent list lives in agentStore. */
-  agentCount: number;
   /** User-chosen icon glyph key (e.g. "server-cog"). Null = use the
    *  frontend's default. Set via PATCH /machines/:id/icon — the
    *  server stores it on the machine row so all dashboards see the

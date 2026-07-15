@@ -1,6 +1,5 @@
 import { io, Socket } from 'socket.io-client';
 import type {
-  AgentDTO,
   BackgroundTaskDTO,
   ClientToServerEvents,
   CommandDTO,
@@ -29,10 +28,6 @@ type Handler = {
   onMachineStatus?: (p: { id: string; status: MachineDTO['status'] }) => void;
   onMachineRemoved?: (p: { id: string }) => void;
   onProjectUpsert?: (p: ProjectDTO) => void;
-  onAgentUpsert?: (a: AgentDTO) => void;
-  onAgentStatus?: (p: { id: string; status: AgentDTO['status'] }) => void;
-  onAgentRemoved?: (p: { id: string }) => void;
-  onAgentSpawnFailed?: (p: { machineId: string; agentId: string; reason: string }) => void;
   onSessionCreated?: (s: SessionDTO) => void;
   onSessionUpdated?: (s: SessionDTO) => void;
   onSessionStatus?: (p: SessionStatusEvent) => void;
@@ -104,10 +99,6 @@ export function ensureSocket(): WSSocket {
   socket.on('machine:status', (p) => handlers.forEach((h) => h.onMachineStatus?.(p)));
   socket.on('machine:removed', (p) => handlers.forEach((h) => h.onMachineRemoved?.(p)));
   socket.on('project:upsert', (p) => handlers.forEach((h) => h.onProjectUpsert?.(p)));
-  socket.on('agent:upsert', (a) => handlers.forEach((h) => h.onAgentUpsert?.(a)));
-  socket.on('agent:status', (p) => handlers.forEach((h) => h.onAgentStatus?.(p)));
-  socket.on('agent:removed', (p) => handlers.forEach((h) => h.onAgentRemoved?.(p)));
-  socket.on('agent:spawn-failed', (p) => handlers.forEach((h) => h.onAgentSpawnFailed?.(p)));
   socket.on('session:created', (s) => handlers.forEach((h) => h.onSessionCreated?.(s)));
   socket.on('session:updated', (s) => handlers.forEach((h) => h.onSessionUpdated?.(s)));
   socket.on('session:status', (p) => handlers.forEach((h) => h.onSessionStatus?.(p)));
