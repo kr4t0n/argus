@@ -489,9 +489,9 @@ func (d *Daemon) workdirAllowed(wd string) bool {
 }
 
 // legacyAgentAddressingError is the synthetic error published when a
-// request arrives with only agentId addressing. A Phase-3 server always
-// sends workingDir; hitting this path means an old server is talking to
-// a runner-mode sidecar.
+// request arrives with no workingDir. A runner-mode (≥ 0.3) server always
+// sends one; hitting this path means a pre-runner server is talking to a
+// runner-mode sidecar.
 const legacyAgentAddressingError = "agent addressing is not supported by this sidecar — upgrade the server"
 
 // handleFSList serves an fs-list request. Workdir-addressed requests
