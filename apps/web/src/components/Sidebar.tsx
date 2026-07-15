@@ -488,7 +488,6 @@ function ProjectRow({
             machine={machine}
             anchor={rowRef}
             onClose={() => setCreateSessionOpen(false)}
-            asSession
             defaults={{
               workingDir: project.fullPath ?? undefined,
               supportsTerminal: project.local?.supportsTerminal ?? false,

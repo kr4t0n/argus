@@ -1,5 +1,4 @@
 import type {
-  AgentDTO,
   BackgroundTaskDTO,
   CommandDTO,
   MachineDTO,
@@ -42,12 +41,6 @@ export interface ServerToClientEvents {
    *  Broadcast to every dashboard, like machine:upsert — project
    *  icons are workspace-shared, not per-user. */
   'project:upsert': (project: ProjectDTO) => void;
-  'agent:upsert': (agent: AgentDTO) => void;
-  'agent:status': (payload: { id: string; status: AgentDTO['status'] }) => void;
-  'agent:removed': (payload: { id: string }) => void;
-  /** Surfaces sidecar-side spawn errors (bad workingDir, missing binary, …)
-   *  so the dashboard can show inline feedback on the create-agent flow. */
-  'agent:spawn-failed': (payload: { machineId: string; agentId: string; reason: string }) => void;
   'session:created': (session: SessionDTO) => void;
   'session:updated': (session: SessionDTO) => void;
   'session:status': (payload: SessionStatusEvent) => void;

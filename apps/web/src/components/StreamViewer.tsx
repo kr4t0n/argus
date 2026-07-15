@@ -23,7 +23,7 @@ type Props = {
   commands: CommandDTO[];
   chunks: ResultChunkDTO[];
   running: boolean;
-  /** Anchor used to relativize file chip paths (`AgentDTO.workingDir`). */
+  /** Anchor used to relativize file chip paths (the project's workingDir). */
   workingDir?: string | null;
   /** Project the session is pinned to — drives file-preview opens
    *  (project-addressed fs-read) and scopes attachment tabs. Null for

@@ -183,7 +183,6 @@ export function ContextPane({ session, commands, chunks }: Props) {
             <TerminalPane
               key={projectRef?.projectId ?? session.id}
               project={projectRef}
-              agent={undefined}
               supported={projectSupportsTerminal}
               machineName={machine?.name ?? ''}
             />

@@ -87,29 +87,15 @@ export class SessionService {
   }
 
   /**
-   * Create a session, addressed either at an explicit agent (legacy
-   * shape, kept until iOS goes project-first) or at a project —
-   * `machineId` + `cliType` + optional `workingDir` — in which case the
-   * server reuses a live same-type agent under that (machine, workdir)
-   * or auto-vivifies one with a random name. This is the Phase-1 home
-   * of the vivify logic that used to live in the web's
-   * CreateAgentPopover: the user names the session, never the agent.
-   *
-   * Both paths pin `projectId` (upserting the Project row for the
-   * pair) and `cliType` on the session — the workdir is per-session
-   * state because claude-code/cursor keep resume data on disk keyed by
-   * the cwd (see docs/plan-agent-to-runners.md §4.1).
-   *
-   * Returns the vivified agent alongside the session so the creating
-   * client can seed its store without waiting for the `agent:upsert`
-   * WS event (`null` when an existing agent was reused).
-   */
-  /**
-   * Create a session on a project — the only shape since Phase 4: the
-   * session is pinned to (machineId, workingDir, cliType) and routes to
-   * the machine's runner for that CLI. No Agent row is created or
-   * referenced — the Agent entity was fully retired in the Phase-6
-   * sweep.
+   * Create a session on a project: the request carries `machineId` +
+   * `cliType` + optional `workingDir`, and the server upserts the
+   * Project row for the (machine, workdir) pair and pins `projectId` +
+   * `cliType` on the session (the workdir is per-session state because
+   * claude-code/cursor keep resume data on disk keyed by the cwd — see
+   * docs/plan-agent-to-runners.md §4.1). The user names the session; no
+   * Agent row is created or referenced — the Agent entity was fully
+   * retired in the Phase-6 sweep. Routes to the machine's runner for
+   * that CLI.
    */
   async create(userId: string, input: CreateSessionInput): Promise<SessionDTO> {
     const machineId = input.machineId?.trim();

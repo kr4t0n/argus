@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import type { FSEntry } from '@argus/shared-types';
 import { api, ApiError } from '../lib/api';
-import { joinAgent, leaveAgent, joinProject, leaveProject, subscribeHandler } from '../lib/ws';
+import { joinProject, leaveProject, subscribeHandler } from '../lib/ws';
 import type { ProjectRef } from '../lib/projects';
 import { useFileTabsStore } from '../stores/fileTabsStore';
 import { cn } from '../lib/utils';
@@ -34,10 +34,6 @@ const TREE_PREFETCH_DEPTH = 3;
 
 type Props = {
   project: ProjectRef;
-  /** During the mixed-fleet window, pre-Phase-2 sidecars broadcast
-   *  fs:changed to the agent room only (no workingDir on the event) —
-   *  join that room too and match on it. Dies with Phase 4. */
-  legacyAgentId?: string;
 };
 
 /**
@@ -51,7 +47,7 @@ type Props = {
  * Double-clicking a file opens it as a preview tab in the main pane
  * (see FileTabStrip + FileViewer).
  */
-export function FileTree({ project, legacyAgentId }: Props) {
+export function FileTree({ project }: Props) {
   // Keyed by path (empty string = root). We never delete entries on
   // collapse — the UI just hides them — so that re-expanding is
   // instant. Collapse → expand → instant is the cursor-style UX the
@@ -150,16 +146,12 @@ export function FileTree({ project, legacyAgentId }: Props) {
 
   // Live updates: sidecar fsnotify → server broadcast → we refetch
   // exactly the affected directory if we've already loaded it. Runner
-  // sidecars broadcast to the project room; pre-Phase-2 sidecars only
-  // to the agent room — join both during the mixed-fleet window and
-  // match on whichever identity the event carries.
+  // sidecars broadcast to the project room, keyed by the
+  // (machineId, workingDir) pair.
   useEffect(() => {
     joinProject(project.machineId, project.workingDir);
-    if (legacyAgentId) joinAgent(legacyAgentId);
-    const matches = (p: { agentId: string; machineId?: string; workingDir?: string }) =>
-      p.workingDir
-        ? p.machineId === project.machineId && p.workingDir === project.workingDir
-        : !!legacyAgentId && p.agentId === legacyAgentId;
+    const matches = (p: { machineId?: string; workingDir?: string }) =>
+      !!p.workingDir && p.machineId === project.machineId && p.workingDir === project.workingDir;
     const unsubscribe = subscribeHandler({
       onFSChanged: (ev) => {
         if (!matches(ev)) return;
@@ -175,9 +167,8 @@ export function FileTree({ project, legacyAgentId }: Props) {
     return () => {
       unsubscribe();
       leaveProject(project.machineId, project.workingDir);
-      if (legacyAgentId) leaveAgent(legacyAgentId);
     };
-  }, [project.projectId, project.machineId, project.workingDir, legacyAgentId, fetchDir]);
+  }, [project.projectId, project.machineId, project.workingDir, fetchDir]);
 
   const toggleDir = useCallback(
     (path: string) => {

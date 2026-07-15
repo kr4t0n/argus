@@ -6,7 +6,6 @@ import '@xterm/xterm/css/xterm.css';
 import { Loader2, Power, RotateCcw, Terminal as TerminalIcon, X } from 'lucide-react';
 import type { ProjectRef } from '../lib/projects';
 import type {
-  AgentDTO,
   TerminalDTO,
   TerminalOutputMessage,
   TerminalClosedMessage,
@@ -26,13 +25,9 @@ import { cn } from '../lib/utils';
 type Props = {
   /** Project the PTY runs in — the open route is project-addressed
    *  (a terminal is a (machine, cwd) pair). Null for workdir-less
-   *  sessions, which fall back to the legacy agent route. */
+   *  sessions, which have no terminal surface. */
   project: ProjectRef | null;
-  /** Legacy fallback + display identity; optional once agent rows
-   *  retire (Phase 4). */
-  agent: AgentDTO | undefined;
-  /** Whether terminals are enabled here — Project.supportsTerminal,
-   *  with the agent flag as the pre-switchover fallback. */
+  /** Whether terminals are enabled here — Project.supportsTerminal. */
   supported: boolean;
   /** Machine label for the idle hint. */
   machineName: string;
@@ -78,18 +73,18 @@ function encodeUtf8Base64(s: string): string {
 }
 
 /**
- * Interactive PTY pane bound to a single agent. Owns one xterm instance
- * for the lifetime of an open terminal; if the user closes & reopens we
- * dispose and rebuild so we get a clean scrollback.
+ * Interactive PTY pane bound to a project (machine + cwd). Owns one
+ * xterm instance for the lifetime of an open terminal; if the user
+ * closes & reopens we dispose and rebuild so we get a clean scrollback.
  *
  * Buffering of out-of-order output:
  *   The sidecar tags every output message with a monotonically
- *   increasing `seq`. Redis Streams + the per-agent consumer group
- *   guarantee in-order delivery, but on reconnect it's possible to
- *   receive a duplicate of the last message we already wrote. We track
- *   the highest seq seen and discard duplicates.
+ *   increasing `seq`. Redis Streams + the consumer group guarantee
+ *   in-order delivery, but on reconnect it's possible to receive a
+ *   duplicate of the last message we already wrote. We track the
+ *   highest seq seen and discard duplicates.
  */
-export function TerminalPane({ project, agent, supported, machineName }: Props) {
+export function TerminalPane({ project, supported, machineName }: Props) {
 
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -126,14 +121,11 @@ export function TerminalPane({ project, agent, supported, machineName }: Props) 
       const rect = containerRef.current?.getBoundingClientRect();
       const cols = rect ? Math.max(40, Math.floor(rect.width / 8.6)) : 100;
       const rows = rect ? Math.max(10, Math.floor(rect.height / 17)) : 24;
-      // Project route when we have one (works with no agent row at all);
-      // the agent route stays for workdir-less sessions until Phase 4.
+      // Project-addressed open (a terminal is a (machine, cwd) pair).
       const t = project
         ? await api.openProjectTerminal(project.projectId, { cols, rows })
-        : agent
-          ? await api.openTerminal(agent.id, { cols, rows })
-          : null;
-      if (!t) throw new Error('no project or agent to open a terminal on');
+        : null;
+      if (!t) throw new Error('no project to open a terminal on');
       terminalIdRef.current = t.id;
       joinTerminal(t.id);
       setStatus({ kind: 'open', terminal: t });
@@ -143,7 +135,7 @@ export function TerminalPane({ project, agent, supported, machineName }: Props) 
         message: (err as Error).message ?? 'failed to open terminal',
       });
     }
-  }, [project, agent, supported]);
+  }, [project, supported]);
 
   const close = useCallback(() => {
     const id = terminalIdRef.current;
@@ -264,12 +256,12 @@ export function TerminalPane({ project, agent, supported, machineName }: Props) 
     return off;
   }, []);
 
-  // On unmount or agent switch, teardown completely.
+  // On unmount, teardown completely.
   useEffect(() => {
     return () => teardown();
   }, [teardown]);
 
-  // When the user switches agents, drop the open terminal and reset.
+  // When the user switches projects, drop the open terminal and reset.
   useEffect(() => {
     return () => {
       // Note: we don't auto-close the PTY on project switch — the user
@@ -277,7 +269,7 @@ export function TerminalPane({ project, agent, supported, machineName }: Props) 
       // shell exits or after the per-sidecar maxSessions cap. If you
       // want strict cleanup, call `close()` here.
     };
-  }, [project?.projectId, agent?.id]);
+  }, [project?.projectId]);
 
   if (!supported) {
     return (

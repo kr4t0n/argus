@@ -1,6 +1,5 @@
 import type {
   AgentQuota,
-  AgentStatus,
   AgentType,
   AvailableAdapter,
   CommandStatus,
@@ -89,37 +88,6 @@ export interface ProjectDTO {
   iconKey: string | null;
 }
 
-export interface AgentDTO {
-  id: string;
-  /** User-friendly label, unique within a machine. */
-  name: string;
-  type: AgentType;
-  machineId: string;
-  /** Denormalized for sidebar display; matches Machine.name at render time. */
-  machineName: string;
-  status: AgentStatus;
-  /**
-   * Whether this agent's supervisor has a PTY runner attached. Controls
-   * whether the dashboard exposes the Terminal pane; the server also
-   * rejects terminal-open requests for agents where this is false.
-   */
-  supportsTerminal: boolean;
-  version: string | null;
-  workingDir: string | null;
-  lastHeartbeatAt: string;
-  registeredAt: string;
-  /** ISO timestamp; null means the agent is visible/unarchived. */
-  archivedAt: string | null;
-}
-
-export interface CreateAgentRequest {
-  name: string;
-  type: AgentType;
-  workingDir?: string;
-  supportsTerminal?: boolean;
-  /** Optional adapter-specific options forwarded to the sidecar. */
-  adapter?: Record<string, unknown>;
-}
 
 export interface SessionDTO {
   id: string;

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, X } from 'lucide-react';
-import type { AgentDTO, AvailableAdapter, MachineDTO, ModelSelection } from '@argus/shared-types';
+import type { AvailableAdapter, MachineDTO, ModelSelection } from '@argus/shared-types';
 import { api, ApiError } from '../lib/api';
 import { useSessionStore } from '../stores/sessionStore';
 import { agentTypeLabel, AgentTypeIcon } from './ui/AgentTypeIcon';
@@ -10,12 +10,16 @@ import { ModelPicker } from './ModelPicker';
 import { cn } from '../lib/utils';
 
 /**
- * Floating "create agent" form anchored to a machine row in the
+ * Floating "new session" form anchored to a project row in the
  * sidebar. Rendered through a portal positioned by the row's
  * bounding rect so the popover escapes the sidebar's overflow
- * container — the machine list is bottom-pinned with its own
+ * container — the list is bottom-pinned with its own
  * `overflow-y-auto`, which otherwise clips a popover that pops
  * "above" the row.
+ *
+ * Named `CreateAgentPopover` for historical reasons; since the Agent
+ * entity was retired it only creates project-first sessions (the
+ * server pins the session to the machine + workingDir project).
  *
  * Placement: the popover floats to the right of the sidebar (so it
  * doesn't overlap the row itself), vertically aligned with the row's
@@ -36,34 +40,12 @@ type Props = {
   /** The row the popover is anchored to; used for positioning. */
   anchor: React.RefObject<HTMLElement | null>;
   onClose: () => void;
-  /**
-   * Prefill values for workingDir and the terminal toggle. In agent
-   * mode they prefill the form fields (still editable); in
-   * `asSession` mode the fields are hidden and these values are used
-   * silently at agent creation time.
-   */
+  /** The project's workingDir + terminal capability, used silently at
+   *  session-create time (the session pins to this project). */
   defaults?: {
     workingDir?: string;
     supportsTerminal?: boolean;
   };
-  /**
-   * Switches the popover from "create agent" to "create session":
-   *  - title + name label flip to session terminology
-   *  - workingDir + terminal inputs vanish (values from `defaults`)
-   *  - submit auto-vivifies a project-scoped agent (reuses an
-   *    `existingAgents` entry of the chosen type, creates one with
-   *    an auto-generated name if none exists), then creates a session
-   *    titled with the user's input, then navigates to it
-   * `MachinePanel` keeps the default (agent mode) for raw agent
-   * creation; only `ProjectRow` flips this on.
-   */
-  asSession?: boolean;
-  /**
-   * Existing agents in the project context. Used by `asSession` mode
-   * to look up a same-type agent to reuse before creating a new one.
-   * Empty/omitted in agent mode.
-   */
-  existingAgents?: AgentDTO[];
 };
 
 // Sized so (a) the model picker's model + effort/variant + facet
@@ -76,14 +58,7 @@ type Props = {
 const POPOVER_WIDTH = 352;
 const VIEWPORT_MARGIN = 8; // keep this far from the edge
 
-export function CreateAgentPopover({
-  machine,
-  anchor,
-  onClose,
-  defaults,
-  asSession = false,
-  existingAgents,
-}: Props) {
+export function CreateAgentPopover({ machine, anchor, onClose, defaults }: Props) {
   const upsertSession = useSessionStore((s) => s.upsertSession);
   const nav = useNavigate();
   const adapters = (machine.availableAdapters ?? []) as AvailableAdapter[];
@@ -91,20 +66,17 @@ export function CreateAgentPopover({
 
   const [type, setType] = useState<string>(defaultType);
   const [name, setName] = useState('');
-  const [workingDir, setWorkingDir] = useState(defaults?.workingDir ?? '');
-  const [supportsTerminal, setSupportsTerminal] = useState(defaults?.supportsTerminal ?? false);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Per-adapter model choice, keyed by adapter type so flipping
   // Claude Code → Codex → back doesn't lose the Claude selection.
-  // Session mode only; agent creation doesn't carry a model default.
   const [modelByType, setModelByType] = useState<Record<string, ModelSelection | null>>({});
   const modelSelection = modelByType[type] ?? null;
   // Catalogs are machine×CLI (Phase 2), so the picker works even for
   // the project's first session on an adapter — the old cold-start
   // free-text degradation only remains for machines that never
   // reported a catalog at all.
-  const catalogTarget = asSession && type ? { machineId: machine.id, cliType: type } : null;
+  const catalogTarget = type ? { machineId: machine.id, cliType: type } : null;
   const popRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -187,16 +159,14 @@ export function CreateAgentPopover({
     setSubmitting(true);
     setErr(null);
     try {
-      // Project-first create (Phase 1 of the agent→runner refactor): the
-      // server pins the session to this (machine, workingDir) project.
-      // The user names the session, never an agent. Empty custom input
-      // ({model: ''}) normalizes to "Default". (The legacy !asSession
-      // create-agent path retired with the Agent entity in Phase 5.)
+      // Project-first create: the server pins the session to this
+      // (machine, workingDir) project. The user names the session.
+      // Empty custom input ({model: ''}) normalizes to "Default".
       const selection = modelSelection?.model ? modelSelection : undefined;
       const { session } = await api.createSession({
         machineId: machine.id,
         workingDir: defaults?.workingDir,
-        cliType: type as AgentDTO['type'],
+        cliType: type,
         supportsTerminal: defaults?.supportsTerminal ?? false,
         title: name.trim(),
         modelSelection: selection,
@@ -225,21 +195,10 @@ export function CreateAgentPopover({
         visibility: pos ? 'visible' : 'hidden',
       }}
       role="dialog"
-      aria-label={asSession ? 'Create session' : `Create agent on ${machine.name}`}
+      aria-label="Create session"
     >
       <div className="mb-4 flex items-center justify-between">
-        <div className="text-caps">
-          {asSession ? (
-            <>new session</>
-          ) : (
-            <>
-              new agent on{' '}
-              <span className="text-fg-secondary normal-case tracking-normal text-xs font-normal">
-                {machine.name}
-              </span>
-            </>
-          )}
-        </div>
+        <div className="text-caps">new session</div>
         <button
           onClick={onClose}
           className="text-fg-muted hover:text-fg-secondary"
@@ -252,8 +211,7 @@ export function CreateAgentPopover({
 
       {machine.status === 'offline' && (
         <div className="mb-3 rounded-md bg-surface-2/40 px-3 py-2 text-xs text-amber-600 dark:text-amber-300">
-          this machine is offline; the {asSession ? 'session' : 'agent'} will queue and start
-          when the sidecar reconnects
+          this machine is offline; the session will queue and start when the sidecar reconnects
         </div>
       )}
       {adapters.length === 0 && (
@@ -332,48 +290,23 @@ export function CreateAgentPopover({
             which re-toggles the dropdown on every option click. Blink
             only forwards when propagation is intact, WebKit always;
             a div sidesteps the quirk in every engine. */}
-        {asSession && (
-          <Field label="model" as="div">
-            <ModelPicker
-              target={catalogTarget}
-              value={modelSelection}
-              onChange={(v) => setModelByType((prev) => ({ ...prev, [type]: v }))}
-            />
-          </Field>
-        )}
+        <Field label="model" as="div">
+          <ModelPicker
+            target={catalogTarget}
+            value={modelSelection}
+            onChange={(v) => setModelByType((prev) => ({ ...prev, [type]: v }))}
+          />
+        </Field>
 
-        <Field label={asSession ? 'session name' : 'name'}>
+        <Field label="session name">
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder={asSession ? 'refactor checkout flow, …' : 'api-bot, frontend, …'}
+            placeholder="refactor checkout flow, …"
             autoFocus
             className="w-full rounded-md bg-surface-2/40 px-3 py-2 text-sm text-fg-primary outline-none transition-colors placeholder:text-fg-muted focus:bg-surface-2"
           />
         </Field>
-
-        {!asSession && (
-          <>
-            <Field label="working dir (optional)">
-              <input
-                value={workingDir}
-                onChange={(e) => setWorkingDir(e.target.value)}
-                placeholder="/Users/you/projects/foo"
-                className="w-full rounded-md bg-surface-2/40 px-3 py-2 font-mono text-xs text-fg-primary outline-none transition-colors placeholder:text-fg-muted focus:bg-surface-2"
-              />
-            </Field>
-
-            <label className="flex items-center gap-2 px-0.5 py-1 text-xs text-fg-secondary cursor-pointer">
-              <input
-                type="checkbox"
-                checked={supportsTerminal}
-                onChange={(e) => setSupportsTerminal(e.target.checked)}
-                className="h-3.5 w-3.5 accent-emerald-500"
-              />
-              attach interactive terminal
-            </label>
-          </>
-        )}
 
         {err && (
           <div className="rounded border border-red-500/30 bg-red-500/10 px-2 py-1.5 text-xs text-red-600 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-400">

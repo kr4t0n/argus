@@ -68,13 +68,12 @@ export function SessionPanel() {
     // re-entry, force `loadSession` to refetch the tail window
     // instead of returning the (now-stale) cached entry — but only
     // when the cache still THINKS something is running. The
-    // App-level agent:status handler silently prefetches sessions
-    // whose agent flipped busy → online, so by the time the user
-    // navigates back the cached entry is usually already fresh
+    // session:status handler keeps the list fresh, so by the time the
+    // user navigates back the cached entry is usually already fresh
     // (running=false) and we can render instantly with no loading
     // flash. The local force-refetch is the fallback for the case
-    // where the user re-enters before the prefetch has completed,
-    // or before the agent flipped status (e.g. machine offline).
+    // where the user re-enters before the status update landed (e.g.
+    // machine offline).
     //
     // Why force-refetch and not a partial-seq backfill: the chunk
     // `seq` is per-command (each command's chunks restart at 1), but

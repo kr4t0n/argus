@@ -148,12 +148,6 @@ export function resetSocket() {
   handlers.clear();
 }
 
-export function joinAgent(agentId: string) {
-  ensureSocket().emit('subscribe:agent', agentId);
-}
-export function leaveAgent(agentId: string) {
-  ensureSocket().emit('unsubscribe:agent', agentId);
-}
 export function joinSession(sessionId: string) {
   ensureSocket().emit('subscribe:session', sessionId);
 }

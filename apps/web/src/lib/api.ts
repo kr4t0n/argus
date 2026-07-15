@@ -225,8 +225,7 @@ export const api = {
   cancelCommand: (id: string) => http<CommandDTO>(`/commands/${id}/cancel`, { method: 'POST' }),
 
   // Terminals
-  /** Project-addressed open — a terminal is a (machine, cwd) pair; the
-   *  agent route below is legacy and dies in Phase 4. */
+  /** Project-addressed open — a terminal is a (machine, cwd) pair. */
   openProjectTerminal: (projectId: string, body: OpenTerminalRequest = {}) =>
     http<TerminalDTO>(`/projects/${projectId}/terminals`, {
       method: 'POST',
@@ -234,11 +233,6 @@ export const api = {
     }),
   listProjectTerminals: (projectId: string) =>
     http<TerminalDTO[]>(`/projects/${projectId}/terminals`),
-  openTerminal: (agentId: string, body: OpenTerminalRequest = {}) =>
-    http<TerminalDTO>(`/agents/${agentId}/terminals`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
 
   // Sidecar version + remote update
   getSidecarVersion: (machineId: string) =>

@@ -214,54 +214,19 @@ export interface AgentQuota {
 // Machine control plane (server → sidecar)
 //
 // Per-machine stream `machine:<machineId>:control`. The server publishes
-// CreateAgent / DestroyAgent commands when a dashboard user mutates the
-// machine's agent set, plus a SyncAgents reconcile broadcast on every
-// (re)connect so a sidecar that missed events while offline catches up
-// without operator intervention.
+// a SyncProjects reconcile broadcast on every (re)connect so a sidecar
+// that missed events while offline catches up without operator
+// intervention. The legacy per-agent CreateAgent / DestroyAgent /
+// SyncAgents commands retired with the Agent entity.
 // ─────────────────────────────────────────────────────────────────────
-
-/** Embedded inside Create / Sync. Mirrors what the sidecar caches. */
-export interface AgentSpec {
-  agentId: string;
-  name: string;
-  type: AgentType;
-  workingDir?: string;
-  supportsTerminal: boolean;
-  /** Optional adapter-specific overrides (e.g. binary path, extraArgs).
-   *  Sidecar passes these straight to the adapter factory. */
-  adapter?: Record<string, unknown>;
-}
-
-export interface CreateAgentCommand {
-  kind: 'create-agent';
-  agent: AgentSpec;
-  ts: number;
-}
-
-export interface DestroyAgentCommand {
-  kind: 'destroy-agent';
-  agentId: string;
-  ts: number;
-}
-
-/** Full canonical list — sidecar reconciles its supervisor set against
- *  this and stops/starts deltas. Sent on every (re)connect. Legacy
- *  (< 0.3.0) sidecars only — runner sidecars get SyncProjects instead. */
-export interface SyncAgentsCommand {
-  kind: 'sync-agents';
-  agents: AgentSpec[];
-  ts: number;
-}
 
 /**
  * Full idempotent snapshot of the machine's known-project workdir
- * allowlist. Phase 3 (docs/plan-agent-to-runners.md): runner sidecars
- * (≥ 0.3.0) have no supervisors, so create/destroy/sync-agents is
- * replaced by this one command — the sidecar reconciles its fs/git
- * jail allowlist (`workdirAllowed`) and refcounted watcher registry
- * against the list. Re-sent on every machine-register and after any
- * agent vivify/create/destroy, so a missed entry heals on the next
- * trigger.
+ * allowlist. Runner sidecars (≥ 0.3.0) have no supervisors, so the
+ * sidecar reconciles its fs/git jail allowlist (`workdirAllowed`) and
+ * refcounted watcher registry against this list. Re-sent on every
+ * machine-register and after any project change, so a missed entry heals
+ * on the next trigger.
  */
 export interface SyncProjectsCommand {
   kind: 'sync-projects';
@@ -706,9 +671,6 @@ export interface ModelCatalogResponseEvent {
 }
 
 export type MachineControlCommand =
-  | CreateAgentCommand
-  | DestroyAgentCommand
-  | SyncAgentsCommand
   | SyncProjectsCommand
   | FSListRequestCommand
   | FSReadRequestCommand
