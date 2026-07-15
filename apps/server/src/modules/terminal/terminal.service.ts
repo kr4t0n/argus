@@ -111,12 +111,10 @@ export class TerminalService {
    * terminal-capable agent under it by the switchover migration, and set
    * by the create-project flow going forward).
    *
-   * `agentId` still rides the wire frame when a representative agent
-   * exists, because PRE-runner sidecars (<0.3) resolve the PTY's
-   * capability + default cwd through their agent lookup. Runner sidecars
-   * ignore it and honor the explicit cwd. A legacy machine with no
-   * terminal-capable agent under the project therefore can't open one —
-   * surfaced as a clear 400 rather than a silent sidecar-side reject.
+   * The frame carries no agentId — the runner (≥0.3) resolves the PTY by
+   * the explicit cwd. A pre-runner sidecar (<0.3) has no runner to open
+   * one on and is rejected earlier with a clear 400 (see the
+   * isRunnerSidecar gate in openForProject).
    */
   async openForProject(
     userId: string,
@@ -196,9 +194,6 @@ export class TerminalService {
     const sent = this.link.send(machineId, {
       kind: 'terminal-open',
       terminalId: id,
-      // Empty string (not omitted): the Go frame types AgentID as a
-      // plain string, and the runner ignores it (routes by cwd).
-      agentId: '',
       shell: req.shell ?? '',
       cwd,
       cols,

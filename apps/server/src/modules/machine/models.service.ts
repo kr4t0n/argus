@@ -50,9 +50,8 @@ const REVALIDATE_AFTER_MS = 6 * 60 * 60 * 1_000;
  * across server restarts and shared by all browsers. The live RPC
  * (same pending-promise pattern as FSService) runs only for: the
  * manual `?refresh=1` path, the cold case, and the background
- * stale-revalidate. The wire request carries `cliType` for Phase-2
- * sidecars plus a representative `agentId` so pre-Phase-2 sidecars
- * keep answering.
+ * stale-revalidate. The wire request is keyed purely by `cliType` —
+ * the Agent entity is retired, so there's no agentId on the frame.
  */
 @Injectable()
 export class ModelsService implements OnModuleDestroy {
@@ -173,7 +172,6 @@ export class ModelsService implements OnModuleDestroy {
       await this.redis.publish(streamKeys.machineControl(machineId), {
         kind: 'list-models',
         requestId,
-        agentId: '',
         cliType,
         ts: Date.now(),
       });

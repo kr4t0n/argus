@@ -51,8 +51,7 @@ type Pending = PendingList | PendingRead | PendingGitLog;
  * Where an fs/git RPC is aimed: the (machineId, workingDir) pair. The
  * runner sidecar (≥0.3) serves by `workingDir`, validating it against
  * its allowlist — the Agent entity is retired, so nothing routes by
- * agent anymore (the wire still carries an empty `agentId` for the
- * sidecar's attribution echo).
+ * agent anymore and the wire frame carries no agentId.
  */
 interface RPCTarget {
   machineId: string;
@@ -155,7 +154,6 @@ export class FSService implements OnModuleDestroy {
       await this.redis.publish(streamKeys.machineControl(target.machineId), {
         kind: 'fs-list',
         requestId,
-        agentId: '',
         workingDir: target.workingDir,
         path: path ?? '',
         showAll: !!showAll,
@@ -207,7 +205,6 @@ export class FSService implements OnModuleDestroy {
       await this.redis.publish(streamKeys.machineControl(target.machineId), {
         kind: 'fs-read',
         requestId,
-        agentId: '',
         workingDir: target.workingDir,
         path,
         ts: Date.now(),
@@ -256,7 +253,6 @@ export class FSService implements OnModuleDestroy {
       await this.redis.publish(streamKeys.machineControl(target.machineId), {
         kind: 'git-log',
         requestId,
-        agentId: '',
         workingDir: target.workingDir,
         limit: effectiveLimit,
         ts: Date.now(),

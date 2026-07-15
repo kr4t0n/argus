@@ -60,16 +60,6 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.debug(`client disconnected sid=${client.id}`);
   }
 
-  @SubscribeMessage('subscribe:agent')
-  subAgent(@ConnectedSocket() c: Socket, @MessageBody() agentId: string) {
-    c.join(`agent:${agentId}`);
-  }
-
-  @SubscribeMessage('unsubscribe:agent')
-  unsubAgent(@ConnectedSocket() c: Socket, @MessageBody() agentId: string) {
-    c.leave(`agent:${agentId}`);
-  }
-
   @SubscribeMessage('subscribe:session')
   subSession(@ConnectedSocket() c: Socket, @MessageBody() sessionId: string) {
     c.join(`session:${sessionId}`);
@@ -195,12 +185,12 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // ------- Filesystem events -------
 
   /**
-   * Broadcast a dir-level change from the sidecar's fsnotify watcher.
-   * Emitted to the project room (Phase 2 — nudges are project-scoped,
-   * and two agents sharing a workdir emit interchangeable ones) AND
-   * the legacy agent room, so panes that haven't re-keyed yet keep
-   * refreshing. Pre-Phase-2 sidecars omit machineId/workingDir and
-   * get agent-room-only fanout.
+   * Broadcast a dir-level change from the sidecar's fsnotify watcher to
+   * the project room — nudges are project-scoped (two runners sharing a
+   * workdir emit interchangeable ones). The Agent entity is retired, so
+   * there's no agent-room fanout; `agentId` rides the payload as
+   * attribution only. A runner event without machineId/workingDir has
+   * nothing to route on and is dropped.
    */
   emitFSChanged(payload: {
     agentId: string;
@@ -208,7 +198,6 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
     machineId?: string;
     workingDir?: string;
   }) {
-    this.server.to(`agent:${payload.agentId}`).emit('fs:changed', payload);
     if (payload.machineId && payload.workingDir) {
       this.server
         .to(projectRoom(payload.machineId, payload.workingDir))
@@ -218,11 +207,9 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   /**
    * Broadcast a debounced ref-change from the sidecar's secondary git
-   * watcher. Same dual project-room + legacy agent-room fanout as
-   * emitFSChanged.
+   * watcher. Same project-room fanout as emitFSChanged.
    */
   emitGitChanged(payload: { agentId: string; machineId?: string; workingDir?: string }) {
-    this.server.to(`agent:${payload.agentId}`).emit('git:changed', payload);
     if (payload.machineId && payload.workingDir) {
       this.server
         .to(projectRoom(payload.machineId, payload.workingDir))

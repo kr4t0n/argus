@@ -316,7 +316,6 @@ export interface GitStatus {
 export interface FSListRequestCommand {
   kind: 'fs-list';
   requestId: string;
-  agentId: string;
   path: string;
   showAll: boolean;
   /** How many directory levels to include in the response, counting the
@@ -334,7 +333,7 @@ export interface FSListRequestCommand {
 }
 
 /**
- * Read one file's contents. Path is jailed to the agent's workingDir
+ * Read one file's contents. Path is jailed to the request's workingDir
  * (sidecar enforces) and capped at FS_READ_MAX_BYTES — over the cap is
  * returned as `result: 'error'` with a "file too large" message rather
  * than truncating, since a partial highlight is misleading. Binary
@@ -344,7 +343,6 @@ export interface FSListRequestCommand {
 export interface FSReadRequestCommand {
   kind: 'fs-read';
   requestId: string;
-  agentId: string;
   path: string;
   ts: number;
 }
@@ -356,7 +354,7 @@ export const FS_READ_MAX_BYTES = 1_048_576;
 
 /**
  * Asks the sidecar for the most recent N commits reachable from the
- * agent's HEAD. Same control-plane RPC pattern as fs-list / fs-read:
+ * workingDir's HEAD. Same control-plane RPC pattern as fs-list / fs-read:
  * server publishes on the per-machine control stream, sidecar replies
  * on the lifecycle stream. The sidecar caps at GIT_LOG_MAX_LIMIT (200)
  * regardless of what's requested.
@@ -364,7 +362,6 @@ export const FS_READ_MAX_BYTES = 1_048_576;
 export interface GitLogRequestCommand {
   kind: 'git-log';
   requestId: string;
-  agentId: string;
   /** Default 50, max 200. Server validates the upper bound; sidecar
    *  applies the same cap defensively. */
   limit?: number;
@@ -666,15 +663,15 @@ export interface ModelCatalogEntry {
 }
 
 /**
- * Server → sidecar: ask for the model catalog of one agent's CLI. Same
- * control-plane RPC shape as fs-list / git-log: request rides the
- * per-machine control stream, response comes back on the lifecycle
- * stream keyed by requestId.
+ * Server → sidecar: ask for the model catalog of one of the machine's
+ * installed CLIs (identified by `cliType`). Same control-plane RPC shape
+ * as fs-list / git-log: request rides the per-machine control stream,
+ * response comes back on the lifecycle stream keyed by requestId.
  */
 export interface ListModelsRequestCommand {
   kind: 'list-models';
   requestId: string;
-  agentId: string;
+  cliType: string;
   ts: number;
 }
 
@@ -1014,7 +1011,6 @@ export interface SessionCloneFailedEvent {
 export interface TerminalOpen {
   kind: 'terminal-open';
   terminalId: string;
-  agentId: string;
   /** Optional shell path; sidecar enforces an allowlist. Empty → default. */
   shell?: string;
   /** Optional cwd; defaults to the sidecar's workingDir. */
