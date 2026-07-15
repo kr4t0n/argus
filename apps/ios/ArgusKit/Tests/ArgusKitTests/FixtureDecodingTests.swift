@@ -70,7 +70,7 @@ struct FixtureDecodingTests {
         #expect(!detail.chunks.isEmpty)
 
         // REST chunks: ISO-string ts must have parsed to real millis, and
-        // the absent sessionId/agentId/isFinal must not have broken decode.
+        // the absent sessionId/isFinal must not have broken decode.
         #expect(detail.chunks.allSatisfy { $0.ts > 0 })
         #expect(detail.chunks.allSatisfy { $0.sessionId == nil })
         #expect(detail.chunks.allSatisfy { $0.kind != .unknown })

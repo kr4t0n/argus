@@ -1,16 +1,13 @@
 import Foundation
 
 // Mirrors packages/shared-types/src/api.ts (terminals). The PTY is
-// per-agent and opt-in at agent-create time (`supportsTerminal`); the
-// server scopes terminals to the opening user and rejects opens for
-// offline agents / agents without a PTY runner.
+// project-scoped and opt-in via the project's `supportsTerminal`; the
+// server scopes terminals to the opening user and rejects opens on
+// offline machines or projects without a PTY runner.
 
 /// 'opening' | 'open' | 'closed' | 'error' — open string for tolerance.
 public struct TerminalDTO: Codable, Equatable, Sendable, Identifiable {
     public var id: String
-    /// Attribution only; optional since the runner refactor (nulled on
-    /// Phase-4 servers).
-    public var agentId: String?
     public var userId: String
     public var status: String
     public var shell: String

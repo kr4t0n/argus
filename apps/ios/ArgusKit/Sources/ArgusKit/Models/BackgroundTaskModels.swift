@@ -11,9 +11,6 @@ public struct BackgroundTaskDTO: Codable, Equatable, Sendable, Identifiable {
     public var taskId: String
     public var machineId: String
     public var workingDir: String
-    /// Attribution only (the protocol keys tasks by machine × workdir);
-    /// optional since the runner refactor — runner sidecars send none.
-    public var agentId: String?
     public var label: String?
     public var cmd: [String]?
     /// Latest progress reading; absent until tqdm fires its first update.

@@ -16,7 +16,6 @@ enum TestSupport {
         ResultChunk(
             id: id,
             commandId: commandId,
-            agentId: "agent-1",
             sessionId: sessionId,
             seq: seq,
             kind: kind,
@@ -52,7 +51,6 @@ enum TestSupport {
         {
           "id": "\(id)",
           "sessionId": "\(sessionId)",
-          "agentId": "agent-1",
           "kind": "\(kind.rawValue)",
           "prompt": \(prompt.map { "\"\($0)\"" } ?? "null"),
           "status": "\(status.rawValue)",

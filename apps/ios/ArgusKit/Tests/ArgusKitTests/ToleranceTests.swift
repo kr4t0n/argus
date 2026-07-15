@@ -11,7 +11,7 @@ struct ToleranceTests {
     func unknownEnumValues() throws {
         let json = """
         {
-          "id": "s1", "userId": "u1", "agentId": "a1", "title": "t",
+          "id": "s1", "userId": "u1", "title": "t",
           "externalId": null, "status": "hibernating", "unread": false,
           "archivedAt": null,
           "createdAt": "2026-07-05T10:00:00.000Z",
@@ -26,7 +26,7 @@ struct ToleranceTests {
     func extraFieldsIgnored() throws {
         let json = """
         {
-          "id": "c1", "sessionId": "s1", "agentId": "a1", "kind": "execute",
+          "id": "c1", "sessionId": "s1", "kind": "execute",
           "prompt": "hi", "status": "completed",
           "createdAt": "2026-07-05T10:00:00.000Z", "completedAt": null,
           "usage": {"inputTokens": 5},
@@ -41,7 +41,7 @@ struct ToleranceTests {
     func wsChunkShape() throws {
         let json = """
         {
-          "id": "ch1", "commandId": "c1", "agentId": "a1", "sessionId": "s1",
+          "id": "ch1", "commandId": "c1", "sessionId": "s1",
           "seq": 3, "kind": "delta", "delta": "hey",
           "ts": 1751700000123, "isFinal": false
         }
@@ -79,7 +79,6 @@ struct ToleranceTests {
         """
         let chunk = try JSONDecoder().decode(ResultChunk.self, from: Data(json.utf8))
         #expect(chunk.sessionId == nil)
-        #expect(chunk.agentId == nil)
         #expect(!chunk.isFinal)
         #expect(chunk.kind == .unknown)
         #expect(chunk.ts > 1_700_000_000_000)
@@ -92,39 +91,11 @@ struct ToleranceTests {
 
     // MARK: Runner refactor (docs/plan-agent-to-runners.md)
     //
-    // Phase 4 nulls `agentId` on session/command/terminal rows and stops
-    // sending it on watcher nudges. A shipped build that force-decodes
-    // it would fail the WHOLE payload — the sidebar and every transcript
-    // would go dark on live devices. These tests are the contract that
-    // makes the server change safe to deploy.
-
-    @Test("SessionDTO decodes with agentId null, absent, or present")
-    func sessionAgentIdOptional() throws {
-        let base = """
-        "id": "s1", "userId": "u1", "title": "t",
-        "externalId": null, "status": "idle", "unread": false,
-        "archivedAt": null,
-        "createdAt": "2026-07-05T10:00:00.000Z",
-        "updatedAt": "2026-07-05T10:00:00.000Z"
-        """
-        // Phase-4 server: the column is nulled.
-        let nulled = try JSONDecoder().decode(
-            SessionDTO.self,
-            from: Data("{\(base), \"agentId\": null}".utf8)
-        )
-        #expect(nulled.agentId == nil)
-
-        // Belt and braces: the key dropped from the payload entirely.
-        let absent = try JSONDecoder().decode(SessionDTO.self, from: Data("{\(base)}".utf8))
-        #expect(absent.agentId == nil)
-
-        // Today's server still sends it — that must keep working.
-        let present = try JSONDecoder().decode(
-            SessionDTO.self,
-            from: Data("{\(base), \"agentId\": \"a1\"}".utf8)
-        )
-        #expect(present.agentId == "a1")
-    }
+    // The Agent entity is retired: sessions route by projectId, watcher
+    // nudges are project-scoped, and catalogs are machine×cliType. The
+    // wire no longer carries any agentId, and a stray one from an older
+    // server must decode as an ignored extra field — never a decode
+    // failure that would blank the sidebar on a live device.
 
     @Test("SessionDTO carries the Phase-1 project pin (projectId + cliType)")
     func sessionProjectPin() throws {
@@ -156,23 +127,9 @@ struct ToleranceTests {
         #expect(legacy.cliType == nil)
     }
 
-    @Test("CommandDTO decodes with agentId null (attribution-only column)")
-    func commandAgentIdOptional() throws {
-        let json = """
-        {
-          "id": "c1", "sessionId": "s1", "agentId": null, "kind": "execute",
-          "prompt": "hi", "status": "completed",
-          "createdAt": "2026-07-05T10:00:00.000Z", "completedAt": null
-        }
-        """
-        let command = try JSONDecoder().decode(CommandDTO.self, from: Data(json.utf8))
-        #expect(command.agentId == nil)
-        #expect(command.status == .completed)
-    }
-
-    @Test("ModelCatalogResponse decodes BOTH the machine route and the legacy agent route")
-    func modelCatalogBothRoutes() throws {
-        // Phase-2 shape: catalogs belong to (machineId, cliType).
+    @Test("ModelCatalogResponse decodes machine×cliType, tolerating a stray agentId")
+    func modelCatalogDecodes() throws {
+        // Catalogs belong to (machineId, cliType).
         let machineRoute = try JSONDecoder().decode(ModelCatalogResponse.self, from: Data("""
         {
           "machineId": "m1", "cliType": "claude-code", "source": "static",
@@ -180,41 +137,40 @@ struct ToleranceTests {
           "models": [{"id": "claude-fable-5", "displayName": "Fable 5"}]
         }
         """.utf8))
-        #expect(machineRoute.agentId == nil)
         #expect(machineRoute.machineId == "m1")
         #expect(machineRoute.cliType == "claude-code")
         #expect(machineRoute.models.count == 1)
 
-        // Legacy shape from an older server: no machineId/cliType.
-        let agentRoute = try JSONDecoder().decode(ModelCatalogResponse.self, from: Data("""
+        // An older server that still stamps agentId must decode fine —
+        // the stray key is ignored, machineId simply absent.
+        let stray = try JSONDecoder().decode(ModelCatalogResponse.self, from: Data("""
         {
           "agentId": "a1", "source": "cli",
           "fetchedAt": "2026-07-05T10:00:00.000Z", "models": []
         }
         """.utf8))
-        #expect(agentRoute.agentId == "a1")
-        #expect(agentRoute.machineId == nil)
+        #expect(stray.machineId == nil)
+        #expect(stray.models.isEmpty)
     }
 
-    @Test("watcher nudges decode from both sidecar generations")
+    @Test("watcher nudges decode from the project-scoped pair, tolerating a stray agentId")
     func watcherNudgeShapes() throws {
-        // Runner sidecar (≥0.3): empty agentId, project pair present —
-        // panels must match on (machineId, workingDir).
-        let runner = try JSONDecoder().decode(FSChangedPayload.self, from: Data("""
+        // Runner sidecar: project pair present — panels match on
+        // (machineId, workingDir). A stray empty agentId is ignored.
+        let fs = try JSONDecoder().decode(FSChangedPayload.self, from: Data("""
         {"agentId": "", "path": "src", "machineId": "m1", "workingDir": "/home/k/proj"}
         """.utf8))
-        #expect(runner.machineId == "m1")
-        #expect(runner.workingDir == "/home/k/proj")
+        #expect(fs.machineId == "m1")
+        #expect(fs.workingDir == "/home/k/proj")
 
-        // Pre-Phase-2 sidecar: agentId only — the legacy-room shim path.
-        let legacy = try JSONDecoder().decode(FSChangedPayload.self, from: Data("""
-        {"agentId": "a1", "path": "src"}
+        // A nudge with neither identity still decodes (degrades matching).
+        let bare = try JSONDecoder().decode(FSChangedPayload.self, from: Data("""
+        {"path": "src"}
         """.utf8))
-        #expect(legacy.agentId == "a1")
-        #expect(legacy.workingDir == nil)
+        #expect(bare.workingDir == nil)
 
         let git = try JSONDecoder().decode(GitChangedPayload.self, from: Data("""
-        {"agentId": "", "machineId": "m1", "workingDir": "/home/k/proj"}
+        {"machineId": "m1", "workingDir": "/home/k/proj"}
         """.utf8))
         #expect(git.workingDir == "/home/k/proj")
     }

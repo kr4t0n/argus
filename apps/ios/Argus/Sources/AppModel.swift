@@ -37,8 +37,7 @@ final class AppModel {
 
     /// Latest fs/git change events — inspector panels watch these and
     /// refetch when the event matches their project's
-    /// (machineId, workingDir) pair, or the legacy agentId for
-    /// pre-Phase-2 sidecars whose events carry no pair.
+    /// (machineId, workingDir) pair.
     private(set) var lastFSChange: FSChangedPayload?
     private(set) var lastGitChange: GitChangedPayload?
 

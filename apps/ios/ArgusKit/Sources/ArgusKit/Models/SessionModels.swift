@@ -10,17 +10,10 @@ import Foundation
 public struct SessionDTO: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var userId: String
-    /// Legacy routing FK. Optional since the runner refactor
-    /// (docs/plan-agent-to-runners.md Phase 4): the server nulls it once
-    /// agent rows retire, so no consumer may force-unwrap it.
-    public var agentId: String?
     /// The `(machineId, workingDir)` Project row this session is pinned
-    /// to. Nil for pre-backfill rows on workdir-less agents (the
-    /// per-machine "no project" bucket).
+    /// to. Nil for the per-machine "no project" bucket (workdir-less).
     public var projectId: String?
     /// CLI adapter type, denormalized onto the session at creation.
-    /// Nil only for pre-backfill rows whose agent vanished before the
-    /// Phase-1 migration ran.
     public var cliType: AgentType?
     public var title: String
     public var externalId: String?
@@ -61,9 +54,6 @@ public struct AttachmentDTO: Codable, Equatable, Sendable, Identifiable {
 public struct CommandDTO: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var sessionId: String
-    /// Attribution only; optional since the runner refactor (nulled on
-    /// Phase-4 servers, absent for runner-dispatched turns).
-    public var agentId: String?
     public var kind: CommandKind
     public var prompt: String?
     public var status: CommandStatus
@@ -81,15 +71,13 @@ public struct CommandDTO: Codable, Equatable, Sendable, Identifiable {
 /// The same logical chunk arrives in two dressings (verified against a
 /// live server — see Tests/Fixtures/session-detail.json):
 ///   - WS `chunk` events relay the wire ResultChunk verbatim: carries
-///     `agentId`/`sessionId`/`isFinal`, `ts` is Unix millis (number);
-///   - REST rows come from Postgres: NO agentId/sessionId/isFinal
-///     columns (implied by the route), `ts` is an ISO string.
+///     `sessionId`/`isFinal`, `ts` is Unix millis (number);
+///   - REST rows come from Postgres: NO sessionId/isFinal columns
+///     (implied by the route), `ts` is an ISO string.
 /// The custom decoder below absorbs both.
 public struct ResultChunk: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var commandId: String
-    /// Present on WS-relayed chunks only.
-    public var agentId: String?
     /// Present on WS-relayed chunks only.
     public var sessionId: String?
     public var seq: Int
@@ -109,7 +97,6 @@ public struct ResultChunk: Codable, Equatable, Sendable, Identifiable {
     public init(
         id: String,
         commandId: String,
-        agentId: String? = nil,
         sessionId: String? = nil,
         seq: Int,
         kind: ResultKind,
@@ -121,7 +108,6 @@ public struct ResultChunk: Codable, Equatable, Sendable, Identifiable {
     ) {
         self.id = id
         self.commandId = commandId
-        self.agentId = agentId
         self.sessionId = sessionId
         self.seq = seq
         self.kind = kind
@@ -133,14 +119,13 @@ public struct ResultChunk: Codable, Equatable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, commandId, agentId, sessionId, seq, kind, delta, content, meta, ts, isFinal
+        case id, commandId, sessionId, seq, kind, delta, content, meta, ts, isFinal
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         commandId = try container.decode(String.self, forKey: .commandId)
-        agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
         sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
         seq = try container.decode(Int.self, forKey: .seq)
         kind = try container.decode(ResultKind.self, forKey: .kind)

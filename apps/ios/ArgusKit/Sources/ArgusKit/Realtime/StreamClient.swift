@@ -28,21 +28,17 @@ public struct SessionCloneFailedPayload: Decodable, Equatable, Sendable {
     public let reason: String
 }
 
-/// fs/git nudges carry two identities during the mixed-fleet window:
-/// legacy sidecars send only `agentId`; runner sidecars send the
-/// `(machineId, workingDir)` pair with an EMPTY agentId (the event fans
-/// out to the project room only). Match on the pair when `workingDir`
-/// is non-empty, else on agentId. All fields optional for tolerance —
-/// a dropped identity must degrade matching, never decoding.
+/// fs/git nudges are scoped to the `(machineId, workingDir)` project the
+/// runner emitted them for; panels match on that pair. Both fields
+/// optional for tolerance — a dropped identity must degrade matching,
+/// never decoding.
 public struct FSChangedPayload: Decodable, Equatable, Sendable {
-    public let agentId: String?
     public let path: String
     public let machineId: String?
     public let workingDir: String?
 }
 
 public struct GitChangedPayload: Decodable, Equatable, Sendable {
-    public let agentId: String?
     public let machineId: String?
     public let workingDir: String?
 }
