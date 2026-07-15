@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Menu, PanelRightClose, PanelRightOpen } from 'lucide-react';
-import { useAgentStore } from '../stores/agentStore';
+import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
 import { useFileTabsStore } from '../stores/fileTabsStore';
@@ -33,9 +33,16 @@ export function SessionPanel() {
   const entry = useSessionStore((s) => (sessionId ? s.entries[sessionId] : undefined));
   const loadSession = useSessionStore((s) => s.loadSession);
   const loadOlder = useSessionStore((s) => s.loadOlder);
-  const agent = useAgentStore((s) =>
-    entry?.session?.agentId ? s.agents[entry.session.agentId] : undefined,
+  // Reachability is a property of the machine now (the Agent entity is
+  // retired). Resolve the session's project, then its machine, and gate
+  // the composer on the machine being offline — undefined (boot race /
+  // workdir-less session) degrades to "enabled" since the server routes
+  // by projectId regardless of what the client knows.
+  const projectRef = useProjectRef(entry?.session);
+  const machine = useMachineStore((s) =>
+    projectRef ? s.machines[projectRef.machineId] : undefined,
   );
+  const machineOffline = machine?.status === 'offline';
   // The queued follow-ups for this session are drained app-wide by
   // `useQueueDrainer` (see App.tsx), so they keep sending even when this
   // panel isn't open — no per-panel flush here anymore.
@@ -46,9 +53,8 @@ export function SessionPanel() {
   const contextPaneWidth = useUIStore((s) => s.contextPaneWidth);
   const setContextPaneWidth = useUIStore((s) => s.setContextPaneWidth);
   const contextPaneRef = useRef<HTMLDivElement | null>(null);
-  const draft = useUIStore((s) =>
-    agent ? s.drafts[agent.id] ?? '' : '',
-  );
+  // Drafts key by session now (they used to key by agent id).
+  const draft = useUIStore((s) => (sessionId ? s.drafts[sessionId] ?? '' : ''));
   const setDraft = useUIStore((s) => s.setDraft);
 
   useEffect(() => {
@@ -122,12 +128,11 @@ export function SessionPanel() {
     if (sessionId) void loadOlder(sessionId);
   }, [sessionId, loadOlder]);
 
-  // File tabs: filtered to the current agent so the strip stays in
+  // File tabs: filtered to the current project so the strip stays in
   // context. The active tab is "the chat" when nothing's selected OR
-  // when the selection points to a different agent's file (those tabs
+  // when the selection points to a different project's file (those tabs
   // are hidden but the store still remembers them, so navigating back
-  // to the original agent restores the selection).
-  const projectRef = useProjectRef(entry?.session);
+  // to the original project restores the selection).
   const openFiles = useFileTabsStore((s) => s.openFiles);
   const activeFileKey = useFileTabsStore((s) => s.activeKey);
   const activeFile = useMemo(() => {
@@ -203,7 +208,7 @@ export function SessionPanel() {
           >
             <Menu className="h-4 w-4" />
           </button>
-          {agent && <AgentTypeIcon type={agent.type} />}
+          {entry.session.cliType && <AgentTypeIcon type={entry.session.cliType} />}
           <div className="flex items-center gap-2 min-w-0">
             <div className="font-display text-base font-semibold tracking-tight text-fg-primary truncate">
               {entry.session.title}
@@ -211,7 +216,7 @@ export function SessionPanel() {
             {elapsed && <span className="text-xs text-fg-tertiary">· {elapsed}</span>}
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <UsageBadge chunks={entry.chunks} agentType={agent?.type} />
+            <UsageBadge chunks={entry.chunks} agentType={entry.session.cliType ?? undefined} />
             <Button
               size="icon"
               variant="ghost"
@@ -248,7 +253,7 @@ export function SessionPanel() {
               commands={entry.commands}
               chunks={entry.chunks}
               running={running}
-              workingDir={agent?.workingDir}
+              workingDir={projectRef?.workingDir}
               hasMore={entry.hasMore}
               loadingOlder={entry.loadingOlder}
               onLoadOlder={onLoadOlder}
@@ -265,12 +270,12 @@ export function SessionPanel() {
             onSend={onSend}
             onCancel={onCancel}
             running={running}
-            disabled={!agent || agent.status === 'offline'}
+            disabled={machineOffline}
             initial={draft}
-            onChange={(v) => agent && setDraft(agent.id, v)}
+            onChange={(v) => sessionId && setDraft(sessionId, v)}
             placeholder={
-              agent?.status === 'offline'
-                ? `${agent.machineName} is offline`
+              machineOffline
+                ? `${machine?.name ?? 'machine'} is offline`
                 : 'Request changes or ask a question…'
             }
           />
@@ -289,7 +294,6 @@ export function SessionPanel() {
             onResize={setContextPaneWidth}
           />
           <ContextPane
-            agent={agent}
             session={entry.session}
             commands={entry.commands}
             chunks={entry.chunks}

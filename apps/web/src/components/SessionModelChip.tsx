@@ -3,7 +3,6 @@ import { ChevronDown, Cpu } from 'lucide-react';
 import type { ModelSelection, SessionDTO } from '@argus/shared-types';
 import { api } from '../lib/api';
 import { useSessionStore } from '../stores/sessionStore';
-import { useAgentStore } from '../stores/agentStore';
 import { ModelPicker, modelSelectionLabel, useModelCatalog } from './ModelPicker';
 import { cn } from '../lib/utils';
 
@@ -22,10 +21,10 @@ import { cn } from '../lib/utils';
  */
 export function SessionModelChip({
   session,
-  agentId,
+  machineId,
 }: {
   session: SessionDTO;
-  agentId: string | undefined;
+  machineId: string | undefined;
 }) {
   const upsertSession = useSessionStore((s) => s.upsertSession);
   const [open, setOpen] = useState(false);
@@ -37,11 +36,10 @@ export function SessionModelChip({
   const [pending, setPending] = useState<ModelSelection | null | undefined>(undefined);
   const wrapRef = useRef<HTMLDivElement>(null);
   // Catalogs are machine×CLI (Phase 2). The session's own cliType is
-  // authoritative; the agent row supplies machineId (and a type
-  // fallback for pre-backfill sessions).
-  const agent = useAgentStore((s) => (agentId ? s.agents[agentId] : undefined));
-  const cliType = session.cliType ?? agent?.type ?? null;
-  const target = agent && cliType ? { machineId: agent.machineId, cliType } : null;
+  // authoritative; the machineId comes from the session's resolved
+  // project (the Agent entity that used to supply it is retired).
+  const cliType = session.cliType ?? null;
+  const target = machineId && cliType ? { machineId, cliType } : null;
   const { catalog } = useModelCatalog(target);
 
   // Resync the draft when another browser/dialog changes the session.

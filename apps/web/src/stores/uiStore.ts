@@ -19,6 +19,7 @@ interface UIState {
   showArchived: Record<string, boolean>;
   /** Global toggle: show archived agents in the sidebar. */
   showArchivedAgents: boolean;
+  /** sessionId → the composer's unsent draft for that session. */
   drafts: Record<string, string>;
   /** User's theme preference. The resolved (system → light/dark) value
    *  is applied to <html> as the `dark` class by `applyTheme()`. */
@@ -55,7 +56,7 @@ interface UIState {
   toggleAgentExpanded: (id: string, expanded?: boolean) => void;
   toggleShowArchived: (agentId: string) => void;
   toggleShowArchivedAgents: () => void;
-  setDraft: (agentId: string, v: string) => void;
+  setDraft: (sessionId: string, v: string) => void;
   setTheme: (t: ThemePreference) => void;
   setNotificationsEnabled: (v: boolean) => void;
   setNotesExtensionEnabled: (v: boolean) => void;
@@ -116,8 +117,8 @@ export const useUIStore = create<UIState>()(
       toggleShowArchivedAgents() {
         set({ showArchivedAgents: !get().showArchivedAgents });
       },
-      setDraft(agentId, v) {
-        set({ drafts: { ...get().drafts, [agentId]: v } });
+      setDraft(sessionId, v) {
+        set({ drafts: { ...get().drafts, [sessionId]: v } });
       },
       setTheme(t) {
         set({ theme: t });

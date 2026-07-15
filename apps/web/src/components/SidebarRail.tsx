@@ -369,7 +369,7 @@ function RailSessionFlyout({
       </div>
       <div className="max-h-80 overflow-y-auto p-1">
         {sessions.map((s) => {
-          const agentType = s.agentId ? agents[s.agentId]?.type : undefined;
+          const agentType = s.cliType ?? undefined;
           // Same status-dot language as the full sidebar's SessionRow:
           // amber running, red failed, emerald done-but-unseen.
           return (

@@ -605,7 +605,7 @@ function ProjectRow({
               key={s.id}
               session={s}
               active={activeSessionId === s.id}
-              agentType={s.agentId ? agents[s.agentId]?.type : undefined}
+              agentType={s.cliType ?? undefined}
             />
           ))}
           {visibleSessions.length === 0 && (
