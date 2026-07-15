@@ -22,7 +22,7 @@ import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 import { FSService } from './fs.service';
 import { ModelsService } from './models.service';
-import { SidecarUpdateService, isRunnerSidecar, stripSidecarPrefix } from './sidecar-update.service';
+import { SidecarUpdateService, stripSidecarPrefix } from './sidecar-update.service';
 
 const CONSUMER = 'server-1';
 const STALE_AFTER_MS = 30_000;
@@ -242,24 +242,18 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     }
 
     const now = new Date();
-    await this.prisma.$transaction([
-      this.prisma.machine.update({
-        where: { id },
-        data: {
-          deletedAt: now,
-          status: 'offline',
-          // Free the unique display name for a future fresh install.
-          name: `${machine.name} (deleted ${now.toISOString()})`,
-        },
-      }),
-      // Soft-hide the agents — reuses the existing archive filtering.
-      // Deliberately NOT a delete: every agent's sessions and history
-      // hang off these rows and must outlive the machine.
-      this.prisma.agent.updateMany({
-        where: { machineId: id, archivedAt: null },
-        data: { archivedAt: now },
-      }),
-    ]);
+    // Soft tombstone. Sessions/commands/terminals keep their history
+    // (they hang off Project/Session rows, not the machine). The Agent
+    // entity is retired, so there's no per-agent cascade anymore.
+    await this.prisma.machine.update({
+      where: { id },
+      data: {
+        deletedAt: now,
+        status: 'offline',
+        // Free the unique display name for a future fresh install.
+        name: `${machine.name} (deleted ${now.toISOString()})`,
+      },
+    });
 
     this.gateway.emitMachineRemoved(id);
     this.logger.log(`machine ${id} (${machine.name}) soft-deleted`);
@@ -324,23 +318,16 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
    * a dropped control entry heals on the next one.
    *
    * Project rows are the authoritative source (every session pins one
-   * since Phase 1, archived or not — archived sessions stay resumable);
-   * live agents' workingDirs are unioned in to cover pre-promotion
-   * rows that never got a Project.
+   * since Phase 1, archived or not — archived sessions stay resumable).
    */
   private async syncProjects(machineId: string): Promise<void> {
-    const [projects, agents] = await Promise.all([
-      this.prisma.project.findMany({ where: { machineId }, select: { workingDir: true } }),
-      this.prisma.agent.findMany({
-        where: { machineId, archivedAt: null },
-        select: { workingDir: true },
-      }),
-    ]);
+    const projects = await this.prisma.project.findMany({
+      where: { machineId },
+      select: { workingDir: true },
+    });
     const workdirs = [
       ...new Set(
-        [...projects, ...agents]
-          .map((r) => r.workingDir?.trim() ?? '')
-          .filter((wd) => wd !== ''),
+        projects.map((r) => r.workingDir?.trim() ?? '').filter((wd) => wd !== ''),
       ),
     ];
     await this.publishControl(machineId, { kind: 'sync-projects', workdirs, ts: Date.now() });

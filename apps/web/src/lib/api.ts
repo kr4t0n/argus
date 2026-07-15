@@ -1,5 +1,4 @@
 import type {
-  AgentDTO,
   ApiKeyDTO,
   AttachmentDTO,
   BackgroundTasksResponse,
@@ -170,9 +169,6 @@ export const api = {
     http<{
       session: SessionDTO;
       command: CommandDTO | null;
-      /** Present only when this create auto-vivified an agent
-       *  (project-first shape, no reusable same-type agent). */
-      agent?: AgentDTO | null;
     }>(`/sessions`, {
       method: 'POST',
       body: JSON.stringify(body),

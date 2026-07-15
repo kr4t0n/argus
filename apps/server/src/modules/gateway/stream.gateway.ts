@@ -11,7 +11,6 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { Server, Socket } from 'socket.io';
 import type {
-  AgentDTO,
   BackgroundTaskDTO,
   CommandDTO,
   MachineDTO,
@@ -117,22 +116,6 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   // ------- Broadcast helpers (called from other services) -------
-
-  emitAgentUpsert(agent: AgentDTO) {
-    this.server.emit('agent:upsert', agent);
-  }
-
-  emitAgentStatus(id: string, status: AgentDTO['status']) {
-    this.server.emit('agent:status', { id, status });
-  }
-
-  emitAgentRemoved(id: string) {
-    this.server.emit('agent:removed', { id });
-  }
-
-  emitAgentSpawnFailed(payload: { machineId: string; agentId: string; reason: string }) {
-    this.server.emit('agent:spawn-failed', payload);
-  }
 
   emitMachineUpsert(machine: MachineDTO) {
     this.server.emit('machine:upsert', machine);

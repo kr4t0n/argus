@@ -2,7 +2,6 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { randomUUID } from 'crypto';
 import type { Session as PSession } from '@prisma/client';
 import type {
-  AgentDTO,
   AgentType,
   AvailableAdapter,
   Command as WireCommand,
@@ -109,14 +108,10 @@ export class SessionService {
    * Create a session on a project — the only shape since Phase 4: the
    * session is pinned to (machineId, workingDir, cliType) and routes to
    * the machine's runner for that CLI. No Agent row is created or
-   * referenced (`agentId` stays NULL); the returned `agent` is always
-   * null (the field is kept for response-shape compatibility with
-   * clients that still read it).
+   * referenced — the Agent entity was fully retired in the Phase-6
+   * sweep.
    */
-  async create(
-    userId: string,
-    input: CreateSessionInput,
-  ): Promise<{ session: SessionDTO; agent: AgentDTO | null }> {
+  async create(userId: string, input: CreateSessionInput): Promise<SessionDTO> {
     const machineId = input.machineId?.trim();
     const cliType = input.cliType?.trim();
     if (!machineId || !cliType) {
@@ -161,7 +156,7 @@ export class SessionService {
     });
     const dto = SessionService.toDto(s);
     this.gateway.emitSessionCreated(dto);
-    return { session: dto, agent: null };
+    return dto;
   }
 
   /**

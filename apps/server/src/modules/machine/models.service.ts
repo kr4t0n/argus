@@ -160,17 +160,6 @@ export class ModelsService implements OnModuleDestroy {
   }
 
   private async fetchCatalog(machineId: string, cliType: string): Promise<ModelCatalogResponse> {
-    // Representative agent: pre-Phase-2 sidecars route list-models by
-    // agentId only. Any live same-type agent works — the catalog
-    // doesn't depend on the workdir. None found is fine for Phase-2
-    // sidecars (they answer via cliType); an old sidecar then replies
-    // with its "agent not running" error, which is the honest state.
-    const rep = await this.prisma.agent.findFirst({
-      where: { machineId, type: cliType, archivedAt: null },
-      select: { id: true },
-      orderBy: { registeredAt: 'asc' },
-    });
-
     const requestId = randomUUID();
     const promise = new Promise<ModelCatalogResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -184,7 +173,7 @@ export class ModelsService implements OnModuleDestroy {
       await this.redis.publish(streamKeys.machineControl(machineId), {
         kind: 'list-models',
         requestId,
-        agentId: rep?.id ?? '',
+        agentId: '',
         cliType,
         ts: Date.now(),
       });
@@ -207,8 +196,9 @@ export class ModelsService implements OnModuleDestroy {
    *  - otherwise: resolve the pending REST call (no-op for stale ids).
    *    Persistence for this flavor happens in liveFetch so the manual
    *    refresh path can await it.
-   * Phase-2 sidecars self-describe with `cliType`; for older ones the
-   * type is resolved from the agent row.
+   * Runner sidecars (≥0.3) self-describe with `cliType`; an event that
+   * arrives without one is simply dropped (the Agent-row fallback that
+   * used to resolve the type retired with the Agent entity).
    */
   handleCatalogResponse(ev: ModelCatalogResponseEvent): void {
     if (ev.requestId === '') {
@@ -235,13 +225,7 @@ export class ModelsService implements OnModuleDestroy {
   }
 
   private async persistFromEvent(ev: ModelCatalogResponseEvent): Promise<void> {
-    let cliType = ev.cliType;
-    if (!cliType && ev.agentId) {
-      const agent = await this.prisma.agent
-        .findUnique({ where: { id: ev.agentId }, select: { type: true } })
-        .catch(() => null);
-      cliType = agent?.type;
-    }
+    const cliType = ev.cliType;
     if (!cliType) return;
     await this.persist(ev.machineId, cliType, ev.source ?? 'cli', ev.models ?? [], new Date(ev.ts));
   }

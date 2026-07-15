@@ -137,19 +137,13 @@ export class TerminalService {
       throw new BadRequestException('machine is offline');
     }
 
-    const rep = await this.prisma.agent.findFirst({
-      where: {
-        machineId: project.machineId,
-        workingDir: project.workingDir,
-        supportsTerminal: true,
-        archivedAt: null,
-      },
-      select: { id: true },
-      orderBy: { registeredAt: 'asc' },
-    });
-    if (!rep && !isRunnerSidecar(project.machine.sidecarVersion)) {
+    // Terminals are (machine, cwd)-addressed and served by the runner
+    // PTY. A pre-runner sidecar has no runner to open one on (and the
+    // Agent fallback that used to cover it is retired), so reject early
+    // with a clear message rather than letting the open hang.
+    if (!isRunnerSidecar(project.machine.sidecarVersion)) {
       throw new BadRequestException(
-        'this machine runs a pre-runner sidecar, which can only open terminals through a terminal-capable agent',
+        'this machine runs a pre-runner sidecar (<0.3), which cannot open terminals — upgrade argus-sidecar',
       );
     }
 
@@ -157,7 +151,6 @@ export class TerminalService {
       userId,
       machineId: project.machineId,
       projectId: project.id,
-      agentId: rep?.id ?? null,
       defaultCwd: project.workingDir,
       req,
     });
@@ -168,11 +161,10 @@ export class TerminalService {
     userId: string;
     machineId: string;
     projectId: string | null;
-    agentId: string | null;
     defaultCwd: string;
     req: OpenTerminalRequest;
   }): Promise<TerminalDTO> {
-    const { userId, machineId, projectId, agentId, defaultCwd, req } = args;
+    const { userId, machineId, projectId, defaultCwd, req } = args;
     if (!this.link.isConnected(machineId)) {
       throw new ServiceUnavailableException(
         'sidecar link not connected for this machine (check argus-sidecar logs)',
@@ -183,10 +175,8 @@ export class TerminalService {
     const rows = clampDimension(req.rows ?? 32, 5, 200);
     const id = randomUUID();
 
-    // Resolve cwd server-side: explicit request wins, else the project /
-    // agent working dir. Runner sidecars have no agent lookup to fall
-    // back on, so an empty cwd means "use the user's home", not "you
-    // figure it out".
+    // Resolve cwd server-side: explicit request wins, else the project's
+    // workingDir. An empty cwd means "use the user's home".
     const cwd = req.cwd?.trim() || defaultCwd || '';
 
     const row = await this.prisma.terminal.create({
@@ -206,9 +196,9 @@ export class TerminalService {
     const sent = this.link.send(machineId, {
       kind: 'terminal-open',
       terminalId: id,
-      // Empty string (not omitted) for runner-only opens: the Go frame
-      // types AgentID as a plain string.
-      agentId: agentId ?? '',
+      // Empty string (not omitted): the Go frame types AgentID as a
+      // plain string, and the runner ignores it (routes by cwd).
+      agentId: '',
       shell: req.shell ?? '',
       cwd,
       cols,

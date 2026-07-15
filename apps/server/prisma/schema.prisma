@@ -208,12 +208,10 @@ model Machine {
   // from that sidecar are ignored, so a still-running or restarting
   // sidecar can no longer resurrect the machine. A deleted machine is
   // filtered out of every active query. NO child rows are removed —
-  // its agents are soft-hidden via their own `archivedAt`, and the
-  // sessions/commands/chunks/terminals underneath survive so history
+  // the sessions/commands/chunks/terminals underneath survive so history
   // stays viewable through the normal session UI.
   deletedAt         DateTime?
 
-  agents       Agent[]
   quotas       MachineAgentQuota[]
   projectNotes ProjectNote[]
   projects     Project[]
@@ -295,36 +293,10 @@ model MachineCliCatalog {
   @@unique([machineId, cliType])
 }
 
-model Agent {
-  // Server-generated UUID. Returned by POST /machines/:id/agents and
-  // pushed to the sidecar via CreateAgentCommand.
-  id               String    @id @default(uuid())
-  // User-friendly label, unique within a single machine.
-  name             String
-  machineId        String
-  type             String
-  status           String    @default("offline") // online | offline | busy | error
-  supportsTerminal Boolean   @default(false)
-  version          String?
-  workingDir       String?
-  lastHeartbeatAt  DateTime
-  registeredAt     DateTime
-  archivedAt       DateTime? // soft-hide from sidebar; preserves history.
-
-  // Agent rows are legacy since Phase 4 — no longer created, no longer
-  // routed through. They persist only to feed Machine.agentCount and the
-  // syncProjects backfill (both keyed by machineId), and as a
-  // representative for fs/git/terminal attribution echoes. Session /
-  // Command / Terminal dropped their agentId FK in the Phase-5 sweep, so
-  // there are no back-relations anymore.
-  machine   Machine    @relation(fields: [machineId], references: [id], onDelete: Cascade)
-
-  @@unique([machineId, name])
-  @@index([status])
-  @@index([type])
-  @@index([archivedAt])
-  @@index([machineId])
-}
+// The Agent model was fully retired in the Phase-6 sweep
+// (docs/plan-agent-to-runners.md). Sessions route by projectId → machine
+// + cliType → runner stream; per-machine resources scale with installed
+// CLIs, not projects. The table + all its reads are gone.
 
 model Session {
   id         String   @id @default(cuid())
