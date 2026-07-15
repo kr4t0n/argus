@@ -1,8 +1,19 @@
 # Plan: retire per-agent resources — Runners (machine × CLI) + first-class Projects
 
-Status: draft for discussion · 2026-07-13
+Status: ✅ COMPLETE (2026-07-15) · originally drafted 2026-07-13
 Owner: kyle
-Prereq: Phase 0 (lifecycle consumer fix) ships independently, before any of this.
+Prereq: Phase 0 (lifecycle consumer fix) shipped independently, before the rest.
+
+> **This refactor has landed in full.** The `Agent` entity is retired end to
+> end: no `Agent` table, no per-agent supervisor/heartbeat/stream, and no
+> `agentId` anywhere on the wire, in the DB, or in any client (server, web,
+> iOS, Go sidecar). Sessions route by `projectId → machine + cliType → runner
+> stream`; the whole fleet runs runner sidecars (≥ 0.3), and the legacy
+> pre-runner protocol has been deleted. The phase-by-phase plan below is kept
+> for historical context — see AGENTS.md for the current architecture. Landed
+> across: server Agent-table drop (migrations `9_phase5_*`, `9_phase6_*`),
+> web `AgentDTO` retirement, iOS agent rip-out, and the final legacy-wire +
+> `agentId`-attribution sweep once the fleet was confirmed all-≥0.3.
 
 ## 1. Motivation
 

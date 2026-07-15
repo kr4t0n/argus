@@ -28,16 +28,17 @@ token-level streaming with reconnect-safe replay.
 
 - **Streaming-first UI**: typewriter deltas, tool-call pills, stdout/stderr
 blocks, auto-scroll-with-stickiness, replay-on-reconnect.
-- **Machine-driven agents**: each host runs one `argus-sidecar` daemon
-that self-registers as a *Machine*. Agents are created from the
-dashboard ("hover a machine, click +") and the server pushes them
-down to the sidecar over a per-machine Redis control stream — no
-YAML files to ship to remote boxes.
+- **Machine-driven runners**: each host runs one `argus-sidecar` daemon
+that self-registers as a *Machine* and runs one runner per installed
+CLI. You create **sessions** from the dashboard ("hover a project, click
++"); each session pins to a `(machine, workingDir)` project and a CLI
+type, and the server routes its turns to the machine's runner over a
+per-CLI Redis stream — no YAML files to ship to remote boxes.
 - **Sessions = conversations**: long-lived chat threads tied to the CLI's
 native `--resume` ids so you can pick up where you left off.
 - **Pluggable adapters with auto-discovery**: `claude-code`, `codex`,
 `cursor-cli` ship in the box; the sidecar probes `PATH` at boot and
-the dashboard's "create agent" dropdown is filtered to whatever's
+the new-session dialog's adapter picker is filtered to whatever's
 actually installed on that machine. New adapters are ~30 lines + an
 `init()` register call.
 - **Per-session model picker**: the new-session dialog and a session-
@@ -47,7 +48,7 @@ each turn is dispatched with the right CLI flags (`--model`/
 `--effort`, `-c model_reasoning_effort=`, Cursor slug). Model lists
 come from each CLI itself (`codex debug models`, `cursor-agent
 models`, a curated alias table for Claude Code), are pushed by the
-sidecar at agent startup and stored server-side (refreshed in the
+sidecar at runner startup and stored server-side (refreshed in the
 background after 6h; a refresh button probes the CLI on demand), and
 never gate dispatch — a free-text "custom…" model id always works.
 Leaving everything on "Default" passes no flags at all, exactly the
@@ -79,12 +80,12 @@ session finishes outside the route you're currently viewing — click
 the notification to jump to that session. Suppressed when you're
 already looking at the session that just completed, so it never
 nags you about something already on screen.
-- **Soft-archive everywhere**: hide a session or an entire agent from the
+- **Soft-archive everywhere**: hide a session or a whole project from the
 sidebar without losing history. The data stays in Postgres and can be
-restored with one click; archived agents stay archived even if the
+restored with one click; archived rows stay archived even if the
 sidecar restarts.
 - **Live workingDir file tree**: the right panel shows a lazy-expanding,
-gitignore-aware tree of the agent's working directory. Stays in sync
+gitignore-aware tree of the project's working directory. Stays in sync
 via the sidecar's `fsnotify` watcher (250 ms-debounced). The header
 also shows the current git branch (or short SHA when detached) — the
 sidecar reads `.git/HEAD` on every listing so the badge flips as soon
@@ -93,21 +94,21 @@ as the next refresh lands.
 chat composer to send them along with a prompt. Images render inline on
 the turn and are passed to the agent as **vision** (Claude/Cursor read
 the on-disk path, Codex via its native `--image` flag); any other file
-type lands on the agent's machine so it can open it directly. Bytes are
-stored in an S3-compatible object store (the bundled MinIO, or any
-S3/R2/MinIO); the sidecar pulls each file over HTTP from the server —
+type lands on the sidecar's machine so the CLI can open it directly.
+Bytes are stored in an S3-compatible object store (the bundled MinIO, or
+any S3/R2/MinIO); the sidecar pulls each file over HTTP from the server —
 so the bucket only needs to be reachable from the server, never from
-remote agent hosts. Files land under `<workingDir>/.argus/uploads/`
+remote sidecar hosts. Files land under `<workingDir>/.argus/uploads/`
 (hidden from the file tree) and stick around for the session so
 `--resume` turns can reference them again.
 - **Prompt queue**: while a turn is running you can keep typing and hit
 send — the message drops into a small queue shown above the input
 instead of being lost. Edit or remove queued items inline; they're
-dispatched one at a time, in order, as soon as the agent goes idle. The
+dispatched one at a time, in order, as soon as the session goes idle. The
 queue is per-session and survives a reload, so you can line up several
 follow-ups and walk away.
-- **Interactive terminal per agent (opt-in)**: tick the "attach
-interactive terminal" box when creating an agent and the dashboard's
+- **Interactive terminal per project (opt-in)**: tick the "attach
+interactive terminal" box when creating a project and the dashboard's
 right panel grows a real PTY shell on that machine — full ANSI
 colors, resize, ctrl-C, the works. xterm.js on the front,
 `creack/pty` in the sidecar. Traffic rides a direct sidecar↔server
@@ -132,7 +133,7 @@ panel in real time, even after you background it with `&` or `nohup`
 without the wrapper the dashboard would never see them). The wrapper
 binary ships alongside the sidecar and is auto-added to `PATH` on
 every shell the sidecar spawns; the JSONL event stream it writes
-into `<workingDir>/.argus/progress/` is tailed by a per-agent
+into `<workingDir>/.argus/progress/` is tailed by a per-workdir
 watcher and rebroadcast to subscribed dashboards.
 - **Last-turn diff (opt-in extension)**: enable the **Diff** extension
 and the session right panel grows a **Diff** tab showing every file the
@@ -347,21 +348,20 @@ On boot the daemon:
 1. Probes `PATH` for every adapter it knows about (`claude`, `codex`,
    `cursor-agent`, …) and reports what it finds back to the server.
 2. Self-registers as a `Machine` row visible at the bottom of the
-   dashboard's left panel.
-3. Sits idle until you create an agent on it from the UI — at which
-   point the server pushes a `create-agent` command down the
-   per-machine Redis stream and the daemon spawns a supervisor for
-   that adapter.
+   dashboard's left panel, and starts one runner per installed CLI.
+3. Serves sessions on demand: when you create one from the UI, the
+   server pins it to a `(machine, workingDir)` project + CLI type and
+   routes its turns to the machine's runner over a per-CLI Redis stream.
 
-Created agents are cached in `~/.config/argus/sidecar.json`, so a
-sidecar restart immediately re-spawns every supervisor without waiting
-for the server's reconcile broadcast.
+The machine identity + its project workdir allowlist are cached in
+`~/.config/argus/sidecar.json`, so the file jail and watchers come up on
+restart without waiting for the server's reconcile broadcast.
 
 To remove a machine from the dashboard, open its panel and use the
-**delete** button next to "new agent" (works at any status). This is
-a **soft delete**: the machine and its agents disappear from the
-dashboard, but nothing is destroyed — every session, command, and
-result stays in the database and remains viewable in your session
+**delete** button (works at any status). This is a **soft delete**: the
+machine disappears from the dashboard, but nothing is destroyed — every
+session, command, and result stays in the database and remains viewable
+in your session
 history. The removal is sticky: even if that machine's sidecar keeps
 running or restarts, the server ignores it and the machine will not
 reappear. There is no un-delete from the UI, so the confirmation is
@@ -407,8 +407,8 @@ You can also trigger the same self-update remotely from the dashboard so
 you don't have to SSH into every host when you cut a new release.
 
 - **Per-machine** — open a machine's focus pane (click its row in the
-  bottom-of-sidebar machines list), then use the kebab menu (⋮) next to
-  **new agent** and pick **Update sidecar**. A small green badge appears
+  bottom-of-sidebar machines list), then use the header kebab menu (⋮)
+  and pick **Update sidecar**. A small green badge appears
   next to the title whenever the host is running a sidecar older than
   the latest published release.
 - **Whole fleet** — hover the **machines** header in the sidebar and use
@@ -473,7 +473,7 @@ sidebar row instead.
 
 #### Optional: interactive terminal opt-in
 
-The PTY is per-agent, enabled at create time via the "attach
+The PTY is per-project, enabled at project-create time via the "attach
 interactive terminal" checkbox. Server-side, set
 `SIDECAR_LINK_TOKEN` in `.env` to a long random string in production
 and pass the same value as `--token` to `argus-sidecar init`. An
@@ -597,7 +597,7 @@ if you don't want it tied to your admin login.
 3. Call `adapter.Register("my-agent", &adapter.Plugin{Factory: newMyAgent, DefaultBinary: "my-cli"})` from `init()`.
 4. Rebuild the sidecar with `make` (or just `go build` for a host-only binary).
 5. The next time the daemon boots it will discover `my-cli` on `PATH` and
-   make it selectable in the dashboard's "create agent" popover.
+   make it selectable in the dashboard's new-session popover.
 
 No changes are needed in the server, dashboard, or protocol — `AgentType` is
 an open string and the UI falls back to a generic icon for unknown types.
