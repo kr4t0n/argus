@@ -576,10 +576,9 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
       }
       case 'fs-changed': {
         // Debounced notification from the sidecar's fsnotify watcher.
-        // Broadcast into the project room (Phase 2) + legacy agent room
-        // so connected dashboards can invalidate their cached listings.
+        // Broadcast into the project room so connected dashboards can
+        // invalidate their cached listings.
         this.gateway.emitFSChanged({
-          agentId: ev.agentId,
           path: ev.path,
           machineId: ev.machineId,
           workingDir: ev.workingDir,
@@ -600,10 +599,9 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
       }
       case 'git-changed': {
         // Debounced notification from the sidecar's secondary git
-        // watcher (.git/HEAD + refs/heads/). Same project-room +
-        // legacy agent-room fanout as fs-changed.
+        // watcher (.git/HEAD + refs/heads/). Same project-room fanout
+        // as fs-changed.
         this.gateway.emitGitChanged({
-          agentId: ev.agentId,
           machineId: ev.machineId,
           workingDir: ev.workingDir,
         });

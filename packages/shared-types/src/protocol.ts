@@ -392,10 +392,8 @@ export interface GitLogResponseEvent {
 export interface GitChangedEvent {
   kind: 'git-changed';
   machineId: string;
-  /** Attribution only; `workingDir` (Phase 2) is what the server
-   *  routes on — nudges are project-scoped. Absent from pre-Phase-2
-   *  sidecars, which then get legacy agent-room-only fanout. */
-  agentId: string;
+  /** The project the change is scoped to — the server routes nudges on
+   *  this (project-scoped). Absent from pre-Phase-2 sidecars. */
   workingDir?: string;
   ts: number;
 }
@@ -406,15 +404,12 @@ export interface GitChangedEvent {
 // Commands wrapped by `argus-bg` (the sidecar's tqdm-aware shell
 // wrapper) write a JSONL event stream into
 // `<workingDir>/.argus/progress/<taskId>.jsonl` as they run. The
-// sidecar's per-agent progress watcher (parallel to fs / git watchers)
-// tails those files and forwards each line on `agent:lifecycle` as one
-// of the three events below.
+// sidecar's progress watcher (parallel to fs / git watchers) tails
+// those files and forwards each line on `agent:lifecycle` as one of the
+// three events below.
 //
-// Scoped by (machineId, workingDir, taskId). `workingDir` — not
-// `agentId` — is the project key, because multiple agents in the same
-// project share one `.argus/progress/` directory and the dashboard's
-// Progress tab is per-project. `agentId` is included for attribution
-// (which agent supervisor's watcher observed the file).
+// Scoped by (machineId, workingDir, taskId) — `workingDir` is the
+// project key, and the dashboard's Progress tab is per-project.
 // ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -425,7 +420,6 @@ export interface GitChangedEvent {
 export interface BackgroundTaskStartedEvent {
   kind: 'background-task-started';
   machineId: string;
-  agentId: string;
   workingDir: string;
   taskId: string;
   label?: string;
@@ -454,7 +448,6 @@ export interface BackgroundTaskStartedEvent {
 export interface BackgroundTaskProgressEvent {
   kind: 'background-task-progress';
   machineId: string;
-  agentId: string;
   workingDir: string;
   taskId: string;
   label?: string;
@@ -481,7 +474,6 @@ export interface BackgroundTaskProgressEvent {
 export interface BackgroundTaskEndedEvent {
   kind: 'background-task-ended';
   machineId: string;
-  agentId: string;
   workingDir: string;
   taskId: string;
   label?: string;
@@ -737,8 +729,7 @@ export interface FSReadResponseEvent {
 export interface FSChangedEvent {
   kind: 'fs-changed';
   machineId: string;
-  /** See GitChangedEvent — agentId is attribution, workingDir routing. */
-  agentId: string;
+  /** See GitChangedEvent — workingDir is what the server routes on. */
   workingDir?: string;
   path: string;
   ts: number;

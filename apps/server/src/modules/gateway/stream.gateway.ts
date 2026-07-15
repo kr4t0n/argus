@@ -187,17 +187,10 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
   /**
    * Broadcast a dir-level change from the sidecar's fsnotify watcher to
    * the project room — nudges are project-scoped (two runners sharing a
-   * workdir emit interchangeable ones). The Agent entity is retired, so
-   * there's no agent-room fanout; `agentId` rides the payload as
-   * attribution only. A runner event without machineId/workingDir has
-   * nothing to route on and is dropped.
+   * workdir emit interchangeable ones). A runner event without
+   * machineId/workingDir has nothing to route on and is dropped.
    */
-  emitFSChanged(payload: {
-    agentId: string;
-    path: string;
-    machineId?: string;
-    workingDir?: string;
-  }) {
+  emitFSChanged(payload: { path: string; machineId?: string; workingDir?: string }) {
     if (payload.machineId && payload.workingDir) {
       this.server
         .to(projectRoom(payload.machineId, payload.workingDir))
@@ -209,7 +202,7 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * Broadcast a debounced ref-change from the sidecar's secondary git
    * watcher. Same project-room fanout as emitFSChanged.
    */
-  emitGitChanged(payload: { agentId: string; machineId?: string; workingDir?: string }) {
+  emitGitChanged(payload: { machineId?: string; workingDir?: string }) {
     if (payload.machineId && payload.workingDir) {
       this.server
         .to(projectRoom(payload.machineId, payload.workingDir))

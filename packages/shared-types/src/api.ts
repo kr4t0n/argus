@@ -573,7 +573,6 @@ export interface BackgroundTaskDTO {
   taskId: string;
   machineId: string;
   workingDir: string;
-  agentId: string;
   label?: string;
   cmd?: string[];
   /** Latest progress reading, if any. Omitted when the task started

@@ -39,13 +39,8 @@ type Handler = {
   onTerminalUpdated?: (t: TerminalDTO) => void;
   onTerminalOutput?: (m: TerminalOutputMessage) => void;
   onTerminalClosed?: (m: TerminalClosedMessage) => void;
-  onFSChanged?: (p: {
-    agentId: string;
-    path: string;
-    machineId?: string;
-    workingDir?: string;
-  }) => void;
-  onGitChanged?: (p: { agentId: string; machineId?: string; workingDir?: string }) => void;
+  onFSChanged?: (p: { path: string; machineId?: string; workingDir?: string }) => void;
+  onGitChanged?: (p: { machineId?: string; workingDir?: string }) => void;
   onSidecarUpdateStarted?: (p: {
     machineId: string;
     requestId: string;
