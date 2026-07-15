@@ -39,7 +39,6 @@ interface HotMeta {
    *  keystroke hot path no longer joins Agent at all (and keeps working
    *  once agent rows retire). */
   machineId: string;
-  agentId: string | null;
   userId: string;
   status: string;
 }
@@ -75,7 +74,6 @@ export class TerminalService {
     if (t.userId !== userId) throw new ForbiddenException('terminal not yours');
     const meta: HotMeta = {
       machineId: t.machineId,
-      agentId: t.agentId,
       userId: t.userId,
       status: t.status,
     };
@@ -89,7 +87,6 @@ export class TerminalService {
       id: t.id,
       machineId: t.machineId,
       projectId: t.projectId,
-      agentId: t.agentId,
       userId: t.userId,
       status: t.status as TerminalDTO['status'],
       shell: t.shell,
@@ -197,7 +194,6 @@ export class TerminalService {
         id,
         machineId,
         projectId,
-        agentId,
         userId,
         status: 'opening',
         shell: req.shell ?? '',
@@ -227,7 +223,7 @@ export class TerminalService {
       throw new ServiceUnavailableException('sidecar link dropped during open');
     }
 
-    this.hotCache.set(id, { machineId, agentId, userId, status: 'opening' });
+    this.hotCache.set(id, { machineId, userId, status: 'opening' });
     const dto = TerminalService.toDto(row);
     this.gateway.emitTerminalCreated(dto);
     return dto;
@@ -342,7 +338,7 @@ export class TerminalService {
    */
   async markAllForMachineClosed(machineId: string, reason: string): Promise<void> {
     const rows = await this.prisma.terminal.findMany({
-      where: { agent: { machineId }, status: { in: ['opening', 'open'] } },
+      where: { machineId, status: { in: ['opening', 'open'] } },
       select: { id: true },
     });
     await Promise.all(

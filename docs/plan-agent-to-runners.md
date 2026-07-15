@@ -292,6 +292,37 @@ methods, web agentStore + CreateAgentPopover agent branch + archive
 cascade agent calls, iOS FleetStore.agents + agent WS cases. Sweep the
 ~41 leftover agent:{id}:* Redis streams once (Kyle-approved, data-safe).
 
+### Phase 5 — sweep the vestigial agentId ✅ IMPLEMENTED (branch refactor/agent-to-runners)
+
+Gate cleared by a prod check: `SELECT count(*) FROM "Session" WHERE
+"projectId" IS NULL` = 0, so no session still needs the resolveRouting
+agent fallback. DONE:
+- DB migration `9_phase5_drop_agent_columns` DROPS `Session.agentId` /
+  `Command.agentId` / `Terminal.agentId` (FKs + indexes + columns). Named
+  `9_…` so it sorts lexicographically AFTER `6/7/8_backfill_command_usage`
+  (which read `Command.agentId`) — a `2026…` timestamp name would sort
+  before them and break a fresh `migrate deploy`. Validated: full fresh
+  replay + `migrate diff` drift-free against schema.prisma.
+- Server: resolveRouting is projectId-only (agent fallback gone); DTO
+  mappers drop agentId; fork/dispatch stop writing/sending it;
+  computeCommandUsage uses `session.cliType` only; terminal
+  markAllForMachineClosed filters by `machineId` (was an Agent join).
+- shared-types: `agentId` removed from SessionDTO / CommandDTO /
+  TerminalDTO / CreateSessionRequest and wire `Command`; dead
+  `streamKeys.command/result` (per-agent) + `consumerGroups.sidecar`
+  removed.
+- Web: resolveProjectRef is projectId-only; SidebarRail re-keyed to
+  projectId (fixes a latent empty-grouping bug); queueDrainer reachability
+  is machine-level; dead `!asSession`/`api.createAgent` branch removed.
+- The `Agent` TABLE is intentionally KEPT (feeds agentCount + syncProjects
+  backfill + representative attribution — all keyed by machineId, not the
+  dropped FKs). iOS untouched (its Swift models are independent; the server
+  simply stops sending agentId; `decodeIfPresent` → nil).
+
+Still deferred (needs its own change): full Agent-table deletion (requires
+`Machine.agentCount` removed from web + iOS → iOS macOS build); the ~41
+leftover `agent:{id}:*` Redis streams (prod mutation, data-safe).
+
 Original gate (all cleared):
 
 - [x] Whole fleet runs sidecar ≥0.3.x (Kyle confirms after real-life

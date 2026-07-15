@@ -4,7 +4,6 @@ import { useNavigate } from 'react-router-dom';
 import { Loader2, X } from 'lucide-react';
 import type { AgentDTO, AvailableAdapter, MachineDTO, ModelSelection } from '@argus/shared-types';
 import { api, ApiError } from '../lib/api';
-import { useAgentStore } from '../stores/agentStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { agentTypeLabel, AgentTypeIcon } from './ui/AgentTypeIcon';
 import { ModelPicker } from './ModelPicker';
@@ -85,7 +84,6 @@ export function CreateAgentPopover({
   asSession = false,
   existingAgents,
 }: Props) {
-  const upsertAgent = useAgentStore((s) => s.upsert);
   const upsertSession = useSessionStore((s) => s.upsertSession);
   const nav = useNavigate();
   const adapters = (machine.availableAdapters ?? []) as AvailableAdapter[];
@@ -189,43 +187,25 @@ export function CreateAgentPopover({
     setSubmitting(true);
     setErr(null);
     try {
-      if (asSession) {
-        // Project-first create (Phase 1 of the agent→runner refactor):
-        // the server reuses a same-type agent under this (machine,
-        // workingDir) or auto-vivifies one — the vivify logic that
-        // used to live here. The user names the session, never the
-        // agent. Empty custom input ({model: ''}) normalizes to
-        // "Default".
-        const selection = modelSelection?.model ? modelSelection : undefined;
-        const { session, agent } = await api.createSession({
-          machineId: machine.id,
-          workingDir: defaults?.workingDir,
-          cliType: type as AgentDTO['type'],
-          supportsTerminal: defaults?.supportsTerminal ?? false,
-          title: name.trim(),
-          modelSelection: selection,
-        });
-        // Seed the store with a vivified agent immediately — the
-        // session row groups under its project via the agent, and
-        // waiting on the agent:upsert WS event would blank the row.
-        if (agent) upsertAgent(agent);
-        upsertSession(session);
-        nav(`/sessions/${session.id}`);
-        onClose();
-      } else {
-        const created = await api.createAgent(machine.id, {
-          name: name.trim(),
-          type,
-          workingDir: workingDir.trim() || undefined,
-          supportsTerminal,
-        });
-        upsertAgent(created);
-        onClose();
-      }
+      // Project-first create (Phase 1 of the agent→runner refactor): the
+      // server pins the session to this (machine, workingDir) project.
+      // The user names the session, never an agent. Empty custom input
+      // ({model: ''}) normalizes to "Default". (The legacy !asSession
+      // create-agent path retired with the Agent entity in Phase 5.)
+      const selection = modelSelection?.model ? modelSelection : undefined;
+      const { session } = await api.createSession({
+        machineId: machine.id,
+        workingDir: defaults?.workingDir,
+        cliType: type as AgentDTO['type'],
+        supportsTerminal: defaults?.supportsTerminal ?? false,
+        title: name.trim(),
+        modelSelection: selection,
+      });
+      upsertSession(session);
+      nav(`/sessions/${session.id}`);
+      onClose();
     } catch (e) {
-      setErr(
-        e instanceof ApiError ? e.message : `failed to create ${asSession ? 'session' : 'agent'}`,
-      );
+      setErr(e instanceof ApiError ? e.message : 'failed to create session');
     } finally {
       setSubmitting(false);
     }

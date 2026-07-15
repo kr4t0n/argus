@@ -158,14 +158,21 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   /projects/icon` upserts by `(machineId, workingDir)` (404s for
   deleted machines, keeps the row with `iconKey` NULL on reset)
   and broadcasts the DTO via the global `project:upsert` WS event.
-- **Agent is retired (Phase 4, docs/plan-agent-to-runners.md).** There is
-  no agent runtime concept and no agent-addressed REST: sessions route by
-  `projectId` → machine + `cliType` → runner stream
-  (`SessionService.resolveRouting`), created project-first with
-  `agentId` NULL. `Session.agentId` / `Command.agentId` / `Terminal.agentId`
-  survive as nullable attribution columns (SetNull) so old rows still
-  render their history; never route on them. The `Agent` table + rows
-  persist as legacy attribution only.
+- **Agent is retired (Phase 4 + Phase 5 sweep, docs/plan-agent-to-runners.md).**
+  There is no agent runtime concept and no agent-addressed REST: sessions
+  route by `projectId` → machine + `cliType` → runner stream
+  (`SessionService.resolveRouting` — projectId-only, no agent fallback),
+  created project-first. The Phase-5 sweep DROPPED the vestigial
+  `Session.agentId` / `Command.agentId` / `Terminal.agentId` columns (and
+  removed `agentId` from the DTOs + wire `Command`) after a prod check
+  confirmed no session still needed the routing fallback
+  (`SELECT count(*) FROM "Session" WHERE "projectId" IS NULL` = 0). The
+  `Agent` table itself is KEPT (no rows created since Phase 4): it still
+  feeds `Machine.agentCount` and the `syncProjects` backfill (both keyed by
+  `machineId`) and supplies a representative agent for fs/git/terminal
+  attribution echoes — none of which use the dropped FK columns. Fully
+  deleting the table is deferred (it would need `agentCount` removed from
+  both clients, gated on an iOS macOS build).
 - `session/` — CRUD for sessions; resolves `externalId` so each subsequent
   turn carries it back to the sidecar for `--resume`. Also owns the
   session-default model choice: `POST /sessions` accepts

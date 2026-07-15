@@ -29,7 +29,6 @@ export class CommandService {
     return {
       id: c.id,
       sessionId: c.sessionId,
-      agentId: c.agentId,
       kind: c.kind as CommandDTO['kind'],
       prompt: c.prompt,
       status: c.status as CommandDTO['status'],
@@ -71,7 +70,6 @@ export class CommandService {
     const cmd = await this.prisma.command.create({
       data: {
         sessionId,
-        // agentId stays NULL — attribution only, and there's no agent.
         kind: 'execute',
         prompt,
         status: 'pending',

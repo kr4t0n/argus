@@ -162,13 +162,13 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
     if (!meta) return undefined;
     const cmd = await this.prisma.command.findUnique({
       where: { id: chunk.commandId },
-      select: { session: { select: { cliType: true } }, agent: { select: { type: true } } },
+      select: { session: { select: { cliType: true } } },
     });
     if (!cmd) return undefined;
-    // Session.cliType is the pinned CLI (Phase 1, survives Phase 4's
-    // Agent retirement); agent.type covers pre-backfill rows whose
-    // agent still exists.
-    const parsed = parseUsage((cmd.session.cliType ?? cmd.agent?.type) as AgentType, meta);
+    // Session.cliType is the pinned CLI (Phase 1). Pre-backfill rows
+    // whose session predates cliType simply yield no usage type — the
+    // Agent-derived fallback retired with the agentId columns (Phase 5).
+    const parsed = parseUsage(cmd.session.cliType as AgentType, meta);
     if (!parsed) return undefined;
     return parsed as unknown as Prisma.InputJsonValue;
   }

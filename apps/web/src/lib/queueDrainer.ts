@@ -57,9 +57,6 @@ const STALL_COOLDOWN_MS = 60_000;
  *  single drain pass. */
 const DRAIN_DEBOUNCE_MS = 120;
 
-const isReachable = (status: string | undefined): boolean =>
-  status === 'online' || status === 'busy';
-
 export function useQueueDrainer() {
   useEffect(() => {
     // sessionId → ts we dispatched a turn but haven't yet seen it go active.
@@ -83,7 +80,6 @@ export function useQueueDrainer() {
       if (sessionIds.length === 0) return;
 
       const { sessions } = useSessionStore.getState();
-      const { agents } = useAgentStore.getState();
       const { machines } = useMachineStore.getState();
       const { projects } = useProjectStore.getState();
 
@@ -100,22 +96,16 @@ export function useQueueDrainer() {
         if (!queue || queue.length === 0) continue;
         const session = sessions[sessionId];
         if (!session) continue; // not loaded yet / deleted — leave queued
-        const machineId =
-          resolveProjectRef(session, agents, projects)?.machineId ??
-          (session.agentId ? agents[session.agentId]?.machineId : undefined);
-        if (machineId) {
-          if (machines[machineId]?.status !== 'online') continue; // machine down
-        } else {
-          // No machine resolvable (stores still hydrating) — legacy
-          // agent-status check as a last resort.
-          const agent = session.agentId ? agents[session.agentId] : undefined;
-          if (!agent || !isReachable(agent.status)) continue;
-        }
+        // Reachability is machine-level: resolve the session's project →
+        // machine and gate on the machine being online. When the project
+        // rows haven't hydrated yet, hold the queue rather than draining
+        // against an unknown machine.
+        const machineId = resolveProjectRef(session, projects)?.machineId;
+        if (!machineId) continue; // machine not resolvable yet — leave queued
+        if (machines[machineId]?.status !== 'online') continue; // machine down
         // Serialize per SESSION only: a session can't run two turns at once
-        // (they'd both `--resume` the same id and corrupt its transcript),
-        // but sessions that share an agent run as independent CLI processes
-        // and drain in parallel. So we gate on THIS session's state, never
-        // the agent's other sessions.
+        // (they'd both `--resume` the same id and corrupt its transcript).
+        // We gate on THIS session's state, never any sibling session's.
         if (session.status === 'active') continue; // this session mid-turn
         if (inFlight.has(sessionId)) continue; // dispatch in flight for it
 

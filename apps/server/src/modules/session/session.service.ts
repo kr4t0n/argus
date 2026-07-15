@@ -52,7 +52,6 @@ export class SessionService {
     return {
       id: s.id,
       userId: s.userId,
-      agentId: s.agentId,
       projectId: s.projectId ?? null,
       cliType: (s.cliType as AgentType | null) ?? null,
       title: s.title,
@@ -196,7 +195,7 @@ export class SessionService {
    * can't be routed (no cliType, or neither anchor resolves).
    */
   async resolveRouting(
-    session: Pick<PSession, 'projectId' | 'agentId' | 'cliType'>,
+    session: Pick<PSession, 'projectId' | 'cliType'>,
   ): Promise<{
     machineId: string;
     workingDir: string | null;
@@ -216,20 +215,6 @@ export class SessionService {
           workingDir: p.workingDir,
           cliType,
           machineStatus: p.machine.status,
-        };
-      }
-    }
-    if (session.agentId) {
-      const a = await this.prisma.agent.findUnique({
-        where: { id: session.agentId },
-        select: { machineId: true, workingDir: true, machine: { select: { status: true } } },
-      });
-      if (a) {
-        return {
-          machineId: a.machineId,
-          workingDir: a.workingDir,
-          cliType,
-          machineStatus: a.machine.status,
         };
       }
     }
@@ -354,7 +339,6 @@ export class SessionService {
       const created = await tx.session.create({
         data: {
           userId,
-          agentId: src.agentId,
           // A fork lives in the same project on the same CLI by
           // construction — the on-disk clone the sidecar performs is
           // only valid under the source's workingDir (cwd-keyed
@@ -369,7 +353,6 @@ export class SessionService {
         const newCmd = await tx.command.create({
           data: {
             sessionId: created.id,
-            agentId: c.agentId,
             kind: c.kind,
             prompt: c.prompt,
             // Force-completed: the fork has no live runner to drive
@@ -415,7 +398,6 @@ export class SessionService {
     if (src.externalId && routing) {
       const wire: WireCommand = {
         id: randomUUID(),
-        agentId: src.agentId ?? undefined,
         sessionId: dto.id,
         kind: 'clone-session',
         clone: {

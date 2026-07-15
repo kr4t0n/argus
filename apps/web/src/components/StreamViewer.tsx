@@ -246,7 +246,6 @@ function groupByCommand(commands: CommandDTO[], chunks: ResultChunkDTO[]): Group
       const stub: CommandDTO = {
         id: ch.commandId,
         sessionId: ch.sessionId,
-        agentId: ch.agentId,
         kind: 'execute',
         prompt: null,
         status: 'running',

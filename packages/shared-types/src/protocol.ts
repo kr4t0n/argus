@@ -924,10 +924,6 @@ export interface AttachmentRef {
 /** Server → sidecar */
 export interface Command {
   id: string;
-  /** Attribution only since Phase 4 — the sidecar routes by the runner
-   *  stream + `workingDir`/`cliType`. Absent on commands for sessions
-   *  created after Phase 4; the sidecar tags result chunks with "" then. */
-  agentId?: string;
   sessionId: string;
   /**
    * CLI-native conversation id. When present the sidecar passes
@@ -1142,14 +1138,11 @@ export const streamKeys = {
    *  trims on XADD). They stay on `lifecycle`, where heartbeat churn
    *  self-cleans them within seconds. */
   notify: 'agent:notify',
-  command: (agentId: string) => `agent:${agentId}:cmd`,
-  result: (agentId: string) => `agent:${agentId}:result`,
   /** Phase-3 runner streams (docs/plan-agent-to-runners.md): sidecars
-   *  ≥ 0.3.0 replace the per-agent cmd/result pair with one pair per
-   *  machine × installed CLI, so stream count scales with the bounded
-   *  dimensions (M·C) instead of projects. The server routes per
-   *  machine off `Machine.sidecarVersion`; a mixed fleet uses both
-   *  families side by side. */
+   *  ≥ 0.3.0 use one cmd/result pair per machine × installed CLI, so
+   *  stream count scales with the bounded dimensions (M·C) instead of
+   *  projects. (The legacy per-agent `agent:{id}:cmd/result` keys were
+   *  removed in the Phase-5 sweep — the whole fleet is ≥ 0.3.) */
   runnerCommand: (machineId: string, cliType: string) => `machine:${machineId}:cli:${cliType}:cmd`,
   runnerResult: (machineId: string, cliType: string) => `machine:${machineId}:cli:${cliType}:result`,
   /** Per-machine control plane: server publishes Create/Destroy/Sync
@@ -1206,17 +1199,4 @@ export const consumerGroups = {
   background: 'server-background',
   /** per-machine consumer group on the machine control stream */
   machine: (machineId: string) => `machine-${machineId}`,
-  /** per-agent consumer group an agent supervisor uses on its own
-   *  command stream. Naming the group after the agent (rather than
-   *  the machine or sidecar) lets two supervisors briefly overlap
-   *  during a daemon restart and cooperatively drain the pending
-   *  entry list instead of double-delivering commands.
-   *
-   *  DRIFT NOTE: the Go side no longer uses this — the daemon reads
-   *  every cmd stream (per-agent and, in Phase 3, per machine×CLI
-   *  runner streams alike) under one machine-wide group,
-   *  `SidecarCommandGroup(machineID)` = `sidecar-cmd-{machineId}`
-   *  (protocol.go). Kept only as documentation until Phase 4 sweeps
-   *  legacy remnants. */
-  sidecar: (agentId: string) => `sidecar-${agentId}`,
 };

@@ -58,7 +58,6 @@ export function Sidebar() {
   // hydrated yet.
   const sessionsByProject: Record<string, SessionDTO[]> = {};
   for (const s of Object.values(sessions)) {
-    if (s.agentId) (sessionsByAgent[s.agentId] ||= []).push(s);
     if (s.projectId) (sessionsByProject[s.projectId] ||= []).push(s);
   }
   for (const list of Object.values(sessionsByAgent)) {

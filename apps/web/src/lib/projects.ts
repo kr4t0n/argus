@@ -1,6 +1,5 @@
 import type { AgentDTO, SessionDTO } from '@argus/shared-types';
-import { useAgentStore } from '../stores/agentStore';
-import { useProjectStore, projectKey, type LocalProject } from '../stores/projectStore';
+import { useProjectStore, type LocalProject } from '../stores/projectStore';
 
 /**
  * Everything the project-addressed read paths need (Phase 4 prep of
@@ -17,26 +16,17 @@ export interface ProjectRef {
 
 /**
  * Resolve a session's ProjectRef. `session.projectId` is authoritative
- * (pinned at create); the pair comes from the agent row when loaded —
- * same pair by construction — else from the hydrated project rows via
- * a serverId reverse lookup. Null for workdir-less sessions (the
- * "no project" bucket has no fs/git surface) and during the boot race
- * before either store has the row.
+ * (pinned at create); the (machineId, workingDir) pair comes from the
+ * hydrated project rows via a serverId reverse lookup. Null for
+ * workdir-less sessions (the "no project" bucket has no fs/git surface)
+ * and during the boot race before the project rows hydrate. (Since the
+ * Phase-5 sweep dropped Session.agentId there is no agent fallback.)
  */
 export function resolveProjectRef(
-  session: Pick<SessionDTO, 'projectId' | 'agentId'> | null | undefined,
-  agents: Record<string, AgentDTO>,
+  session: Pick<SessionDTO, 'projectId'> | null | undefined,
   projects: Record<string, LocalProject>,
 ): ProjectRef | null {
   if (!session?.projectId) return null;
-  const agent = session.agentId ? agents[session.agentId] : undefined;
-  if (agent?.workingDir) {
-    return {
-      projectId: session.projectId,
-      machineId: agent.machineId,
-      workingDir: agent.workingDir,
-    };
-  }
   for (const p of Object.values(projects)) {
     if (p.serverId === session.projectId) {
       return { projectId: session.projectId, machineId: p.machineId, workingDir: p.workingDir };
@@ -45,26 +35,12 @@ export function resolveProjectRef(
   return null;
 }
 
-/** Hook flavor of resolveProjectRef, subscribed to both stores. */
+/** Hook flavor of resolveProjectRef, subscribed to the project store. */
 export function useProjectRef(
-  session: Pick<SessionDTO, 'projectId' | 'agentId'> | null | undefined,
+  session: Pick<SessionDTO, 'projectId'> | null | undefined,
 ): ProjectRef | null {
-  const agents = useAgentStore((s) => s.agents);
   const projects = useProjectStore((s) => s.projects);
-  return resolveProjectRef(session, agents, projects);
-}
-
-/** ProjectRef for an agent-anchored view (no session): the agent's
- *  (machineId, workingDir) pair looked up in the server-backed rows.
- *  Null until the row hydrates or when the agent has no workingDir. */
-export function agentProjectRef(
-  agent: Pick<AgentDTO, 'machineId' | 'workingDir'> | null | undefined,
-  projects: Record<string, LocalProject>,
-): ProjectRef | null {
-  const wd = agent?.workingDir?.trim();
-  if (!agent || !wd) return null;
-  const serverId = projects[projectKey(agent.machineId, wd)]?.serverId;
-  return serverId ? { projectId: serverId, machineId: agent.machineId, workingDir: wd } : null;
+  return resolveProjectRef(session, projects);
 }
 
 /**

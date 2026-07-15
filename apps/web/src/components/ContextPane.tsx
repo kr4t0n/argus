@@ -103,9 +103,6 @@ export function ContextPane({ session, commands, chunks }: Props) {
   // workdir-less sessions. The status dot + subtitle track the machine.
   const title =
     projectRow?.name || (workingDir ? basename(workingDir) : machine?.name || session.title);
-  // Legacy fs/git rooms were keyed by agent id; forward it when a stale
-  // (pre-Phase-4) session still carries one so those events still land.
-  const legacyAgentId = session.agentId ?? undefined;
 
   return (
     <aside className="flex h-full w-full flex-col border-l border-default bg-surface-0">
@@ -177,15 +174,10 @@ export function ContextPane({ session, commands, chunks }: Props) {
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-3 no-scrollbar">
           {active === 'commits' && projectRef && (
-            <GitLogPanel
-              key={projectRef.projectId}
-              project={projectRef}
-              legacyAgentId={legacyAgentId}
-              hideHeader
-            />
+            <GitLogPanel key={projectRef.projectId} project={projectRef} hideHeader />
           )}
           {active === 'files' && projectRef && (
-            <FileTree key={projectRef.projectId} project={projectRef} legacyAgentId={legacyAgentId} />
+            <FileTree key={projectRef.projectId} project={projectRef} />
           )}
           {active === 'terminal' && (
             <TerminalPane

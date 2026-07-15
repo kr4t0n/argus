@@ -11,7 +11,7 @@ import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
 import { useAuthStore } from '../stores/authStore';
 import { useProjectStore, useProjectIconKey } from '../stores/projectStore';
-import { groupProjects, type ProjectGroup } from '../lib/projects';
+import { groupProjects, resolveProjectRef, type ProjectGroup } from '../lib/projects';
 import { cn, relativeTime } from '../lib/utils';
 import { StatusDot } from './ui/StatusDot';
 import { AgentTypeIcon } from './ui/AgentTypeIcon';
@@ -73,11 +73,11 @@ export function SidebarRail() {
   const sessionsByProject = new Map<string, SessionDTO[]>();
   for (const s of Object.values(sessions)) {
     if (s.archivedAt) continue;
-    const a = s.agentId ? agents[s.agentId] : undefined;
-    if (!a || a.archivedAt) continue;
-    const wd = (a.workingDir ?? '').trim();
-    if (!wd) continue;
-    const key = `${a.machineId}::${wd}`;
+    // Group by the session's pinned project (machineId, workingDir) —
+    // the tile keys groupProjects emits use the same shape.
+    const ref = resolveProjectRef(s, localProjects);
+    if (!ref) continue;
+    const key = `${ref.machineId}::${ref.workingDir}`;
     const list = sessionsByProject.get(key);
     if (list) list.push(s);
     else sessionsByProject.set(key, [s]);
@@ -87,14 +87,11 @@ export function SidebarRail() {
   }
 
   // Highlight the project containing the currently-viewed session
-  // (if any). Resolved through agent → workingDir + machineId to
-  // match the project's key shape.
+  // (if any), keyed the same way as the tiles above.
   let activeProjectKey: string | undefined;
   if (sessionId) {
-    const s = sessions[sessionId];
-    const a = s?.agentId ? agents[s.agentId] : undefined;
-    const wd = (a?.workingDir ?? '').trim();
-    if (a && wd) activeProjectKey = `${a.machineId}::${wd}`;
+    const ref = resolveProjectRef(sessions[sessionId], localProjects);
+    if (ref) activeProjectKey = `${ref.machineId}::${ref.workingDir}`;
   }
 
   return (

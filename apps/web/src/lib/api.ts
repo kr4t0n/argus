@@ -4,7 +4,6 @@ import type {
   AttachmentDTO,
   BackgroundTasksResponse,
   CommandDTO,
-  CreateAgentRequest,
   CreateApiKeyRequest,
   CreatedApiKey,
   CreateCommandRequest,
@@ -145,11 +144,6 @@ export const api = {
   listMachines: (opts?: { includeArchived?: boolean }) =>
     http<MachineDTO[]>(`/machines${opts?.includeArchived ? '?includeArchived=true' : ''}`),
   getMachine: (id: string) => http<MachineDTO>(`/machines/${id}`),
-  createAgent: (machineId: string, body: CreateAgentRequest) =>
-    http<AgentDTO>(`/machines/${machineId}/agents`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
   deleteMachine: (id: string) =>
     http<void>(`/machines/${id}`, { method: 'DELETE' }),
 

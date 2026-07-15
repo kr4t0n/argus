@@ -311,10 +311,13 @@ model Agent {
   registeredAt     DateTime
   archivedAt       DateTime? // soft-hide from sidebar; preserves history.
 
+  // Agent rows are legacy since Phase 4 — no longer created, no longer
+  // routed through. They persist only to feed Machine.agentCount and the
+  // syncProjects backfill (both keyed by machineId), and as a
+  // representative for fs/git/terminal attribution echoes. Session /
+  // Command / Terminal dropped their agentId FK in the Phase-5 sweep, so
+  // there are no back-relations anymore.
   machine   Machine    @relation(fields: [machineId], references: [id], onDelete: Cascade)
-  sessions  Session[]
-  commands  Command[]
-  terminals Terminal[]
 
   @@unique([machineId, name])
   @@index([status])
@@ -326,12 +329,6 @@ model Agent {
 model Session {
   id         String   @id @default(cuid())
   userId     String
-  // Attribution only since Phase 4 (docs/plan-agent-to-runners.md): the
-  // session routes by `projectId` → machine + `cliType` → runner stream,
-  // no Agent row involved. NULL on every session created after Phase 4;
-  // populated on older rows and kept for history. SetNull so retiring an
-  // agent row can't delete conversation history.
-  agentId    String?
   // `projectId` anchors the session to its (machineId, workingDir) pair —
   // pinned at creation because claude-code and cursor keep resume state
   // on disk keyed by the cwd, so a session's workdir must never change
@@ -357,17 +354,13 @@ model Session {
   updatedAt  DateTime @updatedAt
 
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  // Both SetNull: a session's history outlives both the agent (retired
-  // in Phase 4) and the Project row. A machine hard-delete still removes
-  // sessions through the Machine→Project cascade... no — Project SetNull
-  // means a project delete orphans, never deletes. Machine delete is a
-  // soft tombstone; nothing hard-deletes a live session's history.
-  agent    Agent?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  // Project SetNull: a session's history outlives its Project row (a
+  // project delete orphans, never deletes). Machine delete is a soft
+  // tombstone; nothing hard-deletes a live session's history.
   project  Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
   commands Command[]
 
   @@index([userId, updatedAt])
-  @@index([agentId, updatedAt])
   @@index([userId, archivedAt])
   @@index([projectId, updatedAt])
 }
@@ -375,9 +368,6 @@ model Session {
 model Command {
   id          String    @id @default(cuid())
   sessionId   String
-  // Attribution only since Phase 4 — the turn routes via its session's
-  // project/cliType. NULL on commands created after Phase 4. SetNull.
-  agentId     String?
   kind        String    @default("execute") // execute | cancel
   prompt      String?   @db.Text
   status      String    @default("pending")
@@ -397,12 +387,10 @@ model Command {
   options     Json?
 
   session     Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  agent       Agent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
   chunks      ResultChunk[]
   attachments Attachment[]
 
   @@index([sessionId, createdAt])
-  @@index([agentId, createdAt])
 }
 
 // A file the user attached to a turn. Bytes live in S3/MinIO under
@@ -457,14 +445,11 @@ model ResultChunk {
 // sidecar's PTY runner is machine-wide and takes an explicit cwd, so
 // nothing here needs an agent. `machineId` is the routing key for every
 // frame (input/resize/close) — cached hot, never joined through Agent.
-// `agentId` survives as attribution + the legacy open path's capability
-// source; it goes nullable so retiring agent rows can't cascade-delete
-// terminal history.
+// The Phase-5 sweep dropped the legacy `agentId` attribution column.
 model Terminal {
   id          String    @id @default(cuid())
   machineId   String
   projectId   String?
-  agentId     String?
   userId      String
   status      String    @default("opening") // opening | open | closed | error
   shell       String
@@ -478,11 +463,9 @@ model Terminal {
 
   machine Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
   project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  agent   Agent?   @relation(fields: [agentId], references: [id], onDelete: SetNull)
 
   @@index([machineId, openedAt])
   @@index([projectId, openedAt])
-  @@index([agentId, openedAt])
   @@index([userId, openedAt])
   @@index([status])
 }

@@ -126,9 +126,6 @@ export interface CreateAgentRequest {
 export interface SessionDTO {
   id: string;
   userId: string;
-  /** Attribution only since Phase 4 — null on sessions created after
-   *  it; kept on older rows. Never route on it. */
-  agentId: string | null;
   /** The (machineId, workingDir) Project row this session is pinned
    *  to. Null for pre-backfill rows on workdir-less agents (the
    *  per-machine "no project" bucket). Pinned at creation — claude-code
@@ -197,8 +194,6 @@ export interface AttachmentDTO {
 export interface CommandDTO {
   id: string;
   sessionId: string;
-  /** Attribution only since Phase 4 — null on commands created after it. */
-  agentId: string | null;
   kind: 'execute' | 'cancel';
   prompt: string | null;
   status: CommandStatus;
@@ -215,23 +210,16 @@ export interface CommandDTO {
 export interface ResultChunkDTO extends ResultChunk {}
 
 export interface CreateSessionRequest {
-  /** Legacy addressing: an explicit agent. Either this or the
-   *  project shape (`machineId` + `cliType`) must be present; when
-   *  both are sent, `agentId` wins. Kept until every client (web,
-   *  iOS) creates sessions project-first — see
-   *  docs/plan-agent-to-runners.md Phase 1/4. */
-  agentId?: string;
   /** Project-first addressing: the server upserts the Project row for
-   *  (machineId, workingDir), reuses a live same-type agent under it,
-   *  or auto-vivifies one (random name — the user names the session,
-   *  never the agent). */
+   *  (machineId, workingDir) and pins the session to it. `machineId`
+   *  and `cliType` are required (the Agent addressing shape retired in
+   *  Phase 4/5 — see docs/plan-agent-to-runners.md). */
   machineId?: string;
-  /** Project anchor. Empty/absent = the machine's "no project"
-   *  bucket: the agent is created without a workingDir. */
+  /** Project anchor. Empty/absent = the machine's "no project" bucket
+   *  (a workdir-less session). */
   workingDir?: string;
   cliType?: AgentType;
-  /** Capability flag for an auto-vivified agent; ignored when an
-   *  existing agent is reused. Mirrors CreateAgentRequest. */
+  /** Capability flag persisted on the Project row for terminal opens. */
   supportsTerminal?: boolean;
   title?: string;
   prompt?: string;
@@ -279,12 +267,8 @@ export interface TerminalDTO {
   /** Routing key: the sidecar link is per-machine, and the PTY runner is
    *  machine-wide. Terminals are (machine, cwd) pairs — no agent needed. */
   machineId: string;
-  /** Project the terminal was opened under; null for agent-addressed
-   *  opens on workdir-less agents. */
+  /** Project the terminal was opened under; null for workdir-less opens. */
   projectId: string | null;
-  /** Attribution + the legacy open path's capability source. Nulled once
-   *  agent rows retire (Phase 4) — never route on it. */
-  agentId: string | null;
   userId: string;
   status: TerminalStatus;
   shell: string;
