@@ -22,7 +22,6 @@ public struct MachineDTO: Codable, Equatable, Sendable, Identifiable {
     public var lastSeenAt: String
     public var registeredAt: String
     public var archivedAt: String?
-    public var agentCount: Int
     public var iconKey: String?
 }
 
