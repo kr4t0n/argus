@@ -7,10 +7,10 @@
 // (two agents sharing a workdir used to double every fs-changed /
 // background-task event).
 //
-// Events carry WorkingDir with AgentID empty — the protocol documents
-// agentId as attribution-only on these shapes (see FSChangedEvent /
-// GitChangedEvent / the background-task section in protocol.go), and the
-// server's project-room fanout (Phase 2) routes on workingDir.
+// Events carry WorkingDir only — the Agent entity is retired, so these
+// shapes have no agentId (see FSChangedEvent / GitChangedEvent / the
+// background-task section in protocol.go), and the server's project-room
+// fanout routes on workingDir.
 package machine
 
 import (
@@ -127,7 +127,6 @@ func (wr *watchRegistry) startFSWatcher(ctx context.Context, workdir string) *fs
 		_ = wr.bus.Publish(ctx, protocol.NotifyStream(), protocol.FSChangedEvent{
 			Kind:       "fs-changed",
 			MachineID:  wr.machine,
-			AgentID:    "", // attribution only; the server routes on workingDir
 			WorkingDir: workdir,
 			Path:       relDir,
 			TS:         time.Now().UnixMilli(),
@@ -149,7 +148,6 @@ func (wr *watchRegistry) startGitWatcher(ctx context.Context, workdir string) *g
 		_ = wr.bus.Publish(ctx, protocol.NotifyStream(), protocol.GitChangedEvent{
 			Kind:       "git-changed",
 			MachineID:  wr.machine,
-			AgentID:    "", // attribution only; the server routes on workingDir
 			WorkingDir: workdir,
 			TS:         time.Now().UnixMilli(),
 		})
@@ -183,8 +181,8 @@ func (wr *watchRegistry) startProgressWatcher(ctx context.Context, workdir strin
 // — newer argus-bg versions might emit kinds this sidecar doesn't
 // recognize, and we don't want one stray line to surface as noise.
 //
-// AgentID is empty: the events are scoped by (machineId, workingDir,
-// taskId) and the protocol documents agentId as attribution-only.
+// The events are scoped by (machineId, workingDir, taskId); the Agent
+// entity is retired, so they carry no agentId.
 func publishBackgroundTaskEvent(ctx context.Context, b *bus.Bus, machineID, workingDir string, ev bgEvent) {
 	now := time.Now().UnixMilli()
 	switch ev.Type {
@@ -192,7 +190,6 @@ func publishBackgroundTaskEvent(ctx context.Context, b *bus.Bus, machineID, work
 		_ = b.Publish(ctx, protocol.BackgroundTaskStream(), protocol.BackgroundTaskStartedEvent{
 			Kind:       "background-task-started",
 			MachineID:  machineID,
-			AgentID:    "",
 			WorkingDir: workingDir,
 			TaskID:     ev.ID,
 			Label:      ev.Label,
@@ -205,7 +202,6 @@ func publishBackgroundTaskEvent(ctx context.Context, b *bus.Bus, machineID, work
 		_ = b.Publish(ctx, protocol.BackgroundTaskStream(), protocol.BackgroundTaskProgressEvent{
 			Kind:       "background-task-progress",
 			MachineID:  machineID,
-			AgentID:    "",
 			WorkingDir: workingDir,
 			TaskID:     ev.ID,
 			Label:      ev.Label,
@@ -223,7 +219,6 @@ func publishBackgroundTaskEvent(ctx context.Context, b *bus.Bus, machineID, work
 		_ = b.Publish(ctx, protocol.BackgroundTaskStream(), protocol.BackgroundTaskEndedEvent{
 			Kind:       "background-task-ended",
 			MachineID:  machineID,
-			AgentID:    "",
 			WorkingDir: workingDir,
 			TaskID:     ev.ID,
 			Label:      ev.Label,

@@ -453,10 +453,8 @@ type ModelCatalogResponseEvent struct {
 type GitChangedEvent struct {
 	Kind      string `json:"kind"` // "git-changed"
 	MachineID string `json:"machineId"`
-	// AgentID is attribution; WorkingDir (Phase 2) is what the server
-	// routes on — nudges are project-scoped, and two agents sharing a
-	// workdir emit interchangeable ones.
-	AgentID    string `json:"agentId"`
+	// WorkingDir is what the server routes on — nudges are project-scoped,
+	// and two runners sharing a workdir emit interchangeable ones.
 	WorkingDir string `json:"workingDir,omitempty"`
 	TS         int64  `json:"ts"`
 }
@@ -470,11 +468,10 @@ type GitChangedEvent struct {
 // git watchers) and forwards each line on the lifecycle stream as one
 // of the three events below.
 //
-// Scoped by (machineId, workingDir, taskId). WorkingDir — not agentId —
-// is the project key, because multiple sessions in the same project share
-// one .argus/progress/ directory and the dashboard's Progress tab is
-// per-project. AgentID is attribution / debugging only, and empty from
-// runner-mode sidecars (the watcher is workdir-owned, not agent-owned).
+// Scoped by (machineId, workingDir, taskId). WorkingDir is the project
+// key, because multiple sessions in the same project share one
+// .argus/progress/ directory and the dashboard's Progress tab is
+// per-project. The watcher is workdir-owned, not agent-owned.
 
 // BackgroundTaskStartedEvent fires once per task when argus-bg writes
 // its "start" JSONL line. Cmd is the wrapped argv (after the `--`
@@ -482,7 +479,6 @@ type GitChangedEvent struct {
 type BackgroundTaskStartedEvent struct {
 	Kind       string   `json:"kind"` // "background-task-started"
 	MachineID  string   `json:"machineId"`
-	AgentID    string   `json:"agentId"`
 	WorkingDir string   `json:"workingDir"`
 	TaskID     string   `json:"taskId"`
 	Label      string   `json:"label,omitempty"`
@@ -507,7 +503,6 @@ type BackgroundTaskStartedEvent struct {
 type BackgroundTaskProgressEvent struct {
 	Kind       string   `json:"kind"` // "background-task-progress"
 	MachineID  string   `json:"machineId"`
-	AgentID    string   `json:"agentId"`
 	WorkingDir string   `json:"workingDir"`
 	TaskID     string   `json:"taskId"`
 	Label      string   `json:"label,omitempty"`
@@ -529,7 +524,6 @@ type BackgroundTaskProgressEvent struct {
 type BackgroundTaskEndedEvent struct {
 	Kind       string   `json:"kind"` // "background-task-ended"
 	MachineID  string   `json:"machineId"`
-	AgentID    string   `json:"agentId"`
 	WorkingDir string   `json:"workingDir"`
 	TaskID     string   `json:"taskId"`
 	Label      string   `json:"label,omitempty"`
@@ -572,9 +566,7 @@ const FSListRecursiveDescentBudget = 5000
 type FSChangedEvent struct {
 	Kind      string `json:"kind"` // "fs-changed"
 	MachineID string `json:"machineId"`
-	// AgentID is attribution; WorkingDir (Phase 2) is what the server
-	// routes on — see GitChangedEvent.
-	AgentID    string `json:"agentId"`
+	// WorkingDir is what the server routes on — see GitChangedEvent.
 	WorkingDir string `json:"workingDir,omitempty"`
 	Path       string `json:"path"`
 	TS         int64  `json:"ts"`
