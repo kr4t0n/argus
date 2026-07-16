@@ -235,7 +235,7 @@ final class AppModel {
         // backgrounded.
         LiveActivityManager.shared.register = { [weak self] sessionId, tokenHex in
             guard let client = self?.client else { return }
-            try? await client.registerLiveActivity(token: tokenHex, sessionId: sessionId)
+            _ = try? await client.registerLiveActivity(token: tokenHex, sessionId: sessionId)
         }
         LiveActivityManager.shared.unregister = { [weak self] tokenHex in
             guard let client = self?.client else { return }

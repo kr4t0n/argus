@@ -256,9 +256,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   raw `node:http2` because APNs requires HTTP/2 and Node's fetch can't
   speak it. Fired from `result-ingestor` at the exact point a session
   flips to `idle`/`failed` + unread (the same trigger as the web's
-  desktop notifications); payload carries only the session title +
-  "Turn completed/failed" (no prompt text on lock screens) and a
-  `sessionId` for the client deep link. 410/`BadDeviceToken`/
+  desktop notifications); payload carries the session title, a
+  `sessionId` for the client deep link, and — for completed turns — a
+  ~300-char preview of the assistant's answer (deliberate trade-off:
+  answer text on the lock screen in exchange for actionable banners;
+  iOS "Show Previews: When Unlocked" is the user-side scope control;
+  failures keep a fixed "Turn failed"). The preview uses the final
+  chunk's content (claude-code's `result` carries the whole answer);
+  codex finals are content-less, so `PushService.answerPreview`
+  re-derives the answer via the deltaSplit boundary rule — making a
+  THIRD port of deltaSplit (web `lib/deltaSplit.ts`, iOS
+  `DeltaSplit.swift`, server `answerPreview`); change one, change all
+  three. 410/`BadDeviceToken`/
   `Unregistered` feedback prunes the `DeviceToken` row.
 - `sidecar-link/` — raw WebSocket server on path `/sidecar-link`
   attached to the same `http.Server` as NestJS (via `HttpAdapterHost`,
@@ -844,6 +853,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Gotchas
 
+- **Model detection is LATEST-match, in both clients**: the right-panel
+  model line and the context ring's window lookup derive the model from
+  chunk `meta` (`parseModel`). Web `useSessionModel` scans backward;
+  iOS `TranscriptState.latestModel()` likewise. It used to be
+  first-match on web (pre-model-picker assumption "set once at session
+  init"), which pinned the label and ring denominator to the oldest
+  loaded turn even after a mid-session model swap — and shifted it
+  *backward* when scrolling paged older history in. Keep both clients
+  on latest-match.
+
 - **A turn may deliver MORE THAN ONE terminal chunk — finalize must be
   idempotent**: sidecars ≤ 0.2.7-rc.1 emitted two finals per healthy
   turn — the CLI's own `result` final (rich: usage, real
@@ -863,6 +882,24 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   only marks the Command row) — the ingestor's already-terminal branch
   handles that case explicitly, without a push or unread dot, and no
   longer overwrites `cancelled` with `completed`.
+- **Live Activity throttles must trailing-edge flush**: both lock-screen
+  card update paths throttle tool-count updates — `LiveActivityManager`
+  at 2s locally, `PushService` at 15s via APNs. The 15s floor is
+  deliberate: priority-10 `liveactivity` pushes draw from an
+  undocumented per-app hourly budget, and sustained sub-15s cadence
+  gets *silently* throttled on-device (APNs still returns 200) unless
+  the app opts into `NSSupportsLiveActivitiesFrequentUpdates`. The
+  original leading-edge-only throttles (`if now - last < window
+  return`) discarded every update inside the window, so the card sat
+  stale on the leading state through a burst and snapped 1→4→10 tools
+  when the next chunk happened to land outside a window. Both sides now
+  arm one timer per window that pushes the then-current counters at
+  expiry — same push rate (≤ 1/window, no extra APNs budget), bounded
+  staleness. `end`/`endLiveActivity` must disarm that timer, or the
+  trailing "running" update fires after the ✓/✗ and revives a settled
+  card. Tool counts still legitimately step by >1: one assistant
+  message can carry several parallel `tool_use` blocks and the sidecar
+  emits their chunks together.
 - **`path:line` citations in markdown links**: CLI agents emit links like
   `[src/foo.go:123](src/foo.go:123)`. TWO layers conspire against these,
   and both must be handled (`StreamViewer.tsx`):

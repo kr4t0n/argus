@@ -27,6 +27,13 @@ final class LiveActivityManager {
     private var tokenHex: [String: String] = [:]
     private var counters: [String: (count: Int, lastTool: String)] = [:]
     private var lastLocalPush: [String: Date] = [:]
+    /// Armed while an update sits suppressed inside the throttle window;
+    /// fires at window expiry with the then-current counters.
+    private var pendingFlush: [String: Task<Void, Never>] = [:]
+
+    /// Min interval between visible local updates (leading edge; a
+    /// trailing flush covers whatever a burst leaves behind).
+    private static let throttleWindow: TimeInterval = 2
 
     private init() {}
 
@@ -74,9 +81,10 @@ final class LiveActivityManager {
     }
 
     /// Local update while foregrounded — counters track every tool
-    /// chunk; the visible update is throttled to ~1/2s.
+    /// chunk; the visible update is throttled to ~1/2s (leading edge),
+    /// with a trailing flush so a burst's final state always renders.
     func noteChunk(sessionId: String, chunk: ResultChunk) {
-        guard chunk.kind == .tool, let activity = activities[sessionId] else { return }
+        guard chunk.kind == .tool, activities[sessionId] != nil else { return }
         var counter = counters[sessionId] ?? (0, "")
         counter.count += 1
         let firstLine = (chunk.content ?? "")
@@ -89,8 +97,38 @@ final class LiveActivityManager {
         counters[sessionId] = counter
 
         let now = Date()
-        if let last = lastLocalPush[sessionId], now.timeIntervalSince(last) < 2 { return }
-        lastLocalPush[sessionId] = now
+        if let last = lastLocalPush[sessionId] {
+            let elapsed = now.timeIntervalSince(last)
+            if elapsed < Self.throttleWindow {
+                scheduleTrailingFlush(sessionId: sessionId, in: Self.throttleWindow - elapsed)
+                return
+            }
+        }
+        pushRunningState(sessionId: sessionId)
+    }
+
+    /// Trailing-edge flush: chunks suppressed by the throttle would
+    /// otherwise never render — the card would sit stale on the
+    /// leading-edge state until the NEXT chunk lands outside the
+    /// window. One deferred update per window re-reads the counters at
+    /// expiry; `end` cancels it so a settled ✓/✗ card can't flip back
+    /// to running.
+    private func scheduleTrailingFlush(sessionId: String, in delay: TimeInterval) {
+        guard pendingFlush[sessionId] == nil else { return }
+        pendingFlush[sessionId] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(0, delay)))
+            guard let self, !Task.isCancelled else { return }
+            self.pendingFlush[sessionId] = nil
+            guard self.activities[sessionId] != nil else { return }
+            self.pushRunningState(sessionId: sessionId)
+        }
+    }
+
+    /// Push the counters' current "running" state to the activity.
+    private func pushRunningState(sessionId: String) {
+        guard let activity = activities[sessionId] else { return }
+        let counter = counters[sessionId] ?? (0, "")
+        lastLocalPush[sessionId] = Date()
         let content = ActivityContent(
             state: TurnActivityAttributes.ContentState(
                 state: "running", toolCount: counter.count, lastTool: counter.lastTool
@@ -105,6 +143,7 @@ final class LiveActivityManager {
     func end(sessionId: String, failed: Bool) {
         guard let activity = activities.removeValue(forKey: sessionId) else { return }
         tokenTasks.removeValue(forKey: sessionId)?.cancel()
+        pendingFlush.removeValue(forKey: sessionId)?.cancel()
         let counter = counters.removeValue(forKey: sessionId) ?? (0, "")
         lastLocalPush[sessionId] = nil
         let hex = tokenHex.removeValue(forKey: sessionId)

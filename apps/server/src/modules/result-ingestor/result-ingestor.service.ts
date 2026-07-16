@@ -284,8 +284,13 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
       );
       // Same trigger point as the web's desktop notification: a turn
       // reached a terminal state. Fire-and-forget — a push failure must
-      // never affect ingestion.
-      void this.push.notifySessionFinished(dto, status === 'failed');
+      // never affect ingestion. The final chunk's content (claude-code:
+      // the canonical answer; codex: absent) seeds the alert-body
+      // preview so the happy path needs no extra DB read.
+      void this.push.notifySessionFinished(dto, status === 'failed', {
+        commandId: chunk.commandId,
+        finalContent: chunk.kind === 'final' ? chunk.content : undefined,
+      });
       // Resolve any lock-screen card immediately (✓/✗).
       void this.push.endLiveActivity(chunk.sessionId, status === 'failed');
     } else {
