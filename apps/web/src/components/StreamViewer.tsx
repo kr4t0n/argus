@@ -406,6 +406,7 @@ const CommandBlock = memo(function CommandBlock({
             text={command.prompt ?? ''}
             attachments={command.attachments}
             scope={project?.projectId ?? null}
+            createdAt={command.createdAt}
           />
         )}
         <ActivityPill
@@ -430,6 +431,7 @@ const CommandBlock = memo(function CommandBlock({
             sessionId={command.sessionId}
             commandId={command.id}
             project={project}
+            completedAt={command.completedAt}
           />
         )}
         {errorChunk && (
@@ -472,6 +474,40 @@ function findScrollParent(el: HTMLElement): HTMLElement | null {
   return null;
 }
 
+/**
+ * Hover-revealed timestamp for a turn, riding the same action row as the
+ * copy/branch buttons.
+ *
+ * Absolute, NOT the app's usual `relativeTime` ("2h ago"), and that's
+ * deliberate: <CommandBlock> is memo'd, so a settled turn renders once
+ * and then never again. A relative label would freeze at whatever it
+ * said when the turn last rendered and silently drift wrong the longer
+ * a session stays open — the exact case (an old turn in a long-lived
+ * tab) where someone bothers to check a timestamp. An absolute clock
+ * can't go stale, so it needs no re-render to stay honest.
+ *
+ * The clock stays compact (time-of-day, date-prefixed only once the
+ * transcript crosses midnight); the full local timestamp rides the
+ * tooltip.
+ */
+function MessageTime({ iso }: { iso: string | null }) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const label = sameDay
+    ? time
+    : `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${time}`;
+  return (
+    <Tooltip content={d.toLocaleString()}>
+      <span className="cursor-default select-none px-1 text-[11px] tabular-nums text-fg-muted">
+        {label}
+      </span>
+    </Tooltip>
+  );
+}
+
 function AnswerBlock({
   bodyText,
   files,
@@ -479,6 +515,7 @@ function AnswerBlock({
   sessionId,
   commandId,
   project,
+  completedAt,
 }: {
   bodyText: string;
   files: ReturnType<typeof extractFiles>;
@@ -486,6 +523,9 @@ function AnswerBlock({
   sessionId: string;
   commandId: string;
   project: ProjectRef | null;
+  /** When the turn settled — the response's timestamp. Null for turns
+   *  that never completed (e.g. cancelled), which just render no time. */
+  completedAt: string | null;
 }) {
   const [copied, setCopied] = useState(false);
   const [forking, setForking] = useState(false);
@@ -647,6 +687,8 @@ function AnswerBlock({
               )}
             </button>
           </Tooltip>
+          {/* Trails the buttons so adding it can't shift their position. */}
+          <MessageTime iso={completedAt} />
         </div>
       )}
     </div>
@@ -657,10 +699,13 @@ function UserMessage({
   text,
   attachments,
   scope,
+  createdAt,
 }: {
   text: string;
   attachments?: AttachmentDTO[];
   scope: string | null;
+  /** When the turn was dispatched — the user message's own timestamp. */
+  createdAt: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [showFade, setShowFade] = useState(false);
@@ -724,22 +769,27 @@ function UserMessage({
           </div>
         </div>
       )}
-      {text && (
-        <div className="mt-1 flex items-center opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
-          <Tooltip content={copied ? 'Copied' : 'Copy message'}>
-            <button
-              type="button"
-              onClick={handleCopy}
-              aria-label="Copy user message"
-              className="inline-flex h-6 w-6 items-center justify-center rounded text-fg-muted transition-colors hover:bg-surface-2/60 hover:text-fg-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-fg-tertiary"
-            >
-              {copied ? (
-                <Check className="h-3 w-3 text-emerald-500/80" />
-              ) : (
-                <Copy className="h-3 w-3" />
-              )}
-            </button>
-          </Tooltip>
+      {/* Gated on text OR attachments (rather than text alone, as the copy
+          button was) so an image-only turn still reveals its timestamp. */}
+      {(text || attachments?.length) && (
+        <div className="mt-1 flex items-center gap-1 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
+          <MessageTime iso={createdAt} />
+          {text && (
+            <Tooltip content={copied ? 'Copied' : 'Copy message'}>
+              <button
+                type="button"
+                onClick={handleCopy}
+                aria-label="Copy user message"
+                className="inline-flex h-6 w-6 items-center justify-center rounded text-fg-muted transition-colors hover:bg-surface-2/60 hover:text-fg-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-fg-tertiary"
+              >
+                {copied ? (
+                  <Check className="h-3 w-3 text-emerald-500/80" />
+                ) : (
+                  <Copy className="h-3 w-3" />
+                )}
+              </button>
+            </Tooltip>
+          )}
         </div>
       )}
     </div>
