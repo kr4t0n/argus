@@ -12,10 +12,20 @@ type: application
 # field — see helm-publish.yml. Prerelease versions (-rc.N) are hidden
 # from plain `helm search`/`helm upgrade`; install them with
 # `--version 0.2.7-rc.3` (or `--devel`).
-version: 0.2.7-rc.3
+version: 0.3.0
 # App version tracks the Docker image tags pulled by default. Bump in
 # lockstep with `version` whenever the chart starts requiring features
 # only present in newer images; otherwise it can lag.
+#
+# 0.3.0 is the runner refactor — a BREAKING release incompatible with
+# < 0.3.0. The per-agent model is retired end to end (no Agent table, no
+# agentId on the wire, no /agents endpoint); sessions route by
+# projectId → machine + CLI type → runner stream. appVersion pins the
+# 0.3.0 images. Carries migrations that DROP the Agent table
+# (9_phase5_* / 9_phase6_*), applied on boot via `prisma migrate deploy`
+# — downgrading below 0.3.0 after upgrading is not supported. Upgrade the
+# server, web, and EVERY sidecar to ≥ 0.3.0 together: a mixed fleet won't
+# work, since old sidecars speak the deleted per-agent protocol.
 #
 # 0.2.7-rc.3 pins the `sha-2b48436` dev image, which fixes doubled push
 # notifications: the ingestor now finalizes a turn exactly once (the
@@ -94,7 +104,7 @@ version: 0.2.7-rc.3
 # 0.2.0 shipped file/image attachments — the default images include the
 # attachment module, so `objectStore` works out of the box (set the
 # endpoint + bucket + creds to enable it).
-appVersion: "sha-2b48436"
+appVersion: "0.3.0"
 
 home: https://github.com/kr4t0n/argus
 sources:
