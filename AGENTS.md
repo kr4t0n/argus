@@ -914,6 +914,28 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   CLIs on a small Redis. The runner dispatches each decoded turn as an
   independent goroutine and owns the `XACK` after the handler completes;
   a `NOGROUP` after a Redis flush self-heals (re-ensure group + retry).
+- **The sidecar's shared go-redis pool must stay explicitly capped**
+  (`bus.Dial`): go-redis v9 defaults assume a dedicated Redis —
+  PoolSize = 10×GOMAXPROCS, and idle conns are **never closed
+  client-side**: v9 has no background reaper (v8's `IdleCheckFrequency`
+  was removed), `ConnMaxIdleTime` is only enforced lazily when a conn is
+  popped at checkout, the default LIFO pool keeps re-using the hot
+  top-of-stack so post-burst conns at the bottom are never popped, and
+  `Put()` re-pools unconditionally when `MaxIdleConns=0`. Sidecar
+  publishes are fire-and-forget XADDs from many concurrent goroutines
+  (runner result chunks, fs/git responders, watchers, heartbeat) at
+  ~150ms RTT, so one busy streaming turn can open 15+ sockets in a burst
+  that then linger until the server/NAT side kills them (~10 min) —
+  observed 2026-07-16 pinning the 30-client Redis Cloud cap and refusing
+  new clients (which also crash-loops a restarting server, see the
+  Redis-unreachable boot gotcha). `bus.Dial` therefore pins
+  `PoolSize`/`MaxActiveConns` = 8, `MaxIdleConns` = 3,
+  `ConnMaxIdleTime` = 5m, `PoolFIFO` = true. Fleet budget on the 30-cap
+  plan: server holds 4 (ioredis), each machine ≤8 at burst / ~5 steady →
+  roughly 5 machines. Data-safe emergency relief when saturated:
+  `CLIENT KILL` go-redis conns with `idle>300` and `cmd≠xreadgroup`
+  (parked stream readers always show `idle≤5`; go-redis re-dials
+  transparently, and Postgres is the source of truth).
 - **Stream MAXLEN is silent message loss, not just memory pressure**:
   every `XADD` on both sides (`apps/server/src/infra/redis/redis.service.ts`
   and `packages/sidecar/internal/bus/bus.go`) trims with `MAXLEN ~ N`,
