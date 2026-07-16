@@ -863,6 +863,24 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   only marks the Command row) — the ingestor's already-terminal branch
   handles that case explicitly, without a push or unread dot, and no
   longer overwrites `cancelled` with `completed`.
+- **Live Activity throttles must trailing-edge flush**: both lock-screen
+  card update paths throttle tool-count updates — `LiveActivityManager`
+  at 2s locally, `PushService` at 15s via APNs. The 15s floor is
+  deliberate: priority-10 `liveactivity` pushes draw from an
+  undocumented per-app hourly budget, and sustained sub-15s cadence
+  gets *silently* throttled on-device (APNs still returns 200) unless
+  the app opts into `NSSupportsLiveActivitiesFrequentUpdates`. The
+  original leading-edge-only throttles (`if now - last < window
+  return`) discarded every update inside the window, so the card sat
+  stale on the leading state through a burst and snapped 1→4→10 tools
+  when the next chunk happened to land outside a window. Both sides now
+  arm one timer per window that pushes the then-current counters at
+  expiry — same push rate (≤ 1/window, no extra APNs budget), bounded
+  staleness. `end`/`endLiveActivity` must disarm that timer, or the
+  trailing "running" update fires after the ✓/✗ and revives a settled
+  card. Tool counts still legitimately step by >1: one assistant
+  message can carry several parallel `tool_use` blocks and the sidecar
+  emits their chunks together.
 - **`path:line` citations in markdown links**: CLI agents emit links like
   `[src/foo.go:123](src/foo.go:123)`. TWO layers conspire against these,
   and both must be handled (`StreamViewer.tsx`):

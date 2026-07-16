@@ -210,7 +210,10 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   elapsed timer, resolving to ✓/✗. Starts when a turn begins in the
   viewed session or is submitted from the device; updates locally while
   the app is foregrounded, and via APNs `liveactivity` pushes (throttled
-  server-side in the result-ingestor) once backgrounded. The UI lives in
+  server-side in the result-ingestor) once backgrounded. Both throttles
+  are leading-edge + trailing-flush: the first update in a window goes
+  out immediately, and one deferred update at window expiry carries
+  whatever a burst left behind, so the card never sits stale mid-turn. The UI lives in
   the `ArgusWidgets` extension; `Shared/TurnActivityAttributes.swift` is
   the content-state wire contract with the server — field names must
   match `push.service.ts`. Without `APNS_*` configured the card still
