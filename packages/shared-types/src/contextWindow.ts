@@ -26,10 +26,13 @@ function isAnthropicFamily(m: string): boolean {
   return /(^|[^a-z0-9])(opus|sonnet|haiku)([^a-z0-9]|$)/.test(m);
 }
 
-/** Window in tokens. Keep families ordered roughly newest-first so the
- *  search hits the most likely current model fastest, but correctness
- *  doesn't depend on order — every entry is mutually exclusive by
- *  substring match. */
+/** Window in tokens. First match wins, and ORDER IS LOAD-BEARING within
+ *  a vendor: the Claude entries deliberately overlap (every one of them
+ *  is an Anthropic model), and they're ordered most-specific-first —
+ *  1M-by-flag, then 1M-by-default, then the baseline that would
+ *  otherwise swallow both. Entries across vendors are mutually exclusive,
+ *  so only the within-vendor order matters. Append a new Claude family
+ *  ABOVE the generic entry, never below it. */
 const CONTEXT_WINDOWS: Array<{
   /** Lowercased substring or regex on the lowercased model id. */
   match: (id: string) => boolean;
@@ -54,6 +57,23 @@ const CONTEXT_WINDOWS: Array<{
       (m.includes('[1m]') || /(^|[^a-z0-9])1m([^a-z0-9]|$)/.test(m)),
     window: 1_000_000,
     family: 'Claude (1M context)',
+  },
+  // Claude Fable — 1M is the DEFAULT, not an opt-in facet, so there is no
+  // `[1m]` token in the id to key off (claude-code exposes no context
+  // facet for it; see `claudeModelCatalog` in models_claude.go). Matching
+  // the family word rather than the `claude-` prefix covers both id
+  // shapes at once: the API id `claude-fable-5` AND cursor-cli's bare
+  // display name, which is "Fable 5 1M Max Thinking" — that one carries
+  // no `claude` substring, so `isAnthropicFamily` misses it and it used
+  // to fall through every entry to a hidden ring.
+  //
+  // Must stay ABOVE the generic Claude entry: `claude-fable-5` satisfies
+  // `isAnthropicFamily`, so the 200k baseline would otherwise claim it
+  // and the ring would read 5x too full.
+  {
+    match: (m) => /(^|[^a-z0-9])fable([^a-z0-9]|$)/.test(m),
+    window: 1_000_000,
+    family: 'Claude Fable',
   },
   {
     match: (m) => isAnthropicFamily(m),
