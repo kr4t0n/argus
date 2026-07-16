@@ -56,6 +56,10 @@ targets:
           NSAllowsArbitraryLoads: true
         # Lock-screen / Dynamic Island cards for running turns.
         NSSupportsLiveActivities: true
+        # Silent clear pushes that withdraw a delivered completion
+        # banner once its session is read on another client.
+        UIBackgroundModes:
+          - remote-notification
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

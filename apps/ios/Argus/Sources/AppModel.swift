@@ -355,6 +355,14 @@ final class AppModel {
         do { sessionList.setAll(try await sessions) } catch { handleAPIError(error) }
         do { extensions = try await userExtensions } catch { handleAPIError(error) }
         maybeDrainAllQueues()
+        // Banners for sessions read elsewhere (or superseded) while we
+        // weren't reachable are stale — sweep against the fresh unread
+        // flags. Covers cold launch, foreground, and reconnect alike;
+        // the server's live clear push can't (best-effort, and never
+        // delivered to a force-quit app).
+        PushManager.reconcileDelivered(
+            keepingUnread: Set(sessionList.sessions.values.filter(\.unread).map(\.id))
+        )
     }
 
     /// PUT the full extension flag set (no server-side merge), keeping

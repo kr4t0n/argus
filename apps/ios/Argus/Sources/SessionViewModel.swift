@@ -207,6 +207,11 @@ final class SessionViewModel {
     }
 
     private func markSeen() {
+        // A banner for this session may sit in Notification Center
+        // (delivered while backgrounded/locked) — reading it here
+        // withdraws it, immediately and without the server round-trip
+        // (markSeen also fans a clear push out to OTHER devices).
+        PushManager.removeDelivered(sessionIds: [sessionId])
         Task {
             try? await client.markSessionSeen(id: sessionId)
         }
