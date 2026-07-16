@@ -199,25 +199,28 @@ public final class StreamClient {
             self?.continuation.yield(.socketError(String(describing: data.first ?? "socket error")))
         }
 
-        on(socket, "chunk", ServerEvent.chunk)
-        on(socket, "command:created", ServerEvent.commandCreated)
-        on(socket, "command:updated", ServerEvent.commandUpdated)
-        on(socket, "session:created", ServerEvent.sessionCreated)
-        on(socket, "session:updated", ServerEvent.sessionUpdated)
-        on(socket, "session:status", ServerEvent.sessionStatus)
-        on(socket, "session:clone-failed", ServerEvent.sessionCloneFailed)
-        on(socket, "machine:upsert", ServerEvent.machineUpsert)
-        on(socket, "machine:status", ServerEvent.machineStatus)
-        on(socket, "machine:removed", ServerEvent.machineRemoved)
-        on(socket, "project:upsert", ServerEvent.projectUpsert)
-        on(socket, "fs:changed", ServerEvent.fsChanged)
-        on(socket, "git:changed", ServerEvent.gitChanged)
-        on(socket, "background-task:updated", ServerEvent.backgroundTaskUpdated)
-        on(socket, "background-task:removed", ServerEvent.backgroundTaskRemoved)
-        on(socket, "terminal:created", ServerEvent.terminalCreated)
-        on(socket, "terminal:updated", ServerEvent.terminalUpdated)
-        on(socket, "terminal:output", ServerEvent.terminalOutput)
-        on(socket, "terminal:closed", ServerEvent.terminalClosed)
+        // Closure literals, not `ServerEvent.case` references: the
+        // compiler doesn't infer @Sendable for unapplied enum-case
+        // constructors, so the references warn under strict concurrency.
+        on(socket, "chunk") { .chunk($0) }
+        on(socket, "command:created") { .commandCreated($0) }
+        on(socket, "command:updated") { .commandUpdated($0) }
+        on(socket, "session:created") { .sessionCreated($0) }
+        on(socket, "session:updated") { .sessionUpdated($0) }
+        on(socket, "session:status") { .sessionStatus($0) }
+        on(socket, "session:clone-failed") { .sessionCloneFailed($0) }
+        on(socket, "machine:upsert") { .machineUpsert($0) }
+        on(socket, "machine:status") { .machineStatus($0) }
+        on(socket, "machine:removed") { .machineRemoved($0) }
+        on(socket, "project:upsert") { .projectUpsert($0) }
+        on(socket, "fs:changed") { .fsChanged($0) }
+        on(socket, "git:changed") { .gitChanged($0) }
+        on(socket, "background-task:updated") { .backgroundTaskUpdated($0) }
+        on(socket, "background-task:removed") { .backgroundTaskRemoved($0) }
+        on(socket, "terminal:created") { .terminalCreated($0) }
+        on(socket, "terminal:updated") { .terminalUpdated($0) }
+        on(socket, "terminal:output") { .terminalOutput($0) }
+        on(socket, "terminal:closed") { .terminalClosed($0) }
     }
 
     /// Register a typed handler: decode the event's first argument into

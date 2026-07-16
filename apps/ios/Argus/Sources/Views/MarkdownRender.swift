@@ -213,8 +213,12 @@ struct HtmlWebView: UIViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "argusHeight")
     }
 
+    // @preconcurrency: WKScriptMessageHandler's requirements are
+    // nonisolated, but WebKit documents that script messages arrive on
+    // the main thread — so the handler below can be MainActor-isolated
+    // (and read the MainActor-annotated `message.body`) safely.
     @MainActor
-    final class Coordinator: NSObject, WKScriptMessageHandler {
+    final class Coordinator: NSObject, @preconcurrency WKScriptMessageHandler {
         weak var webView: WKWebView?
         private let height: Binding<CGFloat>
         private var lastKey = ""
@@ -239,17 +243,15 @@ struct HtmlWebView: UIViewRepresentable {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
         }
 
-        nonisolated func userContentController(
+        func userContentController(
             _ controller: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
             guard let value = message.body as? NSNumber else { return }
             let next = CGFloat(truncating: value)
-            Task { @MainActor in
-                // ResizeObserver feedback-loop guard (web parity).
-                if abs(self.height.wrappedValue - next) > 1, next > 0 {
-                    self.height.wrappedValue = next
-                }
+            // ResizeObserver feedback-loop guard (web parity).
+            if abs(height.wrappedValue - next) > 1, next > 0 {
+                height.wrappedValue = next
             }
         }
 
