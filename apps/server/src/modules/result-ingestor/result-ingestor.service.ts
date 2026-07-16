@@ -265,7 +265,8 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
           select: { status: true },
         });
         if (cmd?.status === 'cancelled') {
-          await this.sessions.setStatus(chunk.sessionId, 'idle', { unread: false });
+          const dto = await this.sessions.setStatus(chunk.sessionId, 'idle', { unread: false });
+          void this.push.clearSessionNotification(dto);
           void this.push.endLiveActivity(chunk.sessionId, false);
         }
         return;
@@ -296,7 +297,13 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
     } else {
       // A fresh turn is running: clear any prior unread result so the
       // dot doesn't linger while the amber "active" indicator shows.
-      await this.sessions.setStatus(chunk.sessionId, 'active', { unread: false });
+      const dto = await this.sessions.setStatus(chunk.sessionId, 'active', { unread: false });
+      // Same supersedence for the phone banner: a "completed" alert
+      // about a session that's running again is stale. Runs per chunk
+      // but costs a Set lookup unless an alert is actually outstanding
+      // (queued follow-ups / remote submits — an interactive read
+      // already cleared it via markSeen).
+      void this.push.clearSessionNotification(dto);
     }
   }
 }

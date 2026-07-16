@@ -86,6 +86,14 @@ export class PushService {
     return Boolean(this.teamId && this.keyId && this.key);
   }
 
+  /** Sessions whose completion alert actually went out to some device —
+   *  the banner may still be sitting on a lock screen. Consumed by the
+   *  background clear so its per-chunk caller costs a Set lookup and no
+   *  DB/APNs work happens unless an alert was really sent. In-memory
+   *  like `liveTurns`: a restart forgets outstanding banners; the app's
+   *  foreground reconcile mops those up. */
+  private outstandingBanners = new Set<string>();
+
   /**
    * Called by the result-ingestor when a turn reaches a terminal state.
    * Fire-and-forget: never throws (a push failure must not affect chunk
@@ -124,6 +132,7 @@ export class PushService {
         sessionId: session.id,
       });
 
+      this.outstandingBanners.add(session.id);
       await Promise.allSettled(
         // Collapse id mirrors the web notification's `tag`: a newer
         // completion in the same session replaces the older banner
@@ -132,6 +141,39 @@ export class PushService {
       );
     } catch (err) {
       this.logger.warn(`push fan-out failed: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Withdraw a session's completion banner from the user's devices —
+   * called wherever `unread` flips false: the session was opened on any
+   * client, or a fresh turn superseded the result. The phone banner is
+   * a projection of the `unread` flag.
+   *
+   * APNs has no server-side revoke, so this is the standard workaround:
+   * a silent background push (`content-available: 1`, priority 5 — Apple
+   * requires it) that wakes the app to delete its own delivered
+   * notification. Best-effort by design: Apple throttles background
+   * pushes and never delivers them to a force-quit app — the iOS
+   * client's foreground reconcile sweeps whatever slips through.
+   */
+  async clearSessionNotification(session: Pick<SessionDTO, 'id' | 'userId'>): Promise<void> {
+    if (!this.enabled) return;
+    if (!this.outstandingBanners.delete(session.id)) return;
+    try {
+      const devices = await this.prisma.deviceToken.findMany({
+        where: { userId: session.userId },
+      });
+      if (devices.length === 0) return;
+      const payload = JSON.stringify({
+        aps: { 'content-available': 1 },
+        clearSessionId: session.id,
+      });
+      await Promise.allSettled(
+        devices.map((device) => this.send(device.token, payload, { pushType: 'background' })),
+      );
+    } catch (err) {
+      this.logger.warn(`push clear fan-out failed: ${String(err)}`);
     }
   }
 
@@ -389,7 +431,7 @@ export class PushService {
     payload: string,
     opts: {
       topic?: string;
-      pushType?: 'alert' | 'liveactivity';
+      pushType?: 'alert' | 'liveactivity' | 'background';
       kind?: 'device' | 'live-activity';
       /** apns-collapse-id (≤64 bytes): later pushes with the same id
        *  replace the delivered notification instead of stacking. */
@@ -416,7 +458,8 @@ export class PushService {
         authorization: `bearer ${this.providerJwt()}`,
         'apns-topic': topic,
         'apns-push-type': pushType,
-        'apns-priority': '10',
+        // Apple rejects background pushes at priority 10.
+        'apns-priority': pushType === 'background' ? '5' : '10',
         'content-type': 'application/json',
         ...(opts.collapseId ? { 'apns-collapse-id': opts.collapseId } : {}),
       });

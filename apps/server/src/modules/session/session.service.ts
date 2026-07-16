@@ -14,6 +14,7 @@ import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 import { AttachmentService } from '../attachment/attachment.service';
+import { PushService } from '../push/push.service';
 
 /** Internal shape of `create` — a project-first session (machineId +
  *  cliType + optional workingDir). `agentId` is gone since Phase 4. */
@@ -33,6 +34,7 @@ export class SessionService {
     private readonly redis: RedisService,
     private readonly gateway: StreamGateway,
     private readonly attachments: AttachmentService,
+    private readonly push: PushService,
   ) {}
 
   /** Decorate raw command rows with their linked attachments (one batch
@@ -439,6 +441,9 @@ export class SessionService {
     });
     const dto = SessionService.toDto(s);
     this.gateway.emitSessionStatus(dto);
+    // Read on one client → withdraw the completion banner from phones.
+    // Fire-and-forget: a push failure must not affect the read.
+    void this.push.clearSessionNotification(dto);
     return dto;
   }
 

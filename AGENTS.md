@@ -269,6 +269,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `DeltaSplit.swift`, server `answerPreview`); change one, change all
   three. 410/`BadDeviceToken`/
   `Unregistered` feedback prunes the `DeviceToken` row.
+  The phone banner is a **projection of the session's `unread` flag**:
+  wherever `unread` flips false — `markSeen` (session opened on any
+  client) or the ingestor's fresh-turn/cancel transitions —
+  `clearSessionNotification` withdraws the banner via a silent
+  background push (`content-available: 1`, priority 5) that wakes the
+  iOS app to delete its own delivered notification (APNs has no
+  server-side revoke). Gated by the in-memory `outstandingBanners` set,
+  so the per-chunk caller costs a Set lookup and nothing is sent unless
+  an alert actually went out.
 - `sidecar-link/` — raw WebSocket server on path `/sidecar-link`
   attached to the same `http.Server` as NestJS (via `HttpAdapterHost`,
   `noServer` pattern). Owns one connection per sidecar, validates a
@@ -900,6 +909,20 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   card. Tool counts still legitimately step by >1: one assistant
   message can carry several parallel `tool_use` blocks and the sidecar
   emits their chunks together.
+- **Delivered APNs banners can only be withdrawn by the app itself**:
+  there is no server-side revoke, so "read on web → banner gone on
+  phone" works via a silent background push (`content-available: 1`,
+  and `apns-priority: 5` — Apple rejects background pushes at 10) that
+  wakes the iOS app to `removeDeliveredNotifications`, matched on the
+  payload's `sessionId`. Background pushes are best-effort: Apple
+  throttles them to an undocumented budget, defers them in Low Power
+  Mode, and NEVER delivers them to a force-quit app — so the client
+  also sweeps stale banners in `refreshAll` (cold launch, foreground,
+  reconnect) against fresh `unread` flags. The server-side
+  `outstandingBanners` gate is per-process memory: a restart forgets
+  it, which the same sweep covers. Requires `UIBackgroundModes:
+  remote-notification` in `project.yml` (regenerate with `xcodegen
+  generate` — the Info.plist is generated).
 - **`path:line` citations in markdown links**: CLI agents emit links like
   `[src/foo.go:123](src/foo.go:123)`. TWO layers conspire against these,
   and both must be handled (`StreamViewer.tsx`):
