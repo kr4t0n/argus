@@ -478,31 +478,33 @@ function findScrollParent(el: HTMLElement): HTMLElement | null {
  * Hover-revealed timestamp for a turn, riding the same action row as the
  * copy/branch buttons.
  *
- * Absolute, NOT the app's usual `relativeTime` ("2h ago"), and that's
- * deliberate: <CommandBlock> is memo'd, so a settled turn renders once
- * and then never again. A relative label would freeze at whatever it
- * said when the turn last rendered and silently drift wrong the longer
- * a session stays open — the exact case (an old turn in a long-lived
- * tab) where someone bothers to check a timestamp. An absolute clock
- * can't go stale, so it needs no re-render to stay honest.
+ * Absolute (not the app's usual `relativeTime` "2h ago") and always
+ * date-qualified, for one shared reason: <CommandBlock> is memo'd, so a
+ * settled turn renders once and then never again. Anything derived from
+ * "now" at render time freezes at whatever it said on that render and
+ * silently drifts wrong while a session stays open — a relative label
+ * goes stale within the hour, and a today-vs-earlier check that drops
+ * the date goes stale at midnight, leaving a bare clock that reads as
+ * today forever. A fully-qualified stamp needs no re-render to stay
+ * honest, and every turn reads the same way.
  *
- * The clock stays compact (time-of-day, date-prefixed only once the
- * transcript crosses midnight); the full local timestamp rides the
- * tooltip.
+ * One `toLocaleString` rather than date + ', ' + time: the separator and
+ * field order are the locale's business, not ours. The full timestamp
+ * (with seconds) rides the tooltip.
  */
 function MessageTime({ iso }: { iso: string | null }) {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  const sameDay = d.toDateString() === new Date().toDateString();
-  const label = sameDay
-    ? time
-    : `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${time}`;
   return (
     <Tooltip content={d.toLocaleString()}>
       <span className="cursor-default select-none px-1 text-[11px] tabular-nums text-fg-muted">
-        {label}
+        {d.toLocaleString(undefined, {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })}
       </span>
     </Tooltip>
   );
