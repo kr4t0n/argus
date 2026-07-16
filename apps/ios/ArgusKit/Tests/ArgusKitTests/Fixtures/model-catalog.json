@@ -1,0 +1,599 @@
+{
+  "agentId": "2715f1f3-3c79-46f4-93ba-14161cbbbfde",
+  "source": "cli",
+  "fetchedAt": "2026-06-18T15:54:00.408Z",
+  "models": [
+    {
+      "id": "auto",
+      "displayName": "Auto"
+    },
+    {
+      "id": "gpt-5.3-codex-low",
+      "family": "Codex 5.3",
+      "displayName": "Codex 5.3 Low",
+      "variantLabel": "Low"
+    },
+    {
+      "id": "gpt-5.3-codex",
+      "family": "Codex 5.3",
+      "displayName": "Codex 5.3",
+      "variantLabel": "Standard"
+    },
+    {
+      "id": "gpt-5.3-codex-high",
+      "family": "Codex 5.3",
+      "displayName": "Codex 5.3 High",
+      "variantLabel": "High"
+    },
+    {
+      "id": "gpt-5.3-codex-xhigh",
+      "family": "Codex 5.3",
+      "displayName": "Codex 5.3 Extra High",
+      "variantLabel": "Extra High"
+    },
+    {
+      "id": "gpt-5.2",
+      "family": "GPT-5.2",
+      "displayName": "GPT-5.2",
+      "variantLabel": "Standard"
+    },
+    {
+      "id": "gpt-5.2-codex-low",
+      "family": "Codex 5.2",
+      "displayName": "Codex 5.2 Low",
+      "variantLabel": "Low"
+    },
+    {
+      "id": "gpt-5.2-codex",
+      "family": "Codex 5.2",
+      "displayName": "Codex 5.2",
+      "variantLabel": "Standard"
+    },
+    {
+      "id": "gpt-5.2-codex-high",
+      "family": "Codex 5.2",
+      "displayName": "Codex 5.2 High",
+      "variantLabel": "High"
+    },
+    {
+      "id": "gpt-5.2-codex-xhigh",
+      "family": "Codex 5.2",
+      "displayName": "Codex 5.2 Extra High",
+      "variantLabel": "Extra High"
+    },
+    {
+      "id": "gpt-5.1-codex-max-low",
+      "family": "Codex 5.1 Max",
+      "displayName": "Codex 5.1 Max Low",
+      "variantLabel": "Low"
+    },
+    {
+      "id": "gpt-5.1-codex-max-medium",
+      "family": "Codex 5.1 Max",
+      "displayName": "Codex 5.1 Max",
+      "variantLabel": "Standard"
+    },
+    {
+      "id": "gpt-5.1-codex-max-high",
+      "family": "Codex 5.1 Max",
+      "displayName": "Codex 5.1 Max High",
+      "variantLabel": "High"
+    },
+    {
+      "id": "gpt-5.1-codex-max-xhigh",
+      "family": "Codex 5.1 Max",
+      "displayName": "Codex 5.1 Max Extra High",
+      "variantLabel": "Extra High"
+    },
+    {
+      "id": "composer-2.5",
+      "isDefault": true,
+      "displayName": "Composer 2.5"
+    },
+    {
+      "id": "claude-opus-4-8-thinking-high",
+      "family": "Opus 4.8 1M",
+      "displayName": "Opus 4.8 1M Thinking",
+      "variantLabel": "Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "gpt-5.5-high",
+      "family": "GPT-5.5 1M",
+      "displayName": "GPT-5.5 1M High",
+      "variantLabel": "High",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-7-thinking-high",
+      "family": "Opus 4.7 1M",
+      "displayName": "Opus 4.7 1M High Thinking",
+      "variantLabel": "High Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "gpt-5.4-high",
+      "family": "GPT-5.4 1M",
+      "displayName": "GPT-5.4 1M High",
+      "variantLabel": "High",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-8-low",
+      "family": "Opus 4.8 1M",
+      "displayName": "Opus 4.8 1M Low",
+      "variantLabel": "Low",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-8-medium",
+      "family": "Opus 4.8 1M",
+      "displayName": "Opus 4.8 1M Medium",
+      "variantLabel": "Medium",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-8-high",
+      "family": "Opus 4.8 1M",
+      "displayName": "Opus 4.8 1M",
+      "variantLabel": "Standard",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-8-xhigh",
+      "family": "Opus 4.8 1M",
+      "displayName": "Opus 4.8 1M Extra High",
+      "variantLabel": "Extra High",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-8-max",
+      "family": "Opus 4.8 1M",
+      "displayName": "Opus 4.8 1M Max",
+      "variantLabel": "Max",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-8-thinking-low",
+      "family": "Opus 4.8 1M",
+      "displayName": "Opus 4.8 1M Low Thinking",
+      "variantLabel": "Low Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-8-thinking-medium",
+      "family": "Opus 4.8 1M",
+      "displayName": "Opus 4.8 1M Medium Thinking",
+      "variantLabel": "Medium Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-8-thinking-xhigh",
+      "family": "Opus 4.8 1M",
+      "displayName": "Opus 4.8 1M Extra High Thinking",
+      "variantLabel": "Extra High Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-8-thinking-max",
+      "family": "Opus 4.8 1M",
+      "displayName": "Opus 4.8 1M Max Thinking",
+      "variantLabel": "Max Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "gpt-5.5-none",
+      "family": "GPT-5.5 1M",
+      "displayName": "GPT-5.5 1M None",
+      "variantLabel": "None",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "gpt-5.5-low",
+      "family": "GPT-5.5 1M",
+      "displayName": "GPT-5.5 1M Low",
+      "variantLabel": "Low",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "gpt-5.5-medium",
+      "family": "GPT-5.5 1M",
+      "displayName": "GPT-5.5 1M",
+      "variantLabel": "Standard",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "gpt-5.5-extra-high",
+      "family": "GPT-5.5 1M",
+      "displayName": "GPT-5.5 1M Extra High",
+      "variantLabel": "Extra High",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-4.6-sonnet-medium",
+      "family": "Sonnet 4.6 1M",
+      "displayName": "Sonnet 4.6 1M",
+      "variantLabel": "Standard",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-4.6-sonnet-medium-thinking",
+      "family": "Sonnet 4.6 1M",
+      "displayName": "Sonnet 4.6 1M Thinking",
+      "variantLabel": "Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-7-low",
+      "family": "Opus 4.7 1M",
+      "displayName": "Opus 4.7 1M Low",
+      "variantLabel": "Low",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-7-medium",
+      "family": "Opus 4.7 1M",
+      "displayName": "Opus 4.7 1M Medium",
+      "variantLabel": "Medium",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-7-high",
+      "family": "Opus 4.7 1M",
+      "displayName": "Opus 4.7 1M High",
+      "variantLabel": "High",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-7-xhigh",
+      "family": "Opus 4.7 1M",
+      "displayName": "Opus 4.7 1M",
+      "variantLabel": "Standard",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-7-max",
+      "family": "Opus 4.7 1M",
+      "displayName": "Opus 4.7 1M Max",
+      "variantLabel": "Max",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-7-thinking-low",
+      "family": "Opus 4.7 1M",
+      "displayName": "Opus 4.7 1M Low Thinking",
+      "variantLabel": "Low Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-7-thinking-medium",
+      "family": "Opus 4.7 1M",
+      "displayName": "Opus 4.7 1M Medium Thinking",
+      "variantLabel": "Medium Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-7-thinking-xhigh",
+      "family": "Opus 4.7 1M",
+      "displayName": "Opus 4.7 1M Thinking",
+      "variantLabel": "Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-opus-4-7-thinking-max",
+      "family": "Opus 4.7 1M",
+      "displayName": "Opus 4.7 1M Max Thinking",
+      "variantLabel": "Max Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "grok-build-0.1",
+      "displayName": "Grok Build 0.1 1M",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "gpt-5.4-low",
+      "family": "GPT-5.4 1M",
+      "displayName": "GPT-5.4 1M Low",
+      "variantLabel": "Low",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "gpt-5.4-medium",
+      "family": "GPT-5.4 1M",
+      "displayName": "GPT-5.4 1M",
+      "variantLabel": "Standard",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "gpt-5.4-xhigh",
+      "family": "GPT-5.4 1M",
+      "displayName": "GPT-5.4 1M Extra High",
+      "variantLabel": "Extra High",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-4.6-opus-high",
+      "family": "Opus 4.6 1M",
+      "displayName": "Opus 4.6 1M",
+      "variantLabel": "Standard",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-4.6-opus-max",
+      "family": "Opus 4.6 1M",
+      "displayName": "Opus 4.6 1M Max",
+      "variantLabel": "Max",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-4.6-opus-high-thinking",
+      "family": "Opus 4.6 1M",
+      "displayName": "Opus 4.6 1M Thinking",
+      "variantLabel": "Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-4.6-opus-max-thinking",
+      "family": "Opus 4.6 1M",
+      "displayName": "Opus 4.6 1M Max Thinking",
+      "variantLabel": "Max Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-4.5-opus-high",
+      "family": "Opus 4.5",
+      "displayName": "Opus 4.5",
+      "variantLabel": "Standard"
+    },
+    {
+      "id": "claude-4.5-opus-high-thinking",
+      "family": "Opus 4.5",
+      "displayName": "Opus 4.5 Thinking",
+      "variantLabel": "Thinking"
+    },
+    {
+      "id": "gpt-5.2-low",
+      "family": "GPT-5.2",
+      "displayName": "GPT-5.2 Low",
+      "variantLabel": "Low"
+    },
+    {
+      "id": "gpt-5.2-high",
+      "family": "GPT-5.2",
+      "displayName": "GPT-5.2 High",
+      "variantLabel": "High"
+    },
+    {
+      "id": "gpt-5.2-xhigh",
+      "family": "GPT-5.2",
+      "displayName": "GPT-5.2 Extra High",
+      "variantLabel": "Extra High"
+    },
+    {
+      "id": "gemini-3.1-pro",
+      "displayName": "Gemini 3.1 Pro"
+    },
+    {
+      "id": "gpt-5.4-mini-none",
+      "family": "GPT-5.4 Mini",
+      "displayName": "GPT-5.4 Mini None",
+      "variantLabel": "None"
+    },
+    {
+      "id": "gpt-5.4-mini-low",
+      "family": "GPT-5.4 Mini",
+      "displayName": "GPT-5.4 Mini Low",
+      "variantLabel": "Low"
+    },
+    {
+      "id": "gpt-5.4-mini-medium",
+      "family": "GPT-5.4 Mini",
+      "displayName": "GPT-5.4 Mini",
+      "variantLabel": "Standard"
+    },
+    {
+      "id": "gpt-5.4-mini-high",
+      "family": "GPT-5.4 Mini",
+      "displayName": "GPT-5.4 Mini High",
+      "variantLabel": "High"
+    },
+    {
+      "id": "gpt-5.4-mini-xhigh",
+      "family": "GPT-5.4 Mini",
+      "displayName": "GPT-5.4 Mini Extra High",
+      "variantLabel": "Extra High"
+    },
+    {
+      "id": "gpt-5.4-nano-none",
+      "family": "GPT-5.4 Nano",
+      "displayName": "GPT-5.4 Nano None",
+      "variantLabel": "None"
+    },
+    {
+      "id": "gpt-5.4-nano-low",
+      "family": "GPT-5.4 Nano",
+      "displayName": "GPT-5.4 Nano Low",
+      "variantLabel": "Low"
+    },
+    {
+      "id": "gpt-5.4-nano-medium",
+      "family": "GPT-5.4 Nano",
+      "displayName": "GPT-5.4 Nano",
+      "variantLabel": "Standard"
+    },
+    {
+      "id": "gpt-5.4-nano-high",
+      "family": "GPT-5.4 Nano",
+      "displayName": "GPT-5.4 Nano High",
+      "variantLabel": "High"
+    },
+    {
+      "id": "gpt-5.4-nano-xhigh",
+      "family": "GPT-5.4 Nano",
+      "displayName": "GPT-5.4 Nano Extra High",
+      "variantLabel": "Extra High"
+    },
+    {
+      "id": "grok-4.3",
+      "displayName": "Grok 4.3 1M",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-4.5-sonnet",
+      "family": "Sonnet 4.5",
+      "displayName": "Sonnet 4.5",
+      "variantLabel": "Standard"
+    },
+    {
+      "id": "claude-4.5-sonnet-thinking",
+      "family": "Sonnet 4.5",
+      "displayName": "Sonnet 4.5 Thinking",
+      "variantLabel": "Thinking"
+    },
+    {
+      "id": "gpt-5.1-low",
+      "family": "GPT-5.1",
+      "displayName": "GPT-5.1 Low",
+      "variantLabel": "Low"
+    },
+    {
+      "id": "gpt-5.1",
+      "family": "GPT-5.1",
+      "displayName": "GPT-5.1",
+      "variantLabel": "Standard"
+    },
+    {
+      "id": "gpt-5.1-high",
+      "family": "GPT-5.1",
+      "displayName": "GPT-5.1 High",
+      "variantLabel": "High"
+    },
+    {
+      "id": "gemini-3-flash",
+      "displayName": "Gemini 3 Flash"
+    },
+    {
+      "id": "gemini-3.5-flash",
+      "displayName": "Gemini 3.5 Flash"
+    },
+    {
+      "id": "gpt-5.1-codex-mini-low",
+      "family": "Codex 5.1 Mini",
+      "displayName": "Codex 5.1 Mini Low",
+      "variantLabel": "Low"
+    },
+    {
+      "id": "gpt-5.1-codex-mini",
+      "family": "Codex 5.1 Mini",
+      "displayName": "Codex 5.1 Mini",
+      "variantLabel": "Standard"
+    },
+    {
+      "id": "gpt-5.1-codex-mini-high",
+      "family": "Codex 5.1 Mini",
+      "displayName": "Codex 5.1 Mini High",
+      "variantLabel": "High"
+    },
+    {
+      "id": "claude-4-sonnet",
+      "family": "Sonnet 4",
+      "displayName": "Sonnet 4",
+      "variantLabel": "Standard"
+    },
+    {
+      "id": "claude-4-sonnet-thinking",
+      "family": "Sonnet 4",
+      "displayName": "Sonnet 4 Thinking",
+      "variantLabel": "Thinking"
+    },
+    {
+      "id": "gpt-5-mini",
+      "displayName": "GPT-5 Mini"
+    },
+    {
+      "id": "kimi-k2.5",
+      "displayName": "Kimi K2.5"
+    },
+    {
+      "id": "claude-fable-5-low",
+      "family": "Fable 5 1M",
+      "description": "NO ZDR",
+      "displayName": "Fable 5 1M Low",
+      "variantLabel": "Low",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-fable-5-medium",
+      "family": "Fable 5 1M",
+      "description": "NO ZDR",
+      "displayName": "Fable 5 1M Medium",
+      "variantLabel": "Medium",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-fable-5-high",
+      "family": "Fable 5 1M",
+      "description": "NO ZDR",
+      "displayName": "Fable 5 1M",
+      "variantLabel": "Standard",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-fable-5-xhigh",
+      "family": "Fable 5 1M",
+      "description": "NO ZDR",
+      "displayName": "Fable 5 1M Extra High",
+      "variantLabel": "Extra High",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-fable-5-max",
+      "family": "Fable 5 1M",
+      "description": "NO ZDR",
+      "displayName": "Fable 5 1M Max",
+      "variantLabel": "Max",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-fable-5-thinking-low",
+      "family": "Fable 5 1M",
+      "description": "NO ZDR",
+      "displayName": "Fable 5 1M Low Thinking",
+      "variantLabel": "Low Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-fable-5-thinking-medium",
+      "family": "Fable 5 1M",
+      "description": "NO ZDR",
+      "displayName": "Fable 5 1M Medium Thinking",
+      "variantLabel": "Medium Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-fable-5-thinking-high",
+      "family": "Fable 5 1M",
+      "description": "NO ZDR",
+      "displayName": "Fable 5 1M Thinking",
+      "variantLabel": "Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-fable-5-thinking-xhigh",
+      "family": "Fable 5 1M",
+      "description": "NO ZDR",
+      "displayName": "Fable 5 1M Extra High Thinking",
+      "variantLabel": "Extra High Thinking",
+      "contextWindow": 1000000
+    },
+    {
+      "id": "claude-fable-5-thinking-max",
+      "family": "Fable 5 1M",
+      "description": "NO ZDR",
+      "displayName": "Fable 5 1M Max Thinking",
+      "variantLabel": "Max Thinking",
+      "contextWindow": 1000000
+    }
+  ]
+}

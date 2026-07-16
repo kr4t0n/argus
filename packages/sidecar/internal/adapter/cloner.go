@@ -124,7 +124,7 @@ func findFirstFile(root, pattern string) (string, error) {
 }
 
 // errCloneSrcNotFound is returned when the per-adapter cloner can't
-// locate the source session file on disk. The supervisor surfaces this
+// locate the source session file on disk. The runner surfaces this
 // up to the server (eventually) so the dashboard can degrade to a
 // history-only fork.
 var errCloneSrcNotFound = errors.New("clone source session not found on disk")

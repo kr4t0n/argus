@@ -36,36 +36,47 @@ import { cn } from '../lib/utils';
 // server caches too — this just skips the round-trip + spinner).
 const catalogCache = new Map<string, ModelCatalogResponse>();
 
-export function useModelCatalog(agentId: string | null) {
+/** Catalog identity since Phase 2 of the agent→runner refactor: a
+ *  catalog belongs to the machine's installed binary, so the picker
+ *  works before any agent of the type exists under the project. */
+export interface CatalogTarget {
+  machineId: string;
+  cliType: string;
+}
+
+export function useModelCatalog(target: CatalogTarget | null) {
+  const key = target ? `${target.machineId}::${target.cliType}` : null;
   const [catalog, setCatalog] = useState<ModelCatalogResponse | null>(
-    agentId ? (catalogCache.get(agentId) ?? null) : null,
+    key ? (catalogCache.get(key) ?? null) : null,
   );
   // loading = nothing to show yet; refreshing = newer data on its way
   // while the current list stays interactive (client-side SWR).
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const machineId = target?.machineId;
+  const cliType = target?.cliType;
 
   useEffect(() => {
-    if (!agentId) {
+    if (!key || !machineId || !cliType) {
       setCatalog(null);
       setError(null);
       return;
     }
-    const cached = catalogCache.get(agentId) ?? null;
+    const cached = catalogCache.get(key) ?? null;
     setCatalog(cached);
     setError(null);
     // Always revalidate, even on cache hit — the server read is a
-    // Postgres lookup now (catalogs are pushed by the sidecar at agent
+    // Postgres lookup (catalogs are pushed by the sidecar at agent
     // spawn), so this is cheap and picks up server-side refreshes the
     // module cache would otherwise mask for the whole page lifetime.
     let cancelled = false;
     if (cached) setRefreshing(true);
     else setLoading(true);
     api
-      .getModelCatalog(agentId)
+      .getMachineModelCatalog(machineId, cliType)
       .then((resp) => {
-        catalogCache.set(agentId, resp);
+        catalogCache.set(key, resp);
         if (!cancelled) setCatalog(resp);
       })
       .catch((e: Error) => {
@@ -81,19 +92,19 @@ export function useModelCatalog(agentId: string | null) {
     return () => {
       cancelled = true;
     };
-  }, [agentId]);
+  }, [key, machineId, cliType]);
 
   /** Manual refresh — the one path that forces a live CLI probe
    *  (`?refresh=1`). The current list stays interactive throughout;
    *  a failure leaves it untouched and surfaces the reason. */
   const refresh = () => {
-    if (!agentId) return;
+    if (!key || !machineId || !cliType) return;
     setRefreshing(true);
     setError(null);
     api
-      .getModelCatalog(agentId, { refresh: true })
+      .getMachineModelCatalog(machineId, cliType, { refresh: true })
       .then((resp) => {
-        catalogCache.set(agentId, resp);
+        catalogCache.set(key, resp);
         setCatalog(resp);
       })
       .catch((e: Error) => setError(e.message || 'refresh failed'))
@@ -114,16 +125,16 @@ const EFFORT_LABEL: Record<string, string> = {
 };
 
 type Props = {
-  /** Agent whose catalog to load. Null = unknown (e.g. session-create
-   *  for a project with no same-type agent yet) → custom-input mode. */
-  agentId: string | null;
+  /** Machine × CLI whose catalog to load. Null = unknown → custom-
+   *  input mode. */
+  target: CatalogTarget | null;
   /** Current selection; null = "Default" (CLI decides). */
   value: ModelSelection | null;
   onChange: (v: ModelSelection | null) => void;
 };
 
-export function ModelPicker({ agentId, value, onChange }: Props) {
-  const { catalog, loading, refreshing, error, refresh } = useModelCatalog(agentId);
+export function ModelPicker({ target, value, onChange }: Props) {
+  const { catalog, loading, refreshing, error, refresh } = useModelCatalog(target);
   // Sticky custom mode: once the user picks "custom…" we keep the text
   // input visible even while the field is empty.
   const [customMode, setCustomMode] = useState(false);
@@ -295,7 +306,7 @@ export function ModelPicker({ agentId, value, onChange }: Props) {
           />
         )}
 
-        {agentId && (
+        {target && (
           <button
             type="button"
             onClick={refresh}

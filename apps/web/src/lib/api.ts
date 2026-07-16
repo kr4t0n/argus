@@ -1,10 +1,8 @@
 import type {
-  AgentDTO,
   ApiKeyDTO,
   AttachmentDTO,
   BackgroundTasksResponse,
   CommandDTO,
-  CreateAgentRequest,
   CreateApiKeyRequest,
   CreatedApiKey,
   CreateCommandRequest,
@@ -95,11 +93,12 @@ export const api = {
   revokeMyApiKey: (id: string) =>
     http<{ revoked: boolean }>(`/auth/api-keys/${id}`, { method: 'DELETE' }),
   /** Smoke-test a freshly-minted key by hitting a read endpoint with it in
-   *  the `X-API-Key` header (NOT the JWT). Returns the visible agent count
-   *  on success. Only usable right after creation, while the plaintext is
-   *  still in hand — stored keys are hashes and can't be replayed. */
+   *  the `X-API-Key` header (NOT the JWT). Returns the visible machine
+   *  count on success. Only usable right after creation, while the
+   *  plaintext is still in hand — stored keys are hashes and can't be
+   *  replayed. (Probes `/machines` since `/agents` retired in Phase 4.) */
   testApiKey: async (secret: string): Promise<number> => {
-    const res = await fetch(`${BASE}/agents`, { headers: { 'X-API-Key': secret } });
+    const res = await fetch(`${BASE}/machines`, { headers: { 'X-API-Key': secret } });
     if (!res.ok) {
       let msg = res.statusText;
       try {
@@ -110,28 +109,34 @@ export const api = {
       }
       throw new ApiError(msg, res.status);
     }
-    const agents = (await res.json()) as unknown;
-    return Array.isArray(agents) ? agents.length : 0;
+    const machines = (await res.json()) as unknown;
+    return Array.isArray(machines) ? machines.length : 0;
   },
 
-  listAgents: (opts?: { includeArchived?: boolean }) =>
-    http<AgentDTO[]>(`/agents${opts?.includeArchived ? '?includeArchived=true' : ''}`),
-  getAgent: (id: string) => http<AgentDTO>(`/agents/${id}`),
-  archiveAgent: (id: string) => http<AgentDTO>(`/agents/${id}/archive`, { method: 'POST' }),
-  unarchiveAgent: (id: string) => http<AgentDTO>(`/agents/${id}/unarchive`, { method: 'POST' }),
+  // Projects (server-backed since Phase 1b — see projectStore)
+  createProject: (body: {
+    machineId: string;
+    workingDir: string;
+    name?: string;
+    supportsTerminal?: boolean;
+  }) => http<ProjectDTO>(`/projects`, { method: 'POST', body: JSON.stringify(body) }),
+  renameProject: (id: string, name: string) =>
+    http<ProjectDTO>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+  archiveProject: (
+    id: string,
+    snapshot?: { archivedAgentIds: string[]; archivedSessionIds: string[] },
+  ) =>
+    http<ProjectDTO>(`/projects/${id}/archive`, {
+      method: 'POST',
+      body: JSON.stringify(snapshot ?? {}),
+    }),
+  unarchiveProject: (id: string) =>
+    http<ProjectDTO>(`/projects/${id}/unarchive`, { method: 'POST' }),
 
   // Machines
   listMachines: (opts?: { includeArchived?: boolean }) =>
     http<MachineDTO[]>(`/machines${opts?.includeArchived ? '?includeArchived=true' : ''}`),
   getMachine: (id: string) => http<MachineDTO>(`/machines/${id}`),
-  listMachineAgents: (id: string) => http<AgentDTO[]>(`/machines/${id}/agents`),
-  createAgent: (machineId: string, body: CreateAgentRequest) =>
-    http<AgentDTO>(`/machines/${machineId}/agents`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-  destroyAgent: (machineId: string, agentId: string) =>
-    http<void>(`/machines/${machineId}/agents/${agentId}`, { method: 'DELETE' }),
   deleteMachine: (id: string) =>
     http<void>(`/machines/${id}`, { method: 'DELETE' }),
 
@@ -161,7 +166,10 @@ export const api = {
     }>(`/sessions/${id}/history?${q.toString()}`);
   },
   createSession: (body: CreateSessionRequest) =>
-    http<{ session: SessionDTO; command: CommandDTO | null }>(`/sessions`, {
+    http<{
+      session: SessionDTO;
+      command: CommandDTO | null;
+    }>(`/sessions`, {
       method: 'POST',
       body: JSON.stringify(body),
     }),
@@ -193,8 +201,10 @@ export const api = {
     }),
   /** Model catalog for an agent's CLI — drives the model picker.
    *  Server-cached per agent (~1h); `refresh` bypasses the cache. */
-  getModelCatalog: (agentId: string, opts?: { refresh?: boolean }) =>
-    http<ModelCatalogResponse>(`/agents/${agentId}/models${opts?.refresh ? '?refresh=1' : ''}`),
+  getMachineModelCatalog: (machineId: string, cliType: string, opts?: { refresh?: boolean }) =>
+    http<ModelCatalogResponse>(
+      `/machines/${machineId}/models?cliType=${encodeURIComponent(cliType)}${opts?.refresh ? '&refresh=1' : ''}`,
+    ),
   /** Replace the session-default model choice; null clears to "CLI
    *  default". Applies to subsequent turns. */
   setSessionModel: (id: string, modelSelection: ModelSelection | null) =>
@@ -213,13 +223,14 @@ export const api = {
   cancelCommand: (id: string) => http<CommandDTO>(`/commands/${id}/cancel`, { method: 'POST' }),
 
   // Terminals
-  openTerminal: (agentId: string, body: OpenTerminalRequest = {}) =>
-    http<TerminalDTO>(`/agents/${agentId}/terminals`, {
+  /** Project-addressed open — a terminal is a (machine, cwd) pair. */
+  openProjectTerminal: (projectId: string, body: OpenTerminalRequest = {}) =>
+    http<TerminalDTO>(`/projects/${projectId}/terminals`, {
       method: 'POST',
       body: JSON.stringify(body),
     }),
-  listTerminals: (agentId: string) => http<TerminalDTO[]>(`/agents/${agentId}/terminals`),
-  closeTerminal: (id: string) => http<TerminalDTO>(`/terminals/${id}`, { method: 'DELETE' }),
+  listProjectTerminals: (projectId: string) =>
+    http<TerminalDTO[]>(`/projects/${projectId}/terminals`),
 
   // Sidecar version + remote update
   getSidecarVersion: (machineId: string) =>
@@ -262,18 +273,17 @@ export const api = {
   // walk multiple levels in one round trip — the result hydrates the
   // tree cache for every returned path so expanding those folders is
   // instant. Omit or pass 1 for the historical single-level listing.
-  listAgentDir: (agentId: string, path: string, showAll: boolean, depth?: number) => {
-    const q = new URLSearchParams();
-    if (path) q.set('path', path);
-    if (showAll) q.set('showAll', 'true');
+  listProjectDir: (projectId: string, path: string, showAll: boolean, depth?: number) => {
+    const q = new URLSearchParams({ path, showAll: String(showAll) });
     if (depth && depth > 1) q.set('depth', String(depth));
-    const qs = q.toString();
-    return http<FSListResponse>(`/agents/${agentId}/fs/list${qs ? `?${qs}` : ''}`);
+    return http<FSListResponse>(`/projects/${projectId}/fs/list?${q.toString()}`);
   },
-  readAgentFile: (agentId: string, path: string) => {
-    const q = new URLSearchParams({ path });
-    return http<FSReadResponse>(`/agents/${agentId}/fs/read?${q.toString()}`);
-  },
+  readProjectFile: (projectId: string, path: string) =>
+    http<FSReadResponse>(`/projects/${projectId}/fs/read?${new URLSearchParams({ path })}`),
+  getProjectGitLog: (projectId: string, limit?: number) =>
+    http<GitLogResponse>(
+      `/projects/${projectId}/git/log${limit ? `?limit=${limit}` : ''}`,
+    ),
 
   /** Per-day command count for the current user (last 365 days). The
    *  response is dense — zero-days included — so the heatmap can map
@@ -346,10 +356,4 @@ export const api = {
   /** Recent commits for the agent's workingDir. The response also
    *  carries a fresh GitStatus so the panel header (branch /
    *  detached) renders in one round trip. */
-  getAgentGitLog: (agentId: string, limit?: number) => {
-    const q = new URLSearchParams();
-    if (limit && limit > 0) q.set('limit', String(limit));
-    const qs = q.toString();
-    return http<GitLogResponse>(`/agents/${agentId}/git/log${qs ? `?${qs}` : ''}`);
-  },
 };

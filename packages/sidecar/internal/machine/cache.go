@@ -1,9 +1,9 @@
 // Package machine implements the per-host argus-sidecar daemon: the
 // long-lived process that registers itself as a Machine with the server,
-// supervises N agent subprocesses (one per Agent row the dashboard
-// created), and persists its identity + agent set to disk so it can
-// re-spawn agents instantly on restart without waiting for the server
-// link.
+// runs one runner per installed CLI (Phase 3 of
+// docs/plan-agent-to-runners.md), and persists its identity + project
+// workdir allowlist to disk so watchers and the fs jail come up on
+// restart without waiting for the server link.
 package machine
 
 import (
@@ -21,23 +21,28 @@ import (
 // CacheSchemaVersion is bumped whenever the on-disk cache shape changes.
 // Older versions are migrated forward in Load(); incompatible bumps
 // trigger an outright rewrite (the sidecar can always re-derive
-// machineId/availableAdapters; only the agent set is operator-defined).
+// machineId/availableAdapters). Removing a field stays at the same
+// version — old caches with the dropped key just decode without it.
 const CacheSchemaVersion = 1
 
 // Cache is the on-disk JSON the sidecar stores at ~/.config/argus/sidecar.json.
 //
 // Persisted fields are deliberately minimal: identity, bus URL, server
-// link credentials, the most recent canonical agent list. Everything
+// link credentials, the most recent workdir allowlist. Everything
 // else (host info, available adapters, sidecar version) is recomputed
 // on boot — those values can change with a binary upgrade or a system
 // rename, and we don't want stale snapshots to drive the wire register.
 type Cache struct {
-	SchemaVersion int           `json:"schemaVersion"`
-	MachineID     string        `json:"machineId"`
-	Name          string        `json:"name"`
-	Bus           string        `json:"bus"`
-	Server        ServerConfig  `json:"server"`
-	Agents        []AgentRecord `json:"agents"`
+	SchemaVersion int          `json:"schemaVersion"`
+	MachineID     string       `json:"machineId"`
+	Name          string       `json:"name"`
+	Bus           string       `json:"bus"`
+	Server        ServerConfig `json:"server"`
+	// Workdirs is the persisted sync-projects allowlist (Phase 3): the
+	// project directories this machine serves fs/git RPCs and watchers
+	// for. Kept on disk so the fs jail and watchers come up on reboot
+	// before the server pushes a fresh snapshot.
+	Workdirs []string `json:"workdirs,omitempty"`
 }
 
 // ServerConfig is the direct sidecar↔server link config (terminal
@@ -45,18 +50,6 @@ type Cache struct {
 type ServerConfig struct {
 	URL   string `json:"url"`
 	Token string `json:"token,omitempty"`
-}
-
-// AgentRecord is the cached canonical form of a server-managed agent.
-// Mirrors protocol.AgentSpec — duplicated rather than aliased so we
-// can evolve the on-disk shape independently of the wire shape.
-type AgentRecord struct {
-	AgentID          string         `json:"agentId"`
-	Name             string         `json:"name"`
-	Type             string         `json:"type"`
-	WorkingDir       string         `json:"workingDir,omitempty"`
-	SupportsTerminal bool           `json:"supportsTerminal"`
-	Adapter          map[string]any `json:"adapter,omitempty"`
 }
 
 // DefaultPath returns the canonical cache location, honoring

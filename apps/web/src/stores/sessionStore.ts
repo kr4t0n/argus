@@ -20,10 +20,11 @@ interface SessionEntry {
   loadingOlder: boolean;
 }
 
-/** Default initial window for `loadSession`. Small enough to keep paint
- *  snappy on long sessions, large enough that most active sessions fit
- *  entirely and never trigger a scroll-up fetch. */
-const DEFAULT_TAIL = 20;
+/** Default initial window for `loadSession`. Deliberately small: the
+ *  open-a-session cost scales with chunks per turn, not turn count
+ *  (agentic turns carry tool meta, diffs, and thinking text), so a
+ *  short tail keeps first paint fast; scroll-up pages the rest in. */
+const DEFAULT_TAIL = 4;
 const OLDER_PAGE = 20;
 
 interface SessionState {

@@ -6,10 +6,10 @@ import {
 import { cn } from '../lib/utils';
 
 type Props = {
-  /** Tabs are filtered to this agent's files. Other agents' tabs stay
-   *  in the store but are hidden so the strip stays in-context for the
-   *  currently viewed session. */
-  agentId: string | null | undefined;
+  /** Tabs are filtered to this project's files (the current session's
+   *  projectId). Other projects' tabs stay in the store but are hidden
+   *  so the strip stays in-context for the currently viewed session. */
+  scope: string | null | undefined;
 };
 
 /**
@@ -19,18 +19,18 @@ type Props = {
  * being previewed. The chat tab is always first and pinned (no close
  * button); file tabs render to the right of it in open order.
  */
-export function FileTabStrip({ agentId }: Props) {
+export function FileTabStrip({ scope }: Props) {
   const openFiles = useFileTabsStore((s) => s.openFiles);
   const activeKey = useFileTabsStore((s) => s.activeKey);
   const setActive = useFileTabsStore((s) => s.setActive);
   const closeFile = useFileTabsStore((s) => s.closeFile);
 
-  if (!agentId) return null;
-  const tabs = openFiles.filter((f) => f.agentId === agentId);
+  if (!scope) return null;
+  const tabs = openFiles.filter((f) => f.scope === scope);
   if (tabs.length === 0) return null;
 
   // The chat tab is "active" both when activeKey is null AND when the
-  // current activeKey points to a different agent's file (we hide
+  // current activeKey points to a different project's file (we hide
   // those tabs, so chat is the only displayable surface).
   const fileActive = tabs.find((f) => f.key === activeKey);
   const chatActive = !fileActive;

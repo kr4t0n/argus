@@ -1,9 +1,9 @@
-// Package machine — per-agent progress watcher.
+// Package machine — per-workdir progress watcher.
 //
 // Watches `<workingDir>/.argus/progress/` for the JSONL streams that
 // `argus-bg` writes when it wraps a long-running command. Each new
-// line in any `*.jsonl` file is decoded and forwarded to the
-// supervisor, which republishes it as a BackgroundTask{Started,
+// line in any `*.jsonl` file is decoded and forwarded to the watch
+// registry, which republishes it as a BackgroundTask{Started,
 // Progress,Ended} event on the dedicated `agent:background` Redis
 // stream so the dashboard can render the per-project Progress tab
 // without contending with the much larger `agent:lifecycle` stream
@@ -95,7 +95,7 @@ type fileTailer struct {
 // <workingDir>/.argus/progress/. The directory is MkdirAll'd on
 // startup so a fresh project (no argus-bg run yet) still gets a watch
 // in place. Soft-fails the same way fsw/gitw do: returns an error and
-// the supervisor logs + carries on without live progress events.
+// the caller logs + carries on without live progress events.
 func newProgressWatcher(ctx context.Context, workingDir string, emit func(bgEvent), logger *log.Logger) (*progressWatcher, error) {
 	if workingDir == "" {
 		return nil, errors.New("progresswatch: empty workingDir")

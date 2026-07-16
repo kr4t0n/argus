@@ -22,12 +22,6 @@ interface PendingCatalog {
   timer: NodeJS.Timeout;
 }
 
-/** Shape persisted in Agent.modelCatalog. */
-interface StoredCatalog {
-  source: 'static' | 'cli';
-  models: ModelCatalogEntry[];
-}
-
 // Generous relative to fs-list's 5s: codex/cursor catalog production
 // shells out to the wrapped CLI, and cursor's `models` makes a vendor
 // API call. The sidecar bounds the CLI exec at 12s, so 15s here means
@@ -44,22 +38,26 @@ const LIST_MODELS_TIMEOUT_MS = 15_000;
 const REVALIDATE_AFTER_MS = 6 * 60 * 60 * 1_000;
 
 /**
- * Server-side half of the model-catalog flow.
+ * Server-side half of the model-catalog flow, keyed by
+ * (machineId, cliType) since Phase 2 of the agent→runner refactor — a
+ * catalog is a property of the installed binary, not the workdir, so
+ * per-agent storage duplicated it per project and left the picker cold
+ * for a project's first session of a type.
  *
- * Reads are DB-first: the sidecar pushes each agent's catalog at
- * supervisor spawn (unsolicited `model-catalog-response` with empty
- * requestId), and every on-demand fetch re-persists — so
- * GET /agents/:id/models is a Postgres read, warm across server
- * restarts and shared by all browsers. The live RPC (same
- * pending-promise pattern as FSService) runs only for: the manual
- * `?refresh=1` path, the cold case (no stored catalog yet), and the
- * background stale-revalidate.
+ * Reads are DB-first: the sidecar pushes a catalog at supervisor spawn
+ * (unsolicited `model-catalog-response` with empty requestId), and
+ * every on-demand fetch re-persists — so reads are Postgres, warm
+ * across server restarts and shared by all browsers. The live RPC
+ * (same pending-promise pattern as FSService) runs only for: the
+ * manual `?refresh=1` path, the cold case, and the background
+ * stale-revalidate. The wire request is keyed purely by `cliType` —
+ * the Agent entity is retired, so there's no agentId on the frame.
  */
 @Injectable()
 export class ModelsService implements OnModuleDestroy {
   private readonly logger = new Logger(ModelsService.name);
   private readonly pending = new Map<string, PendingCatalog>();
-  /** Collapses concurrent live fetches for the same agent into one RPC. */
+  /** Collapses concurrent live fetches for the same (machine, CLI). */
   private readonly inflight = new Map<string, Promise<ModelCatalogResponse>>();
 
   constructor(
@@ -75,80 +73,92 @@ export class ModelsService implements OnModuleDestroy {
     this.pending.clear();
   }
 
-  async getCatalog(agentId: string, refresh = false): Promise<ModelCatalogResponse> {
+  async getCatalogForMachine(
+    machineId: string,
+    cliType: string,
+    refresh = false,
+  ): Promise<ModelCatalogResponse> {
     if (refresh) {
       // Manual refresh: the one user-initiated synchronous path —
       // ground truth or a visible error. A failure leaves the stored
       // catalog untouched.
-      return this.liveFetch(agentId);
+      return this.liveFetch(machineId, cliType);
     }
 
-    const agent = await this.prisma.agent.findUnique({
-      where: { id: agentId },
-      select: { id: true, modelCatalog: true, modelCatalogAt: true },
+    const stored = await this.prisma.machineCliCatalog.findUnique({
+      where: { machineId_cliType: { machineId, cliType } },
     });
-    if (!agent) throw new NotFoundException('agent not found');
-
-    const stored = agent.modelCatalog as StoredCatalog | null;
-    if (stored && agent.modelCatalogAt) {
-      if (Date.now() - agent.modelCatalogAt.getTime() > REVALIDATE_AFTER_MS) {
+    if (stored) {
+      if (Date.now() - stored.fetchedAt.getTime() > REVALIDATE_AFTER_MS) {
         // Stale-while-revalidate: serve immediately, refresh behind.
-        this.liveFetch(agentId).catch((err: Error) => {
-          this.logger.debug(`background catalog revalidate for ${agentId} failed: ${err.message}`);
+        this.liveFetch(machineId, cliType).catch((err: Error) => {
+          this.logger.debug(
+            `background catalog revalidate for ${machineId}/${cliType} failed: ${err.message}`,
+          );
         });
       }
       return {
-        agentId,
-        source: stored.source,
-        fetchedAt: agent.modelCatalogAt.toISOString(),
-        models: stored.models ?? [],
+        machineId,
+        cliType,
+        source: (stored.source as 'static' | 'cli') ?? 'cli',
+        fetchedAt: stored.fetchedAt.toISOString(),
+        models: (stored.models as unknown as ModelCatalogEntry[]) ?? [],
       };
     }
 
-    // Cold: nothing stored yet (agent predates the push mechanism, or
-    // its first push hasn't landed). The picker renders non-blocking
+    // Cold: nothing stored yet. The picker renders non-blocking
     // regardless; this fetch fills the store for next time too.
-    return this.liveFetch(agentId);
+    return this.liveFetch(machineId, cliType);
   }
 
-  /** Live RPC to the sidecar, collapsed per agent, persisting on success. */
-  private liveFetch(agentId: string): Promise<ModelCatalogResponse> {
-    const running = this.inflight.get(agentId);
+  /** Live RPC to the sidecar, collapsed per (machine, CLI), persisting
+   *  on success. */
+  private liveFetch(machineId: string, cliType: string): Promise<ModelCatalogResponse> {
+    const key = `${machineId}::${cliType}`;
+    const running = this.inflight.get(key);
     if (running) return running;
 
-    const fetch = this.fetchCatalog(agentId)
+    const fetch = this.fetchCatalog(machineId, cliType)
       .then(async (resp) => {
-        await this.persist(agentId, { source: resp.source, models: resp.models }, new Date());
+        await this.persist(machineId, cliType, resp.source, resp.models, new Date());
         return resp;
       })
       .finally(() => {
-        this.inflight.delete(agentId);
+        this.inflight.delete(key);
       });
-    this.inflight.set(agentId, fetch);
+    this.inflight.set(key, fetch);
     return fetch;
   }
 
-  private async persist(agentId: string, catalog: StoredCatalog, at: Date): Promise<void> {
+  private async persist(
+    machineId: string,
+    cliType: string,
+    source: string,
+    models: ModelCatalogEntry[],
+    at: Date,
+  ): Promise<void> {
     try {
-      await this.prisma.agent.update({
-        where: { id: agentId },
-        data: {
-          modelCatalog: catalog as unknown as Prisma.InputJsonValue,
-          modelCatalogAt: at,
+      await this.prisma.machineCliCatalog.upsert({
+        where: { machineId_cliType: { machineId, cliType } },
+        create: {
+          machineId,
+          cliType,
+          source,
+          models: models as unknown as Prisma.InputJsonValue,
+          fetchedAt: at,
+        },
+        update: {
+          source,
+          models: models as unknown as Prisma.InputJsonValue,
+          fetchedAt: at,
         },
       });
     } catch {
-      // Agent deleted between fetch and persist — nothing to store.
+      // Machine deleted between fetch and persist — nothing to store.
     }
   }
 
-  private async fetchCatalog(agentId: string): Promise<ModelCatalogResponse> {
-    const agent = await this.prisma.agent.findUnique({
-      where: { id: agentId },
-      select: { id: true, machineId: true },
-    });
-    if (!agent) throw new NotFoundException('agent not found');
-
+  private async fetchCatalog(machineId: string, cliType: string): Promise<ModelCatalogResponse> {
     const requestId = randomUUID();
     const promise = new Promise<ModelCatalogResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -159,10 +169,10 @@ export class ModelsService implements OnModuleDestroy {
     });
 
     try {
-      await this.redis.publish(streamKeys.machineControl(agent.machineId), {
+      await this.redis.publish(streamKeys.machineControl(machineId), {
         kind: 'list-models',
         requestId,
-        agentId,
+        cliType,
         ts: Date.now(),
       });
     } catch (err) {
@@ -184,15 +194,14 @@ export class ModelsService implements OnModuleDestroy {
    *  - otherwise: resolve the pending REST call (no-op for stale ids).
    *    Persistence for this flavor happens in liveFetch so the manual
    *    refresh path can await it.
+   * Runner sidecars (≥0.3) self-describe with `cliType`; an event that
+   * arrives without one is simply dropped (the Agent-row fallback that
+   * used to resolve the type retired with the Agent entity).
    */
   handleCatalogResponse(ev: ModelCatalogResponseEvent): void {
     if (ev.requestId === '') {
       if (!ev.error && ev.models) {
-        void this.persist(
-          ev.agentId,
-          { source: ev.source ?? 'cli', models: ev.models },
-          new Date(ev.ts),
-        );
+        void this.persistFromEvent(ev);
       }
       return;
     }
@@ -205,10 +214,17 @@ export class ModelsService implements OnModuleDestroy {
       return;
     }
     pending.resolve({
-      agentId: ev.agentId,
+      machineId: ev.machineId,
+      cliType: ev.cliType ?? '',
       source: ev.source ?? 'cli',
       fetchedAt: new Date(ev.ts).toISOString(),
       models: ev.models ?? [],
     });
+  }
+
+  private async persistFromEvent(ev: ModelCatalogResponseEvent): Promise<void> {
+    const cliType = ev.cliType;
+    if (!cliType) return;
+    await this.persist(ev.machineId, cliType, ev.source ?? 'cli', ev.models ?? [], new Date(ev.ts));
   }
 }

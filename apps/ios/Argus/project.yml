@@ -1,0 +1,104 @@
+# XcodeGen manifest — `xcodegen generate` produces Argus.xcodeproj
+# (never committed; Info.plist below is generated too). Re-run only when
+# adding/renaming sources or editing this file.
+name: Argus
+options:
+  bundleIdPrefix: app.argus
+  deploymentTarget:
+    iOS: '17.0'
+  xcodeVersion: '16.0'
+
+packages:
+  ArgusKit:
+    path: ../ArgusKit
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: 2.4.0
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    from: 1.2.0
+  Highlightr:
+    url: https://github.com/raspu/Highlightr
+    from: 2.1.0
+
+targets:
+  Argus:
+    type: application
+    platform: iOS
+    deploymentTarget: '17.0'
+    sources:
+      - Sources
+      # Shared with the widget extension (Live Activity attributes).
+      - Shared
+    dependencies:
+      - package: ArgusKit
+      - package: MarkdownUI
+        product: MarkdownUI
+      - package: SwiftTerm
+        product: SwiftTerm
+      - package: Highlightr
+        product: Highlightr
+      - target: ArgusWidgets
+        embed: true
+    scheme: {}
+    entitlements:
+      path: Argus.entitlements
+      properties:
+        # Sandbox push (Xcode/Simulator builds). Archive/export flips
+        # this to production automatically. Remote push in the Simulator
+        # needs an Apple silicon Mac (supported since Xcode 14).
+        aps-environment: development
+    info:
+      path: Info.plist
+      properties:
+        # Self-hosted Argus servers on LAN/localhost are plain http.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        # Lock-screen / Dynamic Island cards for running turns.
+        NSSupportsLiveActivities: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.argus.ios
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        TARGETED_DEVICE_FAMILY: '1,2' # iPhone + iPad
+        SWIFT_VERSION: '5.10'
+        # Simulator needs no signing team. For a physical device, delete
+        # these two lines and set a team in Signing & Capabilities.
+        CODE_SIGNING_ALLOWED: 'NO'
+        CODE_SIGN_IDENTITY: ''
+
+  # Live Activity UI must live in a WidgetKit extension. Depends only on
+  # the Shared attributes — no ArgusKit, no app assets.
+  ArgusWidgets:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: '17.0'
+    sources:
+      - Widgets
+      - Shared
+    info:
+      path: Widgets-Info.plist
+      properties:
+        CFBundleDisplayName: Argus Widgets
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.argus.ios.widgets
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        TARGETED_DEVICE_FAMILY: '1,2'
+        SWIFT_VERSION: '5.10'
+        CODE_SIGNING_ALLOWED: 'NO'
+        CODE_SIGN_IDENTITY: ''

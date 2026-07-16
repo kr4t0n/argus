@@ -131,9 +131,10 @@ func (a *CodexAdapter) Execute(
 	}
 	// Attach image files via codex's native image-input flag so the model
 	// sees them as vision. Non-image attachments are left to the prompt-
-	// path preamble the supervisor already appended. `--image` is
-	// repeatable per the CLI reference; LocalPath is filled in by the
-	// supervisor after it pulls the file to disk.
+	// path preamble the runner already appended. `--image` is repeatable
+	// per the CLI reference; LocalPath is filled in by the runner after
+	// it pulls the file to disk (always an absolute path, so it needs no
+	// workingDir resolution here).
 	for _, att := range cmd.Attachments {
 		if att.LocalPath != "" && strings.HasPrefix(att.Mime, "image/") {
 			flags = append(flags, "--image", att.LocalPath)
@@ -159,7 +160,7 @@ func (a *CodexAdapter) Execute(
 	spec := StreamSpec{
 		Binary:     a.binary,
 		Args:       args,
-		Dir:        a.workingDir,
+		Dir:        runDir(cmd.WorkingDir, a.workingDir),
 		StderrKind: protocol.KindStderr,
 		Mapper: func(line string) []Chunk {
 			return mapCodexLine(line, state)
@@ -224,8 +225,11 @@ func (a *CodexAdapter) Cancel(_ context.Context, commandID string) error {
 // turnIndex is 1-based; we stop emitting at the (turnIndex+1)th
 // task_started event. line 1 (`session_meta`) is always kept and gets
 // `payload.id` rewritten to the new UUID.
+//
+// The workingDir param is ignored: codex buckets sessions by date at
+// the filesystem root, workdir-independently (see cloner.go).
 func (a *CodexAdapter) CloneSession(
-	_ context.Context, srcExternalID string, turnIndex int,
+	_ context.Context, _ /* workingDir */, srcExternalID string, turnIndex int,
 ) (string, error) {
 	home, err := homeDir()
 	if err != nil {

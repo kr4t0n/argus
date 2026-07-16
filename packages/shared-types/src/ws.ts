@@ -1,5 +1,4 @@
 import type {
-  AgentDTO,
   BackgroundTaskDTO,
   CommandDTO,
   MachineDTO,
@@ -20,8 +19,6 @@ export const WS_NAMESPACE = '/stream';
 
 /** Client → server events */
 export interface ClientToServerEvents {
-  'subscribe:agent': (agentId: string) => void;
-  'unsubscribe:agent': (agentId: string) => void;
   'subscribe:session': (sessionId: string) => void;
   'unsubscribe:session': (sessionId: string) => void;
   'subscribe:terminal': (terminalId: string) => void;
@@ -42,12 +39,6 @@ export interface ServerToClientEvents {
    *  Broadcast to every dashboard, like machine:upsert — project
    *  icons are workspace-shared, not per-user. */
   'project:upsert': (project: ProjectDTO) => void;
-  'agent:upsert': (agent: AgentDTO) => void;
-  'agent:status': (payload: { id: string; status: AgentDTO['status'] }) => void;
-  'agent:removed': (payload: { id: string }) => void;
-  /** Surfaces sidecar-side spawn errors (bad workingDir, missing binary, …)
-   *  so the dashboard can show inline feedback on the create-agent flow. */
-  'agent:spawn-failed': (payload: { machineId: string; agentId: string; reason: string }) => void;
   'session:created': (session: SessionDTO) => void;
   'session:updated': (session: SessionDTO) => void;
   'session:status': (payload: SessionStatusEvent) => void;
@@ -63,16 +54,17 @@ export interface ServerToClientEvents {
   'terminal:updated': (terminal: TerminalDTO) => void;
   'terminal:output': (msg: TerminalOutputMessage) => void;
   'terminal:closed': (msg: TerminalClosedMessage) => void;
-  /** One of the agent's working-directory paths changed on disk
+  /** A path under the project's working directory changed on disk
    *  (coalesced by the sidecar's debounced fsnotify). The dashboard
    *  re-fetches the listing for `path` if it's currently expanded in
-   *  the right-pane file tree. */
-  'fs:changed': (payload: { agentId: string; path: string }) => void;
-  /** The agent's repo HEAD or one of its branch tips moved (commit,
+   *  the right-pane file tree. Scoped to the (machineId, workingDir)
+   *  project room. */
+  'fs:changed': (payload: { path: string; machineId?: string; workingDir?: string }) => void;
+  /** The project's repo HEAD or one of its branch tips moved (commit,
    *  checkout, reset, rebase). Debounced on the sidecar — a single
    *  rebase fires one event, not one per ref bump. The dashboard's
    *  commit panel listens for this and re-fetches the log. */
-  'git:changed': (payload: { agentId: string }) => void;
+  'git:changed': (payload: { machineId?: string; workingDir?: string }) => void;
   /** Sidecar update lifecycle (per-machine room). The triple matches
    *  on requestId; the dashboard renders progress in a toast that
    *  resolves on `completed` (machine re-registered with the new

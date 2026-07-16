@@ -82,7 +82,7 @@ export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
   private async consumeLoop() {
     while (this.running) {
       try {
-        const res = (await this.redis.read.xreadgroup(
+        const res = (await this.redis.readBackground.xreadgroup(
           'GROUP',
           consumerGroups.background,
           CONSUMER,
@@ -136,7 +136,6 @@ export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
       taskId: ev.taskId,
       machineId: ev.machineId,
       workingDir: ev.workingDir,
-      agentId: ev.agentId,
       label: ev.label,
       cmd: ev.cmd,
       startedAt: ev.startedAt,
@@ -161,7 +160,6 @@ export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
           taskId: ev.taskId,
           machineId: ev.machineId,
           workingDir: ev.workingDir,
-          agentId: ev.agentId,
           label: ev.label,
           cmd: ev.cmd,
           startedAt: ev.ts,
@@ -193,7 +191,6 @@ export class BackgroundTaskService implements OnModuleInit, OnModuleDestroy {
           taskId: ev.taskId,
           machineId: ev.machineId,
           workingDir: ev.workingDir,
-          agentId: ev.agentId,
           label: ev.label,
           cmd: ev.cmd,
           startedAt: ev.ts,

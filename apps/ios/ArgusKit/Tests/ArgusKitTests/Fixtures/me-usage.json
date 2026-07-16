@@ -1,0 +1,24 @@
+{
+  "usage": {
+    "lifetime": {
+      "inputTokens": 79874,
+      "outputTokens": 2693,
+      "cacheReadTokens": 319448,
+      "cacheWriteTokens": 327908,
+      "durationApiMs": 203331
+    },
+    "last30Days": {
+      "inputTokens": 79874,
+      "outputTokens": 2693,
+      "cacheReadTokens": 319448,
+      "cacheWriteTokens": 327908,
+      "durationApiMs": 203331
+    },
+    "last7Days": {
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0
+    }
+  }
+}

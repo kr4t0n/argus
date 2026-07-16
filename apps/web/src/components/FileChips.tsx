@@ -75,7 +75,7 @@ export function displayPath(abs: string, workingDir?: string | null): string {
 }
 
 /**
- * Convert a chip path to the form `api.readAgentFile()` expects (and
+ * Convert a chip path to the form `api.readProjectFile()` expects (and
  * the sidecar's `fs-read` accepts) — i.e. relative to the agent's
  * `workingDir`, and not a directory.
  *
@@ -119,14 +119,14 @@ export function toAgentRelative(path: string, workingDir?: string | null): strin
 export function FileChips({
   files,
   workingDir,
-  agentId,
+  project,
 }: {
   files: string[];
   workingDir?: string | null;
   /** When set, double-clicking a chip opens that file in the preview
    *  pane (same store action the file-tabs strip uses). Omitted in
    *  contexts where we don't have an agent to fetch the file from. */
-  agentId?: string | null;
+  project?: import('../lib/projects').ProjectRef | null;
 }) {
   const openFile = useFileTabsStore((s) => s.openFile);
   if (files.length === 0) return null;
@@ -142,7 +142,7 @@ export function FileChips({
     <div className="flex flex-nowrap items-center gap-1.5 overflow-x-auto no-scrollbar">
       {files.map((f) => {
         const shown = displayPath(f, workingDir);
-        const apiPath = agentId ? toAgentRelative(f, workingDir) : null;
+        const apiPath = project ? toAgentRelative(f, workingDir) : null;
         // A chip is interactive only when we have both an agent AND a
         // path inside the workspace. Files reached via absolute paths
         // outside workingDir would be rejected by the sidecar.
@@ -160,7 +160,7 @@ export function FileChips({
             title={title}
             onDoubleClick={
               interactive
-                ? () => openFile({ agentId: agentId!, path: apiPath! })
+                ? () => openFile({ project: project!, path: apiPath! })
                 : undefined
             }
             className={

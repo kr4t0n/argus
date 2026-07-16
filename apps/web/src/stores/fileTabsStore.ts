@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { FSReadResult } from '@argus/shared-types';
+import type { ProjectRef } from '../lib/projects';
 
 /**
  * In-session state for the main-area file preview tabs.
@@ -19,9 +20,9 @@ import type { FSReadResult } from '@argus/shared-types';
 
 interface OpenFileBase {
   key: string;
-  /** Owning agent/session context — scopes the tab strip and lets
-   *  clearAgent drop tabs when navigating away. */
-  agentId: string;
+  /** Owning project id — scopes the tab strip to the current session's
+   *  project (Phase 4 prep: tabs no longer know about agents). */
+  scope: string;
   /** Tab label. */
   name: string;
 }
@@ -29,6 +30,9 @@ interface OpenFileBase {
 /** A file from the agent's working directory, fetched via fs-read. */
 export interface OpenWorkingFile extends OpenFileBase {
   kind: 'file';
+  /** Full addressing for the viewer's fs-read — kept on the tab so a
+   *  tab outlives store churn in the project rows. */
+  project: ProjectRef;
   path: string;
   /** 1-based line to scroll to / highlight, from `path:line` citations.
    *  Not part of `key` — reopening the same file at a different line
@@ -59,9 +63,9 @@ interface FileTabsState {
   activeKey: string | null;
   contents: Record<string, FileContentState>;
 
-  openFile: (file: { agentId: string; path: string; line?: number }) => void;
+  openFile: (file: { project: ProjectRef; path: string; line?: number }) => void;
   openAttachment: (att: {
-    agentId: string;
+    scope: string;
     id: string;
     url: string;
     name: string;
@@ -71,12 +75,11 @@ interface FileTabsState {
   closeFile: (key: string) => void;
   setActive: (key: string | null) => void;
   setContent: (key: string, state: FileContentState) => void;
-  /** Drop every tab + cached content for an agent (e.g. agent removed
-   *  or the user navigated to a different agent's session). */
-  clearAgent: (agentId: string) => void;
+  /** Drop every tab + cached content for a project scope. */
+  clearScope: (scope: string) => void;
 }
 
-export const fileKey = (agentId: string, path: string) => `${agentId}:${path}`;
+export const fileKey = (scope: string, path: string) => `${scope}:${path}`;
 export const attachmentKey = (id: string) => `att:${id}`;
 
 const fileName = (path: string) => {
@@ -89,8 +92,8 @@ export const useFileTabsStore = create<FileTabsState>((set, get) => ({
   activeKey: null,
   contents: {},
 
-  openFile({ agentId, path, line }) {
-    const key = fileKey(agentId, path);
+  openFile({ project, path, line }) {
+    const key = fileKey(project.projectId, path);
     const existing = get().openFiles.find((f) => f.key === key);
     if (existing) {
       // Refresh `line` on the existing tab so a second citation into the
@@ -107,20 +110,20 @@ export const useFileTabsStore = create<FileTabsState>((set, get) => ({
     set((s) => ({
       openFiles: [
         ...s.openFiles,
-        { kind: 'file', key, agentId, path, name: fileName(path), line },
+        { kind: 'file', key, scope: project.projectId, project, path, name: fileName(path), line },
       ],
       activeKey: key,
     }));
   },
 
-  openAttachment({ agentId, id, url, name, mime, size }) {
+  openAttachment({ scope, id, url, name, mime, size }) {
     const key = attachmentKey(id);
     if (get().openFiles.some((f) => f.key === key)) {
       set({ activeKey: key });
       return;
     }
     set((s) => ({
-      openFiles: [...s.openFiles, { kind: 'attachment', key, agentId, name, url, mime, size }],
+      openFiles: [...s.openFiles, { kind: 'attachment', key, scope, name, url, mime, size }],
       activeKey: key,
     }));
   },
@@ -152,9 +155,9 @@ export const useFileTabsStore = create<FileTabsState>((set, get) => ({
     set((s) => ({ contents: { ...s.contents, [key]: state } }));
   },
 
-  clearAgent(agentId) {
+  clearScope(scope) {
     set((s) => {
-      const remaining = s.openFiles.filter((f) => f.agentId !== agentId);
+      const remaining = s.openFiles.filter((f) => f.scope !== scope);
       const keep = new Set(remaining.map((f) => f.key));
       const contents: Record<string, FileContentState> = {};
       for (const k of Object.keys(s.contents)) {

@@ -1,15 +1,15 @@
-// Package terminal serves interactive PTY sessions on the agent's host
-// machine. It consumes terminal control frames from the sidecar↔server
-// WebSocket link, owns a PTY per session, and ships output back over
-// the same link.
+// Package terminal serves interactive PTY sessions on the sidecar's
+// host machine. It consumes terminal control frames from the
+// sidecar↔server WebSocket link, owns a PTY per session, and ships
+// output back over the same link.
 //
-// Security model: terminal access is gated per-agent (Agent.supportsTerminal
-// must be true; the dashboard sets this when the operator opts in at
-// agent-creation time). The PTY inherits the sidecar daemon's UID, so
-// anyone with dashboard access to a terminal-enabled agent effectively
-// gets shell-as-sidecar-user on the agent's machine. Treat opting an
-// agent into terminal access as equivalent to handing out SSH access
-// to that user on that host.
+// Security model: terminal capability is gated SERVER-side (the runner
+// refactor removed per-agent state from the sidecar; the server checks
+// the opt-in before ever sending terminal-open). The PTY inherits the
+// sidecar daemon's UID, so anyone the server lets open a terminal
+// effectively gets shell-as-sidecar-user on this machine. Treat
+// enabling terminal access as equivalent to handing out SSH access to
+// that user on that host.
 package terminal
 
 import (
@@ -56,21 +56,6 @@ type Link interface {
 	Publish(frame any) bool
 	Inbound() <-chan json.RawMessage
 	IsConnected() bool
-}
-
-// AgentInfo is the per-agent slice of state the runner needs to validate
-// terminal-open requests and pick a sensible default cwd. Provided by
-// the daemon (which owns the AgentRecord set) via AgentLookup.
-type AgentInfo struct {
-	SupportsTerminal bool
-	WorkingDir       string
-}
-
-// AgentLookup is the runner's read-only view onto the daemon's agent
-// registry. Returns ok=false when the agent isn't known to this machine
-// (e.g. a stale terminal-open after the agent was destroyed).
-type AgentLookup interface {
-	Lookup(agentID string) (AgentInfo, bool)
 }
 
 // Settings are the machine-wide PTY policy knobs. The dashboard never
@@ -120,7 +105,6 @@ func DefaultSettings() Settings {
 
 type Runner struct {
 	settings Settings
-	agents   AgentLookup
 	link     Link
 	log      *log.Logger
 
@@ -139,10 +123,9 @@ type ptySession struct {
 
 // New constructs a Runner. `link` is typically a *sidecarlink.Client
 // but any Link implementation works.
-func New(settings Settings, agents AgentLookup, link Link, logger *log.Logger) *Runner {
+func New(settings Settings, link Link, logger *log.Logger) *Runner {
 	return &Runner{
 		settings: settings,
-		agents:   agents,
 		link:     link,
 		log:      logger,
 		sessions: make(map[string]*ptySession),
@@ -221,19 +204,11 @@ func (r *Runner) handleOpen(parent context.Context, ev protocol.TerminalOpen) {
 		return
 	}
 
-	// Validate against the daemon's agent registry. Two failure modes:
-	// the agent is gone (race with destroy), or the agent didn't opt
-	// into terminal access (defense-in-depth — the server should have
-	// rejected the open already, but the sidecar is the authority).
-	info, ok := r.agents.Lookup(ev.AgentID)
-	if !ok {
-		r.publishClosed(ev.TerminalID, -1, fmt.Sprintf("agent %q is not running on this machine", ev.AgentID))
-		return
-	}
-	if !info.SupportsTerminal {
-		r.publishClosed(ev.TerminalID, -1, fmt.Sprintf("agent %q does not have terminal access enabled", ev.AgentID))
-		return
-	}
+	// No sidecar-side capability check: the runner refactor removed
+	// per-agent state from the sidecar, so the terminal opt-in is
+	// enforced server-side before terminal-open is ever sent. The
+	// sidecar accepts and relies on the shell allowlist + session cap
+	// below as its own limits.
 
 	r.mu.Lock()
 	if _, exists := r.sessions[ev.TerminalID]; exists {
@@ -257,11 +232,13 @@ func (r *Runner) handleOpen(parent context.Context, ev protocol.TerminalOpen) {
 		return
 	}
 
+	// The server sends the cwd explicitly (from the project / agent
+	// row); without one we fall back to the user's home dir. Empty cwd
+	// (home lookup failed) → cmd inherits sidecar's cwd, which is fine.
 	cwd := ev.Cwd
 	if cwd == "" {
-		cwd = info.WorkingDir
+		cwd, _ = os.UserHomeDir()
 	}
-	// Empty cwd → cmd inherits sidecar's cwd, which is fine.
 
 	cols := ev.Cols
 	rows := ev.Rows

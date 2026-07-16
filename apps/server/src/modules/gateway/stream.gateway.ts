@@ -11,7 +11,6 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { Server, Socket } from 'socket.io';
 import type {
-  AgentDTO,
   BackgroundTaskDTO,
   CommandDTO,
   MachineDTO,
@@ -61,16 +60,6 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.debug(`client disconnected sid=${client.id}`);
   }
 
-  @SubscribeMessage('subscribe:agent')
-  subAgent(@ConnectedSocket() c: Socket, @MessageBody() agentId: string) {
-    c.join(`agent:${agentId}`);
-  }
-
-  @SubscribeMessage('unsubscribe:agent')
-  unsubAgent(@ConnectedSocket() c: Socket, @MessageBody() agentId: string) {
-    c.leave(`agent:${agentId}`);
-  }
-
   @SubscribeMessage('subscribe:session')
   subSession(@ConnectedSocket() c: Socket, @MessageBody() sessionId: string) {
     c.join(`session:${sessionId}`);
@@ -117,22 +106,6 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   // ------- Broadcast helpers (called from other services) -------
-
-  emitAgentUpsert(agent: AgentDTO) {
-    this.server.emit('agent:upsert', agent);
-  }
-
-  emitAgentStatus(id: string, status: AgentDTO['status']) {
-    this.server.emit('agent:status', { id, status });
-  }
-
-  emitAgentRemoved(id: string) {
-    this.server.emit('agent:removed', { id });
-  }
-
-  emitAgentSpawnFailed(payload: { machineId: string; agentId: string; reason: string }) {
-    this.server.emit('agent:spawn-failed', payload);
-  }
 
   emitMachineUpsert(machine: MachineDTO) {
     this.server.emit('machine:upsert', machine);
@@ -212,21 +185,29 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // ------- Filesystem events -------
 
   /**
-   * Broadcast a dir-level change from the sidecar's fsnotify watcher.
-   * Scoped to the agent room so only clients actually viewing that
-   * agent's file tree get poked.
+   * Broadcast a dir-level change from the sidecar's fsnotify watcher to
+   * the project room — nudges are project-scoped (two runners sharing a
+   * workdir emit interchangeable ones). A runner event without
+   * machineId/workingDir has nothing to route on and is dropped.
    */
-  emitFSChanged(payload: { agentId: string; path: string }) {
-    this.server.to(`agent:${payload.agentId}`).emit('fs:changed', payload);
+  emitFSChanged(payload: { path: string; machineId?: string; workingDir?: string }) {
+    if (payload.machineId && payload.workingDir) {
+      this.server
+        .to(projectRoom(payload.machineId, payload.workingDir))
+        .emit('fs:changed', payload);
+    }
   }
 
   /**
    * Broadcast a debounced ref-change from the sidecar's secondary git
-   * watcher. Scoped to the agent room — only clients viewing that
-   * agent's panel re-fetch.
+   * watcher. Same project-room fanout as emitFSChanged.
    */
-  emitGitChanged(payload: { agentId: string }) {
-    this.server.to(`agent:${payload.agentId}`).emit('git:changed', payload);
+  emitGitChanged(payload: { machineId?: string; workingDir?: string }) {
+    if (payload.machineId && payload.workingDir) {
+      this.server
+        .to(projectRoom(payload.machineId, payload.workingDir))
+        .emit('git:changed', payload);
+    }
   }
 
   // ------- Sidecar remote-update events -------

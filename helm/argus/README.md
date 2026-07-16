@@ -175,6 +175,47 @@ Notes:
 - Upload caps: `objectStore.maxFileBytes` (default 25 MiB) and
   `objectStore.maxFiles` per turn (default 10).
 
+## Push notifications — APNs (native iOS client)
+
+The native iOS/iPadOS client registers its device with the server, and
+the server pushes turn-finished alerts plus Live Activity updates
+through Apple's APNs. Like attachments, this is **off by default** —
+leave the `apns` block empty and web-only deployments are unaffected
+(the server logs push as disabled and skips it).
+
+You need an Apple Developer **token-auth key** (a `.p8` file, created
+under Certificates → Keys with the APNs capability; pick environment
+*Sandbox & Production* and scope *Team* so one key covers both the
+alert and Live Activity topics). Then:
+
+```yaml
+apns:
+  teamId: "AB12CD34EF"                   # Membership → Team ID
+  keyId: "XY98ZW76VU"                    # the .p8 key id
+  keyBase64: "<base64 of the .p8 file>"  # base64 -i AuthKey_XXXX.p8 | tr -d '\n'
+  # topic: app.argus.ios                 # only if you rebuilt the app with another bundle id
+  # environment: production              # sandbox (default) = Xcode installs; production = TestFlight/App Store
+```
+
+Or keep everything in a Secret you manage — with `existingSecret` set,
+`teamId`/`keyId` may be omitted and read from the Secret too:
+
+```yaml
+apns:
+  existingSecret: my-apns                # keys: APNS_TEAM_ID, APNS_KEY_ID, APNS_KEY_BASE64
+  # existingSecretTeamIdKey / existingSecretKeyIdKey / existingSecretKey
+  # to rename them; an inline teamId/keyId wins over the Secret.
+```
+
+Enablement is all-or-nothing: the server activates push only when team
+id, key id, and key are all present (the chart mirrors this — the env
+block renders only when `existingSecret` is set, or `teamId` and
+`keyId` are both inline). Check the server boot log for `APNs enabled`.
+Requires a server image with the push module (`sha-6cb9f9f` / ≥ 0.2.7).
+Note the pod-rolling `checksum/secret` annotation only tracks the
+chart-managed Secret — after rotating a key inside your own
+`existingSecret`, roll the server Deployment yourself.
+
 ## Wiring the SPA to the API
 
 The web image renders runtime configuration into `/config.js` at
@@ -323,6 +364,11 @@ The most important knobs:
 | `objectStore.bucket`      | `argus-attachments`         | bucket attachments are stored in (must exist)   |
 | `objectStore.accessKey`   | `""`                        | S3 access key (or use `objectStore.existingSecret`) |
 | `objectStore.secretKey`   | `""`                        | S3 secret key                                   |
+| `apns.teamId`             | `""` (off)                  | Apple team id; with `keyId` + key enables iOS push |
+| `apns.keyId`              | `""`                        | APNs token-auth `.p8` key id                    |
+| `apns.keyBase64`          | `""`                        | base64 `.p8` content (or use `apns.existingSecret`) |
+| `apns.existingSecret`     | `""`                        | Secret holding the whole trio (`APNS_TEAM_ID`/`APNS_KEY_ID`/`APNS_KEY_BASE64`) |
+| `apns.environment`        | `""` (→ `sandbox`)          | `production` for TestFlight/App Store builds    |
 | `server.replicaCount`     | `1`                         | NestJS replicas (Socket.IO is sticky-friendly)  |
 | `server.image.repository` | `kr4t0n/argus-server`       |                                                 |
 | `web.replicaCount`        | `1`                         | nginx replicas serving the SPA bundle           |

@@ -216,8 +216,8 @@ func runDaemon(args []string) {
 		}
 		logger.Fatalf("load cache: %v", err)
 	}
-	logger.Printf("config: machineId=%s name=%s bus=%s agents=%d cache=%s pidfile=%s",
-		cache.MachineID, cache.Name, redactBus(cache.Bus), len(cache.Agents), path, resolvedPID)
+	logger.Printf("config: machineId=%s name=%s bus=%s workdirs=%d cache=%s pidfile=%s",
+		cache.MachineID, cache.Name, redactBus(cache.Bus), len(cache.Workdirs), path, resolvedPID)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -338,14 +338,13 @@ func runInit(args []string) {
 		Name:      *name,
 		Bus:       *bus,
 		Server:    machine.ServerConfig{URL: *server, Token: *token},
-		Agents:    nil,
 	}
 	if existing != nil && *force {
-		// Preserve the agent set across re-init: the operator probably
-		// wants a fresh server URL or rotated bus credentials, not to
-		// nuke the (server-managed) agent definitions and risk an
-		// out-of-sync sidecar↔server view until the next sync.
-		cache.Agents = existing.Agents
+		// Preserve the server-managed state across re-init: the operator
+		// probably wants a fresh server URL or rotated bus credentials,
+		// not to nuke the workdir allowlist and risk an out-of-sync
+		// sidecar↔server view until the next sync.
+		cache.Workdirs = existing.Workdirs
 	}
 
 	if err := machine.Save(path, cache); err != nil {

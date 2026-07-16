@@ -1,0 +1,25 @@
+{
+  "quotas": [
+    {
+      "type": "codex",
+      "source": "codex-chatgpt",
+      "windows": [
+        {
+          "key": "five_hour",
+          "label": "5-hour",
+          "resetsAt": "2026-06-19T16:58:38Z",
+          "utilizationPercent": 0
+        },
+        {
+          "key": "weekly",
+          "label": "7-day",
+          "resetsAt": "2026-06-25T04:09:26Z",
+          "utilizationPercent": 1
+        }
+      ],
+      "checkedAt": "2026-06-19T12:01:04.838Z",
+      "machineId": "48cbe45b-b56e-4fcd-aac4-7229ec9f243f",
+      "machineName": "kyles-Mac-mini"
+    }
+  ]
+}

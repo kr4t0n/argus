@@ -16,14 +16,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		Name:      "kyles-Mac-mini",
 		Bus:       "redis://localhost:6379",
 		Server:    ServerConfig{URL: "http://localhost:4000", Token: "tok"},
-		Agents: []AgentRecord{{
-			AgentID:          "a1",
-			Name:             "claude-1",
-			Type:             "claude-code",
-			WorkingDir:       "/tmp/x",
-			SupportsTerminal: true,
-			Adapter:          map[string]any{"binary": "claude"},
-		}},
+		Workdirs:  []string{"/tmp/x", "/tmp/y"},
 	}
 	if err := Save(path, in); err != nil {
 		t.Fatalf("save: %v", err)
@@ -39,8 +32,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if out.MachineID != in.MachineID || out.Name != in.Name || out.Bus != in.Bus {
 		t.Errorf("identity not round-tripped: got %+v", out)
 	}
-	if len(out.Agents) != 1 || out.Agents[0].AgentID != "a1" {
-		t.Errorf("agents not round-tripped: %+v", out.Agents)
+	if len(out.Workdirs) != 2 || out.Workdirs[0] != "/tmp/x" {
+		t.Errorf("workdirs not round-tripped: %+v", out.Workdirs)
 	}
 }
 

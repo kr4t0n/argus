@@ -1,0 +1,68 @@
+name: ios
+
+# ArgusKit (the native client's Swift package) builds and tests on a macOS
+# runner. This workflow is the PRIMARY verifier for Swift changes: the dev
+# box is Linux (no Swift toolchain) and the local Mac has Command Line
+# Tools only (swift build works there, but swift test needs full Xcode —
+# which runners have).
+on:
+  push:
+    branches: [main, dev, 'feat/ios-*']
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios.yml'
+  pull_request:
+    paths:
+      - 'apps/ios/**'
+      - '.github/workflows/ios.yml'
+  # Manual runs for Swift work on long-lived refactor branches — the
+  # dev box has no Swift toolchain, so this workflow is the compiler.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arguskit:
+    name: ArgusKit (swift build + test)
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: apps/ios/ArgusKit
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/ios/ArgusKit/.build
+          key: swiftpm-${{ runner.os }}-${{ hashFiles('apps/ios/ArgusKit/Package.swift') }}
+          restore-keys: |
+            swiftpm-${{ runner.os }}-
+      - name: Swift version
+        run: swift --version
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift test
+
+  argusapp:
+    name: Argus app (xcodebuild, iOS Simulator)
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: apps/ios/Argus
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Build for Simulator
+        run: >-
+          xcodebuild build
+          -project Argus.xcodeproj
+          -scheme Argus
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO

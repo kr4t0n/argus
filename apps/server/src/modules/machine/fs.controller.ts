@@ -43,22 +43,21 @@ class FSReadQueryDto {
 }
 
 /**
- * Thin REST face over FSService. Lives in `agents/:id/fs/*` rather
- * than `machines/:id/...` because the client only knows the agent id
- * — the service resolves the parent machine on the fly.
+ * Thin REST face over FSService — fs browsing is a property of the
+ * (machineId, workingDir) project pair, addressed by project id.
  */
 @UseGuards(JwtAuthGuard)
-@Controller('agents/:id/fs')
-export class FSController {
+@Controller('projects/:id/fs')
+export class ProjectFSController {
   constructor(private readonly service: FSService) {}
 
   @Get('list')
   list(@Param('id') id: string, @Query() q: FSListQueryDto): Promise<FSListResponse> {
-    return this.service.listDir(id, q.path ?? '', q.showAll ?? false, q.depth ?? 1);
+    return this.service.listDirForProject(id, q.path ?? '', q.showAll ?? false, q.depth ?? 1);
   }
 
   @Get('read')
   read(@Param('id') id: string, @Query() q: FSReadQueryDto): Promise<FSReadResponse> {
-    return this.service.readFile(id, q.path);
+    return this.service.readFileForProject(id, q.path);
   }
 }

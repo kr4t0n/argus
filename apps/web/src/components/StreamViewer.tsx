@@ -9,6 +9,7 @@ import { useSessionStore } from '../stores/sessionStore';
 import { splitDeltas } from '../lib/deltaSplit';
 import { ActivityPanel, ActivityPill } from './ActivityPill';
 import { FileChips, extractFiles, splitLineSuffix, toAgentRelative } from './FileChips';
+import type { ProjectRef } from '../lib/projects';
 import { TodoWindow } from './TodoWindow';
 import { SubAgentWindow } from './SubAgentWindow';
 import { MarkdownCodeBlock } from './MarkdownCodeBlock';
@@ -22,8 +23,13 @@ type Props = {
   commands: CommandDTO[];
   chunks: ResultChunkDTO[];
   running: boolean;
-  /** Anchor used to relativize file chip paths (`AgentDTO.workingDir`). */
+  /** Anchor used to relativize file chip paths (the project's workingDir). */
   workingDir?: string | null;
+  /** Project the session is pinned to — drives file-preview opens
+   *  (project-addressed fs-read) and scopes attachment tabs. Null for
+   *  workdir-less sessions: citations render inert, attachments open
+   *  in a browser tab instead of the preview strip. */
+  project: ProjectRef | null;
   /** True iff more history exists on the server (tail-window pagination). */
   hasMore?: boolean;
   loadingOlder?: boolean;
@@ -55,6 +61,7 @@ export function StreamViewer({
   chunks,
   running,
   workingDir,
+  project,
   hasMore = false,
   loadingOlder = false,
   onLoadOlder,
@@ -215,6 +222,7 @@ export function StreamViewer({
             chunks={g.chunks}
             running={running && isLast(g, grouped)}
             workingDir={workingDir}
+            project={project}
             isFirst={i === 0}
           />
         ))}
@@ -238,7 +246,6 @@ function groupByCommand(commands: CommandDTO[], chunks: ResultChunkDTO[]): Group
       const stub: CommandDTO = {
         id: ch.commandId,
         sessionId: ch.sessionId,
-        agentId: ch.agentId,
         kind: 'execute',
         prompt: null,
         status: 'running',
@@ -261,6 +268,7 @@ type CommandBlockProps = {
   chunks: ResultChunkDTO[];
   running: boolean;
   workingDir?: string | null;
+  project: ProjectRef | null;
   isFirst: boolean;
 };
 
@@ -275,6 +283,7 @@ const CommandBlock = memo(function CommandBlock({
   chunks,
   running,
   workingDir,
+  project,
   isFirst,
 }: CommandBlockProps) {
   // Only deltas AFTER the last tool/output chunk count as the user-facing
@@ -396,7 +405,7 @@ const CommandBlock = memo(function CommandBlock({
           <UserMessage
             text={command.prompt ?? ''}
             attachments={command.attachments}
-            agentId={command.agentId}
+            scope={project?.projectId ?? null}
           />
         )}
         <ActivityPill
@@ -420,7 +429,7 @@ const CommandBlock = memo(function CommandBlock({
             workingDir={workingDir}
             sessionId={command.sessionId}
             commandId={command.id}
-            agentId={command.agentId}
+            project={project}
           />
         )}
         {errorChunk && (
@@ -469,14 +478,14 @@ function AnswerBlock({
   workingDir,
   sessionId,
   commandId,
-  agentId,
+  project,
 }: {
   bodyText: string;
   files: ReturnType<typeof extractFiles>;
   workingDir?: string | null;
   sessionId: string;
   commandId: string;
-  agentId: string;
+  project: ProjectRef | null;
 }) {
   const [copied, setCopied] = useState(false);
   const [forking, setForking] = useState(false);
@@ -519,7 +528,7 @@ function AnswerBlock({
           );
         }
         const rel = toAgentRelative(hrefPath, workingDir);
-        if (!rel) {
+        if (!rel || !project) {
           // Outside the workspace, a directory, or we have no agent
           // to fetch from — render as inert text so the broken
           // relative URL can't be followed by a stray click.
@@ -530,7 +539,7 @@ function AnswerBlock({
             role="button"
             tabIndex={0}
             title="Double-click to preview"
-            onDoubleClick={() => openFile({ agentId, path: rel, line })}
+            onDoubleClick={() => openFile({ project, path: rel, line })}
             className="cursor-pointer select-none break-words text-sky-600 hover:underline dark:text-sky-400"
           >
             {children}
@@ -538,7 +547,7 @@ function AnswerBlock({
         );
       },
     }),
-    [agentId, workingDir, openFile],
+    [project, workingDir, openFile],
   );
 
   useEffect(
@@ -602,7 +611,7 @@ function AnswerBlock({
       )}
       {files.length > 0 && (
         <div className={bodyText ? 'mt-4' : ''}>
-          <FileChips files={files} workingDir={workingDir} agentId={agentId} />
+          <FileChips files={files} workingDir={workingDir} project={project} />
         </div>
       )}
       {bodyText && (
@@ -647,11 +656,11 @@ function AnswerBlock({
 function UserMessage({
   text,
   attachments,
-  agentId,
+  scope,
 }: {
   text: string;
   attachments?: AttachmentDTO[];
-  agentId: string;
+  scope: string | null;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [showFade, setShowFade] = useState(false);
@@ -688,7 +697,7 @@ function UserMessage({
       {attachments && attachments.length > 0 && (
         <div className="mb-1.5 flex max-w-[80%] flex-wrap justify-end gap-2">
           {attachments.map((a) => (
-            <AttachmentBubble key={a.id} attachment={a} agentId={agentId} />
+            <AttachmentBubble key={a.id} attachment={a} scope={scope} />
           ))}
         </div>
       )}
@@ -742,18 +751,31 @@ function UserMessage({
  *  the file-open UX is uniform across the app. Images render a thumbnail;
  *  other files render a chip. The tokenized url authenticates via its
  *  `?t=` param (no Authorization header needed for `<img>` / fetch). */
-function AttachmentBubble({ attachment, agentId }: { attachment: AttachmentDTO; agentId: string }) {
+function AttachmentBubble({
+  attachment,
+  scope,
+}: {
+  attachment: AttachmentDTO;
+  scope: string | null;
+}) {
   const href = apiUrl(attachment.url);
   const openAttachment = useFileTabsStore((s) => s.openAttachment);
-  const open = () =>
+  const open = () => {
+    // No project scope (workdir-less session) — there's no tab strip
+    // to land in, so fall back to the browser's own viewer.
+    if (!scope) {
+      window.open(href, '_blank', 'noopener');
+      return;
+    }
     openAttachment({
-      agentId,
+      scope,
       id: attachment.id,
       url: href,
       name: attachment.filename,
       mime: attachment.mime,
       size: attachment.size,
     });
+  };
 
   if (attachment.mime.startsWith('image/')) {
     return (

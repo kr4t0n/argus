@@ -133,6 +133,47 @@ spec:
                   key: S3_SECRET_KEY
                   {{- end }}
             {{- end }}
+            {{- if or .Values.apns.existingSecret (and .Values.apns.teamId .Values.apns.keyId) }}
+            # APNs push for the native iOS client (alerts + Live
+            # Activity updates). The server enables itself only when the
+            # full trio is present.
+            - name: APNS_TEAM_ID
+              {{- if .Values.apns.teamId }}
+              value: {{ .Values.apns.teamId | quote }}
+              {{- else }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.apns.existingSecret }}
+                  key: {{ .Values.apns.existingSecretTeamIdKey }}
+              {{- end }}
+            - name: APNS_KEY_ID
+              {{- if .Values.apns.keyId }}
+              value: {{ .Values.apns.keyId | quote }}
+              {{- else }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.apns.existingSecret }}
+                  key: {{ .Values.apns.existingSecretKeyIdKey }}
+              {{- end }}
+            - name: APNS_KEY_BASE64
+              valueFrom:
+                secretKeyRef:
+                  {{- if .Values.apns.existingSecret }}
+                  name: {{ .Values.apns.existingSecret }}
+                  key: {{ .Values.apns.existingSecretKey }}
+                  {{- else }}
+                  name: {{ include "argus.secret.name" . }}
+                  key: APNS_KEY_BASE64
+                  {{- end }}
+            {{- if .Values.apns.topic }}
+            - name: APNS_TOPIC
+              value: {{ .Values.apns.topic | quote }}
+            {{- end }}
+            {{- if .Values.apns.environment }}
+            - name: APNS_ENV
+              value: {{ .Values.apns.environment | quote }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.server.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -41,12 +41,17 @@ type Versioned interface {
 }
 
 // Cloner is an optional capability for adapters whose CLI persists
-// session state to disk in a format we can fork. The supervisor calls
+// session state to disk in a format we can fork. The runner calls
 // CloneSession when it receives a Command with Kind=="clone-session";
 // the implementation copies the source session file, rewrites any
 // embedded session id, truncates at the chosen turn boundary, and
 // returns the new external id (which the sidecar then publishes via
 // SessionExternalIDEvent on the result stream).
+//
+// workingDir is the command's pinned working directory (Claude and
+// Cursor key their on-disk session storage by it); empty means "use
+// the adapter's construction-time workingDir" (legacy). Codex stores
+// sessions workdir-independently and ignores it.
 //
 // turnIndex is 1-based and may exceed the source session's actual turn
 // count — implementations should clamp by simply copying the whole file
@@ -54,18 +59,18 @@ type Versioned interface {
 // adapter-specific (Claude/Cursor: before the next user-text message;
 // Codex: before the next task_started event).
 type Cloner interface {
-	CloneSession(ctx context.Context, srcExternalID string, turnIndex int) (string, error)
+	CloneSession(ctx context.Context, workingDir, srcExternalID string, turnIndex int) (string, error)
 }
 
 // ModelLister is an optional capability for adapters that can describe
-// which models their CLI can run. The supervisor calls this when a
+// which models their CLI can run. The runner calls this when a
 // `list-models` control request arrives; the result feeds the
 // dashboard's model picker.
 //
 // `source` is "static" (compiled-in table — claude-code, whose CLI has
 // no listing surface) or "cli" (parsed live output — codex `debug
 // models`, cursor-agent `models`). Implementations should bound their
-// own CLI exec with the passed ctx; the daemon already wraps requests
+// own CLI exec with the passed ctx; the runner already wraps requests
 // in a deadline. Entries describe — they never gate: a selection the
 // catalog doesn't contain still passes through to the CLI verbatim.
 type ModelLister interface {
@@ -136,6 +141,17 @@ func WorkingDirFromCfg(cfg map[string]any) string {
 		return s
 	}
 	return ""
+}
+
+// runDir resolves the directory a run should use: the per-command
+// workingDir (Phase 3: pinned on the Session, sent with every command)
+// wins; empty falls back to the adapter's construction-time workingDir
+// (legacy per-agent construction, where the dir was baked into cfg).
+func runDir(cmdWorkingDir, fallback string) string {
+	if cmdWorkingDir != "" {
+		return cmdWorkingDir
+	}
+	return fallback
 }
 
 // Types returns all registered type names (for debugging / --list-adapters).

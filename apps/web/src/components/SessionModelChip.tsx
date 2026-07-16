@@ -21,10 +21,10 @@ import { cn } from '../lib/utils';
  */
 export function SessionModelChip({
   session,
-  agentId,
+  machineId,
 }: {
   session: SessionDTO;
-  agentId: string | undefined;
+  machineId: string | undefined;
 }) {
   const upsertSession = useSessionStore((s) => s.upsertSession);
   const [open, setOpen] = useState(false);
@@ -35,7 +35,12 @@ export function SessionModelChip({
   // `undefined` = nothing in flight; `null` is a real value (Default).
   const [pending, setPending] = useState<ModelSelection | null | undefined>(undefined);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const { catalog } = useModelCatalog(agentId ?? null);
+  // Catalogs are machine×CLI (Phase 2). The session's own cliType is
+  // authoritative; the machineId comes from the session's resolved
+  // project (the Agent entity that used to supply it is retired).
+  const cliType = session.cliType ?? null;
+  const target = machineId && cliType ? { machineId, cliType } : null;
+  const { catalog } = useModelCatalog(target);
 
   // Resync the draft when another browser/dialog changes the session.
   useEffect(() => {
@@ -113,7 +118,7 @@ export function SessionModelChip({
       {open && (
         <div className="absolute right-0 top-full z-50 mt-1.5 w-[352px] max-w-[calc(100vw-16px)] rounded-lg border border-default bg-surface-0 p-3 shadow-2xl">
           <div className="mb-2 text-caps">session model</div>
-          <ModelPicker agentId={agentId ?? null} value={draft} onChange={setDraft} />
+          <ModelPicker target={target} value={draft} onChange={setDraft} />
         </div>
       )}
     </div>

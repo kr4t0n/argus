@@ -1,8 +1,8 @@
-// Package machine — per-agent recursive file watcher.
+// Package machine — per-workdir recursive file watcher.
 //
-// Watches the agent's workingDir and emits debounced dir-level change
-// notifications to the supervisor, which publishes them as
-// FSChangedEvents on the lifecycle stream. Respects gitignore when
+// Watches one project workingDir and emits debounced dir-level change
+// notifications to the watch registry, which publishes them as
+// FSChangedEvents on the notify stream. Respects gitignore when
 // registering watches so we don't burn inotify/FSEvents budget on
 // node_modules / build artifacts / etc.
 package machine
@@ -26,7 +26,7 @@ const fsWatcherDebounce = 250 * time.Millisecond
 // fsWatcher registers one fsnotify watch per non-ignored directory
 // under root, and coalesces events into at-most-one emit() per dir per
 // debounce window. Relative paths ("" means root) are passed to emit so
-// the supervisor can forward them verbatim as FSChangedEvent.Path.
+// the caller can forward them verbatim as FSChangedEvent.Path.
 type fsWatcher struct {
 	root    string
 	matcher *gitignore.GitIgnore

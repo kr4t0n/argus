@@ -11,8 +11,6 @@ export type BuiltInAgentType = (typeof BUILT_IN_AGENT_TYPES)[number];
 // Open string: custom adapters can register their own type name.
 export type AgentType = BuiltInAgentType | (string & {});
 
-export type AgentStatus = 'online' | 'offline' | 'busy' | 'error';
-
 /**
  * Session lifecycle state — the "is a turn running / how did the last
  * one end" axis. Deliberately separate from the unread axis
@@ -35,64 +33,20 @@ export type ResultKind =
   | 'final' // end of a turn
   | 'error';
 
-/**
- * Per-agent register event, emitted by an agent supervisor inside the
- * machine daemon when it (re-)spawns. The server treats this as a
- * status nudge — the Agent row already exists in Postgres because it
- * was created by the dashboard via POST /machines/:id/agents.
- */
-export interface RegisterEvent {
-  kind: 'register';
-  id: string;
-  machineId: string;
-  type: AgentType;
-  /**
-   * Whether the supervisor has a PTY runner attached. Controls whether
-   * the dashboard exposes the Terminal pane and whether the server
-   * accepts terminal-open requests targeting this agent.
-   */
-  supportsTerminal: boolean;
-  version: string;
-  /** Working directory the wrapped CLI is launched in. Empty means inherited. */
-  workingDir?: string;
-  ts: number;
-}
-
-/** Sidecar → server, every N seconds */
-export interface HeartbeatEvent {
-  kind: 'heartbeat';
-  id: string;
-  status: AgentStatus;
-  ts: number;
-}
-
-/** Sidecar → server, on graceful shutdown */
-export interface DeregisterEvent {
-  kind: 'deregister';
-  id: string;
-  ts: number;
-}
-
-export type LifecycleEvent = RegisterEvent | HeartbeatEvent | DeregisterEvent;
-
 // ─────────────────────────────────────────────────────────────────────
 // Machine lifecycle (sidecar daemon ⇄ server)
 //
 // Each host runs one argus-sidecar process, which self-identifies as a
-// `Machine` on the same `agent:lifecycle` stream that agents use. We
-// piggy-back the same stream because:
-//   - The server already runs one consumer there (single sweep loop).
-//   - Machine and agent registrations are causally related (an agent
-//     can only register after the server knows about its machine), so
-//     ordering matters.
-// Events are discriminated by `kind`.
+// `Machine` on the lifecycle stream (`streamKeys.lifecycle`). Runner
+// sidecars (≥ 0.3) have no per-agent supervisors — the machine is the
+// only lifecycle actor. Events are discriminated by `kind`.
 // ─────────────────────────────────────────────────────────────────────
 
 /**
  * One adapter the sidecar found on PATH at boot. Surfaced verbatim in
  * `MachineDTO.availableAdapters` so the dashboard can populate the
- * adapter dropdown in the "create agent" popover with installed CLIs
- * only (don't show "Claude Code" if `claude` isn't on this box).
+ * adapter dropdown in the new-session popover with installed CLIs only
+ * (don't show "Claude Code" if `claude` isn't on this box).
  */
 export interface AvailableAdapter {
   type: AgentType;
@@ -214,41 +168,23 @@ export interface AgentQuota {
 // Machine control plane (server → sidecar)
 //
 // Per-machine stream `machine:<machineId>:control`. The server publishes
-// CreateAgent / DestroyAgent commands when a dashboard user mutates the
-// machine's agent set, plus a SyncAgents reconcile broadcast on every
-// (re)connect so a sidecar that missed events while offline catches up
-// without operator intervention.
+// a SyncProjects reconcile broadcast on every (re)connect so a sidecar
+// that missed events while offline catches up without operator
+// intervention. The legacy per-agent CreateAgent / DestroyAgent /
+// SyncAgents commands retired with the Agent entity.
 // ─────────────────────────────────────────────────────────────────────
 
-/** Embedded inside Create / Sync. Mirrors what the sidecar caches. */
-export interface AgentSpec {
-  agentId: string;
-  name: string;
-  type: AgentType;
-  workingDir?: string;
-  supportsTerminal: boolean;
-  /** Optional adapter-specific overrides (e.g. binary path, extraArgs).
-   *  Sidecar passes these straight to the adapter factory. */
-  adapter?: Record<string, unknown>;
-}
-
-export interface CreateAgentCommand {
-  kind: 'create-agent';
-  agent: AgentSpec;
-  ts: number;
-}
-
-export interface DestroyAgentCommand {
-  kind: 'destroy-agent';
-  agentId: string;
-  ts: number;
-}
-
-/** Full canonical list — sidecar reconciles its supervisor set against
- *  this and stops/starts deltas. Sent on every (re)connect. */
-export interface SyncAgentsCommand {
-  kind: 'sync-agents';
-  agents: AgentSpec[];
+/**
+ * Full idempotent snapshot of the machine's known-project workdir
+ * allowlist. Runner sidecars (≥ 0.3.0) have no supervisors, so the
+ * sidecar reconciles its fs/git jail allowlist (`workdirAllowed`) and
+ * refcounted watcher registry against this list. Re-sent on every
+ * machine-register and after any project change, so a missed entry heals
+ * on the next trigger.
+ */
+export interface SyncProjectsCommand {
+  kind: 'sync-projects';
+  workdirs: string[];
   ts: number;
 }
 
@@ -299,7 +235,6 @@ export interface GitStatus {
 export interface FSListRequestCommand {
   kind: 'fs-list';
   requestId: string;
-  agentId: string;
   path: string;
   showAll: boolean;
   /** How many directory levels to include in the response, counting the
@@ -317,7 +252,7 @@ export interface FSListRequestCommand {
 }
 
 /**
- * Read one file's contents. Path is jailed to the agent's workingDir
+ * Read one file's contents. Path is jailed to the request's workingDir
  * (sidecar enforces) and capped at FS_READ_MAX_BYTES — over the cap is
  * returned as `result: 'error'` with a "file too large" message rather
  * than truncating, since a partial highlight is misleading. Binary
@@ -327,7 +262,6 @@ export interface FSListRequestCommand {
 export interface FSReadRequestCommand {
   kind: 'fs-read';
   requestId: string;
-  agentId: string;
   path: string;
   ts: number;
 }
@@ -339,7 +273,7 @@ export const FS_READ_MAX_BYTES = 1_048_576;
 
 /**
  * Asks the sidecar for the most recent N commits reachable from the
- * agent's HEAD. Same control-plane RPC pattern as fs-list / fs-read:
+ * workingDir's HEAD. Same control-plane RPC pattern as fs-list / fs-read:
  * server publishes on the per-machine control stream, sidecar replies
  * on the lifecycle stream. The sidecar caps at GIT_LOG_MAX_LIMIT (200)
  * regardless of what's requested.
@@ -347,7 +281,6 @@ export const FS_READ_MAX_BYTES = 1_048_576;
 export interface GitLogRequestCommand {
   kind: 'git-log';
   requestId: string;
-  agentId: string;
   /** Default 50, max 200. Server validates the upper bound; sidecar
    *  applies the same cap defensively. */
   limit?: number;
@@ -393,7 +326,6 @@ export interface GitCommit {
 export interface GitLogResponseEvent {
   kind: 'git-log-response';
   machineId: string;
-  agentId: string;
   requestId: string;
   commits?: GitCommit[];
   git?: GitStatus;
@@ -407,11 +339,15 @@ export interface GitLogResponseEvent {
  * branch tip moved (commit, checkout, reset). Debounced on the
  * sidecar so a rebase collapses into one event. The dashboard's
  * GitLogPanel listens for this and re-fetches the log + branch.
+ * Rides `agent:notify` (see streamKeys.notify); pre-notify sidecars
+ * publish it on `lifecycle` and the server still accepts that.
  */
 export interface GitChangedEvent {
   kind: 'git-changed';
   machineId: string;
-  agentId: string;
+  /** The project the change is scoped to — the server routes nudges on
+   *  this (project-scoped). Absent from pre-Phase-2 sidecars. */
+  workingDir?: string;
   ts: number;
 }
 
@@ -421,15 +357,12 @@ export interface GitChangedEvent {
 // Commands wrapped by `argus-bg` (the sidecar's tqdm-aware shell
 // wrapper) write a JSONL event stream into
 // `<workingDir>/.argus/progress/<taskId>.jsonl` as they run. The
-// sidecar's per-agent progress watcher (parallel to fs / git watchers)
-// tails those files and forwards each line on `agent:lifecycle` as one
-// of the three events below.
+// sidecar's progress watcher (parallel to fs / git watchers) tails
+// those files and forwards each line on `agent:lifecycle` as one of the
+// three events below.
 //
-// Scoped by (machineId, workingDir, taskId). `workingDir` — not
-// `agentId` — is the project key, because multiple agents in the same
-// project share one `.argus/progress/` directory and the dashboard's
-// Progress tab is per-project. `agentId` is included for attribution
-// (which agent supervisor's watcher observed the file).
+// Scoped by (machineId, workingDir, taskId) — `workingDir` is the
+// project key, and the dashboard's Progress tab is per-project.
 // ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -440,7 +373,6 @@ export interface GitChangedEvent {
 export interface BackgroundTaskStartedEvent {
   kind: 'background-task-started';
   machineId: string;
-  agentId: string;
   workingDir: string;
   taskId: string;
   label?: string;
@@ -469,7 +401,6 @@ export interface BackgroundTaskStartedEvent {
 export interface BackgroundTaskProgressEvent {
   kind: 'background-task-progress';
   machineId: string;
-  agentId: string;
   workingDir: string;
   taskId: string;
   label?: string;
@@ -496,7 +427,6 @@ export interface BackgroundTaskProgressEvent {
 export interface BackgroundTaskEndedEvent {
   kind: 'background-task-ended';
   machineId: string;
-  agentId: string;
   workingDir: string;
   taskId: string;
   label?: string;
@@ -643,15 +573,15 @@ export interface ModelCatalogEntry {
 }
 
 /**
- * Server → sidecar: ask for the model catalog of one agent's CLI. Same
- * control-plane RPC shape as fs-list / git-log: request rides the
- * per-machine control stream, response comes back on the lifecycle
- * stream keyed by requestId.
+ * Server → sidecar: ask for the model catalog of one of the machine's
+ * installed CLIs (identified by `cliType`). Same control-plane RPC shape
+ * as fs-list / git-log: request rides the per-machine control stream,
+ * response comes back on the lifecycle stream keyed by requestId.
  */
 export interface ListModelsRequestCommand {
   kind: 'list-models';
   requestId: string;
-  agentId: string;
+  cliType: string;
   ts: number;
 }
 
@@ -672,7 +602,8 @@ export interface ListModelsRequestCommand {
 export interface ModelCatalogResponseEvent {
   kind: 'model-catalog-response';
   machineId: string;
-  agentId: string;
+  /** Self-described adapter type (catalogs are stored machine×CLI). */
+  cliType?: string;
   /** Correlates to a ListModelsRequestCommand; '' = unsolicited push. */
   requestId: string;
   source?: 'static' | 'cli';
@@ -682,9 +613,7 @@ export interface ModelCatalogResponseEvent {
 }
 
 export type MachineControlCommand =
-  | CreateAgentCommand
-  | DestroyAgentCommand
-  | SyncAgentsCommand
+  | SyncProjectsCommand
   | FSListRequestCommand
   | FSReadRequestCommand
   | GitLogRequestCommand
@@ -695,7 +624,6 @@ export type MachineControlCommand =
 export interface FSListResponseEvent {
   kind: 'fs-list-response';
   machineId: string;
-  agentId: string;
   requestId: string;
   path: string;
   entries?: FSEntry[];
@@ -728,7 +656,6 @@ export interface FSListResponseEvent {
 export interface FSReadResponseEvent {
   kind: 'fs-read-response';
   machineId: string;
-  agentId: string;
   requestId: string;
   path: string;
   result: 'text' | 'image' | 'binary' | 'error';
@@ -744,11 +671,14 @@ export interface FSReadResponseEvent {
  *  fsnotify watcher. `path` is the directory whose contents changed;
  *  the dashboard invalidates that level in the tree if it's currently
  *  expanded. Coalesced on the sidecar side with a ~250ms debounce so a
- *  noisy build doesn't flood the stream. */
+ *  noisy build doesn't flood the stream. Rides `agent:notify` (see
+ *  streamKeys.notify); pre-notify sidecars publish it on `lifecycle`
+ *  and the server still accepts that. */
 export interface FSChangedEvent {
   kind: 'fs-changed';
   machineId: string;
-  agentId: string;
+  /** See GitChangedEvent — workingDir is what the server routes on. */
+  workingDir?: string;
   path: string;
   ts: number;
 }
@@ -794,49 +724,17 @@ export interface SidecarUpdateFailedEvent {
   ts: number;
 }
 
-/** Sidecar acks (back on agent:lifecycle). Server uses these to flip
- *  the Agent row's status promptly and surface spawn failures in the UI. */
-export interface AgentSpawnedEvent {
-  kind: 'agent-spawned';
-  machineId: string;
-  agentId: string;
-  ts: number;
-}
-
-export interface AgentSpawnFailedEvent {
-  kind: 'agent-spawn-failed';
-  machineId: string;
-  agentId: string;
-  reason: string;
-  ts: number;
-}
-
-export interface AgentDestroyedEvent {
-  kind: 'agent-destroyed';
-  machineId: string;
-  agentId: string;
-  ts: number;
-}
-
-export type MachineLifecycleAck = AgentSpawnedEvent | AgentSpawnFailedEvent | AgentDestroyedEvent;
-
-/** Anything the server expects on `agent:lifecycle`. Ordering matters:
+/** Anything the server expects on the lifecycle stream. Ordering matters:
  *  more specific kinds first so TS narrows correctly.
  *
  *  `BackgroundTask{Started,Progress,Ended}Event` deliberately are NOT
- *  in this union — they ride a dedicated `agent:background` stream
+ *  in this union — they ride a dedicated background stream
  *  (see streamKeys.background) so chatty progress frames can't trim
  *  the shared lifecycle stream via MAXLEN. They're consumed by
  *  BackgroundTaskService.consumeLoop, not MachineService.handle. */
 export type AnyLifecycleEvent =
-  | RegisterEvent
-  | HeartbeatEvent
-  | DeregisterEvent
   | MachineRegisterEvent
   | MachineHeartbeatEvent
-  | AgentSpawnedEvent
-  | AgentSpawnFailedEvent
-  | AgentDestroyedEvent
   | FSListResponseEvent
   | FSReadResponseEvent
   | FSChangedEvent
@@ -892,7 +790,6 @@ export interface AttachmentRef {
 /** Server → sidecar */
 export interface Command {
   id: string;
-  agentId: string;
   sessionId: string;
   /**
    * CLI-native conversation id. When present the sidecar passes
@@ -911,13 +808,21 @@ export interface Command {
   attachments?: AttachmentRef[];
   /** Set when kind === 'clone-session'; ignored otherwise. */
   clone?: CloneSpec;
+  /** Phase 3: the session's pinned workdir (docs/plan-agent-to-runners.md
+   *  §4.1 — resume state is cwd-keyed on disk). Runner sidecars (≥ 0.3.0)
+   *  execute/clone with this as cwd; legacy sidecars resolve cwd from
+   *  their cached agent spec and ignore it. */
+  workingDir?: string;
+  /** Phase 3: the session's pinned CLI type — matches the
+   *  machine:{id}:cli:{type}:cmd stream the command was published on.
+   *  Legacy sidecars ignore it. */
+  cliType?: string;
 }
 
 /** Sidecar → server, streamed */
 export interface ResultChunk {
   id: string;
   commandId: string;
-  agentId: string;
   sessionId: string;
   seq: number;
   kind: ResultKind;
@@ -974,7 +879,6 @@ export interface SessionCloneFailedEvent {
 export interface TerminalOpen {
   kind: 'terminal-open';
   terminalId: string;
-  agentId: string;
   /** Optional shell path; sidecar enforces an allowlist. Empty → default. */
   shell?: string;
   /** Optional cwd; defaults to the sidecar's workingDir. */
@@ -1082,14 +986,33 @@ export const streamKeys = {
   /** Background-task progress events from `argus-bg` (start / progress /
    *  ended). Split off from `lifecycle` because a fast tqdm bar emits
    *  20+ events/sec — at 500 MAXLEN those bursts would silently trim
-   *  heartbeats / fs-changed / sidecar-update events. Higher MAXLEN +
-   *  its own consumer keep both planes fast. */
+   *  heartbeats / sidecar-update events. Higher MAXLEN + its own
+   *  consumer keep both planes fast. */
   background: 'agent:background',
-  command: (agentId: string) => `agent:${agentId}:cmd`,
-  result: (agentId: string) => `agent:${agentId}:result`,
+  /** Watcher nudges (`fs-changed` / `git-changed`). Split off from
+   *  `lifecycle` for the same reason as `background`: fs-changed emits
+   *  one event per dirty directory per 250ms window, so a build across
+   *  N agents' workingDirs can burst hundreds of entries and trim
+   *  unread heartbeats out of the 500-cap lifecycle stream. Nudges are
+   *  idempotent "something changed, refetch" hints — losing one under
+   *  extreme burst degrades to manual refresh, so they get the cheap
+   *  seat. Deliberately NOT a home for the fs-list/fs-read/git-log
+   *  responses: those are few-but-fat, and a fat entry on this quiet
+   *  stream would linger until 2000 later nudges evict it (MAXLEN only
+   *  trims on XADD). They stay on `lifecycle`, where heartbeat churn
+   *  self-cleans them within seconds. */
+  notify: 'agent:notify',
+  /** Phase-3 runner streams (docs/plan-agent-to-runners.md): sidecars
+   *  ≥ 0.3.0 use one cmd/result pair per machine × installed CLI, so
+   *  stream count scales with the bounded dimensions (M·C) instead of
+   *  projects. (The legacy per-agent `agent:{id}:cmd/result` keys were
+   *  removed in the Phase-5 sweep — the whole fleet is ≥ 0.3.) */
+  runnerCommand: (machineId: string, cliType: string) => `machine:${machineId}:cli:${cliType}:cmd`,
+  runnerResult: (machineId: string, cliType: string) => `machine:${machineId}:cli:${cliType}:result`,
   /** Per-machine control plane: server publishes Create/Destroy/Sync
-   *  agent commands here; the sidecar reads them with its own group
-   *  so a server restart doesn't replay everything. */
+   *  agent commands (sync-projects for runner sidecars) here; the
+   *  sidecar reads them with its own group so a server restart doesn't
+   *  replay everything. */
   machineControl: (machineId: string) => `machine:${machineId}:control`,
 };
 
@@ -1104,6 +1027,13 @@ export const streamMaxLen = (streamKey: string): number => {
   // See the streamKeys.background comment for why this is much larger
   // than lifecycle: a single chatty tqdm bar would otherwise self-trim.
   if (streamKey === streamKeys.background) return 5000;
+  // Nudge entries are ~150 bytes, so 2000 costs well under 1 MB while
+  // absorbing a multi-agent build burst without evicting unread git
+  // nudges (fs and git share this stream and burst at correlated
+  // moments — a rebase is both).
+  if (streamKey === streamKeys.notify) return 2000;
+  // Runner streams (`machine:{id}:cli:{type}:cmd` / `:result`), matched by
+  // suffix.
   if (streamKey.endsWith(':cmd')) return 200;
   if (streamKey.endsWith(':result')) return 500;
   if (streamKey.endsWith(':control')) return 200;
@@ -1111,9 +1041,18 @@ export const streamMaxLen = (streamKey: string): number => {
 };
 
 export const consumerGroups = {
-  /** server-side consumer group reading result streams */
+  /** server-side consumer group reading result streams — registered per
+   *  runner stream (`machine:{id}:cli:{type}:result`), same name
+   *  everywhere. */
   server: 'server',
-  /** server-side consumer group reading lifecycle events */
+  /** server-side consumer group reading lifecycle events. Also created
+   *  on `agent:notify`: MachineService drains both streams with a
+   *  single XREADGROUP (one blocking call needs one group *name*, and
+   *  groups are per-stream, so the same name is registered on each).
+   *  Unlike `background` there's no separate consumer service — the
+   *  split exists for MAXLEN buffer isolation, not consumer isolation,
+   *  and a third blocking loop would add up to 5s of round-robin
+   *  latency on the shared `read` connection. */
   lifecycle: 'server-lifecycle',
   /** server-side consumer group reading background-task events.
    *  Separate group (not just stream) because the consumer is a
@@ -1122,10 +1061,4 @@ export const consumerGroups = {
   background: 'server-background',
   /** per-machine consumer group on the machine control stream */
   machine: (machineId: string) => `machine-${machineId}`,
-  /** per-agent consumer group an agent supervisor uses on its own
-   *  command stream. Naming the group after the agent (rather than
-   *  the machine or sidecar) lets two supervisors briefly overlap
-   *  during a daemon restart and cooperatively drain the pending
-   *  entry list instead of double-delivering commands. */
-  sidecar: (agentId: string) => `sidecar-${agentId}`,
 };

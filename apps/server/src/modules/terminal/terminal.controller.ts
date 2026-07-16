@@ -27,18 +27,20 @@ class OpenTerminalDto {
 export class TerminalController {
   constructor(private readonly terminals: TerminalService) {}
 
-  @Post('agents/:agentId/terminals')
-  async open(
+  /** Project-addressed open — the runner-era route. A terminal is a
+   *  (machine, cwd) pair; see TerminalService.openForProject. */
+  @Post('projects/:projectId/terminals')
+  async openForProject(
     @Req() req: AuthedRequest,
-    @Param('agentId') agentId: string,
+    @Param('projectId') projectId: string,
     @Body() body: OpenTerminalDto,
   ) {
-    return this.terminals.open(req.user.id, agentId, body);
+    return this.terminals.openForProject(req.user.id, projectId, body);
   }
 
-  @Get('agents/:agentId/terminals')
-  async list(@Req() req: AuthedRequest, @Param('agentId') agentId: string) {
-    const rows = await this.terminals.listForAgent(req.user.id, agentId);
+  @Get('projects/:projectId/terminals')
+  async listForProject(@Req() req: AuthedRequest, @Param('projectId') projectId: string) {
+    const rows = await this.terminals.listForProject(req.user.id, projectId);
     return rows.map(TerminalService.toDto);
   }
 

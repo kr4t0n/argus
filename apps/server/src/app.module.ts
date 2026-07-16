@@ -3,7 +3,6 @@ import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from './infra/prisma/prisma.module';
 import { RedisModule } from './infra/redis/redis.module';
 import { AuthModule } from './modules/auth/auth.module';
-import { AgentRegistryModule } from './modules/agent-registry/agent-registry.module';
 import { MachineModule } from './modules/machine/machine.module';
 import { ProjectModule } from './modules/project/project.module';
 import { SessionModule } from './modules/session/session.module';
@@ -14,6 +13,7 @@ import { TerminalModule } from './modules/terminal/terminal.module';
 import { SidecarLinkModule } from './modules/sidecar-link/sidecar-link.module';
 import { UserModule } from './modules/user/user.module';
 import { AttachmentModule } from './modules/attachment/attachment.module';
+import { PushModule } from './modules/push/push.module';
 
 @Module({
   imports: [
@@ -29,7 +29,6 @@ import { AttachmentModule } from './modules/attachment/attachment.module';
     AuthModule,
     MachineModule,
     ProjectModule,
-    AgentRegistryModule,
     SessionModule,
     CommandModule,
     ResultIngestorModule,
@@ -38,6 +37,7 @@ import { AttachmentModule } from './modules/attachment/attachment.module';
     TerminalModule,
     UserModule,
     AttachmentModule,
+    PushModule,
   ],
 })
 export class AppModule {}
