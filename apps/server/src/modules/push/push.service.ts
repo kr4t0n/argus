@@ -6,6 +6,19 @@ import * as http2 from 'node:http2';
 import { readFileSync } from 'node:fs';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 
+/** Live-turn bookkeeping for one session's lock-screen activity. */
+type LiveTurn = {
+  commandId: string;
+  toolCount: number;
+  lastTool: string;
+  lastPushAt: number;
+  /** Armed while an update sits suppressed inside the throttle window;
+   *  fires at window expiry with the then-current counters. */
+  pendingFlush?: NodeJS.Timeout;
+  tokens: string[];
+  tokensFetchedAt: number;
+};
+
 /**
  * APNs sender for native clients. Fires a task-completion alert to every
  * device token a user has registered, from the same trigger point that
@@ -78,7 +91,11 @@ export class PushService {
    * Fire-and-forget: never throws (a push failure must not affect chunk
    * ingestion).
    */
-  async notifySessionFinished(session: SessionDTO, failed: boolean): Promise<void> {
+  async notifySessionFinished(
+    session: SessionDTO,
+    failed: boolean,
+    turn?: { commandId: string; finalContent?: string },
+  ): Promise<void> {
     if (!this.enabled) return;
     try {
       const devices = await this.prisma.deviceToken.findMany({
@@ -86,13 +103,20 @@ export class PushService {
       });
       if (devices.length === 0) return;
 
-      // Lock-screen privacy: title is the session name, body is a
-      // fixed phrase — never prompt/answer text.
+      // Completed turns carry a preview of the assistant's answer so
+      // the banner is actionable without opening the app. NOTE this
+      // puts answer text on the lock screen — users who care can scope
+      // it with iOS Settings > Notifications > Show Previews. Failures
+      // keep a fixed phrase (error text is stack-trace-y, not a
+      // summary).
+      const body = failed
+        ? 'Turn failed'
+        : ((await this.answerPreview(turn)) ?? 'Turn completed');
       const payload = JSON.stringify({
         aps: {
           alert: {
             title: session.title,
-            body: failed ? 'Turn failed' : 'Turn completed',
+            body,
           },
           sound: 'default',
           'thread-id': session.id,
@@ -109,6 +133,60 @@ export class PushService {
     } catch (err) {
       this.logger.warn(`push fan-out failed: ${String(err)}`);
     }
+  }
+
+  /** Alert-body budget: the lock-screen banner shows ~4 lines and the
+   *  long-look a bit more; APNs caps the whole payload at 4KB. */
+  private static readonly ALERT_BODY_MAX = 300;
+
+  /**
+   * The turn's final answer, trimmed to banner size — or null when
+   * there's no usable text (caller falls back to the fixed phrase).
+   *
+   * claude-code's `result` final carries the canonical answer as the
+   * chunk's content. codex finals are content-less (the answer streamed
+   * as deltas), so reconstruct it the way the web/iOS transcripts do
+   * (DeltaSplit): the boundary is the highest tool/stdout/stderr/error
+   * seq, and deltas strictly after it are the answer. Both queries ride
+   * the (commandId, seq) index and run once per finished turn, and only
+   * when the user actually has registered devices.
+   */
+  private async answerPreview(turn?: {
+    commandId: string;
+    finalContent?: string;
+  }): Promise<string | null> {
+    if (!turn) return null;
+    let text = (turn.finalContent ?? '').trim();
+    if (!text) {
+      const boundary = await this.prisma.resultChunk.findFirst({
+        where: {
+          commandId: turn.commandId,
+          kind: { in: ['tool', 'stdout', 'stderr', 'error'] },
+        },
+        orderBy: { seq: 'desc' },
+        select: { seq: true },
+      });
+      const deltas = await this.prisma.resultChunk.findMany({
+        where: {
+          commandId: turn.commandId,
+          kind: 'delta',
+          seq: { gt: boundary?.seq ?? -1 },
+        },
+        orderBy: { seq: 'asc' },
+        select: { delta: true },
+      });
+      text = deltas
+        .map((d) => d.delta ?? '')
+        .join('')
+        .trim();
+    }
+    if (!text) return null;
+    // Collapse blank-line runs so markdown paragraph spacing doesn't
+    // eat the banner's few visible lines.
+    const collapsed = text.replace(/\r/g, '').replace(/\n{2,}/g, '\n');
+    const chars = Array.from(collapsed);
+    if (chars.length <= PushService.ALERT_BODY_MAX) return collapsed;
+    return chars.slice(0, PushService.ALERT_BODY_MAX - 1).join('').trimEnd() + '…';
   }
 
   private providerJwt(): string {
@@ -138,17 +216,7 @@ export class PushService {
   /** Per-session live-turn bookkeeping: tool counters + push throttle +
    *  a short token-existence cache so chunk ingestion never queries
    *  Postgres more than once per window. */
-  private liveTurns = new Map<
-    string,
-    {
-      commandId: string;
-      toolCount: number;
-      lastTool: string;
-      lastPushAt: number;
-      tokens: string[];
-      tokensFetchedAt: number;
-    }
-  >();
+  private liveTurns = new Map<string, LiveTurn>();
 
   private static readonly LIVE_UPDATE_MIN_MS = 15_000;
   private static readonly LIVE_TOKEN_CACHE_MS = 60_000;
@@ -203,7 +271,10 @@ export class PushService {
       firstLine || String((chunk.meta as { tool?: string } | undefined)?.tool ?? 'tool');
 
     const now = Date.now();
-    if (now - entry.lastPushAt < PushService.LIVE_UPDATE_MIN_MS) return;
+    if (now - entry.lastPushAt < PushService.LIVE_UPDATE_MIN_MS) {
+      this.scheduleTrailingFlush(chunk.sessionId, entry, now);
+      return;
+    }
     entry.lastPushAt = now;
     void this.pushLiveActivity(chunk.sessionId, 'update', {
       state: 'running',
@@ -212,10 +283,42 @@ export class PushService {
     });
   }
 
+  /** Trailing-edge flush: a chunk suppressed by the throttle would
+   *  otherwise never render — the card sits stale on the leading-edge
+   *  state until the NEXT chunk happens to land outside the window (or
+   *  the turn ends). Arm one timer per window that re-reads the
+   *  counters at expiry and pushes whatever they say THEN. Push rate is
+   *  unchanged (still ≤ 1 per window), so no extra APNs budget spend. */
+  private scheduleTrailingFlush(sessionId: string, entry: LiveTurn, now: number): void {
+    if (entry.pendingFlush) return;
+    const delay = Math.max(0, entry.lastPushAt + PushService.LIVE_UPDATE_MIN_MS - now);
+    const timer = setTimeout(() => {
+      entry.pendingFlush = undefined;
+      // The turn may have settled meanwhile (endLiveActivity clears the
+      // timer, but guard against a same-tick race) — never revive a
+      // resolved card back to "running".
+      if (this.liveTurns.get(sessionId) !== entry) return;
+      entry.lastPushAt = Date.now();
+      void this.pushLiveActivity(sessionId, 'update', {
+        state: 'running',
+        toolCount: entry.toolCount,
+        lastTool: entry.lastTool,
+      });
+    }, delay);
+    timer.unref?.();
+    entry.pendingFlush = timer;
+  }
+
   /** Resolve the card when the turn settles — always immediate. */
   async endLiveActivity(sessionId: string, failed: boolean): Promise<void> {
     if (!this.enabled) return;
     const entry = this.liveTurns.get(sessionId);
+    // Disarm any pending trailing flush: its "running" update firing
+    // after this 'end' would flip a settled ✓/✗ card back to running.
+    if (entry?.pendingFlush) {
+      clearTimeout(entry.pendingFlush);
+      entry.pendingFlush = undefined;
+    }
     await this.pushLiveActivity(sessionId, 'end', {
       state: failed ? 'failed' : 'completed',
       toolCount: entry?.toolCount ?? 0,
