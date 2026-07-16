@@ -256,9 +256,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   raw `node:http2` because APNs requires HTTP/2 and Node's fetch can't
   speak it. Fired from `result-ingestor` at the exact point a session
   flips to `idle`/`failed` + unread (the same trigger as the web's
-  desktop notifications); payload carries only the session title +
-  "Turn completed/failed" (no prompt text on lock screens) and a
-  `sessionId` for the client deep link. 410/`BadDeviceToken`/
+  desktop notifications); payload carries the session title, a
+  `sessionId` for the client deep link, and — for completed turns — a
+  ~300-char preview of the assistant's answer (deliberate trade-off:
+  answer text on the lock screen in exchange for actionable banners;
+  iOS "Show Previews: When Unlocked" is the user-side scope control;
+  failures keep a fixed "Turn failed"). The preview uses the final
+  chunk's content (claude-code's `result` carries the whole answer);
+  codex finals are content-less, so `PushService.answerPreview`
+  re-derives the answer via the deltaSplit boundary rule — making a
+  THIRD port of deltaSplit (web `lib/deltaSplit.ts`, iOS
+  `DeltaSplit.swift`, server `answerPreview`); change one, change all
+  three. 410/`BadDeviceToken`/
   `Unregistered` feedback prunes the `DeviceToken` row.
 - `sidecar-link/` — raw WebSocket server on path `/sidecar-link`
   attached to the same `http.Server` as NestJS (via `HttpAdapterHost`,
