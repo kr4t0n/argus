@@ -853,6 +853,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Gotchas
 
+- **Model detection is LATEST-match, in both clients**: the right-panel
+  model line and the context ring's window lookup derive the model from
+  chunk `meta` (`parseModel`). Web `useSessionModel` scans backward;
+  iOS `TranscriptState.latestModel()` likewise. It used to be
+  first-match on web (pre-model-picker assumption "set once at session
+  init"), which pinned the label and ring denominator to the oldest
+  loaded turn even after a mid-session model swap — and shifted it
+  *backward* when scrolling paged older history in. Keep both clients
+  on latest-match.
+
 - **A turn may deliver MORE THAN ONE terminal chunk — finalize must be
   idempotent**: sidecars ≤ 0.2.7-rc.1 emitted two finals per healthy
   turn — the CLI's own `result` final (rich: usage, real

@@ -52,21 +52,23 @@ export function useSessionUsage(
 }
 
 /**
- * First model name found in any chunk's `meta` for the active session.
+ * LATEST model name found in any chunk's `meta` for the active session.
  * Returns `null` until at least one chunk advertising a model has
  * arrived (typically the very first system / init / session-configured
  * progress chunk a turn emits).
  *
- * We return the FIRST match (not the latest) because the model is set
- * once at session init and doesn't change mid-turn — scanning forward
- * gives us the most stable answer the soonest. If a future feature
- * lets users swap models per-turn, switch this to `findLast` and the
- * UI rerenders for free.
+ * Latest match (backward scan), not first: the session model picker
+ * changes what SUBSEQUENT turns run on, and each turn is a fresh CLI
+ * process that re-advertises its model — so the newest advertising
+ * chunk is the truth. A forward scan would pin the label (and the
+ * context ring's window lookup) to the oldest loaded turn's model
+ * forever — and even shift it backward when scrolling pages older
+ * history in. Matches iOS `TranscriptState.latestModel()`.
  */
 export function useSessionModel(chunks: ResultChunkDTO[]): string | null {
   return useMemo(() => {
-    for (const c of chunks) {
-      const m = parseModel(c.meta);
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      const m = parseModel(chunks[i].meta);
       if (m) return m;
     }
     return null;
