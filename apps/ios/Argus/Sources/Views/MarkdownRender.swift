@@ -213,12 +213,8 @@ struct HtmlWebView: UIViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "argusHeight")
     }
 
-    // @preconcurrency: WKScriptMessageHandler's requirements are
-    // nonisolated, but WebKit documents that script messages arrive on
-    // the main thread — so the handler below can be MainActor-isolated
-    // (and read the MainActor-annotated `message.body`) safely.
     @MainActor
-    final class Coordinator: NSObject, @preconcurrency WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKScriptMessageHandler {
         weak var webView: WKWebView?
         private let height: Binding<CGFloat>
         private var lastKey = ""
@@ -243,15 +239,24 @@ struct HtmlWebView: UIViewRepresentable {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
         }
 
-        func userContentController(
+        // `nonisolated` witness + assumeIsolated, NOT a @preconcurrency
+        // conformance: the protocol is nonisolated in older SDKs but
+        // @MainActor in newer ones, so @preconcurrency warns "has no
+        // effect" on the latter, while a nonisolated witness satisfies
+        // both silently. WebKit documents that script messages arrive
+        // on the main thread, so assuming the actor is sound (and lets
+        // the body read the MainActor-annotated `message.body`).
+        nonisolated func userContentController(
             _ controller: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
-            guard let value = message.body as? NSNumber else { return }
-            let next = CGFloat(truncating: value)
-            // ResizeObserver feedback-loop guard (web parity).
-            if abs(height.wrappedValue - next) > 1, next > 0 {
-                height.wrappedValue = next
+            MainActor.assumeIsolated {
+                guard let value = message.body as? NSNumber else { return }
+                let next = CGFloat(truncating: value)
+                // ResizeObserver feedback-loop guard (web parity).
+                if abs(height.wrappedValue - next) > 1, next > 0 {
+                    height.wrappedValue = next
+                }
             }
         }
 
