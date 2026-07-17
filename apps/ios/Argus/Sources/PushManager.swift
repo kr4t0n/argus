@@ -154,17 +154,23 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     /// Silent clear push (server `clearSessionNotification`): the
     /// session was read on another client, or a fresh turn superseded
     /// the result — withdraw its banner from Notification Center.
+    /// The async delegate variant, deliberately: the handler-based
+    /// form's completionHandler is @Sendable-annotated only in newer
+    /// SDKs, so no single handler-based signature satisfies both
+    /// toolchains' strict checking. Here only a checked continuation
+    /// crosses into the removal callback.
     func application(
         _ application: UIApplication,
-        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
-        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
-    ) {
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any]
+    ) async -> UIBackgroundFetchResult {
         guard let sessionId = userInfo["clearSessionId"] as? String else {
-            completionHandler(.noData)
-            return
+            return .noData
         }
-        PushManager.removeDelivered(sessionIds: [sessionId]) {
-            DispatchQueue.main.async { completionHandler(.noData) }
+        await withCheckedContinuation { continuation in
+            PushManager.removeDelivered(sessionIds: [sessionId]) {
+                continuation.resume()
+            }
         }
+        return .noData
     }
 }
