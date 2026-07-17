@@ -4,20 +4,21 @@ A native **SwiftUI** client for the Argus agent dashboard. It is a *thin
 client*: it speaks the same NestJS REST API + Socket.IO `/stream`
 namespace as the web app and never touches the Go sidecar.
 
-> Status: **Phase 4 + terminal.** Turn-completion alerts via APNs
-> (enable "Task completion alerts" in the account panel; needs the
-> server's `APNS_*` env — see the repo-root `.env.example`; Simulator
-> remote push needs an Apple silicon Mac), and a full **interactive
-> terminal** (SwiftTerm) in the session inspector for agents created
-> with the PTY opt-in — same shell-access trust model as the web's
-> Terminal pane. Phases 1–3 cover login, streaming transcript, iPad
-> three-column layout, inspector (Commits / Files / Terminal / Note /
-> Progress / Diff), queue, attachments, fleet + account panels, and
-> creation flows.
+> Status: **Feature-complete** (2026-07-17), all of it device-verified:
+> streaming transcript + prompt queue + attachments, iPad three-column
+> layout, inspector (Commits / Files / Terminal / Note / Progress /
+> Diff), fleet + account panels, creation flows, APNs turn-completion
+> alerts with **cross-device read-sync** (read a session anywhere, the
+> phone banner withdraws), lock-screen **Live Activities**, and an
+> interactive **terminal** (SwiftTerm) for projects with the PTY
+> opt-in — same shell-access trust model as the web's Terminal pane.
+> APNs needs the server's `APNS_*` env (repo-root `.env.example`);
+> Simulator remote push needs an Apple silicon Mac. The whole codebase
+> builds in **Swift 6 language mode** (strict concurrency).
 >
-> This is a **fresh implementation** — the earlier
-> `feat/ios-native-client` branch (OpenAPI-codegen based) is deprecated;
-> do not build on it.
+> What remains is maintenance, not features: keep the TS ↔ Swift ports
+> below in lockstep (hash-enforced for the context-window table), and
+> re-capture fixtures when shared-types changes shape.
 
 ## Approach: hand-written mirror + captured fixtures (no codegen)
 
@@ -247,10 +248,31 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   amber toast (web SessionCloneFailedToasts parity: one per session,
   newest first, 8s auto-dismiss + manual dismiss, session title looked
   up at event time with id-prefix fallback) over the split view.
-- **Explicit terminal lifecycle (this):** the Terminal tab no longer
+- **Explicit terminal lifecycle (done):** the Terminal tab no longer
   auto-attaches a PTY on visit — web TerminalPane parity: idle shows an
   "Open shell on \<machine\>" CTA, an open shell gets a close (power)
   button, a settled shell offers Dismiss / New shell. One deliberate
   divergence: the shell is still reaped when the inspector closes (the
   web leaves it running; on a phone an orphaned PTY has no re-attach
   surface).
+- **Web-parity batch (done):** context ring learns Fable's 1M-default
+  window — and the shared `contextWindow.ts` table is now hash-pinned
+  by `ContextWindowLockstepTests` (+ an `ios.yml` trigger on that
+  path), so the Swift mirror can never silently drift again; usage
+  popover is an exact port of the web `UsageBreakdown` (ring-only
+  header badge, totals inside); Codex renders its brand-blue Color
+  glyph in light mode; surface greys pinned to the web's exact values
+  (iOS's `tertiarySystemBackground` is *white* in light mode, which
+  had made the inline-code chips and prompt bubble invisible); the
+  compact Files tree / Commits log; clone-failed toasts.
+- **Swift 6 (done):** ArgusKit, the app, and the widget extension all
+  build in Swift 6 language mode. Exactly five justified escapes:
+  `@preconcurrency` imports for SocketIO / UserNotifications /
+  ActivityKit (un-annotated SDK surfaces), `nonisolated(unsafe)` on
+  two documented-thread-safe formatter caches, and one
+  `@unchecked Sendable` delegate bridge. The migration also caught the
+  HTML sandbox's `decidePolicyFor` silently unbinding under newer SDKs
+  (now the async form) and an Xcode asset-symbol collision
+  (`agent-codex-color` → `agent-codex-brand`). Note: the newer local
+  Xcode is stricter than CI's — build locally before merging
+  concurrency-adjacent changes.
