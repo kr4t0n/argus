@@ -699,12 +699,6 @@ func BackgroundTaskStream() string { return "agent:background" }
 // byte-retention gotcha.
 func NotifyStream() string { return "agent:notify" }
 
-// CommandStream / ResultStream are the LEGACY per-agent streams
-// (pre-runner sidecars). Runner-mode sidecars use RunnerCommandStream /
-// RunnerResultStream below; the helpers stay as part of the protocol.ts
-// mirror.
-func CommandStream(id string) string               { return "agent:" + id + ":cmd" }
-func ResultStream(id string) string                { return "agent:" + id + ":result" }
 func MachineControlStream(machineID string) string { return "machine:" + machineID + ":control" }
 func MachineConsumerGroup(machineID string) string { return "machine-" + machineID }
 

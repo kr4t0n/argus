@@ -17,7 +17,7 @@ import { CommandService } from '../command/command.service';
 import { PushService } from '../push/push.service';
 
 const CONSUMER = 'server-1';
-const REFRESH_AGENT_STREAMS_MS = 5_000;
+const REFRESH_RUNNER_STREAMS_MS = 5_000;
 
 type ResultEnvelope = ResultChunk | SessionExternalIdEvent | SessionCloneFailedEvent;
 
@@ -48,7 +48,7 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     await this.refreshStreams();
-    this.refreshTimer = setInterval(() => this.refreshStreams(), REFRESH_AGENT_STREAMS_MS);
+    this.refreshTimer = setInterval(() => this.refreshStreams(), REFRESH_RUNNER_STREAMS_MS);
     this.running = true;
     this.loopPromise = this.consumeLoop();
   }
