@@ -277,3 +277,10 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   (`agent-codex-color` → `agent-codex-brand`). Note: the newer local
   Xcode is stricter than CI's — build locally before merging
   concurrency-adjacent changes.
+- **Enter-to-send (this):** a hardware keyboard's Enter sends the
+  composer, Shift+Enter inserts a newline — the web Composer's rule,
+  for the iPad Magic-Keyboard flow. `onKeyPress` sees only hardware
+  events, so the on-screen return key still newlines; Return during
+  IME composition confirms the marked text (first-responder
+  `markedTextRange` check — the web's `isComposing` guard); ⌘↩ and
+  ⌘. keep working.
