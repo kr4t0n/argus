@@ -976,14 +976,21 @@ private struct PromptBubble: View {
 
     private var overflows: Bool { textHeight > maxHeight }
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         HStack {
             Spacer(minLength: 40)
             bubble
-                // Neutral surface bubble (web: bg-surface-1 / surface-2),
-                // NOT blue. Applied OUTSIDE the fade mask so only the
-                // text fades, not the bubble itself.
-                .background(Color.surface2, in: RoundedRectangle(cornerRadius: 16))
+                // Neutral surface bubble, NOT blue — the web's exact
+                // pick: bg-surface-1 on light, surface-2/80 on dark
+                // (solid surface2 read one step too dark on light).
+                // Applied OUTSIDE the fade mask so only the text fades,
+                // not the bubble itself.
+                .background(
+                    colorScheme == .dark ? Color.surface2.opacity(0.8) : Color.surface1,
+                    in: RoundedRectangle(cornerRadius: 16)
+                )
         }
         .onPreferenceChange(PromptHeightKey.self) { textHeight = $0 }
     }
