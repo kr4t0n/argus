@@ -1,6 +1,11 @@
 import Foundation
 import UIKit
-import UserNotifications
+// This SDK's UNUserNotificationCenterDelegate declares its completion
+// handlers without @Sendable, yet they must cross into our MainActor
+// hops (suppression needs MainActor state). @preconcurrency relaxes the
+// checking at exactly that un-annotated boundary — our own code stays
+// fully checked.
+@preconcurrency import UserNotifications
 
 /// Owns everything UNUserNotificationCenter / remote-notification
 /// registration. AppModel wires the three closures after login:
@@ -98,7 +103,7 @@ extension PushManager: UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         let sessionId = Self.sessionId(from: notification.request.content)
         Task { @MainActor in
@@ -110,7 +115,7 @@ extension PushManager: UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
-        withCompletionHandler completionHandler: @escaping @Sendable () -> Void
+        withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let sessionId = Self.sessionId(from: response.notification.request.content)
         Task { @MainActor in
