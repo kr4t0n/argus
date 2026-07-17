@@ -231,7 +231,7 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   read on-device, and a `refreshAll` sweep that catches whatever the
   best-effort background push misses (Apple throttles them and never
   delivers to force-quit apps).
-- **Inspector Files/Commits polish (this):** both panels rebuilt to the
+- **Inspector Files/Commits polish (done):** both panels rebuilt to the
   web ContextPane's density — no `List` (its default row heights and
   separators read loose), fixed 24pt mono rows in a `LazyVStack`.
   Files is now a lazy-expanding tree (web FileTree port: depth-3
@@ -242,3 +242,8 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   header (amber when detached). Size/mtime and author/date/copy-SHA
   moved to long-press menus — the touch equivalent of the web's
   tooltips.
+- **Clone-failed toasts (this):** `session:clone-failed` was silently
+  ignored; forking a session whose CLI-state clone fails now floats an
+  amber toast (web SessionCloneFailedToasts parity: one per session,
+  newest first, 8s auto-dismiss + manual dismiss, session title looked
+  up at event time with id-prefix fallback) over the split view.
