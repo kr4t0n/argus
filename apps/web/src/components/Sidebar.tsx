@@ -22,7 +22,7 @@ import { groupProjects, type ProjectGroup } from '../lib/projects';
 import { cn, relativeTime } from '../lib/utils';
 import { StatusDot } from './ui/StatusDot';
 import { AgentTypeIcon } from './ui/AgentTypeIcon';
-import { CreateAgentPopover } from './CreateAgentPopover';
+import { CreateSessionPopover } from './CreateSessionPopover';
 import { CreateProjectPopover } from './CreateProjectPopover';
 import { ProjectIcon } from './ProjectIcon';
 import { BulkUpdateModal } from './BulkUpdateModal';
@@ -481,7 +481,7 @@ function ProjectRow({
         )}
 
         {createSessionOpen && machine && (
-          <CreateAgentPopover
+          <CreateSessionPopover
             machine={machine}
             anchor={rowRef}
             onClose={() => setCreateSessionOpen(false)}
@@ -657,7 +657,7 @@ function MachineRow({
   const adapters = machine.availableAdapters ?? [];
   const offline = machine.status === 'offline';
   // Anchor the popover off the row's `+` button via a ref. We use a
-  // portal (rendered inside CreateAgentPopover) so the popover escapes
+  // portal (rendered inside CreateSessionPopover) so the popover escapes
   // the sidebar's `overflow-y-auto` machine-list container, which
   // otherwise clips it (the sidebar is short, the popover is taller
   // than the gap above the bottom-pinned machine list).

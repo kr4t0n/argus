@@ -225,7 +225,7 @@ export function ModelPicker({ target, value, onChange }: Props) {
   // can never be the item that wraps. It used to ride the same wrap
   // container with `ml-auto`, which reads as "anchor right" but really
   // means "float right on whatever line I land on" — at the 352px both
-  // callers render at (312px of content in CreateAgentPopover), a
+  // callers render at (312px of content in CreateSessionPopover), a
   // claude-code row (model + effort + 1M) overshot by ~16px and pushed
   // the button alone onto a second line.
   //
