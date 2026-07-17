@@ -36,11 +36,6 @@ public struct ModelSelection: Codable, Equatable, Sendable {
     }
 }
 
-/// Known effort levels, for pickers. The wire stays an open string.
-public enum EffortLevels {
-    public static let all = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
-}
-
 public struct ModelCatalogFacets: Codable, Equatable, Sendable {
     public struct Effort: Codable, Equatable, Sendable {
         public let levels: [String]
