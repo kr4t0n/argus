@@ -202,8 +202,7 @@ public final class ArgusClient: @unchecked Sendable {
 
     // Project-addressed routes — the runner-era read path (the wire
     // request carries the workingDir; the sidecar serves it after an
-    // allowlist check). The agent-addressed variants below stay for the
-    // mixed-fleet window and die with Stage C.
+    // allowlist check).
 
     public func listProjectDir(
         projectId: String,

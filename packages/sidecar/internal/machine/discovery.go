@@ -12,8 +12,8 @@ import (
 
 // Discover walks every registered adapter type, looks up its DefaultBinary
 // on PATH, and — when found — invokes `<binary> --version` to populate the
-// per-adapter availability record the dashboard's "create agent" UI uses
-// to filter the type dropdown.
+// per-adapter availability record the dashboard's session-creation UI
+// uses to filter the CLI-type dropdown.
 //
 // Adapters with an empty DefaultBinary (i.e. non-CLI adapters, none today
 // but kept open) are skipped silently.

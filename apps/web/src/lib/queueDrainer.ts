@@ -36,10 +36,10 @@ import { resolveProjectRef } from './projects';
  *     cleared once it goes active or after a timeout.
  * Reachability (skip while the target is down) is MACHINE-level since
  * the runner refactor: liveness belongs to the sidecar process, and
- * runner sidecars send no per-agent signal at all. The machine is
- * resolved through the session's pinned project (agent row fallback
- * for workdir-less sessions); only when no machine is resolvable do we
- * fall back to the legacy agent-status check. Skipping (rather than
+ * runner sidecars send no finer-grained signal at all. The machine is
+ * resolved through the session's pinned project; when no machine is
+ * resolvable (project rows not hydrated yet) the queue holds. Skipping
+ * (rather than
  * letting the server reject) matters: a rejected send re-queues the
  * head under a 60s stall cooldown, so an offline blip would delay the
  * queue far longer than the outage itself.

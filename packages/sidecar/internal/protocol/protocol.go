@@ -351,8 +351,8 @@ type ModelCatalogResponseEvent struct {
 	MachineID string `json:"machineId"`
 	// CliType self-describes the catalog's adapter type (Phase 2:
 	// catalogs are stored machine×CLI server-side); old servers ignore
-	// it and old sidecars omit it (the server then resolves the type
-	// from the agent row).
+	// it and pre-runner sidecars omitted it (the legacy protocol that
+	// resolved the type server-side is deleted).
 	CliType   string              `json:"cliType,omitempty"`
 	RequestID string              `json:"requestId"` // "" = unsolicited push
 	Source    string              `json:"source,omitempty"`

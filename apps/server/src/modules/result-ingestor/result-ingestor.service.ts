@@ -120,9 +120,9 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
       } catch (err) {
         if (this.running) {
           const msg = (err as Error).message;
-          // A destroyed agent has its result stream DELed (MachineService
-          // .deleteAgentStreams), and a Redis flush drops every group. Either
-          // leaves a stream in our read set with no consumer group, and a
+          // An emergency DEL of a runner result stream (the documented
+          // Redis-full recovery move) or a Redis flush drops its consumer
+          // groups. Either leaves a stream in our read set with no group, and a
           // single NOGROUP fails the *whole* multi-stream XREADGROUP — so
           // one destroyed agent would otherwise stall live streaming for
           // every session until the 5s timed refresh. Re-sync the stream

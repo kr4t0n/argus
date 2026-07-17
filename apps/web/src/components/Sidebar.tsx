@@ -697,7 +697,7 @@ function MachineRow({
         <Plus className="h-3.5 w-3.5" />
       </button>
       {/* Liveness dot — pinned to the rightmost slot so it reads as a
-          persistent status indicator. Mirrors the AgentRow layout
+          persistent status indicator. Mirrors the SessionRow layout
           (hover actions sit to its left). */}
       <span className="flex items-center pr-2">
         <StatusDot status={machine.status === 'online' ? 'online' : 'offline'} />

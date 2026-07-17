@@ -30,8 +30,9 @@ Swift models are **hand-written, decode-tolerant mirrors** of
 - string enums decode unrecognized values to `.unknown` instead of
   failing the payload,
 - `ResultChunk` absorbs both wire dressings of the same row (WS relays
-  carry `sessionId`/`agentId`/`isFinal` and numeric `ts`; REST rows drop
-  those columns and serialize `ts` as an ISO string).
+  carry `sessionId`/`isFinal` and numeric `ts`; REST rows drop those
+  columns and serialize `ts` as an ISO string — and a stray `agentId`
+  from an old server decodes as an ignored extra).
 
 Contract confidence comes from **fixtures captured from a real server**:
 
@@ -171,7 +172,7 @@ for await event in await stream.events {
     default:
         break
     }
-    let turns = transcript.turns(agentType: agent.type)
+    let turns = transcript.turns(agentType: session.cliType ?? "")
     // render…
 }
 ```
@@ -198,7 +199,7 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   picker, prompt queue + drainer, attachments, fork/rename/archive,
   keyboard shortcuts.
 - **Phase 3 (done):** machines panel, user panel
-  (activity/usage/quota/extensions), project/agent/session creation.
+  (activity/usage/quota/extensions), project/session creation.
 - **Phase 4 (done):** APNs push — server: `DeviceToken` table,
   `POST/DELETE /me/devices`, HTTP/2 APNs sender in the result-ingestor;
   iOS: registration + settings toggle + tap deep-link + on-screen
