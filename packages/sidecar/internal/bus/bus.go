@@ -130,8 +130,9 @@ type StreamMessage struct {
 
 // ReadGroupMulti blocks for up to `block` on a single XREADGROUP that
 // fans in over many streams at once, all under one consumer group. This
-// is what lets the sidecar consume every agent's command stream on a
-// single connection instead of one blocking reader per agent.
+// is what lets the sidecar consume every runner's command stream (one
+// per installed CLI type) on a single connection instead of one
+// blocking reader per stream.
 //
 // `count` caps entries per stream per call. A redis.Nil (block elapsed,
 // nothing ready) maps to (nil, nil). On any other error the batch is

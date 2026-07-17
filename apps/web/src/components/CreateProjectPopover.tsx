@@ -10,7 +10,7 @@ import { cn } from '../lib/utils';
 
 /**
  * Floating "create project" form anchored to a machine row in the
- * sidebar. Mirrors CreateAgentPopover's positioning + dismiss logic
+ * sidebar. Mirrors CreateSessionPopover's positioning + dismiss logic
  * (portal, edge clamps, escape/outside-click close) but creates a
  * client-only project placeholder via useProjectStore rather than
  * calling the server — the sidebar's project tree merges placeholders
@@ -36,7 +36,7 @@ type Props = {
   onClose: () => void;
 };
 
-// Matches CreateAgentPopover so the two creation surfaces read as
+// Matches CreateSessionPopover so the two creation surfaces read as
 // siblings (the agent/session one grew to fit the model picker and
 // adapter rows).
 const POPOVER_WIDTH = 352;

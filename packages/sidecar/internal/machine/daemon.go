@@ -431,7 +431,7 @@ func (d *Daemon) handleSyncProjects(ctx context.Context, ev protocol.SyncProject
 
 // setWorkdirs installs a normalized allowlist, reconciles the watcher
 // registry against it, and persists it to the cache. Shared by boot
-// (cache seed + Agents migration) and handleSyncProjects.
+// (cache seed) and handleSyncProjects.
 func (d *Daemon) setWorkdirs(ctx context.Context, workdirs []string) {
 	normalized := normalizeWorkdirs(workdirs)
 

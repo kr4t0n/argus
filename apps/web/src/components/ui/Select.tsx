@@ -134,7 +134,7 @@ export function Select({
           // stopPropagation blocks that in Blink only; WebKit runs
           // label activation as the event's default action regardless
           // of propagation. So the REAL rule is: never render this
-          // component inside a <label> (see CreateAgentPopover's
+          // component inside a <label> (see CreateSessionPopover's
           // Field as="div"). This handler stays as cheap extra cover
           // for Blink if a label ever sneaks back in.
           onClick={(e) => e.stopPropagation()}

@@ -175,9 +175,9 @@ model Project {
 }
 
 // A Machine is a host running one argus-sidecar process. The sidecar
-// self-registers on boot via MachineRegisterEvent; the dashboard then
-// creates Agent rows as children of this machine and the server pushes
-// them down via control commands.
+// self-registers on boot via MachineRegisterEvent and runs one runner
+// per installed CLI type; Projects — (machineId, workingDir) pairs —
+// are upserted lazily as sessions are created under them.
 //
 // `name` is what the user sees in the sidebar — by default it's the
 // machine's hostname (Bonjour `.local` suffix stripped). Operators can
@@ -408,7 +408,7 @@ model ResultChunk {
   @@index([commandId, seq])
 }
 
-// Audit row for an interactive PTY session opened against an agent.
+// Audit row for an interactive PTY session opened on a project.
 // We do NOT persist the keystroke transcript here; that would balloon
 // fast and risks capturing secrets typed into the shell. Add a separate
 // transcript table later if you need replay/forensics.

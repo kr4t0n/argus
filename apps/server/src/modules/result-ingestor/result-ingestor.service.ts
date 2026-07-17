@@ -17,7 +17,7 @@ import { CommandService } from '../command/command.service';
 import { PushService } from '../push/push.service';
 
 const CONSUMER = 'server-1';
-const REFRESH_AGENT_STREAMS_MS = 5_000;
+const REFRESH_RUNNER_STREAMS_MS = 5_000;
 
 type ResultEnvelope = ResultChunk | SessionExternalIdEvent | SessionCloneFailedEvent;
 
@@ -48,7 +48,7 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     await this.refreshStreams();
-    this.refreshTimer = setInterval(() => this.refreshStreams(), REFRESH_AGENT_STREAMS_MS);
+    this.refreshTimer = setInterval(() => this.refreshStreams(), REFRESH_RUNNER_STREAMS_MS);
     this.running = true;
     this.loopPromise = this.consumeLoop();
   }
@@ -120,9 +120,9 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
       } catch (err) {
         if (this.running) {
           const msg = (err as Error).message;
-          // A destroyed agent has its result stream DELed (MachineService
-          // .deleteAgentStreams), and a Redis flush drops every group. Either
-          // leaves a stream in our read set with no consumer group, and a
+          // An emergency DEL of a runner result stream (the documented
+          // Redis-full recovery move) or a Redis flush drops its consumer
+          // groups. Either leaves a stream in our read set with no group, and a
           // single NOGROUP fails the *whole* multi-stream XREADGROUP — so
           // one destroyed agent would otherwise stall live streaming for
           // every session until the 5s timed refresh. Re-sync the stream

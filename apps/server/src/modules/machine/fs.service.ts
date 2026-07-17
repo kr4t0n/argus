@@ -73,8 +73,8 @@ const GIT_LOG_TIMEOUT_MS = 5_000;
  *
  * The flow (for one tree expansion):
  *
- *   1. Dashboard hits `GET /agents/:id/fs/list?path=src` → listDir()
- *   2. We look up the agent's machineId, mint a requestId, stash a
+ *   1. Dashboard hits `GET /projects/:id/fs/list?path=src` → listDir()
+ *   2. We look up the project's machineId, mint a requestId, stash a
  *      promise in `pending`, and publish `fs-list` to the machine
  *      control stream. A 5s timer guards against lost responses /
  *      offline sidecars.

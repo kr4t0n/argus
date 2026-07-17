@@ -32,7 +32,7 @@ public struct GitStatus: Codable, Equatable, Sendable {
     public let detached: Bool
 }
 
-/// `GET /agents/:id/fs/list`.
+/// `GET /projects/:id/fs/list`.
 public struct FSListResponse: Decodable, Sendable {
     public let path: String
     public let entries: [FSEntry]
@@ -42,7 +42,7 @@ public struct FSListResponse: Decodable, Sendable {
     public let git: GitStatus?
 }
 
-/// `GET /agents/:id/fs/read` — discriminated union on `kind`. Unknown
+/// `GET /projects/:id/fs/read` — discriminated union on `kind`. Unknown
 /// kinds decode as `.unsupported` so a future server-side viewer type
 /// degrades gracefully.
 public enum FSReadResult: Equatable, Sendable {
@@ -99,7 +99,7 @@ public struct GitCommit: Codable, Equatable, Sendable, Identifiable {
     public var id: String { sha }
 }
 
-/// `GET /agents/:id/git/log`. Empty `commits` means "not a git repo" or a
+/// `GET /projects/:id/git/log`. Empty `commits` means "not a git repo" or a
 /// fresh repo with no commits — render an empty state either way.
 public struct GitLogResponse: Decodable, Sendable {
     public let commits: [GitCommit]

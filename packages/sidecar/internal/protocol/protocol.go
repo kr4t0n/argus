@@ -351,8 +351,8 @@ type ModelCatalogResponseEvent struct {
 	MachineID string `json:"machineId"`
 	// CliType self-describes the catalog's adapter type (Phase 2:
 	// catalogs are stored machine×CLI server-side); old servers ignore
-	// it and old sidecars omit it (the server then resolves the type
-	// from the agent row).
+	// it and pre-runner sidecars omitted it (the legacy protocol that
+	// resolved the type server-side is deleted).
 	CliType   string              `json:"cliType,omitempty"`
 	RequestID string              `json:"requestId"` // "" = unsolicited push
 	Source    string              `json:"source,omitempty"`
@@ -699,12 +699,6 @@ func BackgroundTaskStream() string { return "agent:background" }
 // byte-retention gotcha.
 func NotifyStream() string { return "agent:notify" }
 
-// CommandStream / ResultStream are the LEGACY per-agent streams
-// (pre-runner sidecars). Runner-mode sidecars use RunnerCommandStream /
-// RunnerResultStream below; the helpers stay as part of the protocol.ts
-// mirror.
-func CommandStream(id string) string               { return "agent:" + id + ":cmd" }
-func ResultStream(id string) string                { return "agent:" + id + ":result" }
 func MachineControlStream(machineID string) string { return "machine:" + machineID + ":control" }
 func MachineConsumerGroup(machineID string) string { return "machine-" + machineID }
 

@@ -587,7 +587,8 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
       }
       case 'model-catalog-response': {
         // Same fan-in pattern — ModelsService resolves the pending
-        // GET /agents/:id/models call (and populates its TTL cache).
+        // GET /machines/:machineId/models call (and populates its TTL
+        // cache).
         this.models.handleCatalogResponse(ev);
         break;
       }
