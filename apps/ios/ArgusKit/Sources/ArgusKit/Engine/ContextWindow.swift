@@ -33,11 +33,29 @@ public enum ContextWindows {
         let family: String
     }
 
+    // First match wins, and ORDER IS LOAD-BEARING within a vendor: the
+    // Claude entries deliberately overlap (every one of them is an
+    // Anthropic model) and are ordered most-specific-first — 1M-by-flag,
+    // then 1M-by-default, then the baseline that would otherwise swallow
+    // both. Append a new Claude family ABOVE the generic entry, never
+    // below it. (Mirrors the TS table's ordering rule.)
     private static let entries: [Entry] = [
         Entry(
             match: { isAnthropicFamily($0) && hasMillionTokenMarker($0) },
             window: 1_000_000,
             family: "Claude (1M context)"
+        ),
+        // Claude Fable — 1M is the DEFAULT, not an opt-in facet, so there
+        // is no `[1m]` token in the id to key off. Matching the family
+        // word covers both id shapes at once: the API id `claude-fable-5`
+        // AND cursor-cli's bare display name "Fable 5 1M Max Thinking"
+        // (no "claude" substring — isAnthropicFamily misses it). Must
+        // stay ABOVE the generic Claude entry, which would otherwise
+        // claim `claude-fable-5` and read the ring 5x too full.
+        Entry(
+            match: { $0.firstMatch(of: #/(^|[^a-z0-9])fable([^a-z0-9]|$)/#) != nil },
+            window: 1_000_000,
+            family: "Claude Fable"
         ),
         Entry(match: { isAnthropicFamily($0) }, window: 200_000, family: "Claude"),
         Entry(match: { $0.contains("gpt-5") }, window: 400_000, family: "GPT-5"),
