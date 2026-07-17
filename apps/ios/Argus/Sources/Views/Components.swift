@@ -27,11 +27,16 @@ extension Color {
     static let agentCursor = Color(hex: 0x38BDF8)
     static let agentCustom = Color(hex: 0xA3A3A3)
 
-    // Layered greys mapped to the web's surface-0/1/2 tokens. The system
-    // grouped backgrounds already stack light↔dark the same way.
-    static let surface0 = Color(.systemBackground)
-    static let surface1 = Color(.secondarySystemBackground)
-    static let surface2 = Color(.tertiarySystemBackground)
+    // Layered greys mirroring the web's surface-0/1/2 tokens EXACTLY
+    // (index.css: light 97.3/92/87%, dark 4/9/15% lightness). These were
+    // previously the system grouped backgrounds, which LOOK like the
+    // same stack but aren't: iOS's tertiarySystemBackground is WHITE in
+    // light mode (the system alternates white→gray→white for nesting),
+    // so every surface2 consumer — prompt bubble, inline-code chip, bar
+    // tracks — painted invisible white-on-white on the light theme.
+    static let surface0 = Color(light: 0xF8F8F8, dark: 0x0A0A0A)
+    static let surface1 = Color(light: 0xEBEBEB, dark: 0x171717)
+    static let surface2 = Color(light: 0xDEDEDE, dark: 0x262626)
 
     /// Inline-code accent (`.markdown code`): red-700 light / blue-200 dark.
     static let codeInlineFg = Color(light: 0xB91C1C, dark: 0xBFDBFE)
