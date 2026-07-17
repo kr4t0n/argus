@@ -47,7 +47,9 @@ struct UsageBadge: View {
 
 struct ContextRing: View {
     let fraction: Double
-    var size: CGFloat = 15
+    /// Sized to the toolbar's circular SF Symbols (ellipsis.circle ≈
+    /// 20pt at body scale) so the ring reads as a peer control.
+    var size: CGFloat = 20
 
     private var color: Color {
         if fraction >= 0.85 { return .red }
