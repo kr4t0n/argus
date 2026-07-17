@@ -73,8 +73,18 @@ private struct BreakdownView: View {
         // (model + ring up top, session KVs below).
         VStack(alignment: .leading, spacing: 8) {
             if let context, let info = context.windowInfo {
-                Text("Context — \(info.family)")
-                    .font(.caption.weight(.semibold))
+                // Web popover header: family name left, live percentage
+                // right ("Claude Fable    29.7%").
+                HStack {
+                    Text(info.family)
+                        .font(.caption.weight(.semibold))
+                    Spacer(minLength: 12)
+                    if let fraction = context.fraction {
+                        Text(String(format: "%.1f%%", fraction * 100))
+                            .font(.caption.weight(.semibold))
+                            .monospacedDigit()
+                    }
+                }
                 labeled(
                     "Live context",
                     "\(TokenFormat.compact(Double(context.usedTokens))) / \(TokenFormat.compact(Double(info.window)))"
