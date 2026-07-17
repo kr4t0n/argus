@@ -15,6 +15,16 @@
 // When updating: bump as `chore(shared): update model context windows`
 // and verify against the upstream announcement page — DO NOT trust
 // release-note rumors.
+//
+// MIRRORED in Swift: apps/ios/ArgusKit/Sources/ArgusKit/Engine/
+// ContextWindow.swift — any change here MUST be ported there (plus
+// ContextWindowTests.swift) in the same change. This is mechanically
+// enforced: ArgusKit's ContextWindowLockstepTests pins this file's
+// SHA-256, and iOS CI (.github/workflows/ios.yml) triggers on edits to
+// this file — an unported edit fails CI until the mirror and the pinned
+// hash move together. (The enforcement exists because the Fable 1M
+// entry landed here on 2026-07-16 and the Swift mirror missed it — the
+// iOS ring read 5x too full.)
 
 /** Anthropic family detector. Covers the API id form ("claude-opus-…")
  *  AND cursor-cli's bare display names ("Opus 4.7 1M Extra High

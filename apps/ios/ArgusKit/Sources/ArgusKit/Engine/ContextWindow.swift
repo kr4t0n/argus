@@ -5,6 +5,10 @@ import Foundation
 /// Match by family substring, not exact id, so point releases don't need
 /// a code change; keep the table in lockstep with the TS original
 /// (`chore(shared): update model context windows` commits).
+///
+/// The lockstep is ENFORCED: ContextWindowLockstepTests pins the TS
+/// file's SHA-256 and iOS CI triggers on edits to it, so a TS-side
+/// change fails CI until this mirror (and the pin) move with it.
 public struct ContextWindowInfo: Equatable, Sendable {
     /// Total context capacity in tokens.
     public let window: Int
