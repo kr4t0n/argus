@@ -143,7 +143,7 @@ struct AgentTypeIcon: View {
         // mono glyph tinted primary, where the brand tile would pop as a
         // bright chip.
         if type == KnownAgentType.codex, colorScheme == .light {
-            Image("agent-codex-color")
+            Image("agent-codex-brand")
                 .renderingMode(.original)
                 .resizable()
                 .scaledToFit()

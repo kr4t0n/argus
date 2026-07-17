@@ -65,7 +65,7 @@ final class PushManager: NSObject {
     /// into a captured local trips `@Sendable`-capture warnings.
     nonisolated static func removeDelivered(
         sessionIds: Set<String>,
-        completion: (() -> Void)? = nil
+        completion: (@Sendable () -> Void)? = nil
     ) {
         UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
             let ids = delivered

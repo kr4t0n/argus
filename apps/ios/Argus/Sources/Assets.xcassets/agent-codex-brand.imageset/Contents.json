@@ -1,17 +1,17 @@
 {
   "images": [
     {
-      "filename": "agent-codex-color@1x.png",
+      "filename": "agent-codex-brand@1x.png",
       "idiom": "universal",
       "scale": "1x"
     },
     {
-      "filename": "agent-codex-color@2x.png",
+      "filename": "agent-codex-brand@2x.png",
       "idiom": "universal",
       "scale": "2x"
     },
     {
-      "filename": "agent-codex-color@3x.png",
+      "filename": "agent-codex-brand@3x.png",
       "idiom": "universal",
       "scale": "3x"
     }
