@@ -923,6 +923,17 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   it, which the same sweep covers. Requires `UIBackgroundModes:
   remote-notification` in `project.yml` (regenerate with `xcodegen
   generate` — the Info.plist is generated).
+- **`contextWindow.ts` has a hand-written Swift mirror, and the lockstep
+  is hash-enforced**: the iOS context ring's table
+  (`ArgusKit/Engine/ContextWindow.swift`) mirrors
+  `packages/shared-types/src/contextWindow.ts`.
+  `ContextWindowLockstepTests` pins the TS file's SHA-256 and
+  `ios.yml` triggers on that path, so editing the TS table without
+  porting the change (and re-pinning) fails iOS CI in the same push.
+  This exists because the Fable 1M entry (53c9549) landed TS-side only
+  and the iOS ring read 5x too full until a user noticed. Comment-only
+  TS edits also trip the pin on purpose — the comments encode
+  load-bearing rules (entry ordering).
 - **`path:line` citations in markdown links**: CLI agents emit links like
   `[src/foo.go:123](src/foo.go:123)`. TWO layers conspire against these,
   and both must be handled (`StreamViewer.tsx`):

@@ -11,10 +11,16 @@ on:
     paths:
       - 'apps/ios/**'
       - '.github/workflows/ios.yml'
+      # The Swift ContextWindow table mirrors this TS file, and
+      # ContextWindowLockstepTests pins its hash — running iOS CI on
+      # TS-side edits is what surfaces an unported change in the same
+      # push that made it (see the Fable 1M miss, 2026-07-16).
+      - 'packages/shared-types/src/contextWindow.ts'
   pull_request:
     paths:
       - 'apps/ios/**'
       - '.github/workflows/ios.yml'
+      - 'packages/shared-types/src/contextWindow.ts'
   # Manual runs for Swift work on long-lived refactor branches — the
   # dev box has no Swift toolchain, so this workflow is the compiler.
   workflow_dispatch:
