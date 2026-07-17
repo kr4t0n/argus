@@ -119,7 +119,8 @@ enum AgentTypeStyle {
     /// Claude's mark carries its own brand orange (render as-is); Codex
     /// and Cursor are mono glyphs tinted with the primary label color —
     /// exactly how the web renders them (ClaudeCode.Color vs mono Codex/
-    /// Cursor inheriting text-fg-primary).
+    /// Cursor inheriting text-fg-primary). Codex additionally swaps to
+    /// its brand-blue Color glyph in light mode (see AgentTypeIcon).
     static func assetIsTinted(for type: AgentType) -> Bool {
         type != KnownAgentType.claudeCode
     }
@@ -128,9 +129,21 @@ enum AgentTypeStyle {
 struct AgentTypeIcon: View {
     let type: AgentType
     var size: CGFloat = 14
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        if let asset = AgentTypeStyle.assetName(for: type) {
+        // Codex mirrors the web's theme-resolved pick (AgentTypeIcon.tsx
+        // codexEntry): light → the brand Color glyph (blue-gradient mark
+        // on a white tile that blends into light surfaces), dark → the
+        // mono glyph tinted primary, where the brand tile would pop as a
+        // bright chip.
+        if type == KnownAgentType.codex, colorScheme == .light {
+            Image("agent-codex-color")
+                .renderingMode(.original)
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
+        } else if let asset = AgentTypeStyle.assetName(for: type) {
             if AgentTypeStyle.assetIsTinted(for: type) {
                 Image(asset)
                     .renderingMode(.template)
