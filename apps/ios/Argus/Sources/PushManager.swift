@@ -98,7 +98,7 @@ extension PushManager: UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+        withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void
     ) {
         let sessionId = Self.sessionId(from: notification.request.content)
         Task { @MainActor in
@@ -110,7 +110,7 @@ extension PushManager: UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
-        withCompletionHandler completionHandler: @escaping () -> Void
+        withCompletionHandler completionHandler: @escaping @Sendable () -> Void
     ) {
         let sessionId = Self.sessionId(from: response.notification.request.content)
         Task { @MainActor in
