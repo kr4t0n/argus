@@ -69,7 +69,24 @@ private struct BreakdownView: View {
     let context: ContextSnapshot?
 
     var body: some View {
+        // Context block leads, details follow — the web popover's order
+        // (model + ring up top, session KVs below).
         VStack(alignment: .leading, spacing: 8) {
+            if let context, let info = context.windowInfo {
+                Text("Context — \(info.family)")
+                    .font(.caption.weight(.semibold))
+                labeled(
+                    "Live context",
+                    "\(TokenFormat.compact(Double(context.usedTokens))) / \(TokenFormat.compact(Double(info.window)))"
+                )
+                if let fraction = context.fraction {
+                    // Clamp: an overrun context (or a stale window table)
+                    // must read as a full bar, not a runtime warning.
+                    ProgressView(value: min(1, fraction))
+                        .tint(fraction >= 0.85 ? .red : fraction >= 0.60 ? .orange : .green)
+                }
+                if usage != nil { Divider() }
+            }
             if let usage {
                 Text("Session usage")
                     .font(.caption.weight(.semibold))
@@ -82,19 +99,6 @@ private struct BreakdownView: View {
                 }
                 if let apiMs = usage.durationApiMs {
                     labeled("API time", TokenFormat.duration(ms: apiMs))
-                }
-            }
-            if let context, let info = context.windowInfo {
-                Divider()
-                Text("Context — \(info.family)")
-                    .font(.caption.weight(.semibold))
-                labeled(
-                    "Live context",
-                    "\(TokenFormat.compact(Double(context.usedTokens))) / \(TokenFormat.compact(Double(info.window)))"
-                )
-                if let fraction = context.fraction {
-                    ProgressView(value: fraction)
-                        .tint(fraction >= 0.85 ? .red : fraction >= 0.60 ? .orange : .green)
                 }
             }
         }
