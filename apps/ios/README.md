@@ -202,7 +202,7 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   `POST/DELETE /me/devices`, HTTP/2 APNs sender in the result-ingestor;
   iOS: registration + settings toggle + tap deep-link + on-screen
   suppression.
-- **Post-Phase-4 (this):** inspector parity (Note + Progress tabs, web
+- **Post-Phase-4 (done):** inspector parity (Note + Progress tabs, web
   tab order/gating) and the interactive terminal (SwiftTerm over the
   `terminal:*` socket events, lazy-opened per inspector).
 - **Live Activity (done):** a lock-screen / Dynamic Island card for a
@@ -219,3 +219,15 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   match `push.service.ts`. Without `APNS_*` configured the card still
   works while the app is open (plus a foreground reconcile fallback);
   locked-screen updates need the push credentials.
+- **Read-sync (this):** reading a session on *any* client withdraws its
+  completion banner from the phone — the banner mirrors the session's
+  `unread` flag. Server: a silent background clear push at every
+  `unread → false` transition (session opened, fresh turn superseding
+  the result, cancel), gated on an in-memory outstanding-banner set so
+  the hot ingest path pays a Set lookup. iOS: `UIBackgroundModes:
+  remote-notification` (re-run `xcodegen generate` — Info.plist is
+  generated), a background handler that removes the delivered
+  notification by `sessionId`, a local removal when the session is
+  read on-device, and a `refreshAll` sweep that catches whatever the
+  best-effort background push misses (Apple throttles them and never
+  delivers to force-quit apps).

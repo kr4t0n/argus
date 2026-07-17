@@ -47,6 +47,51 @@ final class PushManager: NSObject {
     fileprivate nonisolated static func sessionId(from content: UNNotificationContent) -> String? {
         content.userInfo["sessionId"] as? String
     }
+
+    // MARK: Withdrawing delivered banners
+
+    /// Remove delivered completion banners for the given sessions —
+    /// matched on the payload's `sessionId` (the alert's collapse id
+    /// isn't surfaced by UNUserNotificationCenter). Safe from any
+    /// thread; `completion` runs on a background queue.
+    ///
+    /// `UNUserNotificationCenter.current()` is deliberately re-fetched
+    /// inside the closure: the class isn't Sendable, so hoisting it
+    /// into a captured local trips `@Sendable`-capture warnings.
+    nonisolated static func removeDelivered(
+        sessionIds: Set<String>,
+        completion: (() -> Void)? = nil
+    ) {
+        UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
+            let ids = delivered
+                .filter { sessionId(from: $0.request.content).map(sessionIds.contains) ?? false }
+                .map(\.request.identifier)
+            if !ids.isEmpty {
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids)
+            }
+            completion?()
+        }
+    }
+
+    /// Sweep: any banner whose session is no longer unread was read
+    /// elsewhere (or superseded by a fresh turn) while we weren't
+    /// looking. The server's clear push handles this live, but it's
+    /// best-effort — Apple throttles background pushes and never
+    /// delivers them to a force-quit app — so re-derive from fresh
+    /// session state whenever we have it.
+    nonisolated static func reconcileDelivered(keepingUnread unreadIds: Set<String>) {
+        UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
+            let stale = delivered
+                .filter { note in
+                    guard let id = sessionId(from: note.request.content) else { return false }
+                    return !unreadIds.contains(id)
+                }
+                .map(\.request.identifier)
+            if !stale.isEmpty {
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: stale)
+            }
+        }
+    }
 }
 
 extension PushManager: UNUserNotificationCenterDelegate {
@@ -95,5 +140,22 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // Expected on Intel-Mac Simulators / missing entitlement; the
         // toggle simply won't produce a registered device.
         print("APNs registration failed: \(error.localizedDescription)")
+    }
+
+    /// Silent clear push (server `clearSessionNotification`): the
+    /// session was read on another client, or a fresh turn superseded
+    /// the result — withdraw its banner from Notification Center.
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        guard let sessionId = userInfo["clearSessionId"] as? String else {
+            completionHandler(.noData)
+            return
+        }
+        PushManager.removeDelivered(sessionIds: [sessionId]) {
+            DispatchQueue.main.async { completionHandler(.noData) }
+        }
     }
 }
