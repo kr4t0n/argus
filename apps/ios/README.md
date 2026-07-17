@@ -242,8 +242,15 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   header (amber when detached). Size/mtime and author/date/copy-SHA
   moved to long-press menus — the touch equivalent of the web's
   tooltips.
-- **Clone-failed toasts (this):** `session:clone-failed` was silently
+- **Clone-failed toasts (done):** `session:clone-failed` was silently
   ignored; forking a session whose CLI-state clone fails now floats an
   amber toast (web SessionCloneFailedToasts parity: one per session,
   newest first, 8s auto-dismiss + manual dismiss, session title looked
   up at event time with id-prefix fallback) over the split view.
+- **Explicit terminal lifecycle (this):** the Terminal tab no longer
+  auto-attaches a PTY on visit — web TerminalPane parity: idle shows an
+  "Open shell on \<machine\>" CTA, an open shell gets a close (power)
+  button, a settled shell offers Dismiss / New shell. One deliberate
+  divergence: the shell is still reaped when the inspector closes (the
+  web leaves it running; on a phone an orphaned PTY has no re-attach
+  surface).
