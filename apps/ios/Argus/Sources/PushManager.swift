@@ -99,29 +99,33 @@ final class PushManager: NSObject {
     }
 }
 
-extension PushManager: UNUserNotificationCenterDelegate {
-    nonisolated func userNotificationCenter(
+// @preconcurrency conformance: the delegate callbacks arrive on the
+// main thread (the protocol is @MainActor-annotated in current SDKs),
+// so the witnesses are MainActor-isolated and run synchronously — no
+// Task hop, no completion handler crossing isolation. Under an SDK
+// where the requirements are still nonisolated, @preconcurrency
+// permits the isolated witnesses with a runtime main-thread assertion,
+// which holds for these callbacks.
+extension PushManager: @preconcurrency UNUserNotificationCenterDelegate {
+    func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         let sessionId = Self.sessionId(from: notification.request.content)
-        Task { @MainActor in
-            let suppress = sessionId.map { self.shouldSuppress?($0) ?? false } ?? false
-            completionHandler(suppress ? [] : [.banner, .sound, .list])
-        }
+        let suppress = sessionId.map { shouldSuppress?($0) ?? false } ?? false
+        completionHandler(suppress ? [] : [.banner, .sound, .list])
     }
 
-    nonisolated func userNotificationCenter(
+    func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let sessionId = Self.sessionId(from: response.notification.request.content)
-        Task { @MainActor in
-            if let sessionId { self.onOpenSession?(sessionId) }
-            completionHandler()
+        if let sessionId = Self.sessionId(from: response.notification.request.content) {
+            onOpenSession?(sessionId)
         }
+        completionHandler()
     }
 }
 
