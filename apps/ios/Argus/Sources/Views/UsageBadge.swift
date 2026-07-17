@@ -13,19 +13,23 @@ struct UsageBadge: View {
     @State private var showBreakdown = false
 
     var body: some View {
+        // iPhone header real estate is tight: the badge is JUST the
+        // ring — tap it for the full breakdown. The ↑/↓ totals the web
+        // shows inline render only as the fallback tap target when the
+        // model isn't in the window table (no ring), so the breakdown
+        // never becomes unreachable.
         if usage != nil || context?.fraction != nil {
             Button {
                 showBreakdown = true
             } label: {
-                HStack(spacing: 5) {
-                    if let usage {
-                        Text("↑\(TokenFormat.compact(promptTokens(usage))) ↓\(TokenFormat.compact(usage.outputTokens))")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    if let fraction = context?.fraction {
-                        ContextRing(fraction: fraction)
-                    }
+                if let fraction = context?.fraction {
+                    ContextRing(fraction: fraction)
+                        .padding(4)
+                        .contentShape(Rectangle())
+                } else if let usage {
+                    Text("↑\(TokenFormat.compact(promptTokens(usage))) ↓\(TokenFormat.compact(usage.outputTokens))")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 }
             }
             .buttonStyle(.plain)
