@@ -230,3 +230,76 @@ struct ConnectionBanner: View {
         }
     }
 }
+
+/// Bottom toast column for failed session-clone-from-turn events — the
+/// web SessionCloneFailedToasts: amber warning card per session, newest
+/// on top, auto-dismissed after 8s (the copy isn't actionable beyond
+/// "next prompt starts fresh", so sticky would just be visual debt).
+struct CloneFailureToasts: View {
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ForEach(app.cloneFailures.sorted { $0.startedAt > $1.startedAt }) { failure in
+                CloneFailureCard(failure: failure) {
+                    app.dismissCloneFailure(sessionId: failure.sessionId)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+        .frame(maxWidth: 420)
+        .animation(.snappy, value: app.cloneFailures)
+    }
+}
+
+private struct CloneFailureCard: View {
+    let failure: AppModel.CloneFailure
+    let onDismiss: () -> Void
+
+    private static let autoDismiss: Duration = .seconds(8)
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.footnote)
+                .foregroundStyle(Color.toolAmber)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(failure.sessionTitle)
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                    Spacer(minLength: 6)
+                    Text("clone failed")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                Text("Couldn't fork CLI state. Next prompt will start a fresh conversation.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !failure.reason.isEmpty {
+                    Text(failure.reason)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+        .background(Color.surface1, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.toolAmber.opacity(0.4)))
+        .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .task {
+            try? await Task.sleep(for: Self.autoDismiss)
+            if !Task.isCancelled { onDismiss() }
+        }
+    }
+}

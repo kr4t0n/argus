@@ -45,6 +45,12 @@ struct MainSplitView: View {
                 }
         }
         .navigationSplitViewStyle(.balanced)
+        // Toast host — clone-failed cards float over whichever column
+        // layout is active (the web anchors its toast column bottom-
+        // right of the whole app the same way).
+        .overlay(alignment: .bottom) {
+            CloneFailureToasts()
+        }
     }
 
     @ViewBuilder
