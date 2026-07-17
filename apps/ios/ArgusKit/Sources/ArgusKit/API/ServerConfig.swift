@@ -86,14 +86,16 @@ public struct ServerConfig: Codable, Equatable, Sendable {
 /// so try both.
 public enum ISO8601 {
     // ISO8601DateFormatter is documented thread-safe; cache both variants
-    // (REST chunk decoding calls this per row).
-    private static let fractional: ISO8601DateFormatter = {
+    // (REST chunk decoding calls this per row). nonisolated(unsafe)
+    // states that documented guarantee to Swift 6 — the class just
+    // doesn't declare Sendable.
+    private nonisolated(unsafe) static let fractional: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
 
-    private static let whole: ISO8601DateFormatter = {
+    private nonisolated(unsafe) static let whole: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter

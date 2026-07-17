@@ -1,6 +1,11 @@
 import Foundation
 import UIKit
-import UserNotifications
+// This SDK's UNUserNotificationCenterDelegate declares its completion
+// handlers without @Sendable, yet they must cross into our MainActor
+// hops (suppression needs MainActor state). @preconcurrency relaxes the
+// checking at exactly that un-annotated boundary — our own code stays
+// fully checked.
+@preconcurrency import UserNotifications
 
 /// Owns everything UNUserNotificationCenter / remote-notification
 /// registration. AppModel wires the three closures after login:
@@ -60,7 +65,7 @@ final class PushManager: NSObject {
     /// into a captured local trips `@Sendable`-capture warnings.
     nonisolated static func removeDelivered(
         sessionIds: Set<String>,
-        completion: (() -> Void)? = nil
+        completion: (@Sendable () -> Void)? = nil
     ) {
         UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
             let ids = delivered
@@ -94,29 +99,33 @@ final class PushManager: NSObject {
     }
 }
 
-extension PushManager: UNUserNotificationCenterDelegate {
-    nonisolated func userNotificationCenter(
+// @preconcurrency conformance: the delegate callbacks arrive on the
+// main thread (the protocol is @MainActor-annotated in current SDKs),
+// so the witnesses are MainActor-isolated and run synchronously — no
+// Task hop, no completion handler crossing isolation. Under an SDK
+// where the requirements are still nonisolated, @preconcurrency
+// permits the isolated witnesses with a runtime main-thread assertion,
+// which holds for these callbacks.
+extension PushManager: @preconcurrency UNUserNotificationCenterDelegate {
+    func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         let sessionId = Self.sessionId(from: notification.request.content)
-        Task { @MainActor in
-            let suppress = sessionId.map { self.shouldSuppress?($0) ?? false } ?? false
-            completionHandler(suppress ? [] : [.banner, .sound, .list])
-        }
+        let suppress = sessionId.map { shouldSuppress?($0) ?? false } ?? false
+        completionHandler(suppress ? [] : [.banner, .sound, .list])
     }
 
-    nonisolated func userNotificationCenter(
+    func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let sessionId = Self.sessionId(from: response.notification.request.content)
-        Task { @MainActor in
-            if let sessionId { self.onOpenSession?(sessionId) }
-            completionHandler()
+        if let sessionId = Self.sessionId(from: response.notification.request.content) {
+            onOpenSession?(sessionId)
         }
+        completionHandler()
     }
 }
 
@@ -145,17 +154,23 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     /// Silent clear push (server `clearSessionNotification`): the
     /// session was read on another client, or a fresh turn superseded
     /// the result — withdraw its banner from Notification Center.
+    /// The async delegate variant, deliberately: the handler-based
+    /// form's completionHandler is @Sendable-annotated only in newer
+    /// SDKs, so no single handler-based signature satisfies both
+    /// toolchains' strict checking. Here only a checked continuation
+    /// crosses into the removal callback.
     func application(
         _ application: UIApplication,
-        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
-        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
-    ) {
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any]
+    ) async -> UIBackgroundFetchResult {
         guard let sessionId = userInfo["clearSessionId"] as? String else {
-            completionHandler(.noData)
-            return
+            return .noData
         }
-        PushManager.removeDelivered(sessionIds: [sessionId]) {
-            DispatchQueue.main.async { completionHandler(.noData) }
+        await withCheckedContinuation { continuation in
+            PushManager.removeDelivered(sessionIds: [sessionId]) {
+                continuation.resume()
+            }
         }
+        return .noData
     }
 }

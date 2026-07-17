@@ -143,7 +143,7 @@ struct AgentTypeIcon: View {
         // mono glyph tinted primary, where the brand tile would pop as a
         // bright chip.
         if type == KnownAgentType.codex, colorScheme == .light {
-            Image("agent-codex-color")
+            Image("agent-codex-brand")
                 .renderingMode(.original)
                 .resizable()
                 .scaledToFit()
@@ -196,7 +196,10 @@ struct SessionStatusDot: View {
 }
 
 enum RelativeTime {
-    private static let formatter: RelativeDateTimeFormatter = {
+    // Foundation formatters are documented thread-safe on modern OSes;
+    // nonisolated(unsafe) states that guarantee to Swift 6 (same
+    // pattern as ArgusKit's ISO8601 caches).
+    private nonisolated(unsafe) static let formatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter

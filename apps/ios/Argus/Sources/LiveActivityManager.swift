@@ -1,4 +1,9 @@
-import ActivityKit
+// ActivityKit's Activity<T> carries no Sendable annotations, but its
+// update/end/pushTokenUpdates APIs are documented callable from any
+// context — @preconcurrency states that at the module boundary (newer
+// compilers' region analysis otherwise flags 'sending activity' where
+// the async calls leave the MainActor).
+@preconcurrency import ActivityKit
 import Foundation
 import ArgusKit
 

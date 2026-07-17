@@ -76,7 +76,7 @@ targets:
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 1
         TARGETED_DEVICE_FAMILY: '1,2' # iPhone + iPad
-        SWIFT_VERSION: '5.10'
+        SWIFT_VERSION: '6.0'
         # Simulator needs no signing team. For a physical device, delete
         # these two lines and set a team in Signing & Capabilities.
         CODE_SIGNING_ALLOWED: 'NO'
@@ -103,6 +103,6 @@ targets:
         MARKETING_VERSION: 0.1.0
         CURRENT_PROJECT_VERSION: 1
         TARGETED_DEVICE_FAMILY: '1,2'
-        SWIFT_VERSION: '5.10'
+        SWIFT_VERSION: '6.0'
         CODE_SIGNING_ALLOWED: 'NO'
         CODE_SIGN_IDENTITY: ''

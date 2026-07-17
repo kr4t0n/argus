@@ -8,9 +8,10 @@ import PackageDescription
 // needs full Xcode (Swift Testing ships with Xcode's SDK, not the bare
 // toolchain) — CI runs both on a macOS runner (.github/workflows/ios.yml).
 //
-// Language mode is pinned to v5 while the package stabilizes; flip to v6
-// once CI is reliably green so strict-concurrency adoption is a reviewed,
-// deliberate change rather than blind authoring.
+// Language mode v6 (strict concurrency = complete). SocketIO is the one
+// unmigrated dependency — StreamClient imports it @preconcurrency, the
+// sanctioned boundary for third-party modules that haven't adopted
+// Sendable yet.
 let package = Package(
     name: "ArgusKit",
     platforms: [.iOS(.v17), .macOS(.v14)],
@@ -33,5 +34,5 @@ let package = Package(
             resources: [.copy("Fixtures")]
         ),
     ],
-    swiftLanguageModes: [.v5]
+    swiftLanguageModes: [.v6]
 )

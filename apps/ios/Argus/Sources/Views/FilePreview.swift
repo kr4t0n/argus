@@ -334,12 +334,16 @@ private struct StaticHtmlView: UIViewRepresentable {
 
         /// Belt-and-braces with JS off: block every navigation except
         /// the initial load, so links in the document go nowhere.
+        /// The async form, deliberately: the handler-based signature's
+        /// annotations (@MainActor/@Sendable on the decisionHandler)
+        /// drift between SDK versions, and a mismatch silently demotes
+        /// this from a witness to dead code ("nearly matches") — the
+        /// sandbox would stop cancelling navigation.
         func webView(
             _ webView: WKWebView,
-            decidePolicyFor navigationAction: WKNavigationAction,
-            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
-        ) {
-            decisionHandler(navigationAction.navigationType == .other ? .allow : .cancel)
+            decidePolicyFor navigationAction: WKNavigationAction
+        ) async -> WKNavigationActionPolicy {
+            navigationAction.navigationType == .other ? .allow : .cancel
         }
     }
 

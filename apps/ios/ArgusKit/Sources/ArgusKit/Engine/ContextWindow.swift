@@ -31,8 +31,8 @@ public enum ContextWindows {
         return model.firstMatch(of: #/(^|[^a-z0-9])1m([^a-z0-9]|$)/#) != nil
     }
 
-    private struct Entry {
-        let match: (String) -> Bool
+    private struct Entry: Sendable {
+        let match: @Sendable (String) -> Bool
         let window: Int
         let family: String
     }

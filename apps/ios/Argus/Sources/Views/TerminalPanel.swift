@@ -145,7 +145,11 @@ final class TerminalController {
 /// SwiftTerm's delegate methods are nonisolated protocol requirements;
 /// this NSObject bridge hops them onto the MainActor controller. Kept
 /// separate so TerminalController can stay a plain @Observable class.
-private final class TerminalDelegateBridge: NSObject, TerminalViewDelegate {
+/// @unchecked Sendable: the only state is a weak reference assigned
+/// once at init (before any callback can fire), and every callback
+/// immediately hops to the MainActor — the send/sizeChanged closures
+/// need to carry `self` across that hop.
+private final class TerminalDelegateBridge: NSObject, TerminalViewDelegate, @unchecked Sendable {
     weak var controller: TerminalController?
 
     func send(source: TerminalView, data: ArraySlice<UInt8>) {

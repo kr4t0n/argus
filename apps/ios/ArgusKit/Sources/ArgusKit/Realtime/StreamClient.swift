@@ -1,5 +1,7 @@
 import Foundation
-import SocketIO
+// SocketIO hasn't adopted Sendable; @preconcurrency relaxes strict
+// checking at its API boundary only (our own code stays fully checked).
+@preconcurrency import SocketIO
 
 // Realtime layer — the Swift counterpart of `apps/web/src/lib/ws.ts`,
 // against the event map in `packages/shared-types/src/ws.ts`.

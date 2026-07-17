@@ -52,7 +52,7 @@ can embed real prompt text and the repo is public.
 ```
 apps/ios/
 ├── ArgusKit/                     SwiftPM package — everything except UI
-│   ├── Package.swift             iOS 17+ / macOS 14+, Swift language mode v5
+│   ├── Package.swift             iOS 17+ / macOS 14+, Swift 6 language mode
 │   └── Sources/ArgusKit/
 │       ├── Models/               DTO mirrors (JSONValue, enums, sessions, fleet, …)
 │       ├── API/                  ArgusClient (URLSession), ServerConfig, TokenStore
