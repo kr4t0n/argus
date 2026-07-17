@@ -54,17 +54,20 @@ final class PushManager: NSObject {
     /// matched on the payload's `sessionId` (the alert's collapse id
     /// isn't surfaced by UNUserNotificationCenter). Safe from any
     /// thread; `completion` runs on a background queue.
+    ///
+    /// `UNUserNotificationCenter.current()` is deliberately re-fetched
+    /// inside the closure: the class isn't Sendable, so hoisting it
+    /// into a captured local trips `@Sendable`-capture warnings.
     nonisolated static func removeDelivered(
         sessionIds: Set<String>,
         completion: (() -> Void)? = nil
     ) {
-        let center = UNUserNotificationCenter.current()
-        center.getDeliveredNotifications { delivered in
+        UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
             let ids = delivered
                 .filter { sessionId(from: $0.request.content).map(sessionIds.contains) ?? false }
                 .map(\.request.identifier)
             if !ids.isEmpty {
-                center.removeDeliveredNotifications(withIdentifiers: ids)
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids)
             }
             completion?()
         }
@@ -77,8 +80,7 @@ final class PushManager: NSObject {
     /// delivers them to a force-quit app — so re-derive from fresh
     /// session state whenever we have it.
     nonisolated static func reconcileDelivered(keepingUnread unreadIds: Set<String>) {
-        let center = UNUserNotificationCenter.current()
-        center.getDeliveredNotifications { delivered in
+        UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
             let stale = delivered
                 .filter { note in
                     guard let id = sessionId(from: note.request.content) else { return false }
@@ -86,7 +88,7 @@ final class PushManager: NSObject {
                 }
                 .map(\.request.identifier)
             if !stale.isEmpty {
-                center.removeDeliveredNotifications(withIdentifiers: stale)
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: stale)
             }
         }
     }
