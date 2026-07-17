@@ -82,9 +82,10 @@ struct InspectorPane: View {
                     noProjectPlaceholder
                 }
             case .terminal:
-                // Lazy like the web: the PTY opens on first visit,
-                // then the controller (and its scrollback) survives
-                // tab switches for the inspector's lifetime.
+                // The controller is created lazily on first visit, but
+                // the PTY itself opens on user demand (the tab's "Open
+                // shell" CTA — web parity). Controller + scrollback
+                // survive tab switches for the inspector's lifetime.
                 if let terminalController {
                     TerminalPanel(controller: terminalController)
                 } else if projectRef != nil {
