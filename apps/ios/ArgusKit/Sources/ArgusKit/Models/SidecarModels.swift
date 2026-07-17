@@ -19,21 +19,3 @@ public struct SidecarUpdateAccepted: Codable, Equatable, Sendable {
     public var machineId: String
     public var fromVersion: String
 }
-
-/// One row in a bulk-update plan; `status` is an open string
-/// ('queued' | 'in-progress' | 'completed' | 'failed' |
-/// 'skipped-offline' | 'skipped-already-current').
-public struct SidecarUpdatePlanEntry: Codable, Equatable, Sendable {
-    public var machineId: String
-    public var machineName: String
-    public var fromVersion: String
-    public var status: String
-    public var toVersion: String?
-    public var error: String?
-}
-
-/// 202 body for `POST /machines/sidecar/update-all`.
-public struct SidecarUpdateBatchAccepted: Codable, Equatable, Sendable {
-    public var batchId: String
-    public var plan: [SidecarUpdatePlanEntry]
-}
