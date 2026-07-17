@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import ArgusKit
 
 /// Right inspector for a session — the iOS counterpart of the web's
@@ -76,7 +77,7 @@ struct InspectorPane: View {
                 }
             case .files:
                 if let project = projectRef {
-                    FileBrowserPanel(project: project)
+                    FileTreePanel(project: project)
                 } else {
                     noProjectPlaceholder
                 }
@@ -204,29 +205,59 @@ struct InspectorPane: View {
 
 // MARK: - Files
 
-private struct FileBrowserPanel: View {
+/// Compact lazy-expanding file tree — the iOS port of the web FileTree,
+/// replacing the older drill-down List (default row heights + separators
+/// read loose next to the web's dense panel). Rows are chevron · icon ·
+/// name in caption-mono at a fixed 24pt, indented 12pt per level, no
+/// separators. Cold expansions pull `prefetchDepth` levels in one round
+/// trip and hydrate a flat `path → DirState` cache so the next taps
+/// render synchronously; collapse keeps the cache so re-expanding is
+/// instant. `fs:changed` refetches exactly the loaded level it names.
+/// Size/mtime live in the row's long-press menu (the web keeps them in
+/// tooltips). Tapping a file opens the shared FilePreviewSheet.
+private struct FileTreePanel: View {
     @Environment(AppModel.self) private var app
     let project: ProjectRef
 
-    /// Path relative to the workingDir ("" = root).
-    @State private var path = ""
-    @State private var entries: [FSEntry]?
+    private struct DirState {
+        var entries: [FSEntry] = []
+        var loading = false
+        var error: String?
+    }
+
+    /// Directory levels fetched per round trip (web TREE_PREFETCH_DEPTH):
+    /// root + two more are warm before the first tap.
+    private static let prefetchDepth = 3
+
+    /// Keyed by path relative to the workingDir ("" = root). Entries
+    /// survive collapse on purpose — re-expanding renders from cache.
+    @State private var dirs: [String: DirState] = [:]
+    @State private var expanded: Set<String> = [""]
+    @State private var showAll = false
     @State private var git: GitStatus?
-    @State private var loadError: String?
     @State private var viewingFile: String?
 
     var body: some View {
         VStack(spacing: 0) {
-            breadcrumb
+            toolbar
             Divider()
-            listBody
+            content
         }
-        .task(id: path) { await load() }
+        .task(id: project.projectId) {
+            dirs = [:]
+            expanded = [""]
+            git = nil
+            await fetchDir("", depth: Self.prefetchDepth)
+        }
+        // Filter flip collapses back to the root and refetches with the
+        // new filter — same shape as refreshAll (web behavior).
+        .onChange(of: showAll) { refreshAll() }
         .onChange(of: app.lastFSChange) {
-            // The sidecar debounces; refetch when our directory changed.
+            // The sidecar debounces; refetch exactly the level that
+            // changed, if we've already loaded it.
             guard let change = app.lastFSChange, matches(change) else { return }
-            if change.path == path || change.path.isEmpty || path.hasPrefix(change.path) {
-                Task { await load() }
+            if dirs[change.path] != nil {
+                Task { await fetchDir(change.path) }
             }
         }
         .sheet(item: fileSheetBinding) { box in
@@ -244,75 +275,257 @@ private struct FileBrowserPanel: View {
         return change.machineId == project.machineId && workingDir == project.workingDir
     }
 
-    private var breadcrumb: some View {
-        HStack(spacing: 6) {
-            Button {
-                path = ""
-            } label: {
-                Image(systemName: "house")
-            }
-            .disabled(path.isEmpty)
-            if !path.isEmpty {
-                Button {
-                    path = (path as NSString).deletingLastPathComponent
-                } label: {
-                    Image(systemName: "chevron.up")
+    /// Branch badge + gitignored eye + refresh — the web tree's header
+    /// row. The drill-down breadcrumb is gone; a tree needs none.
+    private var toolbar: some View {
+        HStack(spacing: 12) {
+            if let git {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.branch")
+                    Text(git.detached ? git.head : (git.branch ?? git.head))
                 }
-                Text(path)
-                    .font(.caption.monospaced())
-                    .lineLimit(1)
-                    .truncationMode(.head)
+                .font(.caption2.monospaced())
+                .foregroundStyle(git.detached ? Color.toolAmber : Color.secondary)
+                .lineLimit(1)
             }
             Spacer()
-            if let git {
-                Label(git.branch ?? git.head, systemImage: "arrow.branch")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            Button {
+                showAll.toggle()
+            } label: {
+                Image(systemName: showAll ? "eye" : "eye.slash")
             }
+            .help(showAll ? "Hide gitignored" : "Show gitignored")
+            Button {
+                refreshAll()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .help("Refresh")
         }
         .font(.caption)
-        .padding(.horizontal)
-        .padding(.vertical, 8)
+        .foregroundStyle(.secondary)
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
     }
 
     @ViewBuilder
-    private var listBody: some View {
-        if let entries {
-            if entries.isEmpty {
+    private var content: some View {
+        if let root = dirs[""] {
+            if let error = root.error, root.entries.isEmpty {
+                ContentUnavailableView(
+                    "Couldn't list files",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(error)
+                )
+            } else if root.loading, root.entries.isEmpty {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if root.entries.isEmpty {
                 ContentUnavailableView("Empty directory", systemImage: "folder")
             } else {
-                List(sorted(entries), id: \.name) { entry in
-                    Button {
-                        open(entry)
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: symbol(for: entry))
-                                .foregroundStyle(entry.kind == .dir ? Color.accentColor : .secondary)
-                                .frame(width: 18)
-                            Text(entry.name)
-                                .lineLimit(1)
-                            Spacer()
-                            if entry.kind == .file {
-                                Text(TokenFormat.bytes(entry.size))
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                            }
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(nodes()) { node in
+                            nodeView(node)
                         }
                     }
-                    .buttonStyle(.plain)
+                    .padding(.vertical, 4)
                 }
-                .listStyle(.plain)
-                .refreshable { await load() }
+                .refreshable { await fetchDir("", depth: Self.prefetchDepth) }
             }
-        } else if let loadError {
-            ContentUnavailableView(
-                "Couldn't list files",
-                systemImage: "exclamationmark.triangle",
-                description: Text(loadError)
-            )
         } else {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// One visible row — the recursive tree flattened for LazyVStack
+    /// (which can't recurse). Message rows carry a per-level error or
+    /// "(empty)" placeholder, like the web's inline states.
+    private struct Node: Identifiable {
+        enum Kind {
+            case entry(FSEntry)
+            case message(String, isError: Bool)
+        }
+        let id: String
+        let kind: Kind
+        let path: String
+        let depth: Int
+    }
+
+    private func nodes() -> [Node] {
+        var out: [Node] = []
+        func walk(_ dirPath: String, depth: Int) {
+            guard let state = dirs[dirPath] else { return }
+            for entry in state.entries {
+                let path = dirPath.isEmpty ? entry.name : "\(dirPath)/\(entry.name)"
+                out.append(Node(id: path, kind: .entry(entry), path: path, depth: depth))
+                guard entry.kind == .dir, expanded.contains(path) else { continue }
+                if let child = dirs[path], let error = child.error {
+                    out.append(Node(
+                        id: path + "#error", kind: .message(error, isError: true),
+                        path: path, depth: depth + 1
+                    ))
+                } else if let child = dirs[path], !child.loading, child.entries.isEmpty {
+                    out.append(Node(
+                        id: path + "#empty", kind: .message("(empty)", isError: false),
+                        path: path, depth: depth + 1
+                    ))
+                } else {
+                    walk(path, depth: depth + 1)
+                }
+            }
+        }
+        walk("", depth: 0)
+        return out
+    }
+
+    @ViewBuilder
+    private func nodeView(_ node: Node) -> some View {
+        switch node.kind {
+        case .entry(let entry):
+            entryRow(path: node.path, entry: entry, depth: node.depth)
+        case .message(let text, let isError):
+            Text(text)
+                .font(.caption2.monospaced())
+                .foregroundStyle(isError ? Color.red : Color.secondary)
+                .lineLimit(1)
+                .padding(.leading, leadingInset(depth: node.depth) + 24)
+                .frame(height: 22)
+        }
+    }
+
+    private func entryRow(path: String, entry: FSEntry, depth: Int) -> some View {
+        let isDir = entry.kind == .dir
+        let isOpen = isDir && expanded.contains(path)
+        return Button {
+            tap(path: path, entry: entry)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(isOpen ? 90 : 0))
+                    .opacity(isDir ? 1 : 0)
+                    .frame(width: 10)
+                Image(systemName: symbol(for: entry, open: isOpen))
+                    .font(.system(size: 11))
+                    .foregroundStyle(tint(for: entry))
+                    .frame(width: 15)
+                Text(entry.name)
+                    .font(.caption.monospaced())
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if isDir, dirs[path]?.loading == true {
+                    ProgressView().controlSize(.mini)
+                }
+            }
+            .padding(.leading, leadingInset(depth: depth))
+            .padding(.trailing, 12)
+            .frame(height: 24)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(entry.gitignored == true ? 0.55 : 1)
+        .contextMenu {
+            if entry.kind != .dir {
+                Button("Copy path", systemImage: "doc.on.doc") {
+                    UIPasteboard.general.string = path
+                }
+                Text("\(TokenFormat.bytes(entry.size)) · \(RelativeTime.label(msEpoch: Double(entry.mtime)))")
+            }
+        }
+    }
+
+    private func leadingInset(depth: Int) -> CGFloat {
+        8 + CGFloat(depth) * 12
+    }
+
+    private func symbol(for entry: FSEntry, open: Bool) -> String {
+        switch entry.kind {
+        case .dir: return open ? "folder.fill" : "folder"
+        case .symlink: return "link"
+        default: return "doc.text"
+        }
+    }
+
+    private func tint(for entry: FSEntry) -> Color {
+        switch entry.kind {
+        case .dir: return Color.mdLink.opacity(0.85)
+        case .symlink: return .purple.opacity(0.8)
+        default: return Color(.tertiaryLabel)
+        }
+    }
+
+    private func tap(path: String, entry: FSEntry) {
+        guard entry.kind == .dir else {
+            viewingFile = path
+            return
+        }
+        if expanded.contains(path) {
+            expanded.remove(path)
+            return
+        }
+        expanded.insert(path)
+        if let cached = dirs[path] {
+            // Cached — the folder renders instantly, but slide the
+            // prefetch frontier when some child dir hasn't been walked
+            // yet, so the user's next tap stays on warm cache.
+            if !cached.loading, hasUnwalkedSubdir(cached.entries, parent: path) {
+                Task { await fetchDir(path, depth: Self.prefetchDepth) }
+            }
+        } else {
+            // Cold expansion — outside the prefetch window.
+            Task { await fetchDir(path, depth: Self.prefetchDepth) }
+        }
+    }
+
+    /// True when at least one subdirectory has no cached listing yet.
+    /// Ignored entries are skipped to match the sidecar's BFS, which
+    /// also refuses to descend into them.
+    private func hasUnwalkedSubdir(_ entries: [FSEntry], parent: String) -> Bool {
+        entries.contains { entry in
+            entry.kind == .dir && entry.gitignored != true
+                && dirs[parent.isEmpty ? entry.name : "\(parent)/\(entry.name)"] == nil
+        }
+    }
+
+    private func fetchDir(_ path: String, depth: Int = 1) async {
+        guard let client = app.client else { return }
+        var state = dirs[path] ?? DirState()
+        state.loading = true
+        state.error = nil
+        dirs[path] = state
+        do {
+            let response = try await client.listProjectDir(
+                projectId: project.projectId, path: path, showAll: showAll, depth: depth
+            )
+            // Depth>1 responses hydrate every level the sidecar walked
+            // so the next few expansions render from cache; depth=1
+            // responses land in `entries` only.
+            if let listings = response.listings {
+                for (listedPath, entries) in listings {
+                    dirs[listedPath] = DirState(entries: entries)
+                }
+            }
+            if response.listings?[path] == nil {
+                dirs[path] = DirState(entries: response.entries)
+            }
+            if path.isEmpty { git = response.git }
+        } catch {
+            app.handleAPIError(error)
+            var failed = dirs[path] ?? DirState()
+            failed.loading = false
+            failed.error = (error as? APIError)?.message ?? error.localizedDescription
+            dirs[path] = failed
+        }
+    }
+
+    /// Refresh = start over: collapse to the root and re-pull the
+    /// prefetch window (web refreshAll).
+    private func refreshAll() {
+        dirs = [:]
+        expanded = [""]
+        Task { await fetchDir("", depth: Self.prefetchDepth) }
     }
 
     private var fileSheetBinding: Binding<StringBox?> {
@@ -320,44 +533,6 @@ private struct FileBrowserPanel: View {
             get: { viewingFile.map(StringBox.init) },
             set: { viewingFile = $0?.value }
         )
-    }
-
-    private func sorted(_ entries: [FSEntry]) -> [FSEntry] {
-        entries.sorted {
-            if ($0.kind == .dir) != ($1.kind == .dir) { return $0.kind == .dir }
-            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
-    }
-
-    private func symbol(for entry: FSEntry) -> String {
-        switch entry.kind {
-        case .dir: return "folder.fill"
-        case .symlink: return "link"
-        default: return "doc"
-        }
-    }
-
-    private func open(_ entry: FSEntry) {
-        let child = path.isEmpty ? entry.name : "\(path)/\(entry.name)"
-        if entry.kind == .dir {
-            path = child
-        } else {
-            viewingFile = child
-        }
-    }
-
-    private func load() async {
-        guard let client = app.client else { return }
-        do {
-            let response = try await client.listProjectDir(projectId: project.projectId, path: path)
-            entries = response.entries
-            git = response.git
-            loadError = nil
-        } catch {
-            app.handleAPIError(error)
-            loadError = (error as? APIError)?.message ?? error.localizedDescription
-            entries = nil
-        }
     }
 }
 
@@ -372,6 +547,10 @@ private struct StringBox: Identifiable {
 
 // MARK: - Commits
 
+/// Compact commit log — the web GitLogPanel: branch badge + refresh up
+/// top, then dense mono `sha · subject · age` rows with no separators.
+/// Long-press a row for the author, absolute date, and copy-SHA (the
+/// web keeps those in the row tooltip).
 private struct CommitsPanel: View {
     @Environment(AppModel.self) private var app
     let project: ProjectRef
@@ -382,40 +561,26 @@ private struct CommitsPanel: View {
     var body: some View {
         Group {
             if let response {
-                if response.commits.isEmpty {
-                    ContentUnavailableView(
-                        "No commits",
-                        systemImage: "arrow.branch",
-                        description: Text("Not a git repo, or no commits yet.")
-                    )
-                } else {
-                    List {
-                        if let git = response.git {
-                            Label(git.branch ?? git.head, systemImage: "arrow.branch")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        ForEach(response.commits) { commit in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(commit.subject).font(.callout).lineLimit(2)
-                                HStack(spacing: 6) {
-                                    Text(commit.shortSha)
-                                        .font(.caption2.monospaced())
-                                        .foregroundStyle(.tertiary)
-                                    Text(commit.authorName)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                    Spacer()
-                                    Text(RelativeTime.label(iso: commit.authorDate))
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
+                VStack(spacing: 0) {
+                    toolbar(git: response.git)
+                    Divider()
+                    if response.commits.isEmpty {
+                        ContentUnavailableView(
+                            "No commits",
+                            systemImage: "arrow.branch",
+                            description: Text("Not a git repo, or no commits yet.")
+                        )
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                ForEach(response.commits) { commit in
+                                    CommitRow(commit: commit)
                                 }
                             }
-                            .padding(.vertical, 2)
+                            .padding(.vertical, 4)
                         }
+                        .refreshable { await load() }
                     }
-                    .listStyle(.plain)
-                    .refreshable { await load() }
                 }
             } else if let loadError {
                 ContentUnavailableView(
@@ -434,6 +599,33 @@ private struct CommitsPanel: View {
         }
     }
 
+    /// Branch badge (amber when detached, web parity) + manual refresh.
+    private func toolbar(git: GitStatus?) -> some View {
+        HStack(spacing: 12) {
+            if let git {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.branch")
+                    Text(git.detached ? git.head : (git.branch ?? git.head))
+                }
+                .font(.caption2.monospaced())
+                .foregroundStyle(git.detached ? Color.toolAmber : Color.secondary)
+                .lineLimit(1)
+            }
+            Spacer()
+            Button {
+                Task { await load() }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .help("Refresh")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+    }
+
     /// Pair matching — the same rule as FileBrowserPanel / the web
     /// GitLogPanel.
     private func matches(_ change: GitChangedPayload) -> Bool {
@@ -449,6 +641,36 @@ private struct CommitsPanel: View {
         } catch {
             app.handleAPIError(error)
             loadError = (error as? APIError)?.message ?? error.localizedDescription
+        }
+    }
+}
+
+/// One-line commit row: shortSha · subject · terse age, all mono —
+/// the web CommitRow's shape at a fixed 24pt height.
+private struct CommitRow: View {
+    let commit: GitCommit
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(commit.shortSha)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.tertiary)
+            Text(commit.subject)
+                .font(.caption.monospaced())
+                .lineLimit(1)
+            Spacer(minLength: 6)
+            Text(RelativeTime.short(iso: commit.authorDate))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 24)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Copy SHA", systemImage: "doc.on.doc") {
+                UIPasteboard.general.string = commit.sha
+            }
+            Text("\(commit.authorName) · \(RelativeTime.label(iso: commit.authorDate))")
         }
     }
 }

@@ -219,7 +219,7 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   match `push.service.ts`. Without `APNS_*` configured the card still
   works while the app is open (plus a foreground reconcile fallback);
   locked-screen updates need the push credentials.
-- **Read-sync (this):** reading a session on *any* client withdraws its
+- **Read-sync (done):** reading a session on *any* client withdraws its
   completion banner from the phone — the banner mirrors the session's
   `unread` flag. Server: a silent background clear push at every
   `unread → false` transition (session opened, fresh turn superseding
@@ -231,3 +231,14 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   read on-device, and a `refreshAll` sweep that catches whatever the
   best-effort background push misses (Apple throttles them and never
   delivers to force-quit apps).
+- **Inspector Files/Commits polish (this):** both panels rebuilt to the
+  web ContextPane's density — no `List` (its default row heights and
+  separators read loose), fixed 24pt mono rows in a `LazyVStack`.
+  Files is now a lazy-expanding tree (web FileTree port: depth-3
+  prefetch per cold expansion, cache kept across collapse, gitignored
+  eye toggle, branch badge, per-level inline error/"(empty)" rows)
+  instead of the old drill-down-per-directory browser; Commits is
+  one-line `sha · subject · age` rows under a branch-badge + refresh
+  header (amber when detached). Size/mtime and author/date/copy-SHA
+  moved to long-press menus — the touch equivalent of the web's
+  tooltips.
