@@ -233,6 +233,9 @@ function buildTimeline(chunks: ResultChunkDTO[], live = false): TimelineItem[] {
 
   for (const c of chunks) {
     if (c.kind === 'delta') {
+      // Nested sub-agent text (preamble narration + streamed response)
+      // renders inside its SubAgentWindow row, like nested tools.
+      if (isNestedSubAgentChunk(c)) continue;
       // Settled: trailing (post-tool) deltas are the final answer, owned
       // by the StreamViewer body. Live: fold them in here as a thought.
       if (!live && c.seq > boundarySeq) continue;

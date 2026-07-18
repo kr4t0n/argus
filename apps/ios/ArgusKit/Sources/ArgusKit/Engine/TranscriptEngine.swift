@@ -360,6 +360,11 @@ public struct TranscriptState: Equatable, Sendable {
                 model = found
             }
             if chunk.kind == .delta {
+                // Nested sub-agent text (preamble narration + streamed
+                // response) is SubAgentWindow's concern, like nested
+                // tools/thinking — the parent timeline must not absorb
+                // it as its own thought.
+                if DedicatedPanels.isNested(chunk) { continue }
                 // Settled: only pre-boundary deltas are thoughts (trailing
                 // ones are the answer). Live: fold every delta in as a
                 // thought so nothing streams in the body then relocates.

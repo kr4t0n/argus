@@ -8,10 +8,14 @@ type Props = {
   chunks: ResultChunkDTO[];
 };
 
-type NestedTool = {
-  tool: ResultChunkDTO;
-  result?: ResultChunkDTO;
-};
+/** One chronological entry of a sub-agent's nested run: a tool call
+ *  (paired with its result), a coalesced run of streamed text (the
+ *  sub-agent's preamble narration / response prose), or a thinking
+ *  block. `id` doubles as the React key. */
+type NestedItem =
+  | { kind: 'tool'; id: string; tool: ResultChunkDTO; result?: ResultChunkDTO }
+  | { kind: 'text'; id: string; text: string }
+  | { kind: 'thinking'; id: string; text: string; redacted: boolean };
 
 type SubAgentCall = {
   /** Tool-use id; used as a stable React key, to pair the result, and
@@ -24,8 +28,8 @@ type SubAgentCall = {
   result?: string;
   /** True when the paired result chunk arrived as `stderr`. */
   isError: boolean;
-  /** Tool calls the sub-agent made, in chronological order. */
-  nested: NestedTool[];
+  /** Everything the sub-agent did, in chronological order. */
+  nested: NestedItem[];
 };
 
 /**
@@ -83,6 +87,10 @@ export const SubAgentWindow = memo(function SubAgentWindow({ chunks }: Props) {
   );
 });
 
+function toolCount(call: SubAgentCall): number {
+  return call.nested.filter((n) => n.kind === 'tool').length;
+}
+
 function SubAgentRow({ call }: { call: SubAgentCall }) {
   const hasBody = !!call.prompt || !!call.result || call.nested.length > 0;
   const [open, setOpen] = useState(call.isError);
@@ -109,9 +117,9 @@ function SubAgentRow({ call }: { call: SubAgentCall }) {
         >
           {call.description || 'no description'}
         </span>
-        {call.nested.length > 0 && (
+        {toolCount(call) > 0 && (
           <span className="tabular-nums text-[10px] text-fg-muted">
-            {call.nested.length} {call.nested.length === 1 ? 'tool' : 'tools'}
+            {toolCount(call)} {toolCount(call) === 1 ? 'tool' : 'tools'}
           </span>
         )}
         {call.isError && (
@@ -143,12 +151,28 @@ function SubAgentRow({ call }: { call: SubAgentCall }) {
           {call.nested.length > 0 && (
             <div>
               <div className="mb-0.5 px-1 text-[10px] uppercase tracking-widest text-fg-muted">
-                tools
+                activity
               </div>
               <div className="rounded-md bg-surface-2/40 px-1 py-1">
-                {call.nested.map((n) => (
-                  <ToolPill key={n.tool.id} tool={n.tool} result={n.result} />
-                ))}
+                {call.nested.map((n) =>
+                  n.kind === 'tool' ? (
+                    <ToolPill key={n.id} tool={n.tool} result={n.result} />
+                  ) : n.kind === 'text' ? (
+                    <div
+                      key={n.id}
+                      className="whitespace-pre-wrap px-2 py-1 text-[11px] leading-relaxed text-fg-tertiary"
+                    >
+                      {n.text}
+                    </div>
+                  ) : (
+                    <div
+                      key={n.id}
+                      className="whitespace-pre-wrap px-2 py-1 text-[11px] italic leading-relaxed text-fg-muted"
+                    >
+                      {n.redacted ? '[redacted thinking]' : n.text}
+                    </div>
+                  ),
+                )}
               </div>
             </div>
           )}
@@ -192,20 +216,62 @@ function extractSubAgentCalls(chunks: ResultChunkDTO[]): SubAgentCall[] {
     if (typeof tid === 'string' && tid) resultByToolId.set(tid, c);
   }
 
-  // Collect nested tool chunks keyed by parent Agent tool_use_id, in
-  // chunk-order so the rendered list matches the order Claude
-  // streamed the calls.
-  const nestedByParent = new Map<string, NestedTool[]>();
-  for (const c of chunks) {
-    if (c.kind !== 'tool') continue;
-    const meta = (c.meta ?? {}) as Record<string, unknown>;
-    const parentId = meta.parentToolUseId;
-    if (typeof parentId !== 'string' || !parentId) continue;
-    const id = typeof meta.id === 'string' && meta.id ? meta.id : c.id;
-    const result = resultByToolId.get(id);
+  // Collect the sub-agent's nested activity keyed by parent Agent
+  // tool_use_id, in chunk-order so the rendered list matches the order
+  // Claude streamed it: tool calls, thinking blocks, and streamed text
+  // (adjacent nested deltas coalesce into one prose item, mirroring the
+  // parent timeline's thought coalescing; a chunk from anything else —
+  // top-level or a parallel sibling sub-agent — closes the run).
+  const nestedByParent = new Map<string, NestedItem[]>();
+  const pushItem = (parentId: string, item: NestedItem) => {
     const list = nestedByParent.get(parentId) ?? [];
-    list.push({ tool: c, result });
+    list.push(item);
     nestedByParent.set(parentId, list);
+  };
+  let textBuf: { parentId: string; firstId: string; texts: string[] } | null = null;
+  const flushText = () => {
+    if (!textBuf) return;
+    const text = textBuf.texts.join('').trim();
+    if (text) {
+      pushItem(textBuf.parentId, { kind: 'text', id: `text:${textBuf.firstId}`, text });
+    }
+    textBuf = null;
+  };
+  for (const c of chunks) {
+    const meta = (c.meta ?? {}) as Record<string, unknown>;
+    const parentId = typeof meta.parentToolUseId === 'string' ? meta.parentToolUseId : '';
+    if (!parentId || (textBuf && textBuf.parentId !== parentId)) flushText();
+    if (!parentId) continue;
+    if (c.kind === 'delta') {
+      if (!textBuf) textBuf = { parentId, firstId: c.id, texts: [] };
+      textBuf.texts.push(c.delta ?? '');
+      continue;
+    }
+    flushText();
+    if (c.kind === 'tool') {
+      const id = typeof meta.id === 'string' && meta.id ? meta.id : c.id;
+      pushItem(parentId, { kind: 'tool', id, tool: c, result: resultByToolId.get(id) });
+    } else if (c.kind === 'progress' && meta.contentType === 'thinking' && c.content) {
+      pushItem(parentId, {
+        kind: 'thinking',
+        id: `thinking:${c.id}`,
+        text: c.content,
+        redacted: meta.redacted === true,
+      });
+    }
+  }
+  flushText();
+
+  // Background completion reports: `task_notification` progress chunks
+  // carry the sub-agent's full final report in `content`, attributed to
+  // the dispatching Task call via meta.tool_use_id. Later wins.
+  const notificationByToolId = new Map<string, ResultChunkDTO>();
+  for (const c of chunks) {
+    if (c.kind !== 'progress' || !c.content) continue;
+    const meta = (c.meta ?? {}) as Record<string, unknown>;
+    if (meta.contentType !== 'task_notification') continue;
+    const tid = meta.tool_use_id;
+    if (typeof tid === 'string' && tid) notificationByToolId.set(tid, c);
   }
 
   const out: SubAgentCall[] = [];
@@ -223,13 +289,28 @@ function extractSubAgentCalls(chunks: ResultChunkDTO[]): SubAgentCall[] {
     const description = (input.description as string | undefined) ?? '';
     const prompt = (input.prompt as string | undefined) ?? '';
     const paired = resultByToolId.get(id);
+    const notification = notificationByToolId.get(id);
+    const notifStatus =
+      (notification?.meta as Record<string, unknown> | null | undefined)?.status;
+    // Background runs (run_in_background: true): the Task tool_result is
+    // only launch boilerplate — the real report arrives via
+    // task_notification. Until it lands (or for old rows where the
+    // sidecar dropped it), show no result rather than the boilerplate
+    // blob. Sync runs keep the tool_result as before.
+    const isBackground = input.run_in_background === true;
+    const result =
+      notification?.content?.trim() ||
+      (isBackground ? undefined : paired?.content?.trim() || undefined);
+    const isError = notification
+      ? typeof notifStatus === 'string' && notifStatus !== 'completed'
+      : paired?.kind === 'stderr';
     out.push({
       id,
       subagentType,
       description,
       prompt,
-      result: paired?.content?.trim() || undefined,
-      isError: paired?.kind === 'stderr',
+      result,
+      isError,
       nested: nestedByParent.get(id) ?? [],
     });
   }

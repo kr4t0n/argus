@@ -149,3 +149,71 @@ func TestMapClaudeSubAgentThinkingCarriesParent(t *testing.T) {
 		t.Fatalf("want parentToolUseId=tool-42, got %v", got)
 	}
 }
+
+// TestMapClaudeSubAgentTextCarriesParent verifies nested assistant TEXT (the
+// sub-agent's preamble narration and streamed response) is stamped like every
+// other nested chunk kind — unstamped, it leaks into the parent turn's
+// thought flow instead of the SubAgentWindow.
+func TestMapClaudeSubAgentTextCarriesParent(t *testing.T) {
+	line := `{"type":"assistant","parent_tool_use_id":"tool-42","message":{"content":[` +
+		`{"type":"text","text":"I'll search the repo first."}` +
+		`]}}`
+	chunks := mapClaudeLine(line, nil, nil, "")
+
+	if len(chunks) != 1 {
+		t.Fatalf("want 1 chunk, got %d: %+v", len(chunks), chunks)
+	}
+	if chunks[0].Delta != "I'll search the repo first." {
+		t.Fatalf("want the text as delta, got %+v", chunks[0])
+	}
+	if got := chunks[0].Meta["parentToolUseId"]; got != "tool-42" {
+		t.Fatalf("want parentToolUseId=tool-42, got %v", got)
+	}
+
+	// Top-level text stays meta-less: an empty parent id must NOT stamp
+	// (clients treat any non-empty parentToolUseId as nested).
+	topLevel := mapClaudeLine(
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}`,
+		nil, nil, "",
+	)
+	if len(topLevel) != 1 || topLevel[0].Meta != nil {
+		t.Fatalf("top-level text must carry no meta, got %+v", topLevel)
+	}
+}
+
+// TestMapClaudeTaskNotification verifies the background sub-agent completion
+// event surfaces its summary (the sub-agent's final report) attributed to the
+// dispatching Task call, and that content-less/unlinked notifications and the
+// bookkeeping subtypes stay silent.
+func TestMapClaudeTaskNotification(t *testing.T) {
+	line := `{"type":"system","subtype":"task_notification","task_id":"bg-1",` +
+		`"tool_use_id":"toolu_99","status":"completed","summary":"Found 10 files."}`
+	chunks := mapClaudeLine(line, nil, nil, "")
+	if len(chunks) != 1 {
+		t.Fatalf("want 1 chunk, got %d: %+v", len(chunks), chunks)
+	}
+	c := chunks[0]
+	if c.Kind != protocol.KindProgress || c.Content != "Found 10 files." {
+		t.Fatalf("want progress with summary content, got %+v", c)
+	}
+	if c.Meta["contentType"] != "task_notification" || c.Meta["tool_use_id"] != "toolu_99" ||
+		c.Meta["status"] != "completed" {
+		t.Fatalf("bad meta: %v", c.Meta)
+	}
+
+	// No summary → no signal → dropped.
+	if got := mapClaudeLine(
+		`{"type":"system","subtype":"task_notification","tool_use_id":"toolu_99"}`,
+		nil, nil, "",
+	); len(got) != 0 {
+		t.Fatalf("summary-less notification must be dropped, got %+v", got)
+	}
+
+	// Bookkeeping subtypes stay content-less (never a junk system row).
+	for _, sub := range []string{"task_updated", "background_tasks_changed"} {
+		got := mapClaudeLine(`{"type":"system","subtype":"`+sub+`","tasks":[]}`, nil, nil, "")
+		if len(got) != 1 || got[0].Content != "" || got[0].Kind != protocol.KindProgress {
+			t.Fatalf("%s: want one content-less progress chunk, got %+v", sub, got)
+		}
+	}
+}
