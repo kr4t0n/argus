@@ -531,3 +531,35 @@ struct TranscriptEngineTests {
         #expect(abs(fraction - 0.15) < 0.0001)
     }
 }
+
+    @Test("compaction: divider + collapsed summary in timeline, ring snaps to postTokens")
+    func compactFlow() throws {
+        var state = TranscriptState(sessionId: "sess-1")
+        state.upsert(command: TestSupport.command(status: .completed))
+        state.mergeBackfill(commands: [], chunks: [
+            TestSupport.chunk(
+                id: "b1", seq: 1, kind: .progress,
+                content: "Compacted 25.8k → 1.9k tokens",
+                meta: ["contentType": .string("compact_boundary"),
+                       "preTokens": .number(25829), "postTokens": .number(1854),
+                       "trigger": .string("manual")]
+            ),
+            TestSupport.chunk(
+                id: "s1", seq: 2, kind: .progress,
+                content: "This session is being continued. SUMMARY.",
+                meta: ["contentType": .string("compact_summary")]
+            ),
+            TestSupport.chunk(id: "f1", seq: 3, kind: .final, isFinal: true),
+        ])
+        let turn = try #require(state.turns(agentType: KnownAgentType.claudeCode).first)
+        #expect(turn.timeline.count == 2)
+        #expect(turn.timeline[0].kind == .compact)
+        #expect(turn.timeline[0].text == "Compacted 25.8k → 1.9k tokens")
+        #expect(turn.timeline[1].kind == .compactSummary)
+        #expect(turn.answer.isEmpty)
+        // The ring snaps to the post-compaction context even though the
+        // compact turn's own final carries no usage (its result reports
+        // zero and iterations is empty).
+        let snapshot = try #require(state.contextSnapshot(agentType: KnownAgentType.claudeCode))
+        #expect(snapshot.usedTokens == 1854)
+    }

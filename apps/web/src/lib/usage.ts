@@ -139,19 +139,29 @@ export function useSessionContext(
     const info: ContextWindowInfo | null = lookupContextWindow(model);
     if (!info) return null;
 
-    let latest: TokenUsage | null = null;
+    // Walk backward for the newest context signal: a usage-bearing
+    // final, OR a compact_boundary (whose postTokens IS the live
+    // context after compaction — the compact turn's own final reports
+    // zero usage, so without this the ring sits stale until the next
+    // real turn). Whichever appears later wins.
+    let used = 0;
     for (let i = chunks.length - 1; i >= 0; i--) {
       const c = chunks[i];
+      if (c.kind === 'progress') {
+        const meta = (c.meta ?? {}) as Record<string, unknown>;
+        if (meta.contentType === 'compact_boundary' && typeof meta.postTokens === 'number') {
+          used = meta.postTokens;
+          break;
+        }
+        continue;
+      }
       if (c.kind !== 'final') continue;
       const u = parseContextUsage(agentType, c.meta);
       if (u) {
-        latest = u;
+        used = u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens;
         break;
       }
     }
-    if (!latest) return null;
-
-    const used = latest.inputTokens + latest.cacheReadTokens + latest.cacheWriteTokens;
     if (used === 0) return null;
 
     const percent = Math.min(100, Math.max(0, (used / info.window) * 100));

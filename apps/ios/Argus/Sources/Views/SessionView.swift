@@ -152,7 +152,20 @@ struct SessionView: View {
         ToolbarItem(placement: .topBarTrailing) {
             HStack(spacing: 10) {
                 if let model {
-                    UsageBadge(usage: model.usage, context: model.context)
+                    UsageBadge(
+                        usage: model.usage,
+                        context: model.context,
+                        // /compact is a REAL client-side command only on
+                        // claude-code (codex/cursor print modes role-play
+                        // a fake "Compacted." reply — verified against
+                        // both binaries), and it can't overlap a turn.
+                        onCompact: session?.cliType == KnownAgentType.claudeCode
+                            && model.isRunning != true
+                            ? { app.submitPrompt(
+                                sessionId: sessionId, text: "/compact", attachmentIds: []
+                              ) }
+                            : nil
+                    )
                 }
                 Button {
                     app.inspectorPresented.toggle()
