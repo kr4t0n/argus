@@ -194,12 +194,13 @@ export class PushService {
    * when the user actually has registered devices.
    *
    * Port-sync note: the web/iOS DeltaSplit additionally EXCLUDES
-   * sub-agent-nested chunks (meta.parentToolUseId) so a background
-   * sub-agent's streamed report can't join the parent's answer. The
-   * filter is deliberately omitted here: this reconstruction path only
-   * runs for content-less finals (codex), and codex has no sub-agents —
-   * claude turns always take the finalContent shortcut above. Revisit
-   * if either invariant changes.
+   * sub-agent-nested chunks (meta.parentToolUseId) and treats earlier
+   * inner-turn finals as boundaries (multi-final async commands). Both
+   * refinements are deliberately omitted here: this reconstruction path
+   * only runs for content-less finals (codex), and codex has no
+   * sub-agents and emits one final per command — claude turns always
+   * take the finalContent shortcut above. Revisit if either invariant
+   * changes.
    */
   private async answerPreview(turn?: {
     commandId: string;

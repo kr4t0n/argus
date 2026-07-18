@@ -23,11 +23,29 @@ public struct DeltaSplit: Equatable, Sendable {
     public let intermediateDeltas: [ResultChunk]
 
     public static func split(_ chunks: [ResultChunk]) -> DeltaSplit {
+        // A command can contain several INNER CLI turns: background
+        // sub-agent flows emit a `result` final for the launch-time
+        // reply, keep streaming, then emit another final for the
+        // follow-up reply. Deltas before an earlier final are that
+        // inner turn's text — preamble, not the command's answer. A
+        // final counts as a boundary ONLY when more (non-nested) text
+        // follows it: the last final of a normal turn — and the
+        // synthetic process-exit final old sidecars emitted right
+        // after the rich one — has no deltas after it and must not
+        // erase the answer.
+        var lastDeltaSeq = -1
+        for chunk in chunks where chunk.kind == .delta && !isNested(chunk) {
+            if chunk.seq > lastDeltaSeq { lastDeltaSeq = chunk.seq }
+        }
         var boundarySeq = -1
         for chunk in chunks where !isNested(chunk) {
             switch chunk.kind {
             case .tool, .stdout, .stderr, .error:
                 if chunk.seq > boundarySeq { boundarySeq = chunk.seq }
+            case .final:
+                if chunk.seq < lastDeltaSeq, chunk.seq > boundarySeq {
+                    boundarySeq = chunk.seq
+                }
             default:
                 break
             }

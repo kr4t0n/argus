@@ -54,6 +54,38 @@ struct DeltaSplitTests {
         #expect(split.intermediateDeltas.isEmpty)
     }
 
+    @Test("multi-final command: earlier inner turns' text is preamble, not answer")
+    func innerTurnFinalsSplit() {
+        let chunks = [
+            TestSupport.chunk(seq: 1, kind: .delta, delta: "Launching the agent."),
+            TestSupport.chunk(seq: 2, kind: .tool, content: "Agent spawn"),
+            TestSupport.chunk(seq: 3, kind: .stdout, content: "launched"),
+            TestSupport.chunk(seq: 4, kind: .delta, delta: "It is running now."),
+            TestSupport.chunk(seq: 5, kind: .final, content: "It is running now."),
+            TestSupport.chunk(seq: 6, kind: .delta, delta: "It finished cleanly."),
+            TestSupport.chunk(seq: 7, kind: .final, isFinal: true),
+        ]
+        let split = DeltaSplit.split(chunks)
+        #expect(split.boundarySeq == 5)
+        #expect(split.finalDeltas.compactMap(\.delta).joined() == "It finished cleanly.")
+        #expect(split.intermediateDeltas.count == 2)
+    }
+
+    @Test("old double-final (rich + synthetic exit) keeps the answer intact")
+    func trailingSyntheticFinalHarmless() {
+        let chunks = [
+            TestSupport.chunk(seq: 1, kind: .tool, content: "grep foo"),
+            TestSupport.chunk(seq: 2, kind: .stdout, content: "match"),
+            TestSupport.chunk(seq: 3, kind: .delta, delta: "The answer."),
+            TestSupport.chunk(seq: 4, kind: .final, content: "The answer."),
+            // Sidecars ≤ 0.2.7-rc.1: unconditional process-exit final.
+            TestSupport.chunk(seq: 5, kind: .final, isFinal: true),
+        ]
+        let split = DeltaSplit.split(chunks)
+        #expect(split.boundarySeq == 2)
+        #expect(split.finalDeltas.compactMap(\.delta).joined() == "The answer.")
+    }
+
     @Test("error chunk also forms a boundary")
     func errorIsBoundary() {
         let chunks = [

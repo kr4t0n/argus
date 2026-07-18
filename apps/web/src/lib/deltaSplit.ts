@@ -34,11 +34,28 @@ export function splitDeltas(chunks: ResultChunkDTO[]): {
   /** Deltas (chronological) that occurred before the last tool — interim narration. */
   intermediateDeltas: ResultChunkDTO[];
 } {
+  // A command can contain several INNER CLI turns: background sub-agent
+  // flows emit a `result` final for the launch-time reply, keep
+  // streaming (nested events + the injected completion notification),
+  // then emit another final for the follow-up reply. Deltas before an
+  // earlier final are that inner turn's text — preamble in the final
+  // view, not the command's answer. A final counts as a boundary ONLY
+  // when more (non-nested) text follows it: the last final of a normal
+  // turn — and the synthetic process-exit final old sidecars emitted
+  // right after the rich one — has no deltas after it and must not
+  // erase the answer.
+  let lastDeltaSeq = -1;
+  for (const c of chunks) {
+    if (c.kind === 'delta' && !isNested(c) && c.seq > lastDeltaSeq) lastDeltaSeq = c.seq;
+  }
   let boundarySeq = -1;
   for (const c of chunks) {
     if (isNested(c)) continue;
     if (c.kind === 'tool' || c.kind === 'stdout' || c.kind === 'stderr' || c.kind === 'error') {
       if (c.seq > boundarySeq) boundarySeq = c.seq;
+    }
+    if (c.kind === 'final' && c.seq < lastDeltaSeq && c.seq > boundarySeq) {
+      boundarySeq = c.seq;
     }
   }
   const finalDeltas: ResultChunkDTO[] = [];
