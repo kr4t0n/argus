@@ -138,6 +138,12 @@ private struct SubAgentRow: View {
         !call.prompt.isEmpty || call.result != nil || !call.nested.isEmpty
     }
 
+    /// The header badge counts tool calls only — the interleaved
+    /// `.thought`/`.thinking` items are prose, not activity units.
+    private var toolCount: Int {
+        call.nested.filter { $0.kind == .tool }.count
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Button {
@@ -156,8 +162,8 @@ private struct SubAgentRow: View {
                         .italic(call.description.isEmpty)
                         .foregroundStyle(call.description.isEmpty ? .tertiary : .secondary)
                         .lineLimit(1)
-                    if !call.nested.isEmpty {
-                        Text("\(call.nested.count) tool\(call.nested.count == 1 ? "" : "s")")
+                    if toolCount > 0 {
+                        Text("\(toolCount) tool\(toolCount == 1 ? "" : "s")")
                             .font(.system(size: 10).monospacedDigit())
                             .foregroundStyle(.tertiary)
                     }
@@ -180,9 +186,29 @@ private struct SubAgentRow: View {
                         MonoBlock(text: call.prompt, maxHeight: 180)
                     }
                     if !call.nested.isEmpty {
-                        caption("tools")
+                        caption("activity")
                         VStack(alignment: .leading, spacing: 4) {
-                            ForEach(call.nested) { ToolPillCard(item: $0) }
+                            // Chronological: tools interleaved with the
+                            // sub-agent's streamed text and thinking.
+                            ForEach(call.nested) { item in
+                                switch item.kind {
+                                case .thought:
+                                    Text(item.text)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 2)
+                                case .thinking(let redacted):
+                                    Text(redacted ? "[redacted thinking]" : item.text)
+                                        .font(.caption2)
+                                        .italic()
+                                        .foregroundStyle(.tertiary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 2)
+                                default:
+                                    ToolPillCard(item: item)
+                                }
+                            }
                         }
                         .padding(6)
                         .background(Color.surface2.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))

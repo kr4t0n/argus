@@ -279,12 +279,28 @@ struct TranscriptEngineTests {
                 id: "nr1", seq: 3, kind: .stdout, content: "file body",
                 meta: ["toolResultFor": .string("nested-1"), "parentToolUseId": .string("agent-1")]
             ),
+            // The sub-agent's streamed response prose: two adjacent
+            // nested deltas coalesce into ONE .thought item scoped to
+            // the card — never the parent timeline's thought flow.
+            TestSupport.chunk(
+                id: "nd1", seq: 4, kind: .delta, delta: "Found the bug ",
+                meta: ["parentToolUseId": .string("agent-1")]
+            ),
+            TestSupport.chunk(
+                id: "nd2", seq: 5, kind: .delta, delta: "in x.swift.",
+                meta: ["parentToolUseId": .string("agent-1")]
+            ),
+            // Nested thinking is scoped to the card too.
+            TestSupport.chunk(
+                id: "nt1", seq: 6, kind: .progress, content: "nested reasoning",
+                meta: ["contentType": .string("thinking"), "parentToolUseId": .string("agent-1")]
+            ),
             // The Agent tool's own result.
             TestSupport.chunk(
-                id: "ar1", seq: 4, kind: .stdout, content: "found 2 bugs",
+                id: "ar1", seq: 7, kind: .stdout, content: "found 2 bugs",
                 meta: ["toolResultFor": .string("agent-1")]
             ),
-            TestSupport.chunk(id: "f1", seq: 5, kind: .final, isFinal: true),
+            TestSupport.chunk(id: "f1", seq: 8, kind: .final, isFinal: true),
         ])
         let turn = try #require(state.turns(agentType: KnownAgentType.claudeCode).first)
         #expect(turn.subAgents.count == 1)
@@ -294,9 +310,15 @@ struct TranscriptEngineTests {
         #expect(sub.prompt == "find bugs")
         #expect(sub.result == "found 2 bugs")
         #expect(!sub.isError)
-        #expect(sub.nested.count == 1)
+        // Chronological: the tool call, then the coalesced text run,
+        // then the thinking block.
+        #expect(sub.nested.count == 3)
         #expect(sub.nested[0].toolName == "Read")
         #expect(sub.nested[0].resultText == "file body")
+        #expect(sub.nested[1].kind == .thought)
+        #expect(sub.nested[1].text == "Found the bug in x.swift.")
+        #expect(sub.nested[2].kind == .thinking(redacted: false))
+        #expect(sub.nested[2].text == "nested reasoning")
         // Nothing sub-agent-related leaks into the main timeline.
         #expect(turn.timeline.isEmpty)
     }

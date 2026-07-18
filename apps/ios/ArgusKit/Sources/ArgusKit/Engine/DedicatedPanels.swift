@@ -34,8 +34,10 @@ public struct SubAgentCall: Identifiable, Equatable, Sendable {
     /// Trimmed result body, nil when empty.
     public let result: String?
     public let isError: Bool
-    /// The sub-agent's own tool calls (each a `.tool` TimelineItem so the
-    /// UI reuses ToolPillCard).
+    /// The sub-agent's chronological activity: `.tool` items (so the UI
+    /// reuses ToolPillCard), `.thought` items (coalesced runs of the
+    /// sub-agent's streamed text — its preamble narration and response
+    /// prose), and `.thinking` items.
     public let nested: [TimelineItem]
 }
 
@@ -94,17 +96,60 @@ enum DedicatedPanels {
         return nil
     }
 
-    /// Group nested tool calls under each top-level `agent` tool.
+    /// Group each top-level `agent` tool's nested activity under it, in
+    /// stream order: tool calls, thinking blocks, and the sub-agent's
+    /// own streamed text (adjacent nested deltas coalesce into one
+    /// `.thought` item, mirroring the parent timeline; any chunk from
+    /// anything else — top-level or a parallel sibling — closes the run).
     static func extractSubAgents(_ chunks: [ResultChunk]) -> [SubAgentCall] {
         var resultByToolId: [String: ResultChunk] = [:]
         for chunk in chunks where chunk.kind == .stdout || chunk.kind == .stderr {
             if let rid = chunk.meta?["toolResultFor"]?.string { resultByToolId[rid] = chunk }
         }
-        var nestedByParent: [String: [ResultChunk]] = [:]
-        for chunk in chunks where chunk.kind == .tool {
-            let pid = chunk.meta?["parentToolUseId"]?.string ?? ""
-            if !pid.isEmpty { nestedByParent[pid, default: []].append(chunk) }
+        var nestedByParent: [String: [TimelineItem]] = [:]
+        var textParent = ""
+        var textBuffer = ""
+        var textStart: (id: String, seq: Int)?
+        func flushText() {
+            defer { textBuffer = ""; textStart = nil; textParent = "" }
+            guard let start = textStart,
+                  !textBuffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return }
+            nestedByParent[textParent, default: []].append(TimelineItem(
+                id: start.id + ":subtext", kind: .thought, seq: start.seq, text: textBuffer
+            ))
         }
+        for chunk in chunks {
+            let pid = chunk.meta?["parentToolUseId"]?.string ?? ""
+            if pid.isEmpty || (textStart != nil && textParent != pid) { flushText() }
+            guard !pid.isEmpty else { continue }
+            switch chunk.kind {
+            case .delta:
+                if textStart == nil {
+                    textStart = (chunk.id, chunk.seq)
+                    textParent = pid
+                }
+                textBuffer += chunk.delta ?? ""
+            case .tool:
+                flushText()
+                nestedByParent[pid, default: []]
+                    .append(toolItem(for: chunk, resultByToolId: resultByToolId))
+            case .progress:
+                guard chunk.meta?["contentType"]?.string == "thinking" else { continue }
+                let text = (chunk.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { continue }
+                flushText()
+                nestedByParent[pid, default: []].append(TimelineItem(
+                    id: chunk.id + ":subthink",
+                    kind: .thinking(redacted: chunk.meta?["redacted"]?.bool == true),
+                    seq: chunk.seq,
+                    text: chunk.content ?? ""
+                ))
+            default:
+                flushText()
+            }
+        }
+        flushText()
 
         var calls: [SubAgentCall] = []
         for chunk in chunks where chunk.kind == .tool && toolName(chunk) == "agent" {
@@ -114,9 +159,7 @@ enum DedicatedPanels {
             let subType = input["subagent_type"]?.string ?? input["subagentType"]?.string ?? ""
             let paired = resultByToolId[id]
             let resultText = paired?.content?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let nested = (nestedByParent[id] ?? []).map {
-                toolItem(for: $0, resultByToolId: resultByToolId)
-            }
+            let nested = nestedByParent[id] ?? []
             calls.append(SubAgentCall(
                 id: id,
                 subagentType: subType,

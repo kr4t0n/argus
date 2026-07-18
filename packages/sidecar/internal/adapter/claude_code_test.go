@@ -149,3 +149,34 @@ func TestMapClaudeSubAgentThinkingCarriesParent(t *testing.T) {
 		t.Fatalf("want parentToolUseId=tool-42, got %v", got)
 	}
 }
+
+// TestMapClaudeSubAgentTextCarriesParent verifies nested assistant TEXT (the
+// sub-agent's preamble narration and streamed response) is stamped like every
+// other nested chunk kind — unstamped, it leaks into the parent turn's
+// thought flow instead of the SubAgentWindow.
+func TestMapClaudeSubAgentTextCarriesParent(t *testing.T) {
+	line := `{"type":"assistant","parent_tool_use_id":"tool-42","message":{"content":[` +
+		`{"type":"text","text":"I'll search the repo first."}` +
+		`]}}`
+	chunks := mapClaudeLine(line, nil, nil, "")
+
+	if len(chunks) != 1 {
+		t.Fatalf("want 1 chunk, got %d: %+v", len(chunks), chunks)
+	}
+	if chunks[0].Delta != "I'll search the repo first." {
+		t.Fatalf("want the text as delta, got %+v", chunks[0])
+	}
+	if got := chunks[0].Meta["parentToolUseId"]; got != "tool-42" {
+		t.Fatalf("want parentToolUseId=tool-42, got %v", got)
+	}
+
+	// Top-level text stays meta-less: an empty parent id must NOT stamp
+	// (clients treat any non-empty parentToolUseId as nested).
+	topLevel := mapClaudeLine(
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}`,
+		nil, nil, "",
+	)
+	if len(topLevel) != 1 || topLevel[0].Meta != nil {
+		t.Fatalf("top-level text must carry no meta, got %+v", topLevel)
+	}
+}

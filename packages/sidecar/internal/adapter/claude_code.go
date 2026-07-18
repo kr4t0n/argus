@@ -383,7 +383,16 @@ func mapClaudeLine(line string, state *fileEditState, tasks *taskListState, work
 			switch item["type"] {
 			case "text":
 				if s, _ := item["text"].(string); s != "" {
-					out = append(out, Chunk{Kind: protocol.KindDelta, Delta: s})
+					// Nested sub-agent text (the sub-agent's preamble
+					// narration and streamed response) must carry the
+					// parent id like every other nested chunk kind, or
+					// the clients can't scope it to the SubAgentWindow
+					// and it leaks into the parent turn's thought flow.
+					var meta map[string]any
+					if parentToolUseID != "" {
+						meta = map[string]any{"parentToolUseId": parentToolUseID}
+					}
+					out = append(out, Chunk{Kind: protocol.KindDelta, Delta: s, Meta: meta})
 				}
 			case "thinking":
 				// Extended-thinking reasoning block. The text lives in the
