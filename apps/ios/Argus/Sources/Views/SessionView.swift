@@ -425,10 +425,14 @@ struct SessionView: View {
             PromptQueueList(sessionId: sessionId)
 
             inputBox
-                .frame(maxWidth: 720)
-                .frame(maxWidth: .infinity)
         }
-        .padding(.horizontal, 12)
+        // EXACTLY the transcript rows' geometry (pad INSIDE the 720
+        // cap, same 16pt) so the pill's edges line up with the text
+        // column at every window width — capping first and padding
+        // outside left the pill wider than the chat area.
+        .padding(.horizontal)
+        .frame(maxWidth: 720)
+        .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
     }
 
