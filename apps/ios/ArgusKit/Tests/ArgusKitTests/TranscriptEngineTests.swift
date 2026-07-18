@@ -549,7 +549,19 @@ struct TranscriptEngineTests {
                 content: "This session is being continued. SUMMARY.",
                 meta: ["contentType": .string("compact_summary")]
             ),
-            TestSupport.chunk(id: "f1", seq: 3, kind: .final, isFinal: true),
+            // The REAL compact final: zero token usage but a non-zero
+            // total cost (compaction is a paid API call) — hasUsage
+            // counts cost, so an unguarded walk would stop here with a
+            // zero context and hide (web) or stale-out (iOS) the ring.
+            TestSupport.chunk(
+                id: "f1", seq: 3, kind: .final, isFinal: true,
+                meta: ["total_cost_usd": .number(0.05),
+                       "usage": .object([
+                           "input_tokens": .number(0),
+                           "output_tokens": .number(0),
+                           "iterations": .array([]),
+                       ])]
+            ),
         ])
         let turn = try #require(state.turns(agentType: KnownAgentType.claudeCode).first)
         #expect(turn.timeline.count == 2)

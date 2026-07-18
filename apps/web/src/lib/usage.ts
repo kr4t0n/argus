@@ -158,8 +158,14 @@ export function useSessionContext(
       if (c.kind !== 'final') continue;
       const u = parseContextUsage(agentType, c.meta);
       if (u) {
-        used = u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens;
-        break;
+        const sum = u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens;
+        // A cost-only parse — the compact turn's final: zero tokens but
+        // a real total_cost_usd, which hasUsage counts — carries no
+        // context signal. Keep walking (to the compact_boundary).
+        if (sum > 0) {
+          used = sum;
+          break;
+        }
       }
     }
     if (used === 0) return null;

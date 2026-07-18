@@ -274,6 +274,14 @@ public struct TranscriptState: Equatable, Sendable {
             let final = chunks.last(where: { $0.kind == .final })
             let finalUsage = final.flatMap {
                 UsageParser.parseContextUsage(adapterType: agentType, meta: $0.meta)
+            }.flatMap { usage -> TokenUsage? in
+                // A cost-only parse — the compact turn's final: zero
+                // tokens but a real total cost, which hasUsage counts —
+                // carries no context signal; without this the compact
+                // command is skipped and the ring shows the STALE
+                // pre-compact size (web usage.ts keeps the same guard).
+                (usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens) > 0
+                    ? usage : nil
             }
             var used: Int?
             if let boundary, let post = boundary.meta?["postTokens"]?.int,
