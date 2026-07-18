@@ -554,13 +554,14 @@ struct TranscriptEngineTests {
             // counts cost, so an unguarded walk would stop here with a
             // zero context and hide (web) or stale-out (iOS) the ring.
             TestSupport.chunk(
-                id: "f1", seq: 3, kind: .final, isFinal: true,
+                id: "f1", seq: 3, kind: .final,
                 meta: ["total_cost_usd": .number(0.05),
                        "usage": .object([
                            "input_tokens": .number(0),
                            "output_tokens": .number(0),
                            "iterations": .array([]),
-                       ])]
+                       ])],
+                isFinal: true
             ),
         ])
         let turn = try #require(state.turns(agentType: KnownAgentType.claudeCode).first)
