@@ -46,6 +46,18 @@ public struct DeltaSplit: Equatable, Sendable {
                 if chunk.seq < lastDeltaSeq, chunk.seq > boundarySeq {
                     boundarySeq = chunk.seq
                 }
+            case .progress:
+                // A background sub-agent's completion notification
+                // resumes the conversation (the CLI injects it as a
+                // user message): the model's next text answers IT. On
+                // the real wire this is the ONLY separator between the
+                // launch-time reply and the follow-up — the inner
+                // `result` finals all flush at process exit, after
+                // every delta.
+                if chunk.meta?["contentType"]?.string == "task_notification",
+                   chunk.seq > boundarySeq {
+                    boundarySeq = chunk.seq
+                }
             default:
                 break
             }

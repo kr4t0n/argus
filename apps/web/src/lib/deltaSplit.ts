@@ -57,6 +57,20 @@ export function splitDeltas(chunks: ResultChunkDTO[]): {
     if (c.kind === 'final' && c.seq < lastDeltaSeq && c.seq > boundarySeq) {
       boundarySeq = c.seq;
     }
+    // A background sub-agent's completion notification resumes the
+    // conversation (the CLI injects it as a user message): the model's
+    // next text answers IT, and everything before it addressed the
+    // pre-completion state. On the real wire this is the ONLY separator
+    // between the launch-time reply and the follow-up — the inner
+    // `result` finals all flush at process exit, after every delta.
+    if (
+      c.kind === 'progress' &&
+      (c.meta as Record<string, unknown> | null | undefined)?.contentType ===
+        'task_notification' &&
+      c.seq > boundarySeq
+    ) {
+      boundarySeq = c.seq;
+    }
   }
   const finalDeltas: ResultChunkDTO[] = [];
   const intermediateDeltas: ResultChunkDTO[] = [];

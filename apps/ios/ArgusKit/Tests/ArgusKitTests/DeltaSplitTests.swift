@@ -71,6 +71,33 @@ struct DeltaSplitTests {
         #expect(split.intermediateDeltas.count == 2)
     }
 
+    @Test("real async wire: the notification splits the replies; finals flush at exit")
+    func notificationBoundaryRealShape() {
+        let nested: [String: JSONValue] = ["parentToolUseId": .string("agent-1")]
+        let chunks = [
+            TestSupport.chunk(seq: 1, kind: .delta, delta: "Launching."),
+            TestSupport.chunk(seq: 2, kind: .tool, content: "Agent spawn"),
+            TestSupport.chunk(seq: 3, kind: .stdout, content: "launched"),
+            TestSupport.chunk(seq: 4, kind: .delta, delta: "It is running now."),
+            TestSupport.chunk(seq: 5, kind: .stdout, content: "nested result", meta: nested),
+            TestSupport.chunk(seq: 6, kind: .delta, delta: "SUBAGENT REPORT", meta: nested),
+            TestSupport.chunk(
+                seq: 7, kind: .progress, content: "the report",
+                meta: ["contentType": .string("task_notification"),
+                       "tool_use_id": .string("agent-1")]
+            ),
+            TestSupport.chunk(seq: 8, kind: .delta, delta: "It finished cleanly."),
+            // Both inner `result` finals flush at process exit — after
+            // every delta — so they can never be the separator.
+            TestSupport.chunk(seq: 9, kind: .final, content: "It is running now."),
+            TestSupport.chunk(seq: 10, kind: .final, isFinal: true),
+        ]
+        let split = DeltaSplit.split(chunks)
+        #expect(split.boundarySeq == 7)
+        #expect(split.finalDeltas.compactMap(\.delta).joined() == "It finished cleanly.")
+        #expect(split.intermediateDeltas.count == 2)
+    }
+
     @Test("old double-final (rich + synthetic exit) keeps the answer intact")
     func trailingSyntheticFinalHarmless() {
         let chunks = [
