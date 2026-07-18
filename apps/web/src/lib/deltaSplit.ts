@@ -36,6 +36,7 @@ export function splitDeltas(chunks: ResultChunkDTO[]): {
 } {
   let boundarySeq = -1;
   for (const c of chunks) {
+    if (isNested(c)) continue;
     if (c.kind === 'tool' || c.kind === 'stdout' || c.kind === 'stderr' || c.kind === 'error') {
       if (c.seq > boundarySeq) boundarySeq = c.seq;
     }
@@ -43,9 +44,23 @@ export function splitDeltas(chunks: ResultChunkDTO[]): {
   const finalDeltas: ResultChunkDTO[] = [];
   const intermediateDeltas: ResultChunkDTO[] = [];
   for (const c of chunks) {
-    if (c.kind !== 'delta') continue;
+    if (c.kind !== 'delta' || isNested(c)) continue;
     if (c.seq > boundarySeq) finalDeltas.push(c);
     else intermediateDeltas.push(c);
   }
   return { boundarySeq, finalDeltas, intermediateDeltas };
+}
+
+/**
+ * Chunks emitted inside a sub-agent (Task) run — stamped with
+ * meta.parentToolUseId — are INVISIBLE to the split: the sub-agent's
+ * tools must not move the boundary, and its streamed text must never
+ * join the parent's answer (it renders inside the SubAgentWindow card).
+ * Without this, a background sub-agent that streams its report after
+ * the parent's last top-level tool put that report INTO the rendered
+ * answer, glued to the parent's real reply.
+ */
+function isNested(c: ResultChunkDTO): boolean {
+  const pid = (c.meta as Record<string, unknown> | null | undefined)?.parentToolUseId;
+  return typeof pid === 'string' && pid.length > 0;
 }

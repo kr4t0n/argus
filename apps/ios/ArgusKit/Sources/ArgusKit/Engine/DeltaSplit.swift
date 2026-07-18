@@ -24,7 +24,7 @@ public struct DeltaSplit: Equatable, Sendable {
 
     public static func split(_ chunks: [ResultChunk]) -> DeltaSplit {
         var boundarySeq = -1
-        for chunk in chunks {
+        for chunk in chunks where !isNested(chunk) {
             switch chunk.kind {
             case .tool, .stdout, .stderr, .error:
                 if chunk.seq > boundarySeq { boundarySeq = chunk.seq }
@@ -35,7 +35,7 @@ public struct DeltaSplit: Equatable, Sendable {
 
         var finalDeltas: [ResultChunk] = []
         var intermediateDeltas: [ResultChunk] = []
-        for chunk in chunks where chunk.kind == .delta {
+        for chunk in chunks where chunk.kind == .delta && !isNested(chunk) {
             if chunk.seq > boundarySeq {
                 finalDeltas.append(chunk)
             } else {
@@ -47,5 +47,16 @@ public struct DeltaSplit: Equatable, Sendable {
             finalDeltas: finalDeltas,
             intermediateDeltas: intermediateDeltas
         )
+    }
+
+    /// Chunks emitted inside a sub-agent (Task) run — stamped with
+    /// meta.parentToolUseId — are INVISIBLE to the split: the sub-agent's
+    /// tools must not move the boundary, and its streamed text must
+    /// never join the parent's answer (it renders inside the sub-agent
+    /// card). Without this, a background sub-agent streaming its report
+    /// after the parent's last top-level tool put that report INTO the
+    /// rendered answer, glued to the parent's real reply.
+    private static func isNested(_ chunk: ResultChunk) -> Bool {
+        !(chunk.meta?["parentToolUseId"]?.string ?? "").isEmpty
     }
 }

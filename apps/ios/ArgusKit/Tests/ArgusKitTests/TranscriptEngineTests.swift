@@ -358,18 +358,36 @@ struct TranscriptEngineTests {
         done.upsert(command: TestSupport.command(status: .completed))
         done.mergeBackfill(commands: [], chunks: [
             agentChunk, boilerplate,
+            // The sub-agent streams AFTER the parent's last top-level
+            // tool — its report deltas must render in the card, never
+            // glued into the parent's answer (the DeltaSplit nested
+            // filter).
             TestSupport.chunk(
-                id: "n1", seq: 3, kind: .progress, content: "Found 10 files.",
+                id: "ns1", seq: 3, kind: .stdout, content: "nested tool result",
+                meta: ["toolResultFor": .string("nested-1"),
+                       "parentToolUseId": .string("agent-1")]
+            ),
+            TestSupport.chunk(
+                id: "nd1", seq: 4, kind: .delta, delta: "SUBAGENT REPORT",
+                meta: ["parentToolUseId": .string("agent-1")]
+            ),
+            TestSupport.chunk(
+                id: "n1", seq: 5, kind: .progress, content: "Found 10 files.",
                 meta: ["contentType": .string("task_notification"),
                        "tool_use_id": .string("agent-1"),
                        "status": .string("completed")]
             ),
-            TestSupport.chunk(id: "f1", seq: 4, kind: .final, isFinal: true),
+            TestSupport.chunk(id: "d1", seq: 6, kind: .delta, delta: "The real answer."),
+            TestSupport.chunk(id: "f1", seq: 7, kind: .final, isFinal: true),
         ])
         let turn = try #require(done.turns(agentType: KnownAgentType.claudeCode).first)
         let sub = try #require(turn.subAgents.first)
         #expect(sub.result == "Found 10 files.")
         #expect(!sub.isError)
+        #expect(sub.nested.contains { $0.kind == .thought && $0.text == "SUBAGENT REPORT" })
+        // The parent's answer is ONLY the parent's text — the
+        // sub-agent's streamed report stays in the card.
+        #expect(turn.answer == "The real answer.")
         #expect(turn.timeline.isEmpty)
     }
 

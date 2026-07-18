@@ -34,6 +34,26 @@ struct DeltaSplitTests {
         #expect(split.intermediateDeltas.count == 2)
     }
 
+    @Test("sub-agent-nested chunks are invisible: no boundary moves, no answer join")
+    func nestedChunksInvisible() {
+        let nested: [String: JSONValue] = ["parentToolUseId": .string("agent-1")]
+        let chunks = [
+            TestSupport.chunk(seq: 1, kind: .tool, content: "Agent spawn"),
+            TestSupport.chunk(seq: 2, kind: .stdout, content: "launched"),
+            // Background sub-agent streams AFTER the parent's last
+            // top-level tool: its tool result must not become the
+            // boundary, and its report deltas must not join the answer.
+            TestSupport.chunk(seq: 3, kind: .stdout, content: "nested result", meta: nested),
+            TestSupport.chunk(seq: 4, kind: .delta, delta: "SUBAGENT REPORT", meta: nested),
+            TestSupport.chunk(seq: 5, kind: .delta, delta: "The real answer."),
+            TestSupport.chunk(seq: 6, kind: .final),
+        ]
+        let split = DeltaSplit.split(chunks)
+        #expect(split.boundarySeq == 2)
+        #expect(split.finalDeltas.compactMap(\.delta).joined() == "The real answer.")
+        #expect(split.intermediateDeltas.isEmpty)
+    }
+
     @Test("error chunk also forms a boundary")
     func errorIsBoundary() {
         let chunks = [
