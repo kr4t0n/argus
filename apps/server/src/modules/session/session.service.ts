@@ -15,6 +15,7 @@ import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
 import { AttachmentService } from '../attachment/attachment.service';
 import { PushService } from '../push/push.service';
+import { MachineService } from '../machine/machine.service';
 
 /** Internal shape of `create` — a project-first session (machineId +
  *  cliType + optional workingDir). `agentId` is gone since Phase 4. */
@@ -35,6 +36,7 @@ export class SessionService {
     private readonly gateway: StreamGateway,
     private readonly attachments: AttachmentService,
     private readonly push: PushService,
+    private readonly machines: MachineService,
   ) {}
 
   /** Decorate raw command rows with their linked attachments (one batch
@@ -166,6 +168,17 @@ export class SessionService {
       create: { machineId, workingDir: wd, supportsTerminal: supportsTerminal ?? false },
       update: {},
     });
+    // The sidecar's fs/git allowlist is a registration-time snapshot, so
+    // a project vivified here stays unknown to it — the Files/Commits
+    // panels fail with "workingDir is not a known project" — until the
+    // sidecar's next restart. Re-push the snapshot: idempotent, one
+    // control entry. Never fail session creation over a control-stream
+    // hiccup (the register-time re-sync heals).
+    try {
+      await this.machines.syncProjects(machineId);
+    } catch {
+      /* register-time sync heals */
+    }
     return row.id;
   }
 

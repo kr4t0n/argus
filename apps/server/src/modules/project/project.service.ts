@@ -4,6 +4,7 @@ import type { Project } from '@prisma/client';
 import type { ProjectDTO } from '@argus/shared-types';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { StreamGateway } from '../gateway/stream.gateway';
+import { MachineService } from '../machine/machine.service';
 
 /**
  * First-class "project" rows — the (machineId, workingDir) pair the
@@ -25,6 +26,7 @@ export class ProjectService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly gateway: StreamGateway,
+    private readonly machines: MachineService,
   ) {}
 
   /** Every project row across the fleet, minus rows whose machine has
@@ -116,6 +118,15 @@ export class ProjectService {
     });
     const dto = ProjectService.toDto(row);
     this.gateway.emitProjectUpsert(dto);
+    // Same rule as session-create vivify: the sidecar's fs/git
+    // allowlist only learns new projects via a sync-projects push, so
+    // re-push on explicit creation too (idempotent snapshot; failure
+    // heals at the next registration).
+    try {
+      await this.machines.syncProjects(input.machineId);
+    } catch {
+      /* register-time sync heals */
+    }
     return dto;
   }
 
