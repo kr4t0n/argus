@@ -313,8 +313,14 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
    *
    * Project rows are the authoritative source (every session pins one
    * since Phase 1, archived or not — archived sessions stay resumable).
+   *
+   * Public because the snapshot is ALSO re-pushed whenever the project
+   * set grows (session-create vivify, POST /projects): a project born
+   * after the machine's last registration would otherwise stay unknown
+   * to the sidecar's allowlist until its next restart, failing the
+   * Files/Commits panels with "workingDir is not a known project".
    */
-  private async syncProjects(machineId: string): Promise<void> {
+  async syncProjects(machineId: string): Promise<void> {
     const projects = await this.prisma.project.findMany({
       where: { machineId },
       select: { workingDir: true },
