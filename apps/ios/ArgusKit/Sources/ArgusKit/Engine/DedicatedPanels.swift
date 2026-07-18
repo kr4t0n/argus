@@ -151,6 +151,18 @@ enum DedicatedPanels {
         }
         flushText()
 
+        // Background completion reports: `task_notification` progress
+        // chunks carry the sub-agent's full final report in `content`,
+        // attributed via meta.tool_use_id. Later wins.
+        var notificationByToolId: [String: ResultChunk] = [:]
+        for chunk in chunks where chunk.kind == .progress {
+            guard chunk.meta?["contentType"]?.string == "task_notification",
+                  let tid = chunk.meta?["tool_use_id"]?.string, !tid.isEmpty,
+                  chunk.content?.isEmpty == false
+            else { continue }
+            notificationByToolId[tid] = chunk
+        }
+
         var calls: [SubAgentCall] = []
         for chunk in chunks where chunk.kind == .tool && toolName(chunk) == "agent" {
             let toolId = chunk.meta?["id"]?.string
@@ -158,7 +170,26 @@ enum DedicatedPanels {
             let input = chunk.meta?["input"]?.object ?? [:]
             let subType = input["subagent_type"]?.string ?? input["subagentType"]?.string ?? ""
             let paired = resultByToolId[id]
-            let resultText = paired?.content?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let notification = notificationByToolId[id]
+            // Background runs (run_in_background: true): the Task
+            // tool_result is only launch boilerplate — the real report
+            // arrives via task_notification. Until it lands (or for old
+            // rows where the sidecar dropped it), show no result rather
+            // than the boilerplate blob. Sync runs keep the tool_result.
+            let isBackground = input["run_in_background"]?.bool == true
+            let notifText = notification?.content?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let pairedText = paired?.content?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resultText = (notifText?.isEmpty == false)
+                ? notifText
+                : (isBackground ? nil : pairedText)
+            let isError: Bool
+            if let notification {
+                let status = notification.meta?["status"]?.string
+                isError = status != nil && status != "completed"
+            } else {
+                isError = paired?.kind == .stderr
+            }
             let nested = nestedByParent[id] ?? []
             calls.append(SubAgentCall(
                 id: id,
@@ -166,7 +197,7 @@ enum DedicatedPanels {
                 description: input["description"]?.string ?? "",
                 prompt: input["prompt"]?.string ?? "",
                 result: (resultText?.isEmpty == false) ? resultText : nil,
-                isError: paired?.kind == .stderr,
+                isError: isError,
                 nested: nested
             ))
         }

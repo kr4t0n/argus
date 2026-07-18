@@ -323,6 +323,56 @@ struct TranscriptEngineTests {
         #expect(turn.timeline.isEmpty)
     }
 
+    @Test("background sub-agent: notification summary is the result, boilerplate never shows")
+    func backgroundSubAgentResult() throws {
+        let agentChunk = TestSupport.chunk(
+            id: "a1", seq: 1, kind: .tool, content: "Agent",
+            meta: ["tool": .string("Agent"), "id": .string("agent-1"),
+                   "input": .object([
+                       "subagent_type": .string("explorer"),
+                       "prompt": .string("count files"),
+                       "run_in_background": .bool(true),
+                   ])]
+        )
+        let boilerplate = TestSupport.chunk(
+            id: "r1", seq: 2, kind: .stdout,
+            content: "Async agent launched successfully. agentId: abc123 …",
+            meta: ["toolResultFor": .string("agent-1")]
+        )
+
+        // Launched, no notification yet (or an old row where the sidecar
+        // dropped it): the boilerplate must NOT surface as the result.
+        var running = TranscriptState(sessionId: "sess-1")
+        running.upsert(command: TestSupport.command(status: .running))
+        running.mergeBackfill(commands: [], chunks: [agentChunk, boilerplate])
+        let liveSub = try #require(
+            running.turns(agentType: KnownAgentType.claudeCode).first?.subAgents.first
+        )
+        #expect(liveSub.result == nil)
+        #expect(!liveSub.isError)
+
+        // Notification landed: its summary is the card's result, and the
+        // notification chunk stays out of the main timeline (the
+        // meta.tool_use_id drop rule).
+        var done = TranscriptState(sessionId: "sess-1")
+        done.upsert(command: TestSupport.command(status: .completed))
+        done.mergeBackfill(commands: [], chunks: [
+            agentChunk, boilerplate,
+            TestSupport.chunk(
+                id: "n1", seq: 3, kind: .progress, content: "Found 10 files.",
+                meta: ["contentType": .string("task_notification"),
+                       "tool_use_id": .string("agent-1"),
+                       "status": .string("completed")]
+            ),
+            TestSupport.chunk(id: "f1", seq: 4, kind: .final, isFinal: true),
+        ])
+        let turn = try #require(done.turns(agentType: KnownAgentType.claudeCode).first)
+        let sub = try #require(turn.subAgents.first)
+        #expect(sub.result == "Found 10 files.")
+        #expect(!sub.isError)
+        #expect(turn.timeline.isEmpty)
+    }
+
     @Test("stderr result marks the tool row as an error")
     func toolErrorPairing() throws {
         var state = TranscriptState(sessionId: "sess-1")

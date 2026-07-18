@@ -334,14 +334,37 @@ func mapClaudeLine(line string, state *fileEditState, tasks *taskListState, work
 				return []Chunk{{Kind: protocol.KindProgress, Content: desc, Meta: ev}}
 			}
 		case "task_notification":
-			// Drop entirely. Claude posts this on completion paired with the
-			// matching `task_started`, but `summary` is the same string as
-			// `description` on the started event — surfacing both produces
-			// a duplicate pill in the activity stream. We keep the started
-			// event (which appears at task kickoff, when the user actually
-			// wants the feedback) and rely on the next chunk to imply
-			// completion.
+			// For BACKGROUND sub-agents (Task with run_in_background) this
+			// is the completion event, and `summary` carries the
+			// sub-agent's full final report — the Task tool_result itself
+			// is only launch boilerplate in that flow (verified against
+			// claude 2.1.210 stream captures). `tool_use_id` points at the
+			// dispatching Task call, so clients attach the summary as the
+			// sub-agent card's real result. meta.tool_use_id also makes
+			// older clients drop it from the main timeline (the same rule
+			// that dedups task_started narration) — graceful degradation,
+			// no double-render. Notifications without a summary or task
+			// linkage carry no signal and stay dropped.
+			summary, _ := ev["summary"].(string)
+			toolUseID, _ := ev["tool_use_id"].(string)
+			if summary != "" && toolUseID != "" {
+				meta := map[string]any{
+					"contentType": "task_notification",
+					"tool_use_id": toolUseID,
+				}
+				if s, _ := ev["status"].(string); s != "" {
+					meta["status"] = s
+				}
+				return []Chunk{{Kind: protocol.KindProgress, Content: summary, Meta: meta}}
+			}
 			return nil
+		case "task_updated", "background_tasks_changed":
+			// Background-task bookkeeping (title/status changes, the live
+			// task roster). No user-facing content of its own — the
+			// interesting signal (the completion summary) arrives via
+			// task_notification above. Content-less so it never renders as
+			// a junk "system" row; the full event rides in Meta.
+			return []Chunk{{Kind: protocol.KindProgress, Meta: ev}}
 		case "api_retry":
 			// Emitted when an API call fails with a retryable error (e.g.
 			// a 502) and Claude Code is about to back off and retry; can

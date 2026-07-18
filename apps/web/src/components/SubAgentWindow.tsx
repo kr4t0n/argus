@@ -262,6 +262,18 @@ function extractSubAgentCalls(chunks: ResultChunkDTO[]): SubAgentCall[] {
   }
   flushText();
 
+  // Background completion reports: `task_notification` progress chunks
+  // carry the sub-agent's full final report in `content`, attributed to
+  // the dispatching Task call via meta.tool_use_id. Later wins.
+  const notificationByToolId = new Map<string, ResultChunkDTO>();
+  for (const c of chunks) {
+    if (c.kind !== 'progress' || !c.content) continue;
+    const meta = (c.meta ?? {}) as Record<string, unknown>;
+    if (meta.contentType !== 'task_notification') continue;
+    const tid = meta.tool_use_id;
+    if (typeof tid === 'string' && tid) notificationByToolId.set(tid, c);
+  }
+
   const out: SubAgentCall[] = [];
   for (const c of chunks) {
     if (c.kind !== 'tool') continue;
@@ -277,13 +289,28 @@ function extractSubAgentCalls(chunks: ResultChunkDTO[]): SubAgentCall[] {
     const description = (input.description as string | undefined) ?? '';
     const prompt = (input.prompt as string | undefined) ?? '';
     const paired = resultByToolId.get(id);
+    const notification = notificationByToolId.get(id);
+    const notifStatus =
+      (notification?.meta as Record<string, unknown> | null | undefined)?.status;
+    // Background runs (run_in_background: true): the Task tool_result is
+    // only launch boilerplate — the real report arrives via
+    // task_notification. Until it lands (or for old rows where the
+    // sidecar dropped it), show no result rather than the boilerplate
+    // blob. Sync runs keep the tool_result as before.
+    const isBackground = input.run_in_background === true;
+    const result =
+      notification?.content?.trim() ||
+      (isBackground ? undefined : paired?.content?.trim() || undefined);
+    const isError = notification
+      ? typeof notifStatus === 'string' && notifStatus !== 'completed'
+      : paired?.kind === 'stderr';
     out.push({
       id,
       subagentType,
       description,
       prompt,
-      result: paired?.content?.trim() || undefined,
-      isError: paired?.kind === 'stderr',
+      result,
+      isError,
       nested: nestedByParent.get(id) ?? [],
     });
   }
