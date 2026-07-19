@@ -299,8 +299,10 @@ func claudeIsUserTextTurn(line map[string]any) bool {
 // snapshot chunk (see claude_tasks.go). Pass `state=nil` / `tasks=nil` to
 // disable either behaviour.
 // compactState carries the one-line memory the compact flow needs: the
-// compaction summary arrives as the first plain-text user event AFTER a
-// compact_boundary, with no other marking on the event itself.
+// compaction summary arrives as the first text-bearing user event AFTER
+// a compact_boundary — a plain string on the manual /compact path, a
+// [{type:"text",...}] array on the auto path — with no other marking on
+// the event itself.
 type compactState struct{ pendingSummary bool }
 
 func (c *compactState) expectSummary() {
@@ -315,6 +317,26 @@ func (c *compactState) takeSummary() bool {
 	}
 	c.pendingSummary = false
 	return true
+}
+
+// textBlocksOnly returns the joined text when every block in a user
+// message's content array is a text block — the shape the auto-compact
+// summary arrives in. Empty or mixed arrays (tool_result, image, …)
+// don't qualify.
+func textBlocksOnly(contents []any) (string, bool) {
+	if len(contents) == 0 {
+		return "", false
+	}
+	parts := make([]string, 0, len(contents))
+	for _, c := range contents {
+		item, _ := c.(map[string]any)
+		if item["type"] != "text" {
+			return "", false
+		}
+		text, _ := item["text"].(string)
+		parts = append(parts, text)
+	}
+	return strings.Join(parts, "\n"), true
 }
 
 // formatTokenCount renders context sizes the way the dashboards do:
@@ -574,6 +596,18 @@ func mapClaudeLine(line string, state *fileEditState, tasks *taskListState, comp
 			return nil
 		}
 		contents, _ := msg["content"].([]any)
+		// Auto-compaction emits the very same summary message through
+		// the engine normalizer, which rewraps string content as
+		// [{type:"text",...}] blocks (claude 2.1.210) — so the pending
+		// summary can arrive in array form too. tool_result arrays fall
+		// through without consuming the flag.
+		if text, ok := textBlocksOnly(contents); ok && compact.takeSummary() {
+			return []Chunk{{
+				Kind:    protocol.KindProgress,
+				Content: text,
+				Meta:    map[string]any{"contentType": "compact_summary"},
+			}}
+		}
 		out := []Chunk{}
 		for _, c := range contents {
 			item, _ := c.(map[string]any)

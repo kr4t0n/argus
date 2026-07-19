@@ -935,6 +935,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   MODEL, which role-plays a convincing fake "Compacted." reply while
   the context keeps growing (verified against both binaries,
   2026-07-18) — never surface a compact affordance for those adapters.
+  Gotcha: the summary's wire shape differs by trigger (claude 2.1.210,
+  confirmed by bundle disassembly). Manual `/compact` goes through the
+  local-command handler and emits the summary as plain-STRING user
+  content; AUTO compaction routes it through the engine normalizer,
+  which rewraps it as a `[{type:"text",...}]` ARRAY. The adapter must
+  accept both after a boundary (`textBlocksOnly` in claude_code.go) —
+  matching only the string shape silently drops every auto summary.
 - **`contextWindow.ts` has a hand-written Swift mirror, and the lockstep
   is hash-enforced**: the iOS context ring's table
   (`ArgusKit/Engine/ContextWindow.swift`) mirrors
