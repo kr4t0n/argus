@@ -29,6 +29,12 @@ public struct TimelineItem: Identifiable, Equatable, Sendable {
         /// "thought" rows. Distinct from the final answer.
         case thought
         case thinking(redacted: Bool)
+        /// Compaction divider (manual /compact or threshold auto) —
+        /// everything above it was replaced by a summary.
+        case compact
+        /// The injected compaction summary — what future turns actually
+        /// know about the compacted past. Rendered collapsed.
+        case compactSummary
         /// Unknown system subtype — deliberately VISIBLE (project
         /// convention: the junk row is the breadcrumb that a new CLI
         /// event shape appeared).
@@ -254,14 +260,38 @@ public struct TranscriptState: Equatable, Sendable {
     /// resume, so the latest turn IS the live context.
     public func contextSnapshot(agentType: AgentType) -> ContextSnapshot? {
         for command in commands.reversed() {
-            guard let final = (chunksByCommand[command.id] ?? [])
-                .last(where: { $0.kind == .final })
-            else { continue }
-            guard let usage = UsageParser.parseContextUsage(
-                adapterType: agentType, meta: final.meta
-            ) else { continue }
+            let chunks = chunksByCommand[command.id] ?? []
+            // A compact_boundary carries the post-compaction context in
+            // meta.postTokens — the compact turn's own final reports
+            // zero usage, so the boundary IS that turn's context
+            // signal. The later of (usage-bearing final, boundary) wins
+            // — web useSessionContext parity.
+            let boundary = chunks.last(where: {
+                $0.kind == .progress
+                    && $0.meta?["contentType"]?.string == "compact_boundary"
+                    && $0.meta?["postTokens"]?.int != nil
+            })
+            let final = chunks.last(where: { $0.kind == .final })
+            let finalUsage = final.flatMap {
+                UsageParser.parseContextUsage(adapterType: agentType, meta: $0.meta)
+            }.flatMap { usage -> TokenUsage? in
+                // A cost-only parse — the compact turn's final: zero
+                // tokens but a real total cost, which hasUsage counts —
+                // carries no context signal; without this the compact
+                // command is skipped and the ring shows the STALE
+                // pre-compact size (web usage.ts keeps the same guard).
+                (usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens) > 0
+                    ? usage : nil
+            }
+            var used: Int?
+            if let boundary, let post = boundary.meta?["postTokens"]?.int,
+               finalUsage == nil || boundary.seq > (final?.seq ?? -1) {
+                used = Int(post)
+            } else if let usage = finalUsage {
+                used = Int(usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens)
+            }
+            guard let used, used > 0 else { continue }
             let model = latestModel()
-            let used = Int(usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens)
             return ContextSnapshot(
                 model: model,
                 usedTokens: used,
@@ -440,6 +470,24 @@ public struct TranscriptState: Equatable, Sendable {
                     continue
                 }
                 // Tool-narration progress (Claude's task_started
+                // Compaction: the boundary renders as a transcript
+                // divider, the injected summary as a collapsed row.
+                // (Status pulses are content-less and fall through to
+                // the silent branch below.)
+                if contentType == "compact_boundary" {
+                    timeline.append(TimelineItem(
+                        id: chunk.id, kind: .compact, seq: chunk.seq,
+                        text: chunk.content ?? "Compacted"
+                    ))
+                    continue
+                }
+                if contentType == "compact_summary" {
+                    timeline.append(TimelineItem(
+                        id: chunk.id, kind: .compactSummary, seq: chunk.seq,
+                        text: chunk.content ?? ""
+                    ))
+                    continue
+                }
                 // `description`, tagged with tool_use_id) duplicates the
                 // tool row — the web skips it (ActivityPill buildTimeline),
                 // so drop it here too.

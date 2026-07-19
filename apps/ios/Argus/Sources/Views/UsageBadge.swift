@@ -9,6 +9,10 @@ import ArgusKit
 struct UsageBadge: View {
     let usage: TokenUsage?
     let context: ContextSnapshot?
+    /// Ring-popover "Compact session" action — the caller gates it
+    /// (claude-code only, idle only) and wires the /compact dispatch;
+    /// nil hides the button.
+    var onCompact: (() -> Void)? = nil
 
     @State private var showBreakdown = false
 
@@ -34,8 +38,10 @@ struct UsageBadge: View {
             }
             .buttonStyle(.plain)
             .popover(isPresented: $showBreakdown, arrowEdge: .top) {
-                BreakdownView(usage: usage, context: context)
-                    .presentationCompactAdaptation(.popover)
+                BreakdownView(usage: usage, context: context, onCompact: onCompact.map { action in
+                    { showBreakdown = false; action() }
+                })
+                .presentationCompactAdaptation(.popover)
             }
         }
     }
@@ -78,6 +84,7 @@ struct ContextRing: View {
 private struct BreakdownView: View {
     let usage: TokenUsage?
     let context: ContextSnapshot?
+    var onCompact: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -117,6 +124,16 @@ private struct BreakdownView: View {
                 if let apiMs = usage.durationApiMs, apiMs > 0 {
                     labeled("API time", TokenFormat.apiTime(ms: apiMs))
                 }
+            }
+            if let onCompact {
+                Button(action: onCompact) {
+                    Text("Compact session")
+                        .font(.caption)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .padding(.top, 2)
             }
         }
         .font(.caption)

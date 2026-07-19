@@ -277,7 +277,14 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   (`agent-codex-color` → `agent-codex-brand`). Note: the newer local
   Xcode is stricter than CI's — build locally before merging
   concurrency-adjacent changes.
-- **Enter-to-send (this):** a hardware keyboard's Enter sends the
+- **Session compaction (this):** a "Compact session" button in the
+  context-ring popover (claude-code sessions only — codex/cursor print
+  modes fake it, see AGENTS.md) sends `/compact` through the normal
+  queue path; the transcript renders the compaction divider + the
+  injected summary collapsed beneath it, and the ring snaps to the
+  post-compaction context (`compact_boundary` postTokens) instead of
+  waiting for the next turn's usage.
+- **Enter-to-send (done):** a hardware keyboard's Enter sends the
   composer, Shift+Enter inserts a newline — the web Composer's rule,
   for the iPad Magic-Keyboard flow. `onKeyPress` sees only hardware
   events, so the on-screen return key still newlines; Return during

@@ -923,6 +923,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   it, which the same sweep covers. Requires `UIBackgroundModes:
   remote-notification` in `project.yml` (regenerate with `xcodegen
   generate` — the Info.plist is generated).
+- **`/compact` is real on claude-code only**: claude's `-p` mode parses
+  it client-side — the stream is `system/status` (compacting →
+  compact_result), `system/compact_boundary` (pre/post token counts in
+  `compact_metadata`), an injected summary user-message, and an empty
+  zero-usage result. The adapter maps these to progress chunks
+  (`contentType: compact_boundary / compact_summary / status`), the
+  clients render a divider + collapsed summary, and the context ring
+  snaps to `postTokens` (the compact turn's own usage is empty).
+  codex `exec` and cursor-agent `-p` instead hand slash text to the
+  MODEL, which role-plays a convincing fake "Compacted." reply while
+  the context keeps growing (verified against both binaries,
+  2026-07-18) — never surface a compact affordance for those adapters.
 - **`contextWindow.ts` has a hand-written Swift mirror, and the lockstep
   is hash-enforced**: the iOS context ring's table
   (`ArgusKit/Engine/ContextWindow.swift`) mirrors
