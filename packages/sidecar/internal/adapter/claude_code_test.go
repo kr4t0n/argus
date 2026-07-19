@@ -278,3 +278,48 @@ func TestMapClaudeCompactFlow(t *testing.T) {
 		t.Fatalf("plain user text without pending flag must drop, got %+v", got)
 	}
 }
+
+// TestMapClaudeAutoCompactSummary verifies the auto-compaction wire shape
+// (claude 2.1.210): the engine normalizer rewraps the summary's string
+// content as [{type:"text",...}] blocks, unlike the manual path's plain
+// string. tool_result arrays in between must not consume the pending flag,
+// and text arrays without a pending flag stay dropped.
+func TestMapClaudeAutoCompactSummary(t *testing.T) {
+	compact := &compactState{}
+
+	boundary := mapClaudeLine(
+		`{"type":"system","subtype":"compact_boundary","compact_metadata":{`+
+			`"trigger":"auto","pre_tokens":1000194,"post_tokens":11830,`+
+			`"cumulative_dropped_tokens":988364,"duration_ms":172147}}`,
+		nil, nil, compact, "")
+	if len(boundary) != 1 || boundary[0].Meta["trigger"] != "auto" {
+		t.Fatalf("boundary: got %+v", boundary)
+	}
+
+	// A tool_result array between boundary and summary maps as usual and
+	// leaves the flag armed.
+	state := newFileEditState()
+	tasks := &taskListState{}
+	toolRes := mapClaudeLine(
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","content":"ok"}]}}`,
+		state, tasks, compact, "")
+	if len(toolRes) != 1 || toolRes[0].Kind != protocol.KindStdout {
+		t.Fatalf("tool_result: got %+v", toolRes)
+	}
+
+	summary := mapClaudeLine(
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"This session is being continued. AUTO SUMMARY."}]}}`,
+		state, tasks, compact, "")
+	if len(summary) != 1 || summary[0].Kind != protocol.KindProgress ||
+		summary[0].Meta["contentType"] != "compact_summary" ||
+		summary[0].Content != "This session is being continued. AUTO SUMMARY." {
+		t.Fatalf("array summary: got %+v", summary)
+	}
+
+	// Single-shot: a later text-block user event must not capture.
+	if got := mapClaudeLine(
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"later injected text"}]}}`,
+		state, tasks, compact, ""); len(got) != 0 {
+		t.Fatalf("text array without pending flag must drop, got %+v", got)
+	}
+}
