@@ -80,15 +80,26 @@ final class AppModel {
     private var pendingFSChanges: [FSChangedPayload] = []
     private var fsFlushScheduled = false
 
-    /// Publish the accumulated batch on the next main-actor hop, so N
-    /// events drained from the socket stream back-to-back become ONE
-    /// observable update. The `fsFlushScheduled` guard is the whole
-    /// mechanism — without it each event would queue its own flush and
-    /// we'd be back to multiple updates per frame.
+    /// How long to accumulate nudges before publishing one batch.
+    ///
+    /// A bare main-actor hop is NOT enough, which cost a round trip to
+    /// learn: the event pump is `for await event in stream.events`, so
+    /// every iteration is a suspension point, and a hop-scheduled flush
+    /// simply interleaves with the already-buffered events — one publish
+    /// per event again, i.e. the "multiple times per frame" fault
+    /// unchanged. Only a real time window makes a burst collapse.
+    private static let fsFlushWindow = Duration.milliseconds(150)
+
+    /// Publish the accumulated batch once per window, so N events drained
+    /// back-to-back become ONE observable update. The `fsFlushScheduled`
+    /// guard makes the window non-restarting: a nudge arriving mid-window
+    /// joins the pending batch instead of pushing the flush later, which
+    /// is what keeps updates flowing during sustained editing.
     private func scheduleFSFlush() {
         guard !fsFlushScheduled else { return }
         fsFlushScheduled = true
         Task { @MainActor in
+            try? await Task.sleep(for: Self.fsFlushWindow)
             fsFlushScheduled = false
             guard !pendingFSChanges.isEmpty else { return }
             fsChanges = pendingFSChanges

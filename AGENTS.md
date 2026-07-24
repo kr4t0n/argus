@@ -1391,10 +1391,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
      burst advance it several times inside one SwiftUI frame, which
      trips the runtime fault `onChange(of: Int) action tried to update
      multiple times per frame`. `AppModel.scheduleFSFlush` accumulates
-     into `pendingFSChanges` and publishes once per main-actor hop, so a
+     into `pendingFSChanges` and publishes once per **time window**, so a
      burst is one observable update carrying every changed directory —
      which is why consumers iterate a batch instead of reading a single
-     latest payload.
+     latest payload. A bare `Task { @MainActor in … }` hop is NOT a
+     window and does not fix this: the event pump is
+     `for await event in stream.events`, so every iteration is already a
+     suspension point and a hop-scheduled flush just interleaves with the
+     buffered events — one publish per event, fault unchanged. Cost a
+     full device round trip to learn.
   2. **The project room is often not joined when the sheet opens.** Only
      `InspectorPane` joined it, and the inspector is
      `.inspector(isPresented:)` — routinely closed on iPhone. But the
@@ -1408,6 +1413,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
      also folds in the former separate colorScheme observer.
   Scroll is held via `.scrollPosition(id:)` + `.scrollTargetLayout()`
   (iOS 17) rather than the web's `scrollTop` capture/restore.
+  **Debounce windows on both clients are NON-RESTARTING, and that is
+  load-bearing.** `schedule()` (web) and `scheduleRefresh()` (iOS) both
+  early-return when a window is already open, rather than cancelling and
+  re-arming. A restarting trailing debounce STARVES under exactly the
+  conditions this feature exists for: the sidecar emits about every
+  250 ms while an agent edits, the window is 400 ms, so every nudge
+  would cancel the pending read and the refresh would only land once
+  editing stopped — presenting as "auto-refresh doesn't work at all".
+  The iOS port originally cancelled-and-re-armed and had precisely that
+  symptom; if you touch either debounce, keep the early return.
 - **Project WS rooms are refcounted on BOTH clients** — `lib/ws.ts` on
   web, `StreamClient` on iOS (`projectRooms: [ProjectRoomKey: Int]`,
   replayed by `rejoinProjectRooms()` from `AppModel`'s `.connected`

@@ -158,10 +158,21 @@ struct FilePreviewSheet: View {
         }
         guard touchesThisFile else { return }
 
-        refreshTask?.cancel()
+        // Do NOT restart an open window. A trailing debounce that resets
+        // on every nudge never fires while an agent is actively editing:
+        // the sidecar emits roughly every 250 ms and this window is
+        // 400 ms, so each nudge would cancel the pending read and the
+        // refresh would only land once editing STOPPED — which reads as
+        // "auto-refresh doesn't work". The web's schedule() early-returns
+        // for exactly this reason; this port originally didn't, and that
+        // divergence was the bug.
+        guard refreshTask == nil else { return }
         refreshTask = Task {
             try? await Task.sleep(for: Self.refreshDebounce)
             guard !Task.isCancelled else { return }
+            // Cleared BEFORE the read so a nudge arriving during it can
+            // open the next window rather than being swallowed.
+            refreshTask = nil
             await load(isRefresh: true)
         }
     }
