@@ -60,15 +60,43 @@ final class AppModel {
     /// refetch when the event matches their project's
     /// (machineId, workingDir) pair.
     ///
-    /// `fsChangeSeq` is what observers must watch, NOT `lastFSChange`
-    /// alone. `FSChangedPayload` is `{path, machineId, workingDir}` with
-    /// no timestamp and it's Equatable, so two consecutive writes to the
-    /// same directory produce an identical value — and `.onChange(of:)`
-    /// fires only on inequality. Watching the payload therefore drops
-    /// every repeat edit to one directory, which is the common case
-    /// while an agent works. The counter makes each delivery distinct.
-    private(set) var lastFSChange: FSChangedPayload?
+    /// Observers watch `fsChangeSeq` and read `fsChanges` — never a
+    /// payload directly. Two properties, two distinct reasons:
+    ///
+    /// 1. `FSChangedPayload` is `{path, machineId, workingDir}` with no
+    ///    timestamp, and it's Equatable — so two consecutive writes to
+    ///    one directory are an IDENTICAL value, and `.onChange(of:)`
+    ///    fires only on inequality. Watching the payload silently drops
+    ///    every repeat edit to a directory, which is the common case
+    ///    while an agent works. A counter makes each delivery distinct.
+    /// 2. The batch, in turn, is why the counter advances once per FLUSH
+    ///    rather than once per event. Bumping per event let a burst
+    ///    (an agent touching several directories) advance it several
+    ///    times inside ONE SwiftUI frame, which trips the runtime fault
+    ///    "onChange(of:) action tried to update multiple times per
+    ///    frame" and makes delivery undefined.
+    private(set) var fsChanges: [FSChangedPayload] = []
     private(set) var fsChangeSeq: Int = 0
+    private var pendingFSChanges: [FSChangedPayload] = []
+    private var fsFlushScheduled = false
+
+    /// Publish the accumulated batch on the next main-actor hop, so N
+    /// events drained from the socket stream back-to-back become ONE
+    /// observable update. The `fsFlushScheduled` guard is the whole
+    /// mechanism — without it each event would queue its own flush and
+    /// we'd be back to multiple updates per frame.
+    private func scheduleFSFlush() {
+        guard !fsFlushScheduled else { return }
+        fsFlushScheduled = true
+        Task { @MainActor in
+            fsFlushScheduled = false
+            guard !pendingFSChanges.isEmpty else { return }
+            fsChanges = pendingFSChanges
+            pendingFSChanges.removeAll()
+            fsChangeSeq &+= 1
+        }
+    }
+
     private(set) var lastGitChange: GitChangedPayload?
 
     /// Latest background-task events (Progress extension) — the pane
@@ -604,8 +632,10 @@ final class AppModel {
             fleet.upsert(project: project)
 
         case .fsChanged(let payload):
-            lastFSChange = payload
-            fsChangeSeq &+= 1
+            // Dedupe within the batch: the same directory nudged twice
+            // before the flush is one refetch, not two.
+            if !pendingFSChanges.contains(payload) { pendingFSChanges.append(payload) }
+            scheduleFSFlush()
         case .gitChanged(let payload):
             lastGitChange = payload
 

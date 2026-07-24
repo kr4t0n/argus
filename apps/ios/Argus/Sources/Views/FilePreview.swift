@@ -110,10 +110,10 @@ struct FilePreviewSheet: View {
                         machineId: project.machineId, workingDir: project.workingDir
                     )
                 }
-                // Watch the SEQ, not the payload: repeat writes to one
+                // Watch the SEQ and read the BATCH: repeat writes to one
                 // directory are Equatable-identical and `.onChange` would
                 // swallow every one after the first — which is exactly
-                // the case that matters here (see AppModel.fsChangeSeq).
+                // the case that matters here (see AppModel.fsChanges).
                 .onChange(of: app.fsChangeSeq) { scheduleRefresh() }
         }
     }
@@ -150,12 +150,13 @@ struct FilePreviewSheet: View {
     /// since only one preview is ever open.
     @MainActor
     private func scheduleRefresh() {
-        guard let change = app.lastFSChange,
-              let workingDir = change.workingDir, !workingDir.isEmpty,
-              change.machineId == project.machineId,
-              workingDir == project.workingDir,
-              change.path == targetDirectory
-        else { return }
+        let touchesThisFile = app.fsChanges.contains { change in
+            guard let workingDir = change.workingDir, !workingDir.isEmpty else { return false }
+            return change.machineId == project.machineId
+                && workingDir == project.workingDir
+                && change.path == targetDirectory
+        }
+        guard touchesThisFile else { return }
 
         refreshTask?.cancel()
         refreshTask = Task {

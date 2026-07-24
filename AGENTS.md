@@ -1383,10 +1383,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   1. **`FSChangedPayload` has no timestamp** (`{path, machineId,
      workingDir}`) and is Equatable, so two consecutive writes to one
      directory are an identical value and `.onChange(of:)` — which fires
-     only on inequality — swallows every repeat. Observers must watch
-     **`AppModel.fsChangeSeq`**, a counter bumped per delivery, NOT
-     `lastFSChange`. This also silently affected the inspector's file
-     tree before the counter existed.
+     only on inequality — swallows every repeat. Observers watch
+     **`AppModel.fsChangeSeq`** and read the **`fsChanges`** batch. This
+     also silently affected the inspector's file tree before the counter
+     existed. *Second-order gotcha, found on device:* the counter must
+     advance once per FLUSH, not per event. Bumping it per event let a
+     burst advance it several times inside one SwiftUI frame, which
+     trips the runtime fault `onChange(of: Int) action tried to update
+     multiple times per frame`. `AppModel.scheduleFSFlush` accumulates
+     into `pendingFSChanges` and publishes once per main-actor hop, so a
+     burst is one observable update carrying every changed directory —
+     which is why consumers iterate a batch instead of reading a single
+     latest payload.
   2. **The project room is often not joined when the sheet opens.** Only
      `InspectorPane` joined it, and the inspector is
      `.inspector(isPresented:)` — routinely closed on iPhone. But the

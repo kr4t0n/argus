@@ -254,14 +254,16 @@ private struct FileTreePanel: View {
         // new filter — same shape as refreshAll (web behavior).
         .onChange(of: showAll) { refreshAll() }
         .onChange(of: app.fsChangeSeq) {
-            // Watch the SEQ, not the payload: repeat writes to one
-            // directory produce an Equatable-identical payload, which
-            // `.onChange` would swallow (see AppModel.fsChangeSeq).
-            // The sidecar debounces; refetch exactly the level that
-            // changed, if we've already loaded it.
-            guard let change = app.lastFSChange, matches(change) else { return }
-            if dirs[change.path] != nil {
-                Task { await fetchDir(change.path) }
+            // Watch the SEQ and read the BATCH — repeat writes to one
+            // directory are Equatable-identical payloads that `.onChange`
+            // would swallow, and a burst arrives as one bump carrying
+            // several directories (see AppModel.fsChanges).
+            // The sidecar debounces; refetch exactly the levels that
+            // changed, for the ones we've already loaded.
+            for change in app.fsChanges where matches(change) {
+                if dirs[change.path] != nil {
+                    Task { await fetchDir(change.path) }
+                }
             }
         }
         .sheet(item: fileSheetBinding) { box in
