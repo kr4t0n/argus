@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # On-demand runs for work on a branch that isn't a PR yet — the same
+  # affordance ios.yml and docker-publish.yml already have.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -33,7 +36,28 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
-      - working-directory: packages/sidecar
+      - name: Vet + build
+        working-directory: packages/sidecar
         run: |
           go vet ./...
           go build ./...
+
+      # `vet` + `build` prove the sidecar COMPILES; they assert nothing.
+      # Until this step existed, all 58 test functions across
+      # adapter/machine/updater/argus-bg ran only when someone typed
+      # `go test` locally — so a change that broke behaviour while still
+      # compiling merged green. The whole suite is ~2s.
+      - name: Test
+        working-directory: packages/sidecar
+        run: go test ./...
+
+      # Separate step, and deliberately after the plain run: if this one
+      # is red while the step above is green, the failure is a data race
+      # rather than a logic bug, which is most of the diagnosis. Needs
+      # cgo — free on ubuntu-latest, but the reason `-race` can't be run
+      # on a toolchain-only dev box (no gcc, no race detector).
+      - name: Test (race detector)
+        working-directory: packages/sidecar
+        env:
+          CGO_ENABLED: '1'
+        run: go test -race ./...
