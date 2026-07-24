@@ -1,11 +1,10 @@
 import SwiftUI
 import ArgusKit
 
-// Creation flows, mirroring the web's CreateProjectPopover /
-// CreateAgentPopover(asSession): the user picks an adapter + title and
-// AppModel.createSession posts the project-first shape (machineId +
-// workingDir + cliType) — the SERVER reuses-or-vivifies the agent; the
-// client never touches agent identity here.
+// Creation flows, mirroring the web's creation popovers: the user
+// picks an adapter + title and AppModel.createSession posts the
+// project-first shape (machineId + workingDir + cliType) — the server
+// upserts the Project row and routes by machine × CLI runner.
 
 /// "＋" on a project row → new session inside that project.
 struct NewSessionSheet: View {
@@ -95,7 +94,7 @@ struct NewSessionSheet: View {
 
 /// Machine panel "…" → new project: working dir + first session, on
 /// that machine. The project row is created server-side by the
-/// project-first session POST (which also vivifies the agent).
+/// project-first session POST.
 ///
 /// Web parity: projects are created FROM a machine (the machine list's
 /// hover "+"), never from a global button that then asks which machine —
@@ -194,7 +193,7 @@ struct NewProjectSheet: View {
 /// The create sheets' "Model" row: current selection as a summary,
 /// pushing the shared catalog editor. Both the machine and the adapter
 /// type are known right here, and catalogs are keyed (machineId,
-/// cliType) since Phase 2 — no agent lookup needed.
+/// cliType) since Phase 2 — resolvable before any session exists.
 struct ModelRow: View {
     let machineId: String?
     let adapterType: AgentType

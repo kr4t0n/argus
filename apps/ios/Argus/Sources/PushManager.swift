@@ -1,6 +1,11 @@
 import Foundation
 import UIKit
-import UserNotifications
+// This SDK's UNUserNotificationCenterDelegate declares its completion
+// handlers without @Sendable, yet they must cross into our MainActor
+// hops (suppression needs MainActor state). @preconcurrency relaxes the
+// checking at exactly that un-annotated boundary — our own code stays
+// fully checked.
+@preconcurrency import UserNotifications
 
 /// Owns everything UNUserNotificationCenter / remote-notification
 /// registration. AppModel wires the three closures after login:
@@ -47,31 +52,80 @@ final class PushManager: NSObject {
     fileprivate nonisolated static func sessionId(from content: UNNotificationContent) -> String? {
         content.userInfo["sessionId"] as? String
     }
+
+    // MARK: Withdrawing delivered banners
+
+    /// Remove delivered completion banners for the given sessions —
+    /// matched on the payload's `sessionId` (the alert's collapse id
+    /// isn't surfaced by UNUserNotificationCenter). Safe from any
+    /// thread; `completion` runs on a background queue.
+    ///
+    /// `UNUserNotificationCenter.current()` is deliberately re-fetched
+    /// inside the closure: the class isn't Sendable, so hoisting it
+    /// into a captured local trips `@Sendable`-capture warnings.
+    nonisolated static func removeDelivered(
+        sessionIds: Set<String>,
+        completion: (@Sendable () -> Void)? = nil
+    ) {
+        UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
+            let ids = delivered
+                .filter { sessionId(from: $0.request.content).map(sessionIds.contains) ?? false }
+                .map(\.request.identifier)
+            if !ids.isEmpty {
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids)
+            }
+            completion?()
+        }
+    }
+
+    /// Sweep: any banner whose session is no longer unread was read
+    /// elsewhere (or superseded by a fresh turn) while we weren't
+    /// looking. The server's clear push handles this live, but it's
+    /// best-effort — Apple throttles background pushes and never
+    /// delivers them to a force-quit app — so re-derive from fresh
+    /// session state whenever we have it.
+    nonisolated static func reconcileDelivered(keepingUnread unreadIds: Set<String>) {
+        UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
+            let stale = delivered
+                .filter { note in
+                    guard let id = sessionId(from: note.request.content) else { return false }
+                    return !unreadIds.contains(id)
+                }
+                .map(\.request.identifier)
+            if !stale.isEmpty {
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: stale)
+            }
+        }
+    }
 }
 
-extension PushManager: UNUserNotificationCenterDelegate {
-    nonisolated func userNotificationCenter(
+// @preconcurrency conformance: the delegate callbacks arrive on the
+// main thread (the protocol is @MainActor-annotated in current SDKs),
+// so the witnesses are MainActor-isolated and run synchronously — no
+// Task hop, no completion handler crossing isolation. Under an SDK
+// where the requirements are still nonisolated, @preconcurrency
+// permits the isolated witnesses with a runtime main-thread assertion,
+// which holds for these callbacks.
+extension PushManager: @preconcurrency UNUserNotificationCenterDelegate {
+    func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         let sessionId = Self.sessionId(from: notification.request.content)
-        Task { @MainActor in
-            let suppress = sessionId.map { self.shouldSuppress?($0) ?? false } ?? false
-            completionHandler(suppress ? [] : [.banner, .sound, .list])
-        }
+        let suppress = sessionId.map { shouldSuppress?($0) ?? false } ?? false
+        completionHandler(suppress ? [] : [.banner, .sound, .list])
     }
 
-    nonisolated func userNotificationCenter(
+    func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let sessionId = Self.sessionId(from: response.notification.request.content)
-        Task { @MainActor in
-            if let sessionId { self.onOpenSession?(sessionId) }
-            completionHandler()
+        if let sessionId = Self.sessionId(from: response.notification.request.content) {
+            onOpenSession?(sessionId)
         }
+        completionHandler()
     }
 }
 
@@ -95,5 +149,28 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // Expected on Intel-Mac Simulators / missing entitlement; the
         // toggle simply won't produce a registered device.
         print("APNs registration failed: \(error.localizedDescription)")
+    }
+
+    /// Silent clear push (server `clearSessionNotification`): the
+    /// session was read on another client, or a fresh turn superseded
+    /// the result — withdraw its banner from Notification Center.
+    /// The async delegate variant, deliberately: the handler-based
+    /// form's completionHandler is @Sendable-annotated only in newer
+    /// SDKs, so no single handler-based signature satisfies both
+    /// toolchains' strict checking. Here only a checked continuation
+    /// crosses into the removal callback.
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any]
+    ) async -> UIBackgroundFetchResult {
+        guard let sessionId = userInfo["clearSessionId"] as? String else {
+            return .noData
+        }
+        await withCheckedContinuation { continuation in
+            PushManager.removeDelivered(sessionIds: [sessionId]) {
+                continuation.resume()
+            }
+        }
+        return .noData
     }
 }

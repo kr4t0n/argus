@@ -168,6 +168,33 @@ export function ActivityPanel({
             </div>
           );
         }
+        if (it.kind === 'compact') {
+          // Compaction divider (manual /compact or threshold auto): the
+          // CLI replaced everything above with a summary — mark the seam.
+          return (
+            <div key={it.id} className="flex items-center gap-2 py-1.5">
+              <div className="h-px flex-1 bg-fg-muted/25" />
+              <span className="text-[10px] uppercase tracking-widest text-fg-muted">
+                {it.label}
+              </span>
+              <div className="h-px flex-1 bg-fg-muted/25" />
+            </div>
+          );
+        }
+        if (it.kind === 'compact-summary') {
+          // What future turns actually know about the compacted past —
+          // collapsed by default (long, and semi-internal CLI copy).
+          return (
+            <details key={it.id} className="py-1">
+              <summary className="cursor-pointer list-none text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg-tertiary">
+                compaction summary
+              </summary>
+              <div className="markdown max-w-none py-1.5 text-xs leading-relaxed text-fg-tertiary">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{it.text}</ReactMarkdown>
+              </div>
+            </details>
+          );
+        }
         return (
           <div key={it.chunk.id} className="text-xs text-fg-tertiary italic">
             {it.chunk.content ?? 'working…'}
@@ -183,7 +210,9 @@ type TimelineItem =
   | { kind: 'output'; chunk: ResultChunkDTO }
   | { kind: 'progress'; chunk: ResultChunkDTO }
   | { kind: 'thought'; id: string; text: string }
-  | { kind: 'thinking'; id: string; text: string; redacted: boolean };
+  | { kind: 'thinking'; id: string; text: string; redacted: boolean }
+  | { kind: 'compact'; id: string; label: string }
+  | { kind: 'compact-summary'; id: string; text: string };
 
 /**
  * Pair every `tool` chunk with its matching `stdout` / `stderr` result
@@ -233,6 +262,9 @@ function buildTimeline(chunks: ResultChunkDTO[], live = false): TimelineItem[] {
 
   for (const c of chunks) {
     if (c.kind === 'delta') {
+      // Nested sub-agent text (preamble narration + streamed response)
+      // renders inside its SubAgentWindow row, like nested tools.
+      if (isNestedSubAgentChunk(c)) continue;
       // Settled: trailing (post-tool) deltas are the final answer, owned
       // by the StreamViewer body. Live: fold them in here as a thought.
       if (!live && c.seq > boundarySeq) continue;
@@ -296,6 +328,16 @@ function buildTimeline(chunks: ResultChunkDTO[], live = false): TimelineItem[] {
           text: c.content,
           redacted: meta.redacted === true,
         });
+        continue;
+      }
+      if (meta.contentType === 'compact_boundary') {
+        flushThought();
+        out.push({ kind: 'compact', id: `compact:${c.id}`, label: c.content });
+        continue;
+      }
+      if (meta.contentType === 'compact_summary') {
+        flushThought();
+        out.push({ kind: 'compact-summary', id: `compact-summary:${c.id}`, text: c.content });
         continue;
       }
       if (typeof meta.tool_use_id === 'string' && meta.tool_use_id) continue;

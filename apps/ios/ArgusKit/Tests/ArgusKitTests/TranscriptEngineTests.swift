@@ -279,12 +279,28 @@ struct TranscriptEngineTests {
                 id: "nr1", seq: 3, kind: .stdout, content: "file body",
                 meta: ["toolResultFor": .string("nested-1"), "parentToolUseId": .string("agent-1")]
             ),
+            // The sub-agent's streamed response prose: two adjacent
+            // nested deltas coalesce into ONE .thought item scoped to
+            // the card — never the parent timeline's thought flow.
+            TestSupport.chunk(
+                id: "nd1", seq: 4, kind: .delta, delta: "Found the bug ",
+                meta: ["parentToolUseId": .string("agent-1")]
+            ),
+            TestSupport.chunk(
+                id: "nd2", seq: 5, kind: .delta, delta: "in x.swift.",
+                meta: ["parentToolUseId": .string("agent-1")]
+            ),
+            // Nested thinking is scoped to the card too.
+            TestSupport.chunk(
+                id: "nt1", seq: 6, kind: .progress, content: "nested reasoning",
+                meta: ["contentType": .string("thinking"), "parentToolUseId": .string("agent-1")]
+            ),
             // The Agent tool's own result.
             TestSupport.chunk(
-                id: "ar1", seq: 4, kind: .stdout, content: "found 2 bugs",
+                id: "ar1", seq: 7, kind: .stdout, content: "found 2 bugs",
                 meta: ["toolResultFor": .string("agent-1")]
             ),
-            TestSupport.chunk(id: "f1", seq: 5, kind: .final, isFinal: true),
+            TestSupport.chunk(id: "f1", seq: 8, kind: .final, isFinal: true),
         ])
         let turn = try #require(state.turns(agentType: KnownAgentType.claudeCode).first)
         #expect(turn.subAgents.count == 1)
@@ -294,11 +310,93 @@ struct TranscriptEngineTests {
         #expect(sub.prompt == "find bugs")
         #expect(sub.result == "found 2 bugs")
         #expect(!sub.isError)
-        #expect(sub.nested.count == 1)
+        // Chronological: the tool call, then the coalesced text run,
+        // then the thinking block.
+        #expect(sub.nested.count == 3)
         #expect(sub.nested[0].toolName == "Read")
         #expect(sub.nested[0].resultText == "file body")
+        #expect(sub.nested[1].kind == .thought)
+        #expect(sub.nested[1].text == "Found the bug in x.swift.")
+        #expect(sub.nested[2].kind == .thinking(redacted: false))
+        #expect(sub.nested[2].text == "nested reasoning")
         // Nothing sub-agent-related leaks into the main timeline.
         #expect(turn.timeline.isEmpty)
+    }
+
+    @Test("background sub-agent: notification summary is the result, boilerplate never shows")
+    func backgroundSubAgentResult() throws {
+        let agentChunk = TestSupport.chunk(
+            id: "a1", seq: 1, kind: .tool, content: "Agent",
+            meta: ["tool": .string("Agent"), "id": .string("agent-1"),
+                   "input": .object([
+                       "subagent_type": .string("explorer"),
+                       "prompt": .string("count files"),
+                       "run_in_background": .bool(true),
+                   ])]
+        )
+        let boilerplate = TestSupport.chunk(
+            id: "r1", seq: 2, kind: .stdout,
+            content: "Async agent launched successfully. agentId: abc123 …",
+            meta: ["toolResultFor": .string("agent-1")]
+        )
+
+        // Launched, no notification yet (or an old row where the sidecar
+        // dropped it): the boilerplate must NOT surface as the result.
+        var running = TranscriptState(sessionId: "sess-1")
+        running.upsert(command: TestSupport.command(status: .running))
+        running.mergeBackfill(commands: [], chunks: [agentChunk, boilerplate])
+        let liveSub = try #require(
+            running.turns(agentType: KnownAgentType.claudeCode).first?.subAgents.first
+        )
+        #expect(liveSub.result == nil)
+        #expect(!liveSub.isError)
+
+        // Notification landed: its summary is the card's result, and the
+        // notification chunk stays out of the main timeline (the
+        // meta.tool_use_id drop rule).
+        var done = TranscriptState(sessionId: "sess-1")
+        done.upsert(command: TestSupport.command(status: .completed))
+        done.mergeBackfill(commands: [], chunks: [
+            agentChunk, boilerplate,
+            // The parent's launch-time reply. The real wire emits NO
+            // final here — every inner `result` flushes at process
+            // exit — so the completion notification below is what
+            // separates this preamble from the follow-up answer.
+            TestSupport.chunk(id: "d0", seq: 3, kind: .delta, delta: "It is running now."),
+            // The sub-agent streams AFTER the parent's last top-level
+            // tool — its report deltas must render in the card, never
+            // glued into the parent's answer (the DeltaSplit nested
+            // filter).
+            TestSupport.chunk(
+                id: "ns1", seq: 4, kind: .stdout, content: "nested tool result",
+                meta: ["toolResultFor": .string("nested-1"),
+                       "parentToolUseId": .string("agent-1")]
+            ),
+            TestSupport.chunk(
+                id: "nd1", seq: 5, kind: .delta, delta: "SUBAGENT REPORT",
+                meta: ["parentToolUseId": .string("agent-1")]
+            ),
+            TestSupport.chunk(
+                id: "n1", seq: 6, kind: .progress, content: "Found 10 files.",
+                meta: ["contentType": .string("task_notification"),
+                       "tool_use_id": .string("agent-1"),
+                       "status": .string("completed")]
+            ),
+            TestSupport.chunk(id: "d1", seq: 7, kind: .delta, delta: "The real answer."),
+            TestSupport.chunk(id: "f0", seq: 8, kind: .final, content: "It is running now."),
+            TestSupport.chunk(id: "f1", seq: 9, kind: .final, isFinal: true),
+        ])
+        let turn = try #require(done.turns(agentType: KnownAgentType.claudeCode).first)
+        let sub = try #require(turn.subAgents.first)
+        #expect(sub.result == "Found 10 files.")
+        #expect(!sub.isError)
+        #expect(sub.nested.contains { $0.kind == .thought && $0.text == "SUBAGENT REPORT" })
+        // The parent's answer is ONLY the post-notification reply; the
+        // launch-time reply renders as a preamble thought and the
+        // sub-agent's streamed report stays in the card.
+        #expect(turn.answer == "The real answer.")
+        #expect(turn.timeline.contains { $0.kind == .thought && $0.text == "It is running now." })
+        #expect(!turn.timeline.contains { $0.text.contains("SUBAGENT REPORT") })
     }
 
     @Test("stderr result marks the tool row as an error")
@@ -433,3 +531,48 @@ struct TranscriptEngineTests {
         #expect(abs(fraction - 0.15) < 0.0001)
     }
 }
+
+    @Test("compaction: divider + collapsed summary in timeline, ring snaps to postTokens")
+    func compactFlow() throws {
+        var state = TranscriptState(sessionId: "sess-1")
+        state.upsert(command: TestSupport.command(status: .completed))
+        state.mergeBackfill(commands: [], chunks: [
+            TestSupport.chunk(
+                id: "b1", seq: 1, kind: .progress,
+                content: "Compacted 25.8k → 1.9k tokens",
+                meta: ["contentType": .string("compact_boundary"),
+                       "preTokens": .number(25829), "postTokens": .number(1854),
+                       "trigger": .string("manual")]
+            ),
+            TestSupport.chunk(
+                id: "s1", seq: 2, kind: .progress,
+                content: "This session is being continued. SUMMARY.",
+                meta: ["contentType": .string("compact_summary")]
+            ),
+            // The REAL compact final: zero token usage but a non-zero
+            // total cost (compaction is a paid API call) — hasUsage
+            // counts cost, so an unguarded walk would stop here with a
+            // zero context and hide (web) or stale-out (iOS) the ring.
+            TestSupport.chunk(
+                id: "f1", seq: 3, kind: .final,
+                meta: ["total_cost_usd": .number(0.05),
+                       "usage": .object([
+                           "input_tokens": .number(0),
+                           "output_tokens": .number(0),
+                           "iterations": .array([]),
+                       ])],
+                isFinal: true
+            ),
+        ])
+        let turn = try #require(state.turns(agentType: KnownAgentType.claudeCode).first)
+        #expect(turn.timeline.count == 2)
+        #expect(turn.timeline[0].kind == .compact)
+        #expect(turn.timeline[0].text == "Compacted 25.8k → 1.9k tokens")
+        #expect(turn.timeline[1].kind == .compactSummary)
+        #expect(turn.answer.isEmpty)
+        // The ring snaps to the post-compaction context even though the
+        // compact turn's own final carries no usage (its result reports
+        // zero and iterations is empty).
+        let snapshot = try #require(state.contextSnapshot(agentType: KnownAgentType.claudeCode))
+        #expect(snapshot.usedTokens == 1854)
+    }

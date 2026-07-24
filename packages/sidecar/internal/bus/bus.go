@@ -21,6 +21,24 @@ func Dial(ctx context.Context, url string) (*Bus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse redis url: %w", err)
 	}
+	// Cap the connection pool. The go-redis defaults are sized for a
+	// dedicated Redis (PoolSize = 10×GOMAXPROCS, idle conns never closed:
+	// v9 has no background reaper, ConnMaxIdleTime is only checked lazily
+	// at checkout, and the default LIFO pool never revisits conns below
+	// the hot top-of-stack). Our Redis Cloud plan allows 30 clients TOTAL
+	// across the fleet, and concurrent fire-and-forget XADDs (result
+	// chunks, fs/git responses, watcher events) at ~150ms RTT can balloon
+	// an uncapped pool by 15+ sockets in one burst that then never shrink.
+	// Two conns stay parked in blocking XREADGROUPs (control + command
+	// reader); the rest serve publishes — 6 conns ≈ 40 XADD/s at 150ms
+	// RTT, far above real inflow. MaxIdleConns trims back to 3 as burst
+	// conns are released; FIFO rotation makes the 5m idle expiry actually
+	// reach every conn.
+	opt.PoolSize = 8
+	opt.MaxActiveConns = 8
+	opt.MaxIdleConns = 3
+	opt.ConnMaxIdleTime = 5 * time.Minute
+	opt.PoolFIFO = true
 	rdb := redis.NewClient(opt)
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		return nil, fmt.Errorf("ping redis: %w", err)
@@ -112,8 +130,9 @@ type StreamMessage struct {
 
 // ReadGroupMulti blocks for up to `block` on a single XREADGROUP that
 // fans in over many streams at once, all under one consumer group. This
-// is what lets the sidecar consume every agent's command stream on a
-// single connection instead of one blocking reader per agent.
+// is what lets the sidecar consume every runner's command stream (one
+// per installed CLI type) on a single connection instead of one
+// blocking reader per stream.
 //
 // `count` caps entries per stream per call. A redis.Nil (block elapsed,
 // nothing ready) maps to (nil, nil). On any other error the batch is

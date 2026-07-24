@@ -4,20 +4,21 @@ A native **SwiftUI** client for the Argus agent dashboard. It is a *thin
 client*: it speaks the same NestJS REST API + Socket.IO `/stream`
 namespace as the web app and never touches the Go sidecar.
 
-> Status: **Phase 4 + terminal.** Turn-completion alerts via APNs
-> (enable "Task completion alerts" in the account panel; needs the
-> server's `APNS_*` env — see the repo-root `.env.example`; Simulator
-> remote push needs an Apple silicon Mac), and a full **interactive
-> terminal** (SwiftTerm) in the session inspector for agents created
-> with the PTY opt-in — same shell-access trust model as the web's
-> Terminal pane. Phases 1–3 cover login, streaming transcript, iPad
-> three-column layout, inspector (Commits / Files / Terminal / Note /
-> Progress / Diff), queue, attachments, fleet + account panels, and
-> creation flows.
+> Status: **Feature-complete** (2026-07-17), all of it device-verified:
+> streaming transcript + prompt queue + attachments, iPad three-column
+> layout, inspector (Commits / Files / Terminal / Note / Progress /
+> Diff), fleet + account panels, creation flows, APNs turn-completion
+> alerts with **cross-device read-sync** (read a session anywhere, the
+> phone banner withdraws), lock-screen **Live Activities**, and an
+> interactive **terminal** (SwiftTerm) for projects with the PTY
+> opt-in — same shell-access trust model as the web's Terminal pane.
+> APNs needs the server's `APNS_*` env (repo-root `.env.example`);
+> Simulator remote push needs an Apple silicon Mac. The whole codebase
+> builds in **Swift 6 language mode** (strict concurrency).
 >
-> This is a **fresh implementation** — the earlier
-> `feat/ios-native-client` branch (OpenAPI-codegen based) is deprecated;
-> do not build on it.
+> What remains is maintenance, not features: keep the TS ↔ Swift ports
+> below in lockstep (hash-enforced for the context-window table), and
+> re-capture fixtures when shared-types changes shape.
 
 ## Approach: hand-written mirror + captured fixtures (no codegen)
 
@@ -29,8 +30,9 @@ Swift models are **hand-written, decode-tolerant mirrors** of
 - string enums decode unrecognized values to `.unknown` instead of
   failing the payload,
 - `ResultChunk` absorbs both wire dressings of the same row (WS relays
-  carry `sessionId`/`agentId`/`isFinal` and numeric `ts`; REST rows drop
-  those columns and serialize `ts` as an ISO string).
+  carry `sessionId`/`isFinal` and numeric `ts`; REST rows drop those
+  columns and serialize `ts` as an ISO string — and a stray `agentId`
+  from an old server decodes as an ignored extra).
 
 Contract confidence comes from **fixtures captured from a real server**:
 
@@ -52,7 +54,7 @@ can embed real prompt text and the repo is public.
 ```
 apps/ios/
 ├── ArgusKit/                     SwiftPM package — everything except UI
-│   ├── Package.swift             iOS 17+ / macOS 14+, Swift language mode v5
+│   ├── Package.swift             iOS 17+ / macOS 14+, Swift 6 language mode
 │   └── Sources/ArgusKit/
 │       ├── Models/               DTO mirrors (JSONValue, enums, sessions, fleet, …)
 │       ├── API/                  ArgusClient (URLSession), ServerConfig, TokenStore
@@ -170,7 +172,7 @@ for await event in await stream.events {
     default:
         break
     }
-    let turns = transcript.turns(agentType: agent.type)
+    let turns = transcript.turns(agentType: session.cliType ?? "")
     // render…
 }
 ```
@@ -197,12 +199,12 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   picker, prompt queue + drainer, attachments, fork/rename/archive,
   keyboard shortcuts.
 - **Phase 3 (done):** machines panel, user panel
-  (activity/usage/quota/extensions), project/agent/session creation.
+  (activity/usage/quota/extensions), project/session creation.
 - **Phase 4 (done):** APNs push — server: `DeviceToken` table,
   `POST/DELETE /me/devices`, HTTP/2 APNs sender in the result-ingestor;
   iOS: registration + settings toggle + tap deep-link + on-screen
   suppression.
-- **Post-Phase-4 (this):** inspector parity (Note + Progress tabs, web
+- **Post-Phase-4 (done):** inspector parity (Note + Progress tabs, web
   tab order/gating) and the interactive terminal (SwiftTerm over the
   `terminal:*` socket events, lazy-opened per inspector).
 - **Live Activity (done):** a lock-screen / Dynamic Island card for a
@@ -210,9 +212,82 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   elapsed timer, resolving to ✓/✗. Starts when a turn begins in the
   viewed session or is submitted from the device; updates locally while
   the app is foregrounded, and via APNs `liveactivity` pushes (throttled
-  server-side in the result-ingestor) once backgrounded. The UI lives in
+  server-side in the result-ingestor) once backgrounded. Both throttles
+  are leading-edge + trailing-flush: the first update in a window goes
+  out immediately, and one deferred update at window expiry carries
+  whatever a burst left behind, so the card never sits stale mid-turn. The UI lives in
   the `ArgusWidgets` extension; `Shared/TurnActivityAttributes.swift` is
   the content-state wire contract with the server — field names must
   match `push.service.ts`. Without `APNS_*` configured the card still
   works while the app is open (plus a foreground reconcile fallback);
   locked-screen updates need the push credentials.
+- **Read-sync (done):** reading a session on *any* client withdraws its
+  completion banner from the phone — the banner mirrors the session's
+  `unread` flag. Server: a silent background clear push at every
+  `unread → false` transition (session opened, fresh turn superseding
+  the result, cancel), gated on an in-memory outstanding-banner set so
+  the hot ingest path pays a Set lookup. iOS: `UIBackgroundModes:
+  remote-notification` (re-run `xcodegen generate` — Info.plist is
+  generated), a background handler that removes the delivered
+  notification by `sessionId`, a local removal when the session is
+  read on-device, and a `refreshAll` sweep that catches whatever the
+  best-effort background push misses (Apple throttles them and never
+  delivers to force-quit apps).
+- **Inspector Files/Commits polish (done):** both panels rebuilt to the
+  web ContextPane's density — no `List` (its default row heights and
+  separators read loose), fixed 24pt mono rows in a `LazyVStack`.
+  Files is now a lazy-expanding tree (web FileTree port: depth-3
+  prefetch per cold expansion, cache kept across collapse, gitignored
+  eye toggle, branch badge, per-level inline error/"(empty)" rows)
+  instead of the old drill-down-per-directory browser; Commits is
+  one-line `sha · subject · age` rows under a branch-badge + refresh
+  header (amber when detached). Size/mtime and author/date/copy-SHA
+  moved to long-press menus — the touch equivalent of the web's
+  tooltips.
+- **Clone-failed toasts (done):** `session:clone-failed` was silently
+  ignored; forking a session whose CLI-state clone fails now floats an
+  amber toast (web SessionCloneFailedToasts parity: one per session,
+  newest first, 8s auto-dismiss + manual dismiss, session title looked
+  up at event time with id-prefix fallback) over the split view.
+- **Explicit terminal lifecycle (done):** the Terminal tab no longer
+  auto-attaches a PTY on visit — web TerminalPane parity: idle shows an
+  "Open shell on \<machine\>" CTA, an open shell gets a close (power)
+  button, a settled shell offers Dismiss / New shell. One deliberate
+  divergence: the shell is still reaped when the inspector closes (the
+  web leaves it running; on a phone an orphaned PTY has no re-attach
+  surface).
+- **Web-parity batch (done):** context ring learns Fable's 1M-default
+  window — and the shared `contextWindow.ts` table is now hash-pinned
+  by `ContextWindowLockstepTests` (+ an `ios.yml` trigger on that
+  path), so the Swift mirror can never silently drift again; usage
+  popover is an exact port of the web `UsageBreakdown` (ring-only
+  header badge, totals inside); Codex renders its brand-blue Color
+  glyph in light mode; surface greys pinned to the web's exact values
+  (iOS's `tertiarySystemBackground` is *white* in light mode, which
+  had made the inline-code chips and prompt bubble invisible); the
+  compact Files tree / Commits log; clone-failed toasts.
+- **Swift 6 (done):** ArgusKit, the app, and the widget extension all
+  build in Swift 6 language mode. Exactly five justified escapes:
+  `@preconcurrency` imports for SocketIO / UserNotifications /
+  ActivityKit (un-annotated SDK surfaces), `nonisolated(unsafe)` on
+  two documented-thread-safe formatter caches, and one
+  `@unchecked Sendable` delegate bridge. The migration also caught the
+  HTML sandbox's `decidePolicyFor` silently unbinding under newer SDKs
+  (now the async form) and an Xcode asset-symbol collision
+  (`agent-codex-color` → `agent-codex-brand`). Note: the newer local
+  Xcode is stricter than CI's — build locally before merging
+  concurrency-adjacent changes.
+- **Session compaction (this):** a "Compact session" button in the
+  context-ring popover (claude-code sessions only — codex/cursor print
+  modes fake it, see AGENTS.md) sends `/compact` through the normal
+  queue path; the transcript renders the compaction divider + the
+  injected summary collapsed beneath it, and the ring snaps to the
+  post-compaction context (`compact_boundary` postTokens) instead of
+  waiting for the next turn's usage.
+- **Enter-to-send (done):** a hardware keyboard's Enter sends the
+  composer, Shift+Enter inserts a newline — the web Composer's rule,
+  for the iPad Magic-Keyboard flow. `onKeyPress` sees only hardware
+  events, so the on-screen return key still newlines; Return during
+  IME composition confirms the marked text (first-responder
+  `markedTextRange` check — the web's `isComposing` guard); ⌘↩ and
+  ⌘. keep working.

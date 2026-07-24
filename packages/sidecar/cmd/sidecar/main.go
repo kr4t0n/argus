@@ -1,8 +1,9 @@
 // Command argus-sidecar is the per-machine daemon. It registers itself
-// with the Argus server, supervises N agents (each one wrapping a CLI
-// like claude-code, codex, cursor-agent), and persists its identity and
-// agent set to ~/.config/argus/sidecar.json so a restart re-spawns
-// agents instantly without waiting for a server reconcile.
+// with the Argus server, runs one runner per installed CLI type
+// (claude-code, codex, cursor-agent) that executes turns by explicit
+// workingDir, and persists its identity and workdir allowlist to
+// ~/.config/argus/sidecar.json so a restart resumes instantly without
+// waiting for a server reconcile.
 //
 // Subcommands:
 //
@@ -14,7 +15,7 @@
 //	            after --timeout) and remove the pidfile
 //	restart     stop + start
 //	status      report whether the daemon is running, plus PID, log
-//	            path, machineId, and configured agent count
+//	            path, machineId, and registered workdir count
 //	init        write the on-disk cache (bus URL, server URL, machine
 //	            name) — interactive at a TTY, flag-driven otherwise
 //	update      self-update by fetching the latest release for this OS/arch

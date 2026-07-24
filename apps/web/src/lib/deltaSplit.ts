@@ -34,18 +34,64 @@ export function splitDeltas(chunks: ResultChunkDTO[]): {
   /** Deltas (chronological) that occurred before the last tool — interim narration. */
   intermediateDeltas: ResultChunkDTO[];
 } {
+  // A command can contain several INNER CLI turns: background sub-agent
+  // flows emit a `result` final for the launch-time reply, keep
+  // streaming (nested events + the injected completion notification),
+  // then emit another final for the follow-up reply. Deltas before an
+  // earlier final are that inner turn's text — preamble in the final
+  // view, not the command's answer. A final counts as a boundary ONLY
+  // when more (non-nested) text follows it: the last final of a normal
+  // turn — and the synthetic process-exit final old sidecars emitted
+  // right after the rich one — has no deltas after it and must not
+  // erase the answer.
+  let lastDeltaSeq = -1;
+  for (const c of chunks) {
+    if (c.kind === 'delta' && !isNested(c) && c.seq > lastDeltaSeq) lastDeltaSeq = c.seq;
+  }
   let boundarySeq = -1;
   for (const c of chunks) {
+    if (isNested(c)) continue;
     if (c.kind === 'tool' || c.kind === 'stdout' || c.kind === 'stderr' || c.kind === 'error') {
       if (c.seq > boundarySeq) boundarySeq = c.seq;
+    }
+    if (c.kind === 'final' && c.seq < lastDeltaSeq && c.seq > boundarySeq) {
+      boundarySeq = c.seq;
+    }
+    // A background sub-agent's completion notification resumes the
+    // conversation (the CLI injects it as a user message): the model's
+    // next text answers IT, and everything before it addressed the
+    // pre-completion state. On the real wire this is the ONLY separator
+    // between the launch-time reply and the follow-up — the inner
+    // `result` finals all flush at process exit, after every delta.
+    if (
+      c.kind === 'progress' &&
+      (c.meta as Record<string, unknown> | null | undefined)?.contentType ===
+        'task_notification' &&
+      c.seq > boundarySeq
+    ) {
+      boundarySeq = c.seq;
     }
   }
   const finalDeltas: ResultChunkDTO[] = [];
   const intermediateDeltas: ResultChunkDTO[] = [];
   for (const c of chunks) {
-    if (c.kind !== 'delta') continue;
+    if (c.kind !== 'delta' || isNested(c)) continue;
     if (c.seq > boundarySeq) finalDeltas.push(c);
     else intermediateDeltas.push(c);
   }
   return { boundarySeq, finalDeltas, intermediateDeltas };
+}
+
+/**
+ * Chunks emitted inside a sub-agent (Task) run — stamped with
+ * meta.parentToolUseId — are INVISIBLE to the split: the sub-agent's
+ * tools must not move the boundary, and its streamed text must never
+ * join the parent's answer (it renders inside the SubAgentWindow card).
+ * Without this, a background sub-agent that streams its report after
+ * the parent's last top-level tool put that report INTO the rendered
+ * answer, glued to the parent's real reply.
+ */
+function isNested(c: ResultChunkDTO): boolean {
+  const pid = (c.meta as Record<string, unknown> | null | undefined)?.parentToolUseId;
+  return typeof pid === 'string' && pid.length > 0;
 }

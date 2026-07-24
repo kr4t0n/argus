@@ -63,7 +63,9 @@ heartbeat; failures degrade per-row. (The CLIs' quota endpoints are
 undocumented and may change.)
 - **Task-completion notifications (opt-in)** — desktop notification + chime
 when a session finishes off-screen; click to jump to it. Suppressed for the
-session you're already viewing.
+session you're already viewing. The native iOS app gets the same alert via
+APNs, and reading the session on any client withdraws the phone banner
+(silent clear push, best-effort by Apple's design).
 - **Soft-archive everywhere** — hide a session or a whole project from the
 sidebar without losing history; one-click restore, and archives survive
 sidecar restarts.

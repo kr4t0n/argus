@@ -19,7 +19,7 @@ type Props = { file: OpenFile };
 
 /**
  * Top-level viewer for one open file tab. Owns the fetch lifecycle for
- * the file's content (kicks off `GET /agents/:id/fs/read` on mount /
+ * the file's content (kicks off `GET /projects/:id/fs/read` on mount /
  * tab activation if uncached) and routes by content kind to the right
  * sub-viewer. The fetch result is cached in the file-tabs store so
  * tab-switching back is instant.

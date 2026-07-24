@@ -44,14 +44,27 @@ final class TerminalController {
         terminalView.terminalDelegate = delegateBridge
     }
 
-    func startIfNeeded() async {
-        guard state == .idle else { return }
+    /// User-driven open — the tab shows a CTA instead of auto-attaching
+    /// (web parity: visiting the pane must not spawn a PTY you didn't
+    /// ask for). Also the retry/new-shell path: a fresh PTY has a fresh
+    /// seq stream.
+    func open() async {
+        guard state != .connecting, state != .open else { return }
+        lastSeq = -1
         await start()
     }
 
-    func restart() async {
-        lastSeq = -1
-        await start()
+    /// User-driven close (the power button) — the web's "close shell".
+    /// Same WS close as the inspector-disappear reap; back to the CTA.
+    func closeShell() {
+        shutdown()
+    }
+
+    /// Drop a settled "Shell ended" banner back to the CTA without
+    /// opening a new PTY (the web's dismiss).
+    func dismissToIdle() {
+        guard case .closed = state else { return }
+        state = .idle
     }
 
     private func start() async {
@@ -132,7 +145,11 @@ final class TerminalController {
 /// SwiftTerm's delegate methods are nonisolated protocol requirements;
 /// this NSObject bridge hops them onto the MainActor controller. Kept
 /// separate so TerminalController can stay a plain @Observable class.
-private final class TerminalDelegateBridge: NSObject, TerminalViewDelegate {
+/// @unchecked Sendable: the only state is a weak reference assigned
+/// once at init (before any callback can fire), and every callback
+/// immediately hops to the MainActor — the send/sizeChanged closures
+/// need to carry `self` across that hop.
+private final class TerminalDelegateBridge: NSObject, TerminalViewDelegate, @unchecked Sendable {
     weak var controller: TerminalController?
 
     func send(source: TerminalView, data: ArraySlice<UInt8>) {
@@ -180,13 +197,31 @@ private struct TerminalHostView: UIViewRepresentable {
 /// sidecar user — it only exists for projects whose runner has the
 /// terminal opt-in, and the server scopes each terminal to the opening
 /// user.
+///
+/// Lifecycle is explicit, like the web TerminalPane: idle shows an
+/// "Open shell" CTA (no auto-attach), an open shell gets a close
+/// (power) button, and a settled shell offers Dismiss / New shell. The
+/// one divergence: the inspector-disappear reap stays — on a phone an
+/// orphaned PTY with no visible re-attach surface is worse than the
+/// web's leave-it-running stance.
 struct TerminalPanel: View {
+    @Environment(AppModel.self) private var app
     let controller: TerminalController
 
     var body: some View {
         VStack(spacing: 0) {
             switch controller.state {
-            case .idle, .connecting:
+            case .idle:
+                ContentUnavailableView {
+                    Label("No shell", systemImage: "terminal")
+                } description: {
+                    Text("Attach a shell on \(machineName).")
+                } actions: {
+                    Button("Open shell") {
+                        Task { await controller.open() }
+                    }
+                }
+            case .connecting:
                 ProgressView("Opening shell…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .failed(let message):
@@ -196,10 +231,27 @@ struct TerminalPanel: View {
                     Text(message)
                 } actions: {
                     Button("Try again") {
-                        Task { await controller.restart() }
+                        Task { await controller.open() }
                     }
                 }
             case .open, .closed:
+                if controller.state == .open {
+                    HStack {
+                        Spacer()
+                        Button {
+                            controller.closeShell()
+                        } label: {
+                            Image(systemName: "power")
+                        }
+                        .help("Close shell")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    Divider()
+                }
                 TerminalHostView(terminalView: controller.terminalView)
                 if case .closed(let message) = controller.state {
                     HStack {
@@ -207,8 +259,12 @@ struct TerminalPanel: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
+                        Button("Dismiss") {
+                            controller.dismissToIdle()
+                        }
+                        .font(.caption)
                         Button("New shell") {
-                            Task { await controller.restart() }
+                            Task { await controller.open() }
                         }
                         .font(.caption)
                     }
@@ -218,6 +274,9 @@ struct TerminalPanel: View {
                 }
             }
         }
-        .task { await controller.startIfNeeded() }
+    }
+
+    private var machineName: String {
+        controller.project.flatMap { app.fleet.machines[$0.machineId]?.name } ?? "the machine"
     }
 }

@@ -21,6 +21,22 @@ struct ContextWindowTests {
         #expect(ContextWindows.lookup(model: "sonnetics") == nil)
     }
 
+    @Test("Fable is 1M by default — no [1m] marker in either id shape")
+    func fableFamilies() {
+        let api = ContextWindows.lookup(model: "claude-fable-5")
+        #expect(api?.window == 1_000_000)
+        #expect(api?.family == "Claude Fable")
+        // cursor-cli display name: no "claude" substring at all.
+        #expect(ContextWindows.lookup(model: "Fable 5 1M Max Thinking")?.window == 1_000_000)
+    }
+
+    @Test("word boundaries: 'affable' is not Fable")
+    func fableFalsePositives() {
+        #expect(ContextWindows.lookup(model: "affable-9000") == nil)
+        #expect(ContextWindows.lookup(model: "unfable") == nil)
+        #expect(ContextWindows.lookup(model: "fables-1") == nil)
+    }
+
     @Test("OpenAI families")
     func openAIFamilies() {
         #expect(ContextWindows.lookup(model: "gpt-5-codex")?.window == 400_000)

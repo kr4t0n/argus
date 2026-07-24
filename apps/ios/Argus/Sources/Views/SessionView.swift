@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UIKit
 import UniformTypeIdentifiers
 import ArgusKit
 
@@ -151,7 +152,20 @@ struct SessionView: View {
         ToolbarItem(placement: .topBarTrailing) {
             HStack(spacing: 10) {
                 if let model {
-                    UsageBadge(usage: model.usage, context: model.context)
+                    UsageBadge(
+                        usage: model.usage,
+                        context: model.context,
+                        // /compact is a REAL client-side command only on
+                        // claude-code (codex/cursor print modes role-play
+                        // a fake "Compacted." reply — verified against
+                        // both binaries), and it can't overlap a turn.
+                        onCompact: session?.cliType == KnownAgentType.claudeCode
+                            && model.isRunning != true
+                            ? { app.submitPrompt(
+                                sessionId: sessionId, text: "/compact", attachmentIds: []
+                              ) }
+                            : nil
+                    )
                 }
                 Button {
                     app.inspectorPresented.toggle()
@@ -424,10 +438,14 @@ struct SessionView: View {
             PromptQueueList(sessionId: sessionId)
 
             inputBox
-                .frame(maxWidth: 720)
-                .frame(maxWidth: .infinity)
         }
-        .padding(.horizontal, 12)
+        // EXACTLY the transcript rows' geometry (pad INSIDE the 720
+        // cap, same 16pt) so the pill's edges line up with the text
+        // column at every window width — capping first and padding
+        // outside left the pill wider than the chat area.
+        .padding(.horizontal)
+        .frame(maxWidth: 720)
+        .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
     }
 
@@ -460,6 +478,23 @@ struct SessionView: View {
                 .lineLimit(1...5)
                 .padding(.vertical, 6)
                 .disabled(model == nil)
+                // Hardware-keyboard Enter sends, Shift+Enter newlines —
+                // the web Composer's onKeyDown rule, for the iPad
+                // Magic-Keyboard flow. onKeyPress sees only hardware
+                // events, so the on-screen return key still inserts a
+                // newline. Web parity details: an unmodified Return is
+                // ALWAYS swallowed (send() no-ops via canSend when
+                // there's nothing to send — Enter never newlines), any
+                // modifier falls through (Shift+Return → the field's
+                // newline; ⌘↩ → the send button's shortcut), and Return
+                // mid-IME-composition confirms the marked text instead
+                // of sending (the web's isComposing guard).
+                .onKeyPress(.return, phases: .down) { press in
+                    guard press.modifiers.isEmpty else { return .ignored }
+                    guard !ComposerKeyboard.isComposingMarkedText else { return .ignored }
+                    send()
+                    return .handled
+                }
 
                 if model?.isRunning == true {
                     // Web order: add-to-queue (only when there's content)
@@ -976,14 +1011,21 @@ private struct PromptBubble: View {
 
     private var overflows: Bool { textHeight > maxHeight }
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         HStack {
             Spacer(minLength: 40)
             bubble
-                // Neutral surface bubble (web: bg-surface-1 / surface-2),
-                // NOT blue. Applied OUTSIDE the fade mask so only the
-                // text fades, not the bubble itself.
-                .background(Color.surface2, in: RoundedRectangle(cornerRadius: 16))
+                // Neutral surface bubble, NOT blue — the web's exact
+                // pick: bg-surface-1 on light, surface-2/80 on dark
+                // (solid surface2 read one step too dark on light).
+                // Applied OUTSIDE the fade mask so only the text fades,
+                // not the bubble itself.
+                .background(
+                    colorScheme == .dark ? Color.surface2.opacity(0.8) : Color.surface1,
+                    in: RoundedRectangle(cornerRadius: 16)
+                )
         }
         .onPreferenceChange(PromptHeightKey.self) { textHeight = $0 }
     }
@@ -1029,9 +1071,41 @@ private struct PromptBubble: View {
 }
 
 private struct PromptHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    static var defaultValue: CGFloat { 0 }
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
+    }
+}
+
+/// The composer's stand-in for the web's `isComposing` guard: while an
+/// IME has marked text active (CJK composition), hardware Return must
+/// confirm the candidate, never send. SwiftUI doesn't surface marked
+/// text, so ask UIKit — walk to the first responder and check its
+/// `markedTextRange` (public API; the composer's backing field IS the
+/// first responder whenever a key press reaches onKeyPress).
+@MainActor
+enum ComposerKeyboard {
+    static var isComposingMarkedText: Bool {
+        guard let input = firstResponder() as? UITextInput else { return false }
+        return input.markedTextRange != nil
+    }
+
+    private static func firstResponder() -> UIResponder? {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows {
+                if let responder = findFirstResponder(in: window) { return responder }
+            }
+        }
+        return nil
+    }
+
+    private static func findFirstResponder(in view: UIView) -> UIResponder? {
+        if view.isFirstResponder { return view }
+        for subview in view.subviews {
+            if let responder = findFirstResponder(in: subview) { return responder }
+        }
+        return nil
     }
 }
 

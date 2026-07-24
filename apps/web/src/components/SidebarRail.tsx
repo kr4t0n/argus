@@ -264,7 +264,7 @@ function RailProjectTile({
 /**
  * The floating session list itself. Portaled to <body> so it escapes
  * the rail's `overflow-y-auto` project strip (same trick as
- * CreateAgentPopover): floats to the right of the anchor tile, top-
+ * CreateSessionPopover): floats to the right of the anchor tile, top-
  * aligned, with the bottom edge clamped to the viewport. The rail is
  * pinned to the left edge so there's no "flip to the other side"
  * fallback to worry about.
@@ -291,7 +291,7 @@ function RailSessionFlyout({
   const popRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
-  // Mirror CreateAgentPopover's placement loop: position before first
+  // Mirror CreateSessionPopover's placement loop: position before first
   // paint, then follow resizes/scrolls (the project strip scrolls
   // independently) and the panel's own size changes.
   useLayoutEffect(() => {

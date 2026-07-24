@@ -163,6 +163,21 @@ struct TimelineRowView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .thinking(let redacted):
             ThinkingRow(text: item.text, redacted: redacted)
+        case .compact:
+            // Compaction divider — everything above was replaced by a
+            // summary. Mirrors the web's centered-rule row.
+            HStack(spacing: 8) {
+                Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1)
+                Text(item.text)
+                    .font(.system(size: 10, weight: .medium))
+                    .textCase(.uppercase)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize()
+                Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1)
+            }
+            .padding(.vertical, 4)
+        case .compactSummary:
+            CompactSummaryRow(text: item.text)
         case .system:
             Text(item.text)
                 .font(.caption)
@@ -337,5 +352,42 @@ struct MonoBlock: View {
         .frame(maxHeight: maxHeight)
         .padding(8)
         .background(Color.surface1.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+
+/// The injected compaction summary — collapsed by default (long,
+/// semi-internal CLI copy); what future turns actually know about the
+/// compacted past.
+private struct CompactSummaryRow: View {
+    let text: String
+    @State private var open = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                withAnimation(.easeOut(duration: 0.12)) { open.toggle() }
+            } label: {
+                HStack(spacing: 4) {
+                    Text("compaction summary")
+                        .font(.system(size: 10, weight: .medium))
+                        .textCase(.uppercase)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                        .rotationEffect(.degrees(open ? 180 : 0))
+                }
+                .foregroundStyle(.tertiary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if open {
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.vertical, 2)
     }
 }

@@ -17,9 +17,8 @@ import { cn } from '../lib/utils';
  * `overflow-y-auto`, which otherwise clips a popover that pops
  * "above" the row.
  *
- * Named `CreateAgentPopover` for historical reasons; since the Agent
- * entity was retired it only creates project-first sessions (the
- * server pins the session to the machine + workingDir project).
+ * Creates project-first sessions (the server pins the session to the
+ * machine + workingDir project).
  *
  * Placement: the popover floats to the right of the sidebar (so it
  * doesn't overlap the row itself), vertically aligned with the row's
@@ -58,7 +57,7 @@ type Props = {
 const POPOVER_WIDTH = 352;
 const VIEWPORT_MARGIN = 8; // keep this far from the edge
 
-export function CreateAgentPopover({ machine, anchor, onClose, defaults }: Props) {
+export function CreateSessionPopover({ machine, anchor, onClose, defaults }: Props) {
   const upsertSession = useSessionStore((s) => s.upsertSession);
   const nav = useNavigate();
   const adapters = (machine.availableAdapters ?? []) as AvailableAdapter[];

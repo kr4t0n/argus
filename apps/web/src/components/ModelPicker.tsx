@@ -220,91 +220,100 @@ export function ModelPicker({ target, value, onChange }: Props) {
     { value: 'custom', label: 'custom…' },
   ];
 
-  // One wrap-tolerant row: model gets the most room, the secondary
-  // control (variant or effort) shares the line when it fits, facet
-  // chips trail and the refresh button anchors the row's right edge.
-  // flex-wrap is the safety valve — long model names (codex) push the
-  // secondary controls onto a second line instead of truncating
-  // everything. The description renders below the row, not in it: as
-  // a trailing flex item it wraps to a full line in narrow panels and
-  // strands the ml-auto refresh button alone on a third line.
+  // Two nested rows, not one: the controls wrap among themselves in a
+  // flex-1 track and the refresh button sits OUTSIDE that track, so it
+  // can never be the item that wraps. It used to ride the same wrap
+  // container with `ml-auto`, which reads as "anchor right" but really
+  // means "float right on whatever line I land on" — at the 352px both
+  // callers render at (312px of content in CreateSessionPopover), a
+  // claude-code row (model + effort + 1M) overshot by ~16px and pushed
+  // the button alone onto a second line.
+  //
+  // flex-wrap inside the track is still the safety valve — long model
+  // names (codex) or cursor's model+variant+effort trio push the later
+  // controls onto a second line instead of truncating everything. The
+  // description renders below both, not in the track: as a trailing
+  // flex item it wraps to a full line in narrow panels and strands
+  // whatever follows it.
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <Select
-          value={primaryValue}
-          options={primaryOptions}
-          onChange={onPrimaryChange}
-          className="min-w-[140px] flex-[2]"
-        />
-
-        {selected?.family && familyMembers.length > 0 && (
+      <div className="flex items-start gap-1.5">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
           <Select
-            value={selected.id}
-            options={familyMembers.map((m) => ({
-              value: m.id,
-              label: m.variantLabel || m.displayName,
-              hint: m.isDefault ? 'CLI default' : undefined,
-            }))}
-            onChange={(id) => {
-              const entry = byId.get(id);
-              if (entry) emitEntry(entry);
-            }}
-            className="min-w-[110px] flex-1"
+            value={primaryValue}
+            options={primaryOptions}
+            onChange={onPrimaryChange}
+            className="min-w-[104px] flex-[2]"
           />
-        )}
 
-        {selected?.facets?.effort && (
-          <Select
-            value={value?.effort ?? ''}
-            options={[
-              {
-                value: '',
-                label: 'effort: default',
-                hint: EFFORT_LABEL[selected.facets.effort.default] ?? undefined,
-              },
-              ...selected.facets.effort.levels.map((l) => ({
-                value: l,
-                label: `effort: ${EFFORT_LABEL[l] ?? l}`,
-              })),
-            ]}
-            onChange={(v) => {
-              const next = { ...(value ?? {}) } as ModelSelection;
-              if (v) next.effort = v as EffortLevel;
-              else delete next.effort;
-              onChange(next);
-            }}
-            className="min-w-[110px] flex-1"
-            title="effort / thinking strength"
-          />
-        )}
+          {selected?.family && familyMembers.length > 0 && (
+            <Select
+              value={selected.id}
+              options={familyMembers.map((m) => ({
+                value: m.id,
+                label: m.variantLabel || m.displayName,
+                hint: m.isDefault ? 'CLI default' : undefined,
+              }))}
+              onChange={(id) => {
+                const entry = byId.get(id);
+                if (entry) emitEntry(entry);
+              }}
+              className="min-w-[110px] flex-1"
+            />
+          )}
 
-        {selected?.facets?.context && (
-          <FacetToggle
-            label="1M"
-            title="1M-token context window (may require plan upgrade or usage credits)"
-            active={value?.context === '1m'}
-            onToggle={(on) => {
-              const next = { ...(value ?? {}) } as ModelSelection;
-              if (on) next.context = '1m';
-              else delete next.context;
-              onChange(next);
-            }}
-          />
-        )}
-        {selected?.facets?.speed && (
-          <FacetToggle
-            label="fast"
-            title="priority / fast service tier"
-            active={value?.speed === 'fast'}
-            onToggle={(on) => {
-              const next = { ...(value ?? {}) } as ModelSelection;
-              if (on) next.speed = 'fast';
-              else delete next.speed;
-              onChange(next);
-            }}
-          />
-        )}
+          {selected?.facets?.effort && (
+            <Select
+              value={value?.effort ?? ''}
+              options={[
+                {
+                  value: '',
+                  label: 'effort: default',
+                  hint: EFFORT_LABEL[selected.facets.effort.default] ?? undefined,
+                },
+                ...selected.facets.effort.levels.map((l) => ({
+                  value: l,
+                  label: `effort: ${EFFORT_LABEL[l] ?? l}`,
+                })),
+              ]}
+              onChange={(v) => {
+                const next = { ...(value ?? {}) } as ModelSelection;
+                if (v) next.effort = v as EffortLevel;
+                else delete next.effort;
+                onChange(next);
+              }}
+              className="min-w-[110px] flex-1"
+              title="effort / thinking strength"
+            />
+          )}
+
+          {selected?.facets?.context && (
+            <FacetToggle
+              label="1M"
+              title="1M-token context window (may require plan upgrade or usage credits)"
+              active={value?.context === '1m'}
+              onToggle={(on) => {
+                const next = { ...(value ?? {}) } as ModelSelection;
+                if (on) next.context = '1m';
+                else delete next.context;
+                onChange(next);
+              }}
+            />
+          )}
+          {selected?.facets?.speed && (
+            <FacetToggle
+              label="fast"
+              title="priority / fast service tier"
+              active={value?.speed === 'fast'}
+              onToggle={(on) => {
+                const next = { ...(value ?? {}) } as ModelSelection;
+                if (on) next.speed = 'fast';
+                else delete next.speed;
+                onChange(next);
+              }}
+            />
+          )}
+        </div>
 
         {target && (
           <button
@@ -312,7 +321,10 @@ export function ModelPicker({ target, value, onChange }: Props) {
             onClick={refresh}
             disabled={refreshing}
             title="refresh model list (probes the CLI directly)"
-            className="ml-auto rounded-md p-1.5 text-fg-muted transition-colors hover:bg-surface-2/60 hover:text-fg-primary disabled:hover:bg-transparent"
+            // h-8 matches the Select trigger's height so `items-start`
+            // lines the glyph up with the first control row and keeps it
+            // there when the track wraps.
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-surface-2/60 hover:text-fg-primary disabled:hover:bg-transparent"
           >
             <RefreshCw className={cn('h-3 w-3', refreshing && 'animate-spin')} />
           </button>

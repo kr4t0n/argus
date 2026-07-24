@@ -25,9 +25,14 @@ import { Tooltip } from './ui/Tooltip';
 export function UsageBadge({
   chunks,
   agentType,
+  onCompact,
 }: {
   chunks: ResultChunkDTO[];
   agentType: AgentType | undefined;
+  /** Ring-popover "Compact session" action — the caller gates it
+   *  (claude-code only, idle only) and wires the /compact dispatch;
+   *  undefined hides the button. */
+  onCompact?: () => void;
 }) {
   const total = useSessionUsage(chunks, agentType);
   const ctx = useSessionContext(chunks, agentType);
@@ -44,7 +49,7 @@ export function UsageBadge({
   const inOut = `↑ ${formatTokensShort(promptTotal)} ↓ ${formatTokensShort(total.outputTokens)}`;
 
   return (
-    <Tooltip content={<UsageBreakdown u={total} ctx={ctx} />}>
+    <Tooltip content={<UsageBreakdown u={total} ctx={ctx} onCompact={onCompact} />}>
       <span className="inline-flex shrink-0 cursor-default items-center gap-1.5 rounded-md border border-default bg-surface-1/60 px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-fg-tertiary">
         {ctx && <ContextRing percent={ctx.percent} />}
         <span>{inOut}</span>
@@ -108,7 +113,15 @@ function ContextRing({ percent }: { percent: number }) {
  *  rows live ABOVE a divider because they describe the latest turn's
  *  live state, while everything below is cumulative-across-the-session
  *  — distinct semantics, worth the visual separation. */
-function UsageBreakdown({ u, ctx }: { u: TokenUsage; ctx: SessionContext | null }) {
+function UsageBreakdown({
+  u,
+  ctx,
+  onCompact,
+}: {
+  u: TokenUsage;
+  ctx: SessionContext | null;
+  onCompact?: () => void;
+}) {
   const totalRows: Array<[string, string]> = [
     ['Input', u.inputTokens.toLocaleString()],
     ['Output', u.outputTokens.toLocaleString()],
@@ -155,6 +168,15 @@ function UsageBreakdown({ u, ctx }: { u: TokenUsage; ctx: SessionContext | null 
             <RowCells key={k} k={k} v={v} />
           ))}
         </div>
+      )}
+      {onCompact && (
+        <button
+          type="button"
+          onClick={onCompact}
+          className="mt-2 w-full rounded border border-default px-2 py-1 text-center font-sans text-[11px] text-fg-secondary transition-colors hover:bg-surface-1 hover:text-fg-primary"
+        >
+          Compact session
+        </button>
       )}
     </div>
   );

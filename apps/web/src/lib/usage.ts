@@ -52,21 +52,23 @@ export function useSessionUsage(
 }
 
 /**
- * First model name found in any chunk's `meta` for the active session.
+ * LATEST model name found in any chunk's `meta` for the active session.
  * Returns `null` until at least one chunk advertising a model has
  * arrived (typically the very first system / init / session-configured
  * progress chunk a turn emits).
  *
- * We return the FIRST match (not the latest) because the model is set
- * once at session init and doesn't change mid-turn — scanning forward
- * gives us the most stable answer the soonest. If a future feature
- * lets users swap models per-turn, switch this to `findLast` and the
- * UI rerenders for free.
+ * Latest match (backward scan), not first: the session model picker
+ * changes what SUBSEQUENT turns run on, and each turn is a fresh CLI
+ * process that re-advertises its model — so the newest advertising
+ * chunk is the truth. A forward scan would pin the label (and the
+ * context ring's window lookup) to the oldest loaded turn's model
+ * forever — and even shift it backward when scrolling pages older
+ * history in. Matches iOS `TranscriptState.latestModel()`.
  */
 export function useSessionModel(chunks: ResultChunkDTO[]): string | null {
   return useMemo(() => {
-    for (const c of chunks) {
-      const m = parseModel(c.meta);
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      const m = parseModel(chunks[i].meta);
       if (m) return m;
     }
     return null;
@@ -137,19 +139,35 @@ export function useSessionContext(
     const info: ContextWindowInfo | null = lookupContextWindow(model);
     if (!info) return null;
 
-    let latest: TokenUsage | null = null;
+    // Walk backward for the newest context signal: a usage-bearing
+    // final, OR a compact_boundary (whose postTokens IS the live
+    // context after compaction — the compact turn's own final reports
+    // zero usage, so without this the ring sits stale until the next
+    // real turn). Whichever appears later wins.
+    let used = 0;
     for (let i = chunks.length - 1; i >= 0; i--) {
       const c = chunks[i];
+      if (c.kind === 'progress') {
+        const meta = (c.meta ?? {}) as Record<string, unknown>;
+        if (meta.contentType === 'compact_boundary' && typeof meta.postTokens === 'number') {
+          used = meta.postTokens;
+          break;
+        }
+        continue;
+      }
       if (c.kind !== 'final') continue;
       const u = parseContextUsage(agentType, c.meta);
       if (u) {
-        latest = u;
-        break;
+        const sum = u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens;
+        // A cost-only parse — the compact turn's final: zero tokens but
+        // a real total_cost_usd, which hasUsage counts — carries no
+        // context signal. Keep walking (to the compact_boundary).
+        if (sum > 0) {
+          used = sum;
+          break;
+        }
       }
     }
-    if (!latest) return null;
-
-    const used = latest.inputTokens + latest.cacheReadTokens + latest.cacheWriteTokens;
     if (used === 0) return null;
 
     const percent = Math.min(100, Math.max(0, (used / info.window) * 100));

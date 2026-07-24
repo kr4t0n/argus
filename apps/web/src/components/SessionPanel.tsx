@@ -215,7 +215,19 @@ export function SessionPanel() {
             {elapsed && <span className="text-xs text-fg-tertiary">· {elapsed}</span>}
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <UsageBadge chunks={entry.chunks} agentType={entry.session.cliType ?? undefined} />
+            <UsageBadge
+              chunks={entry.chunks}
+              agentType={entry.session.cliType ?? undefined}
+              // /compact is a REAL client-side command only on claude-code
+              // (codex/cursor print modes role-play a fake "Compacted."
+              // reply — verified against both binaries), and compaction
+              // can't overlap a running turn.
+              onCompact={
+                entry.session.cliType === 'claude-code' && !running
+                  ? () => void onSend('/compact', [])
+                  : undefined
+              }
+            />
             <Button
               size="icon"
               variant="ghost"

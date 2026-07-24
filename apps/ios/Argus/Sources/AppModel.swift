@@ -35,6 +35,27 @@ final class AppModel {
         return nil
     }
 
+    /// Failed session-clone-from-turn toasts, keyed by sessionId (one
+    /// per session, latest wins) — web cloneFailureStore parity. The
+    /// fork itself succeeded (the Session row exists); what failed is
+    /// cloning the CLI's on-disk state, so the copy says the next
+    /// prompt starts a fresh conversation.
+    struct CloneFailure: Identifiable, Equatable {
+        let sessionId: String
+        let sessionTitle: String
+        let reason: String
+        let startedAt: Date
+        /// startedAt participates so a re-failure of the same session
+        /// gets fresh view identity — and with it a fresh 8s timer.
+        var id: String { "\(sessionId)-\(startedAt.timeIntervalSince1970)" }
+    }
+
+    private(set) var cloneFailures: [CloneFailure] = []
+
+    func dismissCloneFailure(sessionId: String) {
+        cloneFailures.removeAll { $0.sessionId == sessionId }
+    }
+
     /// Latest fs/git change events — inspector panels watch these and
     /// refetch when the event matches their project's
     /// (machineId, workingDir) pair.
@@ -178,6 +199,7 @@ final class AppModel {
         inspectorPresented = false
         drainInFlight = [:]
         drainCooldown = [:]
+        cloneFailures = []
         extensions = UserExtensions()
         fleet.reset()
         sessionList.reset()
@@ -235,7 +257,7 @@ final class AppModel {
         // backgrounded.
         LiveActivityManager.shared.register = { [weak self] sessionId, tokenHex in
             guard let client = self?.client else { return }
-            try? await client.registerLiveActivity(token: tokenHex, sessionId: sessionId)
+            _ = try? await client.registerLiveActivity(token: tokenHex, sessionId: sessionId)
         }
         LiveActivityManager.shared.unregister = { [weak self] tokenHex in
             guard let client = self?.client else { return }
@@ -355,6 +377,14 @@ final class AppModel {
         do { sessionList.setAll(try await sessions) } catch { handleAPIError(error) }
         do { extensions = try await userExtensions } catch { handleAPIError(error) }
         maybeDrainAllQueues()
+        // Banners for sessions read elsewhere (or superseded) while we
+        // weren't reachable are stale — sweep against the fresh unread
+        // flags. Covers cold launch, foreground, and reconnect alike;
+        // the server's live clear push can't (best-effort, and never
+        // delivered to a force-quit app).
+        PushManager.reconcileDelivered(
+            keepingUnread: Set(sessionList.sessions.values.filter(\.unread).map(\.id))
+        )
     }
 
     /// PUT the full extension flag set (no server-side merge), keeping
@@ -533,8 +563,20 @@ final class AppModel {
                 )
                 maybeDrain(sessionId: status.id)
             }
-        case .sessionCloneFailed:
-            break
+        case .sessionCloneFailed(let payload):
+            // Look the session up at push time so the toast shows the
+            // human title even if the row hasn't hydrated yet (the
+            // session:created event may still be in flight); fall back
+            // to the id prefix so the label is never empty.
+            let title = sessionList.sessions[payload.sessionId]?.title
+                ?? String(payload.sessionId.prefix(8))
+            cloneFailures.removeAll { $0.sessionId == payload.sessionId }
+            cloneFailures.append(CloneFailure(
+                sessionId: payload.sessionId,
+                sessionTitle: title,
+                reason: payload.reason,
+                startedAt: Date()
+            ))
 
         case .machineUpsert(let machine):
             fleet.upsert(machine: machine)

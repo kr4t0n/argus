@@ -133,6 +133,7 @@ func (a *ClaudeCodeAdapter) Execute(
 	// to this Execute() so we never leak across runs.
 	state := newFileEditState()
 	tasks := newTaskListState()
+	compact := &compactState{}
 
 	dir := runDir(cmd.WorkingDir, a.workingDir)
 	spec := StreamSpec{
@@ -142,7 +143,7 @@ func (a *ClaudeCodeAdapter) Execute(
 		Dir:        dir,
 		StderrKind: protocol.KindStderr,
 		Mapper: func(line string) []Chunk {
-			return mapClaudeLine(line, state, tasks, dir)
+			return mapClaudeLine(line, state, tasks, compact, dir)
 		},
 	}
 
@@ -297,7 +298,57 @@ func claudeIsUserTextTurn(line map[string]any) bool {
 // traffic so task tool results additionally emit a synthesized TodoWrite
 // snapshot chunk (see claude_tasks.go). Pass `state=nil` / `tasks=nil` to
 // disable either behaviour.
-func mapClaudeLine(line string, state *fileEditState, tasks *taskListState, workingDir string) []Chunk {
+// compactState carries the one-line memory the compact flow needs: the
+// compaction summary arrives as the first text-bearing user event AFTER
+// a compact_boundary — a plain string on the manual /compact path, a
+// [{type:"text",...}] array on the auto path — with no other marking on
+// the event itself.
+type compactState struct{ pendingSummary bool }
+
+func (c *compactState) expectSummary() {
+	if c != nil {
+		c.pendingSummary = true
+	}
+}
+
+func (c *compactState) takeSummary() bool {
+	if c == nil || !c.pendingSummary {
+		return false
+	}
+	c.pendingSummary = false
+	return true
+}
+
+// textBlocksOnly returns the joined text when every block in a user
+// message's content array is a text block — the shape the auto-compact
+// summary arrives in. Empty or mixed arrays (tool_result, image, …)
+// don't qualify.
+func textBlocksOnly(contents []any) (string, bool) {
+	if len(contents) == 0 {
+		return "", false
+	}
+	parts := make([]string, 0, len(contents))
+	for _, c := range contents {
+		item, _ := c.(map[string]any)
+		if item["type"] != "text" {
+			return "", false
+		}
+		text, _ := item["text"].(string)
+		parts = append(parts, text)
+	}
+	return strings.Join(parts, "\n"), true
+}
+
+// formatTokenCount renders context sizes the way the dashboards do:
+// "25.8k" / "412".
+func formatTokenCount(n int64) string {
+	if n >= 1000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+func mapClaudeLine(line string, state *fileEditState, tasks *taskListState, compact *compactState, workingDir string) []Chunk {
 	ev := TryParseJSON(line)
 	if ev == nil {
 		return []Chunk{{Kind: protocol.KindDelta, Delta: line}}
@@ -334,14 +385,85 @@ func mapClaudeLine(line string, state *fileEditState, tasks *taskListState, work
 				return []Chunk{{Kind: protocol.KindProgress, Content: desc, Meta: ev}}
 			}
 		case "task_notification":
-			// Drop entirely. Claude posts this on completion paired with the
-			// matching `task_started`, but `summary` is the same string as
-			// `description` on the started event — surfacing both produces
-			// a duplicate pill in the activity stream. We keep the started
-			// event (which appears at task kickoff, when the user actually
-			// wants the feedback) and rely on the next chunk to imply
-			// completion.
+			// For BACKGROUND sub-agents (Task with run_in_background) this
+			// is the completion event, and `summary` carries the
+			// sub-agent's full final report — the Task tool_result itself
+			// is only launch boilerplate in that flow (verified against
+			// claude 2.1.210 stream captures). `tool_use_id` points at the
+			// dispatching Task call, so clients attach the summary as the
+			// sub-agent card's real result. meta.tool_use_id also makes
+			// older clients drop it from the main timeline (the same rule
+			// that dedups task_started narration) — graceful degradation,
+			// no double-render. Notifications without a summary or task
+			// linkage carry no signal and stay dropped.
+			summary, _ := ev["summary"].(string)
+			toolUseID, _ := ev["tool_use_id"].(string)
+			if summary != "" && toolUseID != "" {
+				meta := map[string]any{
+					"contentType": "task_notification",
+					"tool_use_id": toolUseID,
+				}
+				if s, _ := ev["status"].(string); s != "" {
+					meta["status"] = s
+				}
+				return []Chunk{{Kind: protocol.KindProgress, Content: summary, Meta: meta}}
+			}
 			return nil
+		case "task_updated", "background_tasks_changed":
+			// Background-task bookkeeping (title/status changes, the live
+			// task roster). No user-facing content of its own — the
+			// interesting signal (the completion summary) arrives via
+			// task_notification above. Content-less so it never renders as
+			// a junk "system" row; the full event rides in Meta.
+			return []Chunk{{Kind: protocol.KindProgress, Meta: ev}}
+		case "compact_boundary":
+			// Manual /compact or threshold auto-compaction: the CLI
+			// replaced the conversation history with a summary.
+			// compact_metadata carries before/after context sizes — the
+			// UI renders a transcript divider and snaps the context
+			// ring to postTokens (the compact turn's own result
+			// reports zero usage, so without this the ring would sit
+			// stale until the next real turn).
+			meta := map[string]any{"contentType": "compact_boundary"}
+			var pre, post int64
+			if cm, ok := ev["compact_metadata"].(map[string]any); ok {
+				if v, ok := jsonNumberToInt64(cm["pre_tokens"]); ok {
+					meta["preTokens"] = v
+					pre = v
+				}
+				if v, ok := jsonNumberToInt64(cm["post_tokens"]); ok {
+					meta["postTokens"] = v
+					post = v
+				}
+				if v, ok := jsonNumberToInt64(cm["cumulative_dropped_tokens"]); ok {
+					meta["droppedTokens"] = v
+				}
+				if v, ok := jsonNumberToInt64(cm["duration_ms"]); ok {
+					meta["durationMs"] = v
+				}
+				if s, _ := cm["trigger"].(string); s != "" {
+					meta["trigger"] = s
+				}
+			}
+			compact.expectSummary()
+			return []Chunk{{
+				Kind:    protocol.KindProgress,
+				Content: fmt.Sprintf("Compacted %s → %s tokens", formatTokenCount(pre), formatTokenCount(post)),
+				Meta:    meta,
+			}}
+		case "status":
+			// Compaction lifecycle ("compacting" → compact_result) and
+			// any future status pulses. Content-less so it never
+			// renders as a junk system row; clients read meta for a
+			// live "Compacting…" state.
+			meta := map[string]any{"contentType": "status"}
+			if s, _ := ev["status"].(string); s != "" {
+				meta["status"] = s
+			}
+			if s, _ := ev["compact_result"].(string); s != "" {
+				meta["compactResult"] = s
+			}
+			return []Chunk{{Kind: protocol.KindProgress, Meta: meta}}
 		case "api_retry":
 			// Emitted when an API call fails with a retryable error (e.g.
 			// a 502) and Claude Code is about to back off and retry; can
@@ -383,7 +505,16 @@ func mapClaudeLine(line string, state *fileEditState, tasks *taskListState, work
 			switch item["type"] {
 			case "text":
 				if s, _ := item["text"].(string); s != "" {
-					out = append(out, Chunk{Kind: protocol.KindDelta, Delta: s})
+					// Nested sub-agent text (the sub-agent's preamble
+					// narration and streamed response) must carry the
+					// parent id like every other nested chunk kind, or
+					// the clients can't scope it to the SubAgentWindow
+					// and it leaks into the parent turn's thought flow.
+					var meta map[string]any
+					if parentToolUseID != "" {
+						meta = map[string]any{"parentToolUseId": parentToolUseID}
+					}
+					out = append(out, Chunk{Kind: protocol.KindDelta, Delta: s, Meta: meta})
 				}
 			case "thinking":
 				// Extended-thinking reasoning block. The text lives in the
@@ -444,7 +575,39 @@ func mapClaudeLine(line string, state *fileEditState, tasks *taskListState, work
 
 	case "user":
 		msg, _ := ev["message"].(map[string]any)
+		// Plain-text user events (string content, no tool_result
+		// blocks). Two shapes matter: the compaction summary the CLI
+		// injects right after a compact_boundary (kept — it is what
+		// future turns actually know about the compacted past, shown
+		// as a collapsed transcript row), and <local-command-stdout>
+		// slash-command echoes (noise, dropped). Anything else — e.g.
+		// injected task notifications — stays dropped as before.
+		if text, ok := msg["content"].(string); ok {
+			if strings.HasPrefix(text, "<local-command-") {
+				return nil
+			}
+			if compact.takeSummary() {
+				return []Chunk{{
+					Kind:    protocol.KindProgress,
+					Content: text,
+					Meta:    map[string]any{"contentType": "compact_summary"},
+				}}
+			}
+			return nil
+		}
 		contents, _ := msg["content"].([]any)
+		// Auto-compaction emits the very same summary message through
+		// the engine normalizer, which rewraps string content as
+		// [{type:"text",...}] blocks (claude 2.1.210) — so the pending
+		// summary can arrive in array form too. tool_result arrays fall
+		// through without consuming the flag.
+		if text, ok := textBlocksOnly(contents); ok && compact.takeSummary() {
+			return []Chunk{{
+				Kind:    protocol.KindProgress,
+				Content: text,
+				Meta:    map[string]any{"contentType": "compact_summary"},
+			}}
+		}
 		out := []Chunk{}
 		for _, c := range contents {
 			item, _ := c.(map[string]any)

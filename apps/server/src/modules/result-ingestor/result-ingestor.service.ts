@@ -17,7 +17,7 @@ import { CommandService } from '../command/command.service';
 import { PushService } from '../push/push.service';
 
 const CONSUMER = 'server-1';
-const REFRESH_AGENT_STREAMS_MS = 5_000;
+const REFRESH_RUNNER_STREAMS_MS = 5_000;
 
 type ResultEnvelope = ResultChunk | SessionExternalIdEvent | SessionCloneFailedEvent;
 
@@ -48,7 +48,7 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     await this.refreshStreams();
-    this.refreshTimer = setInterval(() => this.refreshStreams(), REFRESH_AGENT_STREAMS_MS);
+    this.refreshTimer = setInterval(() => this.refreshStreams(), REFRESH_RUNNER_STREAMS_MS);
     this.running = true;
     this.loopPromise = this.consumeLoop();
   }
@@ -120,9 +120,9 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
       } catch (err) {
         if (this.running) {
           const msg = (err as Error).message;
-          // A destroyed agent has its result stream DELed (MachineService
-          // .deleteAgentStreams), and a Redis flush drops every group. Either
-          // leaves a stream in our read set with no consumer group, and a
+          // An emergency DEL of a runner result stream (the documented
+          // Redis-full recovery move) or a Redis flush drops its consumer
+          // groups. Either leaves a stream in our read set with no group, and a
           // single NOGROUP fails the *whole* multi-stream XREADGROUP — so
           // one destroyed agent would otherwise stall live streaming for
           // every session until the 5s timed refresh. Re-sync the stream
@@ -265,7 +265,8 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
           select: { status: true },
         });
         if (cmd?.status === 'cancelled') {
-          await this.sessions.setStatus(chunk.sessionId, 'idle', { unread: false });
+          const dto = await this.sessions.setStatus(chunk.sessionId, 'idle', { unread: false });
+          void this.push.clearSessionNotification(dto);
           void this.push.endLiveActivity(chunk.sessionId, false);
         }
         return;
@@ -284,14 +285,25 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
       );
       // Same trigger point as the web's desktop notification: a turn
       // reached a terminal state. Fire-and-forget — a push failure must
-      // never affect ingestion.
-      void this.push.notifySessionFinished(dto, status === 'failed');
+      // never affect ingestion. The final chunk's content (claude-code:
+      // the canonical answer; codex: absent) seeds the alert-body
+      // preview so the happy path needs no extra DB read.
+      void this.push.notifySessionFinished(dto, status === 'failed', {
+        commandId: chunk.commandId,
+        finalContent: chunk.kind === 'final' ? chunk.content : undefined,
+      });
       // Resolve any lock-screen card immediately (✓/✗).
       void this.push.endLiveActivity(chunk.sessionId, status === 'failed');
     } else {
       // A fresh turn is running: clear any prior unread result so the
       // dot doesn't linger while the amber "active" indicator shows.
-      await this.sessions.setStatus(chunk.sessionId, 'active', { unread: false });
+      const dto = await this.sessions.setStatus(chunk.sessionId, 'active', { unread: false });
+      // Same supersedence for the phone banner: a "completed" alert
+      // about a session that's running again is stale. Runs per chunk
+      // but costs a Set lookup unless an alert is actually outstanding
+      // (queued follow-ups / remote submits — an interactive read
+      // already cleared it via markSeen).
+      void this.push.clearSessionNotification(dto);
     }
   }
 }

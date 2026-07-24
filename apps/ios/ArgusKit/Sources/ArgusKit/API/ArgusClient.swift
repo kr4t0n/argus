@@ -104,10 +104,6 @@ public final class ArgusClient: @unchecked Sendable {
         try await send("POST", "/sessions/\(id)/seen")
     }
 
-    public func deleteSession(id: String) async throws {
-        try await sendVoid("DELETE", "/sessions/\(id)")
-    }
-
     public func forkSession(id: String, commandId: String, title: String? = nil) async throws -> SessionDTO {
         struct ForkRequest: Encodable {
             let commandId: String
@@ -158,10 +154,6 @@ public final class ArgusClient: @unchecked Sendable {
         try await send("GET", "/machines", query: flag("includeArchived", includeArchived))
     }
 
-    public func getMachine(id: String) async throws -> MachineDTO {
-        try await send("GET", "/machines/\(id)")
-    }
-
     // MARK: Terminals (interactive PTY)
 
     /// Open a PTY in the project's working dir — a terminal is a
@@ -187,11 +179,6 @@ public final class ArgusClient: @unchecked Sendable {
         )
     }
 
-    @discardableResult
-    public func closeTerminal(id: String) async throws -> TerminalDTO {
-        try await send("DELETE", "/terminals/\(id)")
-    }
-
     public func deleteMachine(id: String) async throws {
         try await sendVoid("DELETE", "/machines/\(id)")
     }
@@ -207,10 +194,6 @@ public final class ArgusClient: @unchecked Sendable {
         try await send("POST", "/machines/\(machineId)/sidecar/update")
     }
 
-    public func updateAllSidecars() async throws -> SidecarUpdateBatchAccepted {
-        try await send("POST", "/machines/sidecar/update-all")
-    }
-
     public func listProjects() async throws -> [ProjectDTO] {
         try await send("GET", "/projects")
     }
@@ -219,8 +202,7 @@ public final class ArgusClient: @unchecked Sendable {
 
     // Project-addressed routes — the runner-era read path (the wire
     // request carries the workingDir; the sidecar serves it after an
-    // allowlist check). The agent-addressed variants below stay for the
-    // mixed-fleet window and die with Stage C.
+    // allowlist check).
 
     public func listProjectDir(
         projectId: String,

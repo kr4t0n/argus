@@ -256,10 +256,28 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   raw `node:http2` because APNs requires HTTP/2 and Node's fetch can't
   speak it. Fired from `result-ingestor` at the exact point a session
   flips to `idle`/`failed` + unread (the same trigger as the web's
-  desktop notifications); payload carries only the session title +
-  "Turn completed/failed" (no prompt text on lock screens) and a
-  `sessionId` for the client deep link. 410/`BadDeviceToken`/
+  desktop notifications); payload carries the session title, a
+  `sessionId` for the client deep link, and — for completed turns — a
+  ~300-char preview of the assistant's answer (deliberate trade-off:
+  answer text on the lock screen in exchange for actionable banners;
+  iOS "Show Previews: When Unlocked" is the user-side scope control;
+  failures keep a fixed "Turn failed"). The preview uses the final
+  chunk's content (claude-code's `result` carries the whole answer);
+  codex finals are content-less, so `PushService.answerPreview`
+  re-derives the answer via the deltaSplit boundary rule — making a
+  THIRD port of deltaSplit (web `lib/deltaSplit.ts`, iOS
+  `DeltaSplit.swift`, server `answerPreview`); change one, change all
+  three. 410/`BadDeviceToken`/
   `Unregistered` feedback prunes the `DeviceToken` row.
+  The phone banner is a **projection of the session's `unread` flag**:
+  wherever `unread` flips false — `markSeen` (session opened on any
+  client) or the ingestor's fresh-turn/cancel transitions —
+  `clearSessionNotification` withdraws the banner via a silent
+  background push (`content-available: 1`, priority 5) that wakes the
+  iOS app to delete its own delivered notification (APNs has no
+  server-side revoke). Gated by the in-memory `outstandingBanners` set,
+  so the per-chunk caller costs a Set lookup and nothing is sent unless
+  an alert actually went out.
 - `sidecar-link/` — raw WebSocket server on path `/sidecar-link`
   attached to the same `http.Server` as NestJS (via `HttpAdapterHost`,
   `noServer` pattern). Owns one connection per sidecar, validates a
@@ -844,6 +862,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Gotchas
 
+- **Model detection is LATEST-match, in both clients**: the right-panel
+  model line and the context ring's window lookup derive the model from
+  chunk `meta` (`parseModel`). Web `useSessionModel` scans backward;
+  iOS `TranscriptState.latestModel()` likewise. It used to be
+  first-match on web (pre-model-picker assumption "set once at session
+  init"), which pinned the label and ring denominator to the oldest
+  loaded turn even after a mid-session model swap — and shifted it
+  *backward* when scrolling paged older history in. Keep both clients
+  on latest-match.
+
 - **A turn may deliver MORE THAN ONE terminal chunk — finalize must be
   idempotent**: sidecars ≤ 0.2.7-rc.1 emitted two finals per healthy
   turn — the CLI's own `result` final (rich: usage, real
@@ -863,6 +891,68 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   only marks the Command row) — the ingestor's already-terminal branch
   handles that case explicitly, without a push or unread dot, and no
   longer overwrites `cancelled` with `completed`.
+- **Live Activity throttles must trailing-edge flush**: both lock-screen
+  card update paths throttle tool-count updates — `LiveActivityManager`
+  at 2s locally, `PushService` at 15s via APNs. The 15s floor is
+  deliberate: priority-10 `liveactivity` pushes draw from an
+  undocumented per-app hourly budget, and sustained sub-15s cadence
+  gets *silently* throttled on-device (APNs still returns 200) unless
+  the app opts into `NSSupportsLiveActivitiesFrequentUpdates`. The
+  original leading-edge-only throttles (`if now - last < window
+  return`) discarded every update inside the window, so the card sat
+  stale on the leading state through a burst and snapped 1→4→10 tools
+  when the next chunk happened to land outside a window. Both sides now
+  arm one timer per window that pushes the then-current counters at
+  expiry — same push rate (≤ 1/window, no extra APNs budget), bounded
+  staleness. `end`/`endLiveActivity` must disarm that timer, or the
+  trailing "running" update fires after the ✓/✗ and revives a settled
+  card. Tool counts still legitimately step by >1: one assistant
+  message can carry several parallel `tool_use` blocks and the sidecar
+  emits their chunks together.
+- **Delivered APNs banners can only be withdrawn by the app itself**:
+  there is no server-side revoke, so "read on web → banner gone on
+  phone" works via a silent background push (`content-available: 1`,
+  and `apns-priority: 5` — Apple rejects background pushes at 10) that
+  wakes the iOS app to `removeDeliveredNotifications`, matched on the
+  payload's `sessionId`. Background pushes are best-effort: Apple
+  throttles them to an undocumented budget, defers them in Low Power
+  Mode, and NEVER delivers them to a force-quit app — so the client
+  also sweeps stale banners in `refreshAll` (cold launch, foreground,
+  reconnect) against fresh `unread` flags. The server-side
+  `outstandingBanners` gate is per-process memory: a restart forgets
+  it, which the same sweep covers. Requires `UIBackgroundModes:
+  remote-notification` in `project.yml` (regenerate with `xcodegen
+  generate` — the Info.plist is generated).
+- **`/compact` is real on claude-code only**: claude's `-p` mode parses
+  it client-side — the stream is `system/status` (compacting →
+  compact_result), `system/compact_boundary` (pre/post token counts in
+  `compact_metadata`), an injected summary user-message, and an empty
+  zero-usage result. The adapter maps these to progress chunks
+  (`contentType: compact_boundary / compact_summary / status`), the
+  clients render a divider + collapsed summary, and the context ring
+  snaps to `postTokens` (the compact turn's own usage is empty).
+  codex `exec` and cursor-agent `-p` instead hand slash text to the
+  MODEL, which role-plays a convincing fake "Compacted." reply while
+  the context keeps growing (verified against both binaries,
+  2026-07-18) — never surface a compact affordance for those adapters.
+  Gotcha: the summary's wire shape differs by trigger (claude 2.1.210,
+  confirmed by bundle disassembly). Manual `/compact` goes through the
+  local-command handler and emits the summary as plain-STRING user
+  content; AUTO compaction routes it through the engine normalizer,
+  which rewraps it as a `[{type:"text",...}]` ARRAY. The adapter must
+  accept both after a boundary (`textBlocksOnly` in claude_code.go) —
+  matching only the string shape silently drops every auto summary.
+- **`contextWindow.ts` has a hand-written Swift mirror, and the lockstep
+  is hash-enforced**: the iOS context ring's table
+  (`ArgusKit/Engine/ContextWindow.swift`) mirrors
+  `packages/shared-types/src/contextWindow.ts`.
+  `ContextWindowLockstepTests` pins the TS file's SHA-256 and
+  `ios.yml` triggers on that path, so editing the TS table without
+  porting the change (and re-pinning) fails iOS CI in the same push.
+  This exists because the Fable 1M entry (53c9549) landed TS-side only
+  and the iOS ring read 5x too full until a user noticed. Comment-only
+  TS edits also trip the pin on purpose — the comments encode
+  load-bearing rules (entry ordering).
 - **`path:line` citations in markdown links**: CLI agents emit links like
   `[src/foo.go:123](src/foo.go:123)`. TWO layers conspire against these,
   and both must be handled (`StreamViewer.tsx`):
@@ -914,6 +1004,28 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   CLIs on a small Redis. The runner dispatches each decoded turn as an
   independent goroutine and owns the `XACK` after the handler completes;
   a `NOGROUP` after a Redis flush self-heals (re-ensure group + retry).
+- **The sidecar's shared go-redis pool must stay explicitly capped**
+  (`bus.Dial`): go-redis v9 defaults assume a dedicated Redis —
+  PoolSize = 10×GOMAXPROCS, and idle conns are **never closed
+  client-side**: v9 has no background reaper (v8's `IdleCheckFrequency`
+  was removed), `ConnMaxIdleTime` is only enforced lazily when a conn is
+  popped at checkout, the default LIFO pool keeps re-using the hot
+  top-of-stack so post-burst conns at the bottom are never popped, and
+  `Put()` re-pools unconditionally when `MaxIdleConns=0`. Sidecar
+  publishes are fire-and-forget XADDs from many concurrent goroutines
+  (runner result chunks, fs/git responders, watchers, heartbeat) at
+  ~150ms RTT, so one busy streaming turn can open 15+ sockets in a burst
+  that then linger until the server/NAT side kills them (~10 min) —
+  observed 2026-07-16 pinning the 30-client Redis Cloud cap and refusing
+  new clients (which also crash-loops a restarting server, see the
+  Redis-unreachable boot gotcha). `bus.Dial` therefore pins
+  `PoolSize`/`MaxActiveConns` = 8, `MaxIdleConns` = 3,
+  `ConnMaxIdleTime` = 5m, `PoolFIFO` = true. Fleet budget on the 30-cap
+  plan: server holds 4 (ioredis), each machine ≤8 at burst / ~5 steady →
+  roughly 5 machines. Data-safe emergency relief when saturated:
+  `CLIENT KILL` go-redis conns with `idle>300` and `cmd≠xreadgroup`
+  (parked stream readers always show `idle≤5`; go-redis re-dials
+  transparently, and Postgres is the source of truth).
 - **Stream MAXLEN is silent message loss, not just memory pressure**:
   every `XADD` on both sides (`apps/server/src/infra/redis/redis.service.ts`
   and `packages/sidecar/internal/bus/bus.go`) trims with `MAXLEN ~ N`,

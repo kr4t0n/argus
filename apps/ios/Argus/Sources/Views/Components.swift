@@ -27,11 +27,16 @@ extension Color {
     static let agentCursor = Color(hex: 0x38BDF8)
     static let agentCustom = Color(hex: 0xA3A3A3)
 
-    // Layered greys mapped to the web's surface-0/1/2 tokens. The system
-    // grouped backgrounds already stack light↔dark the same way.
-    static let surface0 = Color(.systemBackground)
-    static let surface1 = Color(.secondarySystemBackground)
-    static let surface2 = Color(.tertiarySystemBackground)
+    // Layered greys mirroring the web's surface-0/1/2 tokens EXACTLY
+    // (index.css: light 97.3/92/87%, dark 4/9/15% lightness). These were
+    // previously the system grouped backgrounds, which LOOK like the
+    // same stack but aren't: iOS's tertiarySystemBackground is WHITE in
+    // light mode (the system alternates white→gray→white for nesting),
+    // so every surface2 consumer — prompt bubble, inline-code chip, bar
+    // tracks — painted invisible white-on-white on the light theme.
+    static let surface0 = Color(light: 0xF8F8F8, dark: 0x0A0A0A)
+    static let surface1 = Color(light: 0xEBEBEB, dark: 0x171717)
+    static let surface2 = Color(light: 0xDEDEDE, dark: 0x262626)
 
     /// Inline-code accent (`.markdown code`): red-700 light / blue-200 dark.
     static let codeInlineFg = Color(light: 0xB91C1C, dark: 0xBFDBFE)
@@ -119,7 +124,8 @@ enum AgentTypeStyle {
     /// Claude's mark carries its own brand orange (render as-is); Codex
     /// and Cursor are mono glyphs tinted with the primary label color —
     /// exactly how the web renders them (ClaudeCode.Color vs mono Codex/
-    /// Cursor inheriting text-fg-primary).
+    /// Cursor inheriting text-fg-primary). Codex additionally swaps to
+    /// its brand-blue Color glyph in light mode (see AgentTypeIcon).
     static func assetIsTinted(for type: AgentType) -> Bool {
         type != KnownAgentType.claudeCode
     }
@@ -128,9 +134,21 @@ enum AgentTypeStyle {
 struct AgentTypeIcon: View {
     let type: AgentType
     var size: CGFloat = 14
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        if let asset = AgentTypeStyle.assetName(for: type) {
+        // Codex mirrors the web's theme-resolved pick (AgentTypeIcon.tsx
+        // codexEntry): light → the brand Color glyph (blue-gradient mark
+        // on a white tile that blends into light surfaces), dark → the
+        // mono glyph tinted primary, where the brand tile would pop as a
+        // bright chip.
+        if type == KnownAgentType.codex, colorScheme == .light {
+            Image("agent-codex-brand")
+                .renderingMode(.original)
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
+        } else if let asset = AgentTypeStyle.assetName(for: type) {
             if AgentTypeStyle.assetIsTinted(for: type) {
                 Image(asset)
                     .renderingMode(.template)
@@ -178,7 +196,10 @@ struct SessionStatusDot: View {
 }
 
 enum RelativeTime {
-    private static let formatter: RelativeDateTimeFormatter = {
+    // Foundation formatters are documented thread-safe on modern OSes;
+    // nonisolated(unsafe) states that guarantee to Swift 6 (same
+    // pattern as ArgusKit's ISO8601 caches).
+    private nonisolated(unsafe) static let formatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter
@@ -227,6 +248,79 @@ struct ConnectionBanner: View {
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity)
             .background(.yellow.opacity(0.15))
+        }
+    }
+}
+
+/// Bottom toast column for failed session-clone-from-turn events — the
+/// web SessionCloneFailedToasts: amber warning card per session, newest
+/// on top, auto-dismissed after 8s (the copy isn't actionable beyond
+/// "next prompt starts fresh", so sticky would just be visual debt).
+struct CloneFailureToasts: View {
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ForEach(app.cloneFailures.sorted { $0.startedAt > $1.startedAt }) { failure in
+                CloneFailureCard(failure: failure) {
+                    app.dismissCloneFailure(sessionId: failure.sessionId)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+        .frame(maxWidth: 420)
+        .animation(.snappy, value: app.cloneFailures)
+    }
+}
+
+private struct CloneFailureCard: View {
+    let failure: AppModel.CloneFailure
+    let onDismiss: () -> Void
+
+    private static let autoDismiss: Duration = .seconds(8)
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.footnote)
+                .foregroundStyle(Color.toolAmber)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(failure.sessionTitle)
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                    Spacer(minLength: 6)
+                    Text("clone failed")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                Text("Couldn't fork CLI state. Next prompt will start a fresh conversation.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !failure.reason.isEmpty {
+                    Text(failure.reason)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+        .background(Color.surface1, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.toolAmber.opacity(0.4)))
+        .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .task {
+            try? await Task.sleep(for: Self.autoDismiss)
+            if !Task.isCancelled { onDismiss() }
         }
     }
 }

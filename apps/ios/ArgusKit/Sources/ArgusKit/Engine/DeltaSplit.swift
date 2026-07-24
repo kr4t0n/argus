@@ -23,11 +23,41 @@ public struct DeltaSplit: Equatable, Sendable {
     public let intermediateDeltas: [ResultChunk]
 
     public static func split(_ chunks: [ResultChunk]) -> DeltaSplit {
+        // A command can contain several INNER CLI turns: background
+        // sub-agent flows emit a `result` final for the launch-time
+        // reply, keep streaming, then emit another final for the
+        // follow-up reply. Deltas before an earlier final are that
+        // inner turn's text — preamble, not the command's answer. A
+        // final counts as a boundary ONLY when more (non-nested) text
+        // follows it: the last final of a normal turn — and the
+        // synthetic process-exit final old sidecars emitted right
+        // after the rich one — has no deltas after it and must not
+        // erase the answer.
+        var lastDeltaSeq = -1
+        for chunk in chunks where chunk.kind == .delta && !isNested(chunk) {
+            if chunk.seq > lastDeltaSeq { lastDeltaSeq = chunk.seq }
+        }
         var boundarySeq = -1
-        for chunk in chunks {
+        for chunk in chunks where !isNested(chunk) {
             switch chunk.kind {
             case .tool, .stdout, .stderr, .error:
                 if chunk.seq > boundarySeq { boundarySeq = chunk.seq }
+            case .final:
+                if chunk.seq < lastDeltaSeq, chunk.seq > boundarySeq {
+                    boundarySeq = chunk.seq
+                }
+            case .progress:
+                // A background sub-agent's completion notification
+                // resumes the conversation (the CLI injects it as a
+                // user message): the model's next text answers IT. On
+                // the real wire this is the ONLY separator between the
+                // launch-time reply and the follow-up — the inner
+                // `result` finals all flush at process exit, after
+                // every delta.
+                if chunk.meta?["contentType"]?.string == "task_notification",
+                   chunk.seq > boundarySeq {
+                    boundarySeq = chunk.seq
+                }
             default:
                 break
             }
@@ -35,7 +65,7 @@ public struct DeltaSplit: Equatable, Sendable {
 
         var finalDeltas: [ResultChunk] = []
         var intermediateDeltas: [ResultChunk] = []
-        for chunk in chunks where chunk.kind == .delta {
+        for chunk in chunks where chunk.kind == .delta && !isNested(chunk) {
             if chunk.seq > boundarySeq {
                 finalDeltas.append(chunk)
             } else {
@@ -47,5 +77,16 @@ public struct DeltaSplit: Equatable, Sendable {
             finalDeltas: finalDeltas,
             intermediateDeltas: intermediateDeltas
         )
+    }
+
+    /// Chunks emitted inside a sub-agent (Task) run — stamped with
+    /// meta.parentToolUseId — are INVISIBLE to the split: the sub-agent's
+    /// tools must not move the boundary, and its streamed text must
+    /// never join the parent's answer (it renders inside the sub-agent
+    /// card). Without this, a background sub-agent streaming its report
+    /// after the parent's last top-level tool put that report INTO the
+    /// rendered answer, glued to the parent's real reply.
+    private static func isNested(_ chunk: ResultChunk) -> Bool {
+        !(chunk.meta?["parentToolUseId"]?.string ?? "").isEmpty
     }
 }

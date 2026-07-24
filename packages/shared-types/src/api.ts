@@ -34,7 +34,6 @@ export type MachineStatus = 'online' | 'offline';
 /**
  * Snapshot of a host running argus-sidecar. Created from the first
  * MachineRegisterEvent and refreshed on every subsequent (re-)register.
- * Agents are nested children — see `agents` for the lazy-loaded list.
  */
 export interface MachineDTO {
   id: string;
@@ -207,9 +206,10 @@ export interface CreateCommandRequest {
 }
 
 /**
- * REST face of GET /agents/:id/models. `fetchedAt` lets the dashboard
- * show staleness; `source` distinguishes the compiled-in claude-code
- * table from live CLI output. The server caches per agent with a TTL —
+ * REST face of GET /machines/:machineId/models. `fetchedAt` lets the
+ * dashboard show staleness; `source` distinguishes the compiled-in
+ * claude-code table from live CLI output. The server caches per
+ * (machine, cliType) with a TTL —
  * pass `?refresh=1` to bypass.
  */
 export interface ModelCatalogResponse {
@@ -281,10 +281,11 @@ export interface TerminalClosedMessage {
 }
 
 /**
- * REST response for `GET /agents/:id/fs/list`. The controller waits for
- * the sidecar's fs-list-response on the lifecycle stream and surfaces
- * exactly one of `entries` (success) or `error` (sidecar rejected the
- * path, or the agent is offline and the request timed out).
+ * REST response for `GET /projects/:id/fs/list`. The controller waits
+ * for the sidecar's fs-list-response on the lifecycle stream and
+ * surfaces exactly one of `entries` (success) or `error` (sidecar
+ * rejected the path, or the machine is offline and the request timed
+ * out).
  */
 export interface FSListResponse {
   path: string;
@@ -302,9 +303,10 @@ export interface FSListResponse {
 }
 
 /**
- * REST response for `GET /agents/:id/fs/read`. Discriminated union: the
- * dashboard switches the viewer based on `result.kind`. The error path
- * (path escaped jail, file too large, agent offline, sidecar refused)
+ * REST response for `GET /projects/:id/fs/read`. Discriminated union:
+ * the dashboard switches the viewer based on `result.kind`. The error
+ * path (path escaped jail, file too large, machine offline, sidecar
+ * refused)
  * surfaces as an HTTP error and never reaches this shape.
  */
 export type FSReadResult =
@@ -313,7 +315,7 @@ export type FSReadResult =
   | { kind: 'binary'; size: number };
 
 /**
- * REST response for `GET /agents/:id/git/log`. Carries both the
+ * REST response for `GET /projects/:id/git/log`. Carries both the
  * recent-commits list and the current GitStatus (branch / detached
  * HEAD) so the dashboard's commit panel doesn't have to round-trip a
  * separate fs-list call just to render its header. Empty `commits`

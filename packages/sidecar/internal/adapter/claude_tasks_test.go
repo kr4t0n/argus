@@ -29,7 +29,7 @@ func lastSynthesizedTodos(t *testing.T, lines []string) []any {
 	tasks := newTaskListState()
 	var todos []any
 	for _, line := range lines {
-		for _, c := range mapClaudeLine(line, nil, tasks, "") {
+		for _, c := range mapClaudeLine(line, nil, tasks, nil, "") {
 			if c.Kind != protocol.KindTool {
 				continue
 			}
@@ -65,14 +65,14 @@ func TestClaudeTaskCreateSynthesizesTodoWrite(t *testing.T) {
 	use := mapClaudeLine(
 		taskUseLine("tu-1", "TaskCreate",
 			`{"subject":"Set up project","description":"d","activeForm":"Setting up project"}`),
-		nil, tasks, "")
+		nil, tasks, nil, "")
 	if len(use) != 1 || use[0].Meta["tool"] != "TaskCreate" {
 		t.Fatalf("tool_use chunk should pass through unmodified, got %+v", use)
 	}
 
 	res := mapClaudeLine(
 		taskResultLine("tu-1", "Task #1 created successfully: Set up project", false),
-		nil, tasks, "")
+		nil, tasks, nil, "")
 	if len(res) != 2 {
 		t.Fatalf("want result + synthesized chunk, got %d: %+v", len(res), res)
 	}
@@ -211,8 +211,8 @@ func TestClaudeTaskUpdateUnknownIDPlaceholder(t *testing.T) {
 // the pending slot without applying the mutation or emitting a snapshot.
 func TestClaudeTaskErrorResultMutatesNothing(t *testing.T) {
 	tasks := newTaskListState()
-	mapClaudeLine(taskUseLine("tu-1", "TaskCreate", `{"subject":"Alpha","description":"d"}`), nil, tasks, "")
-	res := mapClaudeLine(taskResultLine("tu-1", "Error: task list unavailable", true), nil, tasks, "")
+	mapClaudeLine(taskUseLine("tu-1", "TaskCreate", `{"subject":"Alpha","description":"d"}`), nil, tasks, nil, "")
+	res := mapClaudeLine(taskResultLine("tu-1", "Error: task list unavailable", true), nil, tasks, nil, "")
 	if len(res) != 1 {
 		t.Fatalf("errored result must not emit a synthesized chunk, got %+v", res)
 	}
@@ -228,8 +228,8 @@ func TestClaudeTaskErrorResultMutatesNothing(t *testing.T) {
 // Read, …) don't grow a synthesized chunk even with task state present.
 func TestClaudeNonTaskResultNoSnapshot(t *testing.T) {
 	tasks := newTaskListState()
-	mapClaudeLine(taskUseLine("tu-1", "Bash", `{"command":"ls"}`), nil, tasks, "")
-	res := mapClaudeLine(taskResultLine("tu-1", "file.txt", false), nil, tasks, "")
+	mapClaudeLine(taskUseLine("tu-1", "Bash", `{"command":"ls"}`), nil, tasks, nil, "")
+	res := mapClaudeLine(taskResultLine("tu-1", "file.txt", false), nil, tasks, nil, "")
 	if len(res) != 1 {
 		t.Fatalf("non-task result should emit exactly one chunk, got %+v", res)
 	}
