@@ -38,6 +38,10 @@ Argus has **four** moving parts and one wire format:
        Split off from `lifecycle` so a build-burst of fs events can't
        MAXLEN-trim unread heartbeats (which flips healthy machines offline).
        Drained by the same MachineService XREADGROUP as `lifecycle`.
+       `git-changed` has exactly ONE producer — the per-workdir
+       `gitWatcher` — and that is a deliberate invariant, not an
+       accident of history; see the `vcs_state_changed` gotcha before
+       adding a second.
      - `agent:background`        — `argus-bg` task progress (see the
        background-task service note under Server modules).
      - `machine:{mid}:control`   — server → sidecar daemon
@@ -1143,7 +1147,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   tells us a new subtype appeared and needs explicit handling. Don't
   "fix" it by making the fallback content-less — special-case known-noisy
   subtypes individually instead (as done for `thinking_tokens`,
-  `task_notification`, and `api_retry`).
+  `task_notification`, `api_retry`, `vcs_state_changed`, and
+  `code_change_published`).
+  *Worked example of the breadcrumb doing its job:* a burst of "system"
+  rows in a release session on `claude` 2.1.217 turned out to be two
+  subtypes added since 2.1.210 (`vcs_state_changed`,
+  `code_change_published`), both below. Method, if it happens again: the
+  session transcript (`~/.claude/projects/<slug>/<id>.jsonl`) does **not**
+  record `system` events — they're synthesized at the output layer — so
+  diff `strings` of the two `~/.local/share/claude/versions/<v>` binaries
+  for `type:"system",subtype:"…"` instead. In `-p` mode the CLI drains its
+  event queue to stdout **unfiltered** (the interactive REPL bridge
+  applies an allowlist), so the sidecar sees strictly more subtypes than
+  the interactive UI does.
 - **`api_retry` (Claude Code)**: `{"type":"system","subtype":"api_retry",
   "error_status":502,"attempt":N,"max_retries":10,"retry_delay_ms":…}`
   fires when an API call fails retryably and the CLI is backing off; it
@@ -1152,6 +1168,59 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   render as a junk "system" row. No UI affordance yet — a future
   improvement could read `meta` to show "retrying N/10" while the turn
   stalls in backoff.
+- **`vcs_state_changed` (Claude Code ≥ 2.1.217)**:
+  `{"type":"system","subtype":"vcs_state_changed","kind":"commit"|"push"|
+  "merge"|"rebase","cwd":"…"}` — the CLI classifies git/gh operations it
+  observes in **its own Bash tool output** and emits one event per kind,
+  so a single compound command fires several (`git checkout dev && git
+  merge --ff-only main && git push origin dev` → `merge` + `push`).
+  Payload-free by design: it says the repo changed, not what it changed
+  to. Mapped to a content-less `progress` chunk with
+  `meta.contentType="vcs_state_changed"` + `kind`/`cwd`, and **nothing
+  else** — it is silenced, not consumed.
+  **Design decision, considered and rejected (2026-07-24):** wiring this
+  to a `git-changed` nudge so the dashboard reacts to `git push` (which
+  `gitWatcher` structurally cannot see — a push moves
+  `refs/remotes/<remote>/…`, and the watcher only watches `.git/HEAD` +
+  `.git/refs/heads/`). Rejected on three counts, and the reasoning is
+  worth keeping because the idea is tempting:
+  1. **Refs on disk are the source of truth; this event is a claim.**
+     It's the CLI's classification of its own shell output, not an
+     observation of the repository. `gitWatcher` stays the single
+     producer of `git-changed`.
+  2. **It's attributed to the wrong directory.** `cwd` is the *session's*
+     dir, not the mutated repo's — a turn running `git -C ../other push`
+     emits `kind:"push"` with the session's cwd, nudging a repo that
+     didn't change. A false positive the watcher cannot have.
+  3. **The overlap is total where it matters, and the gap is empty.**
+     Every kind the dashboard renders (commit / merge / rebase) already
+     moves a ref `gitWatcher` sees. The one kind it uniquely catches —
+     `push` — changes nothing the git panel displays: `git.go` puts
+     ahead/behind explicitly out of scope, and `GitLogPanel` renders
+     branch + short SHA + commit list, none of which a push alters.
+  If ahead/behind ever lands in `GitStatus` (cheap now — `ReadGitLog`
+  already shells out, so it's one `git rev-list --left-right --count
+  @{u}...HEAD`), revisit (1) and (2) *first*: the honest fix is probably
+  for `gitWatcher` to also watch `refs/remotes/`, not to trust the CLI's
+  self-report. Remaining wire gotchas either way: `kind` is an **open
+  set** (treat unknown values as "something changed"), and detection is
+  best-effort — dry runs excluded, and a backgrounded command whose
+  confirming output hadn't printed emits nothing.
+- **`code_change_published` (Claude Code ≥ 2.1.217)**:
+  `{"type":"system","subtype":"code_change_published","provider":"github",
+  "url":"…/pull/36","repo":"owner/name","identifier":"36"}` — fires when
+  the harness binds the session to a pull/merge request, on creation
+  **and** on every later contribution (`gh pr edit/close/ready`, `gh pr
+  checkout`, or a plain push to a branch with an open PR). It repeats for
+  the same URL many times per session (11× in the session that surfaced
+  it), so it is idempotent rebinding, not a create — dedupe downstream.
+  Mapped to a content-less `progress` chunk carrying the four fields in
+  `meta`. No UI affordance yet; the obvious one is a PR link in the
+  session header. *Gotcha:* the fields are **scraped from captured
+  command output** (last PR-shaped URL printed), which can include hook
+  output or a file the same command catted — a display hint, not a
+  verified identity. Never send credentials to `url` on its strength;
+  `provider` is an open set too.
 - **Extended thinking (Claude Code)**: newer `claude` emits two distinct
   thinking signals, handled in `mapClaudeLine`:
   1. `{"type":"system","subtype":"thinking_tokens","estimated_tokens":N,
