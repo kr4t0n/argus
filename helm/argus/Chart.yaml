@@ -12,10 +12,25 @@ type: application
 # field — see helm-publish.yml. Prerelease versions (-rc.N) are hidden
 # from plain `helm search`/`helm upgrade`; install them with
 # `--version 0.2.7-rc.3` (or `--devel`).
-version: 0.3.0
+version: 0.3.1
 # App version tracks the Docker image tags pulled by default. Bump in
 # lockstep with `version` whenever the chart starts requiring features
 # only present in newer images; otherwise it can lag.
+#
+# 0.3.1 is a control-plane + sidecar release with NO schema change —
+# compatible with 0.3.0, no forced migration. appVersion pins the 0.3.1
+# server/web images. Highlights: session compaction straight from the
+# context-ring popover; sub-agent turns render in their own scoped cards
+# (background runs report via task_notification, nested / inner-turn
+# chunks no longer leak into the answer); push/Live-Activity gains an
+# answer preview in the turn-completed APNs alert, a trailing-edge flush
+# on both update throttles, and withdraws iOS completion banners once a
+# session is read elsewhere; plus web polish (model picker shows the
+# latest turn's model, hover-to-reveal turn timestamps, Fable's 1M
+# context window in the ring). Pair with sidecar v0.3.1 on agent hosts —
+# it finalizes the 0.3.1-rc series, capping the shared go-redis pool so
+# publish bursts can't exhaust maxclients, and captures the
+# auto-compaction summary's text-block array shape.
 #
 # 0.3.0 is the runner refactor — a BREAKING release incompatible with
 # < 0.3.0. The per-agent model is retired end to end (no Agent table, no
@@ -104,7 +119,7 @@ version: 0.3.0
 # 0.2.0 shipped file/image attachments — the default images include the
 # attachment module, so `objectStore` works out of the box (set the
 # endpoint + bucket + creds to enable it).
-appVersion: "0.3.0"
+appVersion: "0.3.1"
 
 home: https://github.com/kr4t0n/argus
 sources:
