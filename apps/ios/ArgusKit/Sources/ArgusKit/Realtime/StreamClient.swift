@@ -106,6 +106,18 @@ public enum ServerEvent: Sendable {
     case terminalClosed(TerminalClosedPayload)
 }
 
+/// Identifies one project room. A Hashable struct rather than a joined
+/// string so there's no separator for a `workingDir` to collide on —
+/// `("a", "b/c")` and `("a/b", "c")` are distinct rooms.
+///
+/// File scope, not nested in `StreamClient`: a type nested inside a
+/// `@MainActor` class inherits that isolation, which fights the
+/// `Sendable` conformance a dictionary key wants.
+struct ProjectRoomKey: Hashable, Sendable {
+    let machineId: String
+    let workingDir: String
+}
+
 /// Owns the Socket.IO connection and surfaces typed events as an
 /// `AsyncStream`. Create one per login; `connect` after login, `shutdown`
 /// on logout.
@@ -156,6 +168,12 @@ public final class StreamClient {
         socket?.removeAllHandlers()
         socket = nil
         manager = nil
+        // Membership belongs to the connection we just dropped. Both
+        // callers (login `connect`, logout `shutdown`) run with no
+        // session view on screen, so there are no live holders to
+        // orphan; keeping stale counts would instead make the next
+        // `rejoinProjectRooms()` resubscribe rooms nobody is watching.
+        projectRooms.removeAll()
     }
 
     // MARK: Rooms
@@ -163,12 +181,58 @@ public final class StreamClient {
     public func joinSession(_ id: String) { socket?.emit("subscribe:session", id) }
     public func leaveSession(_ id: String) { socket?.emit("unsubscribe:session", id) }
 
+    /// Held project rooms → holder count. A REFCOUNT, not a flag: the
+    /// inspector, the file-preview sheet, and anything else wanting
+    /// `fs:changed` subscribe independently, and Socket.IO's `leave` is
+    /// not refcounted — so without this the first holder to disappear
+    /// unsubscribes the socket out from under the others.
+    ///
+    /// Doubles as the replay list for `rejoinProjectRooms()`.
+    private(set) var projectRooms: [ProjectRoomKey: Int] = [:]
+
     public func joinProject(machineId: String, workingDir: String) {
-        socket?.emit("subscribe:project", ["machineId": machineId, "workingDir": workingDir])
+        let key = ProjectRoomKey(machineId: machineId, workingDir: workingDir)
+        let holders = (projectRooms[key] ?? 0) + 1
+        projectRooms[key] = holders
+        // Holders 2..N are already subscribed on this connection.
+        if holders == 1 { emitJoinProject(key) }
     }
 
     public func leaveProject(machineId: String, workingDir: String) {
+        let key = ProjectRoomKey(machineId: machineId, workingDir: workingDir)
+        let holders = (projectRooms[key] ?? 0) - 1
+        if holders > 0 {
+            projectRooms[key] = holders
+            return
+        }
+        projectRooms[key] = nil
         socket?.emit("unsubscribe:project", ["machineId": machineId, "workingDir": workingDir])
+    }
+
+    /// Re-subscribe every held project room after a reconnect.
+    ///
+    /// Socket.IO rooms are per-CONNECTION, so a drop silently discards
+    /// all of them. Nothing replayed them before, so after any blip
+    /// `fs:changed` / `git:changed` stopped arriving until the holding
+    /// view happened to reappear — on mobile, where drops are routine,
+    /// that meant the inspector's file tree and commit list quietly went
+    /// dead while still looking live.
+    ///
+    /// Called from `AppModel`'s `.connected` handler, next to the
+    /// session/terminal rejoin. Deliberately NOT called from the socket's
+    /// own connect callback: those closures run outside this actor
+    /// (SocketIO is a `@preconcurrency` import) and must not touch
+    /// actor-isolated state — which is why every other handler in this
+    /// file only ever touches `continuation`.
+    public func rejoinProjectRooms() {
+        for key in projectRooms.keys { emitJoinProject(key) }
+    }
+
+    private func emitJoinProject(_ key: ProjectRoomKey) {
+        socket?.emit(
+            "subscribe:project",
+            ["machineId": key.machineId, "workingDir": key.workingDir]
+        )
     }
 
     public func joinTerminal(_ id: String) { socket?.emit("subscribe:terminal", id) }

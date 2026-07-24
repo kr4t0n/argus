@@ -1374,6 +1374,43 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   only re-scrolls when the citation itself changed; and a FAILED refresh
   keeps the last good render rather than showing an error, because an
   atomic rename leaves a window where the path briefly doesn't resolve.
+- **Live file tabs, iOS side**: same feature, different shape, because
+  `FilePreviewSheet` is a MODAL SHEET with no cache — `@State result`
+  dies on dismiss and only one file is open at a time. So none of the
+  web's `revisions` / stamped-content bookkeeping is needed; the "only
+  the focused file refetches" bound is structural. Three iOS-specific
+  problems it does have, none of which are transcription:
+  1. **`FSChangedPayload` has no timestamp** (`{path, machineId,
+     workingDir}`) and is Equatable, so two consecutive writes to one
+     directory are an identical value and `.onChange(of:)` — which fires
+     only on inequality — swallows every repeat. Observers must watch
+     **`AppModel.fsChangeSeq`**, a counter bumped per delivery, NOT
+     `lastFSChange`. This also silently affected the inspector's file
+     tree before the counter existed.
+  2. **The project room is often not joined when the sheet opens.** Only
+     `InspectorPane` joined it, and the inspector is
+     `.inspector(isPresented:)` — routinely closed on iPhone. But the
+     sheet also opens from chat citations / FileChips in `SessionView`,
+     where nothing else holds the room. The sheet now joins it itself,
+     which is only safe because `StreamClient` refcounts (below).
+  3. **`TextFileView` highlighted only on appear** (bare `.task`), so a
+     refreshed file would render new text under the OLD file's colors —
+     content and highlight are two separate arrays here, unlike the
+     web's single shiki HTML blob. Now `.task(id: HighlightKey)`, which
+     also folds in the former separate colorScheme observer.
+  Scroll is held via `.scrollPosition(id:)` + `.scrollTargetLayout()`
+  (iOS 17) rather than the web's `scrollTop` capture/restore.
+- **Project WS rooms are refcounted on BOTH clients** — `lib/ws.ts` on
+  web, `StreamClient` on iOS (`projectRooms: [ProjectRoomKey: Int]`,
+  replayed by `rejoinProjectRooms()` from `AppModel`'s `.connected`
+  handler). iOS deliberately does NOT replay from the socket's own
+  connect callback: SocketIO is a `@preconcurrency` import so those
+  closures run outside the actor and must only touch `continuation` —
+  which is why every other handler in that file does exactly that.
+  `ProjectRoomKey` is a file-scope Hashable struct, not nested in the
+  `@MainActor` class (nested types inherit that isolation, which fights
+  `Sendable`) and not a joined string (`("a","b/c")` and `("a/b","c")`
+  would collide). Details of the web side:
 - **Project WS rooms are refcounted (`lib/ws.ts`)**: `joinProject` /
   `leaveProject` count holders and only emit `subscribe:` /
   `unsubscribe:project` at the 0↔1 edges. Socket.io's `leave` is not

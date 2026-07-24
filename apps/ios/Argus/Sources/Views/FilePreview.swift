@@ -38,9 +38,26 @@ struct FilePreviewSheet: View {
     @State private var result: FSReadResult?
     @State private var loadError: String?
     @State private var htmlMode: HtmlMode = .preview
+    /// Coalesces a burst of nudges into one re-read; cancelled and
+    /// replaced while the window is open, and on dismiss.
+    @State private var refreshTask: Task<Void, Never>?
+
+    /// Trailing window for coalescing `fs:changed` nudges, on top of the
+    /// sidecar's own 250 ms fsWatcher debounce — so a long edit loop
+    /// settles into one re-read instead of tracking the agent's write
+    /// rate. Matches the web client's INVALIDATE_DEBOUNCE_MS.
+    private static let refreshDebounce = Duration.milliseconds(400)
 
     private var fileExtension: String {
         (target.path as NSString).pathExtension.lowercased()
+    }
+
+    /// Directory the previewed file sits in, workingDir-relative. `""`
+    /// for a root-level file — matching how the sidecar names the watched
+    /// root, and NOT the "." a naive path API would hand back.
+    private var targetDirectory: String {
+        let parent = (target.path as NSString).deletingLastPathComponent
+        return parent == "." ? "" : parent
     }
 
     private var isHTMLFile: Bool {
@@ -73,17 +90,78 @@ struct FilePreviewSheet: View {
                         Button("Done") { dismiss() }
                     }
                 }
-                .task {
-                    guard let client = app.client else { return }
-                    do {
-                        result = try await client.readProjectFile(
-                            projectId: project.projectId, path: target.path
-                        ).result
-                    } catch {
-                        app.handleAPIError(error)
-                        loadError = (error as? APIError)?.message ?? error.localizedDescription
-                    }
+                .task { await load(isRefresh: false) }
+                // Hold the project room for as long as the sheet is up.
+                // The inspector holds it too when the preview is opened
+                // from the Files browser — but a preview opened from a
+                // chat citation or FileChip can have the inspector
+                // closed, in which case nothing else is subscribed and no
+                // nudge would ever arrive. StreamClient refcounts, so the
+                // overlapping case is safe.
+                .onAppear {
+                    app.stream?.joinProject(
+                        machineId: project.machineId, workingDir: project.workingDir
+                    )
                 }
+                .onDisappear {
+                    refreshTask?.cancel()
+                    refreshTask = nil
+                    app.stream?.leaveProject(
+                        machineId: project.machineId, workingDir: project.workingDir
+                    )
+                }
+                // Watch the SEQ, not the payload: repeat writes to one
+                // directory are Equatable-identical and `.onChange` would
+                // swallow every one after the first — which is exactly
+                // the case that matters here (see AppModel.fsChangeSeq).
+                .onChange(of: app.fsChangeSeq) { scheduleRefresh() }
+        }
+    }
+
+    /// Read the file into `result`.
+    ///
+    /// A refresh deliberately does NOT clear `result` first: the reader
+    /// is looking at this file, and dropping to a spinner every time an
+    /// agent touches its directory would be worse than the staleness
+    /// being fixed. A refresh that fails likewise keeps the last good
+    /// render — an atomic write-then-rename leaves a window where the
+    /// path briefly doesn't resolve, and that must not blow away a
+    /// readable file. A cold load still surfaces its error; there's
+    /// nothing else to show then.
+    @MainActor
+    private func load(isRefresh: Bool) async {
+        guard let client = app.client else { return }
+        do {
+            let fresh = try await client.readProjectFile(
+                projectId: project.projectId, path: target.path
+            ).result
+            result = fresh
+            loadError = nil
+        } catch {
+            guard !isRefresh else { return }
+            app.handleAPIError(error)
+            loadError = (error as? APIError)?.message ?? error.localizedDescription
+        }
+    }
+
+    /// Debounce a nudge into a re-read, if it names this file's project
+    /// and directory. `fs:changed` is directory-granular (the sidecar
+    /// drops the filename), so a sibling write re-reads too — accepted,
+    /// since only one preview is ever open.
+    @MainActor
+    private func scheduleRefresh() {
+        guard let change = app.lastFSChange,
+              let workingDir = change.workingDir, !workingDir.isEmpty,
+              change.machineId == project.machineId,
+              workingDir == project.workingDir,
+              change.path == targetDirectory
+        else { return }
+
+        refreshTask?.cancel()
+        refreshTask = Task {
+            try? await Task.sleep(for: Self.refreshDebounce)
+            guard !Task.isCancelled else { return }
+            await load(isRefresh: true)
         }
     }
 
@@ -151,6 +229,21 @@ private struct TextFileView: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var highlightedLines: [AttributedString]?
+    /// Topmost visible line (1-based, matching the row `.id`s). Declaring
+    /// it is what lets the scroll view hold its place when `content` is
+    /// replaced by a live refresh — without it a re-read snaps the reader
+    /// back to line 1 on every agent write.
+    @State private var topLine: Int?
+
+    /// What a highlight pass depends on. Re-highlighting is driven by
+    /// `.task(id:)` on this rather than a bare `.task` (appear-only,
+    /// which would leave the OLD file's colors applied to new content
+    /// after a refresh) plus a separate colorScheme observer — one path
+    /// for both inputs.
+    private struct HighlightKey: Equatable, Sendable {
+        let content: String
+        let dark: Bool
+    }
 
     private var plainLines: [String] {
         content.components(separatedBy: "\n")
@@ -180,8 +273,19 @@ private struct TextFileView: View {
                 }
                 .padding(.vertical, 10)
                 .padding(.trailing, 12)
+                // Required companion of `.scrollPosition(id:)` — it marks
+                // the rows as the things whose identity the scroll view
+                // tracks. Not a snapping behaviour (that needs
+                // `.scrollTargetBehavior`), so scrolling still feels free.
+                .scrollTargetLayout()
             }
-            .task {
+            .scrollPosition(id: $topLine, anchor: .top)
+            .task(id: HighlightKey(content: content, dark: colorScheme == .dark)) {
+                // Drop the previous pass first: content and highlight are
+                // two separate arrays here, so holding the old colors over
+                // new text is a real mismatch, not just stale styling.
+                // Costs a brief plain-text moment on refresh.
+                highlightedLines = nil
                 highlightedLines = await CodeHighlighter.highlightLines(
                     content,
                     language: language,
@@ -195,17 +299,6 @@ private struct TextFileView: View {
                 // long-distance jump.
                 try? await Task.sleep(for: .milliseconds(80))
                 proxy.scrollTo(targetLine, anchor: .center)
-            }
-            .onChange(of: colorScheme) {
-                highlightedLines = nil
-                Task {
-                    highlightedLines = await CodeHighlighter.highlightLines(
-                        content,
-                        language: language,
-                        dark: colorScheme == .dark,
-                        expectedLineCount: lines.count
-                    )
-                }
             }
         }
     }

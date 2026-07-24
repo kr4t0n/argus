@@ -59,7 +59,16 @@ final class AppModel {
     /// Latest fs/git change events — inspector panels watch these and
     /// refetch when the event matches their project's
     /// (machineId, workingDir) pair.
+    ///
+    /// `fsChangeSeq` is what observers must watch, NOT `lastFSChange`
+    /// alone. `FSChangedPayload` is `{path, machineId, workingDir}` with
+    /// no timestamp and it's Equatable, so two consecutive writes to the
+    /// same directory produce an identical value — and `.onChange(of:)`
+    /// fires only on inequality. Watching the payload therefore drops
+    /// every repeat edit to one directory, which is the common case
+    /// while an agent works. The counter makes each delivery distinct.
     private(set) var lastFSChange: FSChangedPayload?
+    private(set) var fsChangeSeq: Int = 0
     private(set) var lastGitChange: GitChangedPayload?
 
     /// Latest background-task events (Progress extension) — the pane
@@ -523,6 +532,12 @@ final class AppModel {
             // Socket.IO rooms don't survive reconnects; delivery has no
             // replay. Rejoin + backfill, and refresh the lists we may
             // have missed events for.
+            //
+            // Project rooms were missing from this list: nothing
+            // re-subscribed them, so after a blip fs/git nudges stopped
+            // arriving until the holding view reappeared. StreamClient
+            // refcounts them, so it can replay exactly what's held.
+            stream?.rejoinProjectRooms()
             Task {
                 await refreshAll()
                 await activeSession?.handleReconnect()
@@ -590,6 +605,7 @@ final class AppModel {
 
         case .fsChanged(let payload):
             lastFSChange = payload
+            fsChangeSeq &+= 1
         case .gitChanged(let payload):
             lastGitChange = payload
 

@@ -253,7 +253,10 @@ private struct FileTreePanel: View {
         // Filter flip collapses back to the root and refetches with the
         // new filter — same shape as refreshAll (web behavior).
         .onChange(of: showAll) { refreshAll() }
-        .onChange(of: app.lastFSChange) {
+        .onChange(of: app.fsChangeSeq) {
+            // Watch the SEQ, not the payload: repeat writes to one
+            // directory produce an Equatable-identical payload, which
+            // `.onChange` would swallow (see AppModel.fsChangeSeq).
             // The sidecar debounces; refetch exactly the level that
             // changed, if we've already loaded it.
             guard let change = app.lastFSChange, matches(change) else { return }
