@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Code2, Download, Eye, FileWarning, Loader2 } from 'lucide-react';
@@ -47,23 +47,48 @@ function WorkingFileView({ file }: { file: OpenWorkingFile }) {
 
 function useFetchFileContent(file: OpenWorkingFile) {
   const setContent = useFileTabsStore((s) => s.setContent);
-  const cached = useFileTabsStore((s) => s.contents[file.key]);
+  // Bumped by useFileTabAutoRefresh when a CLI writes into this file's
+  // directory. It's in the dep array below, and that is the entire
+  // mechanism by which an edited file re-reads itself — the cached
+  // content deliberately is NOT, or every fetch would retrigger the
+  // effect that performed it.
+  const revision = useFileTabsStore((s) => s.revisions[file.key] ?? 0);
 
   useEffect(() => {
-    // Only kick off the fetch if we don't have ANY state for this key
-    // yet. Loading / ready / error are all terminal-for-now; a future
-    // "reload" action will reset to undefined to re-trigger.
-    if (cached) return;
+    // Read the cache imperatively: it's a guard, not an input.
+    const cached = useFileTabsStore.getState().contents[file.key];
+    const hasContent = cached?.status === 'ready';
+
+    // Already holding this exact revision — re-focusing a tab must not
+    // re-read the file. The effect re-runs on every activation (the
+    // `file.*` deps change), so without this the feature would turn tab
+    // switching into fs-read traffic, which is precisely the cost we
+    // designed it to avoid.
+    if (hasContent && cached.revision === revision) return;
+
+    // Stale-while-revalidate. A cold open shows the spinner; a refresh
+    // keeps the current render on screen until the new bytes land.
+    // Blanking a file someone is reading every time an agent touches its
+    // directory would be a worse bug than the staleness this fixes.
+    if (!hasContent && cached?.status !== 'loading') {
+      setContent(file.key, { status: 'loading' });
+    }
+
     let cancelled = false;
-    setContent(file.key, { status: 'loading' });
     api
       .readProjectFile(file.project.projectId, file.path)
       .then((res) => {
         if (cancelled) return;
-        setContent(file.key, { status: 'ready', result: res.result });
+        setContent(file.key, { status: 'ready', result: res.result, revision });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
+        // Don't replace a readable file with a red error box because a
+        // refresh lost a race — an atomic write-then-rename leaves a
+        // window where the path briefly doesn't resolve. The next nudge
+        // (or reopening the tab) recovers. A COLD open still surfaces
+        // its error; there's nothing else to show then.
+        if (hasContent) return;
         const message =
           err instanceof ApiError ? err.message : (err as Error)?.message || 'failed to load file';
         setContent(file.key, { status: 'error', message });
@@ -71,10 +96,7 @@ function useFetchFileContent(file: OpenWorkingFile) {
     return () => {
       cancelled = true;
     };
-    // `cached` intentionally omitted — only re-run when the file
-    // identity changes; the cache check above already gates the fetch.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [file.key, file.project.projectId, file.path]);
+  }, [file.key, file.project.projectId, file.path, revision, setContent]);
 }
 
 /**
@@ -172,15 +194,39 @@ function PreviewableTextViewer({
 function TextViewer({ path, content, line }: { path: string; content: string; line?: number }) {
   const [html, setHtml] = useState<string | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
+  // Scroll offset captured just before a re-highlight, restored once the
+  // new markup is in the DOM. Without this, every auto-refresh would
+  // yank a reader back to line 1 of the file they're watching.
+  const scrollRef = useRef(0);
   // Use the RESOLVED theme (not the user pref) so an OS-driven flip
   // while on 'system' also re-runs the highlight with the matching
   // shiki theme. highlightCode reads `currentShikiTheme()` off
   // <html>, which the apply-theme hook has already updated by the
   // time this effect runs.
   const resolvedTheme = useResolvedTheme();
+  // This component is REUSED across tab switches (same tree position,
+  // same type), so "the content changed" and "we're looking at a
+  // different file now" both arrive as a prop change and have to be told
+  // apart.
+  const renderedPathRef = useRef<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    setHtml(null);
+    const samePath = renderedPathRef.current === path;
+    renderedPathRef.current = path;
+    if (samePath) {
+      // Same file, new bytes — an auto-refresh. Capture the scroll BEFORE
+      // the swap (`html` still holds the previous markup here, so the
+      // host is showing what the user was reading) and deliberately do
+      // NOT `setHtml(null)`: dropping to the "highlighting…" spinner on
+      // every agent write is exactly the jank this feature must avoid.
+      scrollRef.current = hostRef.current?.scrollTop ?? 0;
+    } else {
+      // Different file. Blank it — leaving the previous file's contents
+      // under the new tab's header, then restoring ITS scroll offset,
+      // would be straightforwardly wrong.
+      scrollRef.current = 0;
+      setHtml(null);
+    }
     void highlightCode(content, path).then((h) => {
       if (!cancelled) setHtml(h);
     });
@@ -189,19 +235,42 @@ function TextViewer({ path, content, line }: { path: string; content: string; li
     };
   }, [content, path, resolvedTheme]);
 
+  // Restore scroll in a LAYOUT effect so it lands before paint (no
+  // visible jump), and before the citation effect below — which should
+  // win when it applies, since an explicit citation beats restoration.
+  useLayoutEffect(() => {
+    const host = hostRef.current;
+    if (html === null || !host || scrollRef.current === 0) return;
+    host.scrollTop = scrollRef.current;
+  }, [html]);
+
   // Scroll to / highlight the cited line once shiki's html is in the
   // DOM. Runs again when `line` changes (same tab re-opened from a new
   // citation) and clears the previous mark, so at most one line is lit.
+  // Keyed by path AND line, not line alone: two different files cited at
+  // the same line number are two different scroll targets.
+  const scrolledRef = useRef<string | null>(null);
   useEffect(() => {
     const host = hostRef.current;
     if (html === null || !host) return;
     for (const el of host.querySelectorAll('.line-target')) el.classList.remove('line-target');
-    if (!line) return;
+    if (!line) {
+      scrolledRef.current = null;
+      return;
+    }
     const target = host.querySelectorAll<HTMLElement>('.line')[line - 1];
     if (!target) return;
+    // The marker has to be re-applied on every re-highlight, since shiki
+    // rebuilds the DOM — but only SCROLL when the citation itself
+    // changed, or an auto-refresh would drag the reader back to the
+    // cited line on every agent write.
     target.classList.add('line-target');
-    target.scrollIntoView({ block: 'center' });
-  }, [html, line]);
+    const token = `${path}:${line}`;
+    if (scrolledRef.current !== token) {
+      scrolledRef.current = token;
+      target.scrollIntoView({ block: 'center' });
+    }
+  }, [html, line, path]);
 
   if (html === null) {
     return (

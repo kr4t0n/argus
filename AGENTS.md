@@ -666,6 +666,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   WS room; file tabs are scoped by projectId (`fileTabsStore.scope`), and
   the queue drainer's reachability check is machine-level, resolved
   through the same ProjectRef.
+- **Open file tabs auto-refresh when a CLI edits the file** — see the
+  "Live file tabs" gotcha for the mechanism and why the traffic is
+  bounded. `lib/useFileTabAutoRefresh.ts` is mounted from `SessionPanel`
+  (NOT `FileViewer`, which exists only for the focused tab).
 - `components/MachinePanel.tsx` — `/machines/:id` route. Header with
   machine glyph + name + status dot + sidecar-update button. Below the
   header: Host KV + a `Supports` footer of installed adapters (from
@@ -1330,6 +1334,60 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the S3 object on the upload-failure
   path — a periodic orphan sweep (objects whose row is gone, and unlinked
   `commandId IS NULL` uploads abandoned before send) is a follow-up.
+- **Live file tabs (frontend)**: an open file tab re-reads itself when a
+  CLI writes the file. Entirely client-side — the signal already ran end
+  to end, `FileViewer` just cached forever (`if (cached) return`).
+  `fsWatcher` fires on content edits, not only create/delete: verified
+  against the real watcher that an in-place rewrite, an atomic
+  write-temp-then-rename, AND a 5-write burst each produce exactly one
+  debounced dir nudge.
+  Flow: `fs:changed` → `useFileTabAutoRefresh` (mounted in `SessionPanel`)
+  → `fileTabsStore.invalidateDir` bumps `revisions[key]` for every open
+  tab in that dir → the bump is in `useFetchFileContent`'s dep array,
+  which is what re-reads the file.
+  **The traffic budget is the whole design.** `fs-read` responses ride
+  the byte-capped `lifecycle` stream (MAXLEN 500 *entries*, ≤1 MB each,
+  shared with heartbeats on a ~30 MB Redis) — the same budget the
+  "Redis fills up" incident blew. Four things bound it, and none are
+  decoration:
+  1. Only the FOCUSED tab's `FileViewer` is mounted (`SessionPanel`'s
+     `activeFile ? <FileViewer/> : <StreamViewer/>`), so at most one file
+     per dashboard is ever in flight. Background tabs just carry a bumped
+     revision and re-read when you click them.
+  2. `contents[key]` records the `revision` it was read at, so
+     re-focusing a tab does NOT re-read. Drop that and tab switching
+     itself becomes fs-read traffic.
+  3. A 400 ms trailing debounce on top of the sidecar's own 250 ms.
+  4. Nothing invalidates while `document.hidden`; dirs stay pending and
+     flush on the way back to visible.
+  Known-and-accepted: `fs:changed` is DIRECTORY-granular (the sidecar
+  drops the filename), so a sibling write refreshes your file too. Making
+  it exact means putting the basename on the wire across sidecar +
+  shared-types + server + web + iOS — considered and deferred, since (1)
+  already bounds the cost and the fallback path such a change would need
+  is exactly today's behaviour.
+  UX rules the implementation must keep: refresh is
+  stale-while-revalidate (never flip a readable file to a spinner —
+  `TextViewer` deliberately does not `setHtml(null)` on re-highlight);
+  `scrollTop` is captured before the swap and restored in a *layout*
+  effect; a cited `line` re-applies its marker on every re-highlight but
+  only re-scrolls when the citation itself changed; and a FAILED refresh
+  keeps the last good render rather than showing an error, because an
+  atomic rename leaves a window where the path briefly doesn't resolve.
+- **Project WS rooms are refcounted (`lib/ws.ts`)**: `joinProject` /
+  `leaveProject` count holders and only emit `subscribe:` /
+  `unsubscribe:project` at the 0↔1 edges. Socket.io's `leave` is not
+  refcounted, so the first unmounting holder used to kick the socket out
+  of the room and silently starve the others of `fs:changed` /
+  `git:changed`. This was latent — `ContextPane` renders FileTree /
+  GitLogPanel / ProgressPane as mutually exclusive tabs, so only one ever
+  held a room — and went live the moment `useFileTabAutoRefresh` added a
+  holder that has to outlive the Files tab. The same map is replayed on
+  `connect`: rooms are per-CONNECTION, and nothing re-joined them after a
+  reconnect, so a network blip used to stop live updates until the
+  subscriber happened to remount. `resetSocket` clears the map — every
+  holder is an effect that re-joins on its next mount, and a surviving
+  count would suppress that.
 - **Attachment viewing is unified with the file tree (frontend)**: a sent
   attachment opens as a `FileViewer` **tab** on double-click — same
   gesture and destination as the Files panel, not a floating modal.

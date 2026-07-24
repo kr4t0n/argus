@@ -71,7 +71,9 @@ sidebar without losing history; one-click restore, and archives survive
 sidecar restarts.
 - **Live workingDir file tree** — a lazy-expanding, gitignore-aware tree kept
 in sync by the sidecar's `fsnotify` watcher; the header also shows the current
-git branch (or short SHA when detached).
+git branch (or short SHA when detached). Open a file and it stays live too:
+when an agent edits it, the viewer re-reads it in place, preserving your
+scroll position instead of flashing a spinner.
 - **File & image attachments** — drag-drop / paste / pick files in the
 composer. Images render inline and pass to the agent as vision; other files
 land on the sidecar host. Bytes live in any S3-compatible store (bundled

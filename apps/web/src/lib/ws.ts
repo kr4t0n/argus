@@ -88,7 +88,17 @@ export function ensureSocket(): WSSocket {
     reconnectionDelay: 500,
     reconnectionDelayMax: 10_000,
   }) as WSSocket;
-  socket.on('connect', () => handlers.forEach((h) => h.onConnect?.()));
+  socket.on('connect', () => {
+    // Socket.io rooms are per-CONNECTION, so a reconnect drops every
+    // membership server-side. Nothing re-joined them before, so a
+    // network blip silently stopped `fs:changed` / `git:changed` until
+    // the subscribing component happened to remount. Replay from the
+    // refcount map (below) so live updates survive a reconnect.
+    for (const { machineId, workingDir } of projectRooms.values()) {
+      socket?.emit('subscribe:project', { machineId, workingDir });
+    }
+    handlers.forEach((h) => h.onConnect?.());
+  });
   socket.on('disconnect', () => handlers.forEach((h) => h.onDisconnect?.()));
   socket.on('machine:upsert', (m) => handlers.forEach((h) => h.onMachineUpsert?.(m)));
   socket.on('machine:status', (p) => handlers.forEach((h) => h.onMachineStatus?.(p)));
@@ -141,6 +151,10 @@ export function resetSocket() {
     socket = null;
   }
   handlers.clear();
+  // Membership dies with the connection, and every holder is a React
+  // effect that will re-join on its next mount — a surviving count here
+  // would suppress that re-join and leave the room permanently unjoined.
+  projectRooms.clear();
 }
 
 export function joinSession(sessionId: string) {
@@ -155,10 +169,44 @@ export function joinTerminal(terminalId: string) {
 export function leaveTerminal(terminalId: string) {
   ensureSocket().emit('unsubscribe:terminal', terminalId);
 }
+/**
+ * Project-room membership is REFCOUNTED because several components
+ * subscribe to the same (machineId, workingDir) independently —
+ * FileTree, GitLogPanel, ProgressPane, and the file-tab auto-refresh
+ * hook. Socket.io's `leave` is not refcounted, so without this the
+ * first component to unmount would kick the socket out of the room and
+ * silently starve every other subscriber of `fs:changed` / `git:changed`.
+ * (Latent until now only because ContextPane renders those panels as
+ * mutually exclusive tabs.)
+ *
+ * The map doubles as the replay list for the reconnect handler above.
+ */
+type ProjectRoom = { machineId: string; workingDir: string; holders: number };
+// Keyed by a joined string but CARRYING the parts, so the reconnect
+// replay never has to parse them back out — a workingDir can contain
+// whatever separator we'd otherwise pick.
+const projectRooms = new Map<string, ProjectRoom>();
+const roomKey = (machineId: string, workingDir: string) => `${machineId}\n${workingDir}`;
+
 export function joinProject(machineId: string, workingDir: string) {
+  const key = roomKey(machineId, workingDir);
+  const room = projectRooms.get(key);
+  if (room) {
+    // Already joined on this connection; counting is all that's left.
+    room.holders += 1;
+    return;
+  }
+  projectRooms.set(key, { machineId, workingDir, holders: 1 });
   ensureSocket().emit('subscribe:project', { machineId, workingDir });
 }
 export function leaveProject(machineId: string, workingDir: string) {
+  const key = roomKey(machineId, workingDir);
+  const room = projectRooms.get(key);
+  if (room && room.holders > 1) {
+    room.holders -= 1;
+    return;
+  }
+  projectRooms.delete(key);
   ensureSocket().emit('unsubscribe:project', { machineId, workingDir });
 }
 export function sendTerminalInput(terminalId: string, dataB64: string) {
