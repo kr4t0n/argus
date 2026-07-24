@@ -215,6 +215,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   command, mints **15-min pull tokens** for the wire `Command.attachments`,
   and returns/loads **1-h display tokens** in `AttachmentDTO.url`
   (`SessionService.withAttachments` batches them onto the transcript).
+  The feature is **optional and endpoint-gated**: `S3ClientProvider`
+  returns `null` when `S3_ENDPOINT` is unset (no localhost fallback), and
+  every store call goes through `sendToStore`, which logs the flattened
+  cause chain (see the `AggregateError` gotcha) and maps failures to
+  **404** when the object itself is gone (`NoSuchKey`/`NotFound` — the row
+  outlived its bytes) or **503** otherwise, worded "not configured" vs
+  "unreachable" vs "rejected the request". The 404 test is keyed on the
+  error *name*, not the status: `NoSuchBucket` is also a 404 from S3 but
+  means the deployment is misconfigured, so it stays a 503.
 - `result-ingestor/` — single XREADGROUP across **all** runner result
   streams (refreshed every 5s): `machine:{id}:cli:{type}:result`, one per
   entry in each machine's `availableAdapters`. Persists each chunk and
@@ -1327,6 +1336,32 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   has one. (Claude's *Read tool* is unreliable for images — several
   upstream issues — but we never depend on it; the path-in-prompt route
   is the documented, working one.)
+- **A bare `ERROR [ExceptionsHandler] AggregateError` means "could not
+  open a TCP connection", nothing else**. Node's happy-eyeballs connect
+  (`autoSelectFamily`, default-on since Node 20) wraps the per-address
+  errnos in an `AggregateError` whose own `message` is the **empty
+  string**. Nest's `BaseExceptionFilter.handleUnknownError` treats a
+  message-less error as a non-Error and logs the raw object — which
+  stringifies to just the class name, with no stack and no causes. The
+  reported instance was attachment upload: `S3ClientProvider` used to
+  default `S3_ENDPOINT` to `http://localhost:9000`, so any deployment
+  that didn't set it (the Helm chart omits every `S3_*` var when
+  `objectStore.endpoint` is empty) pointed the S3 client at the server
+  pod's own loopback and every `PutObject` died at connect. Two guards
+  now exist: `AttachmentService.sendToStore` translates store failures
+  into a 503 while logging endpoint + flattened causes, and
+  `AllExceptionsFilter` (`src/common/`) flattens any message-less error
+  for every other route — both share `common/describe-error.ts`. The
+  filter is **HTTP-only by construction**: `@nestjs/websockets` builds its
+  chain from an `ExceptionFiltersContext` whose `getGlobalMetadata()`
+  returns `[]`, so a global `@Catch()` never reaches the gateways (it
+  would misbehave there — `BaseExceptionFilter` assumes an HTTP response
+  at `getArgByIndex(1)`). The original bare line still follows ours in
+  the log; the base filter re-logs it and suppressing that would mean
+  reimplementing its response handling. **Never give a network endpoint a
+  localhost default** — an unset endpoint should disable the feature (the
+  provider now yields a `null` client), not silently point at the server
+  itself.
 - **Attachment lifecycle is keep-for-session; S3 orphans are a TODO**.
   Files stay under `.argus/uploads/` and in S3 for the life of the
   session so `--resume` turns can re-reference them. Deleting a command

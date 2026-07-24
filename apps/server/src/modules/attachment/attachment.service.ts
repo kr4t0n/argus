@@ -7,6 +7,7 @@ import {
   Logger,
   NotFoundException,
   PayloadTooLargeException,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -21,6 +22,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { PrismaService } from '../../infra/prisma/prisma.service';
+import { describeError } from '../../common/describe-error';
 import { S3_CLIENT } from './s3.provider';
 
 /** JWT `scope` claim that marks a token as an attachment-download grant —
@@ -50,7 +52,7 @@ export class AttachmentService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly jwt: JwtService,
-    @Inject(S3_CLIENT) private readonly s3: S3Client,
+    @Inject(S3_CLIENT) private readonly s3: S3Client | null,
   ) {
     this.bucket = this.config.get<string>('S3_BUCKET', 'argus-attachments');
     this.maxBytes = Number(this.config.get('ATTACHMENT_MAX_FILE_BYTES', 26_214_400));
@@ -80,14 +82,18 @@ export class AttachmentService {
     const filename = sanitizeFilename(file.originalname);
     const key = `attachments/${randomUUID()}/${filename}`;
 
-    await this.s3.send(
-      new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        Body: file.buffer,
-        ContentType: file.mimetype || 'application/octet-stream',
-        ContentLength: file.size,
-      }),
+    await this.sendToStore(
+      (s3) =>
+        s3.send(
+          new PutObjectCommand({
+            Bucket: this.bucket,
+            Key: key,
+            Body: file.buffer,
+            ContentType: file.mimetype || 'application/octet-stream',
+            ContentLength: file.size,
+          }),
+        ),
+      `upload ${key}`,
     );
 
     try {
@@ -192,8 +198,9 @@ export class AttachmentService {
     const row = await this.prisma.attachment.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('attachment not found');
 
-    const obj = await this.s3.send(
-      new GetObjectCommand({ Bucket: this.bucket, Key: row.s3Key }),
+    const obj = await this.sendToStore(
+      (s3) => s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: row.s3Key })),
+      `download ${row.s3Key}`,
     );
     const body = obj.Body as Readable | undefined;
     if (!body) throw new NotFoundException('attachment body missing');
@@ -243,12 +250,77 @@ export class AttachmentService {
   }
 
   private async deleteObject(key: string): Promise<void> {
+    if (!this.s3) return;
     try {
       await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
     } catch (err) {
-      this.logger.warn(`failed to delete orphaned object ${key}: ${(err as Error).message}`);
+      this.logger.warn(`failed to delete orphaned object ${key}: ${describeError(err)}`);
     }
   }
+
+  /**
+   * Run one S3 operation with the object store's failure modes made
+   * legible. Without this, an unreachable endpoint surfaces as Node's
+   * connect `AggregateError` — whose `message` is EMPTY, so Nest's default
+   * handler logs the bare string `AggregateError` with no stack and no
+   * cause, and the user gets an unexplained 500.
+   *
+   * A vanished object is a 404 (the row outlived its bytes — see the S3
+   * orphan-sweep TODO); everything else is a 503 whose text separates "not
+   * configured" from "unreachable" from "rejected". The operator-facing
+   * detail (endpoint, bucket, per-address errno) goes to the log only.
+   */
+  private async sendToStore<T>(op: (s3: S3Client) => Promise<T>, what: string): Promise<T> {
+    if (!this.s3) {
+      this.logger.error(`cannot ${what}: S3_ENDPOINT is not configured`);
+      throw new ServiceUnavailableException(
+        'file attachments are not configured on this server',
+      );
+    }
+    try {
+      return await op(this.s3);
+    } catch (err) {
+      if (isMissingObject(err)) {
+        this.logger.warn(`object store ${what}: object is gone (bucket=${this.bucket})`);
+        throw new NotFoundException('attachment is no longer stored');
+      }
+      const endpoint = this.config.get<string>('S3_ENDPOINT', '(unset)');
+      this.logger.error(
+        `object store ${what} failed (endpoint=${endpoint} bucket=${this.bucket}): ${describeError(err)}`,
+      );
+      throw new ServiceUnavailableException(
+        isConnectFailure(err)
+          ? 'attachment storage is unreachable — check the server logs'
+          : 'attachment storage rejected the request — check the server logs',
+      );
+    }
+  }
+}
+
+/** True when S3 says the *object* isn't there. Deliberately keyed on the
+ *  error name rather than the 404 status: `NoSuchBucket` is also a 404 but
+ *  means the deployment is misconfigured, which is a 503, not a missing
+ *  attachment. `NoSuchKey` is GetObject's form, `NotFound` HeadObject's. */
+function isMissingObject(err: unknown): boolean {
+  return err instanceof Error && (err.name === 'NoSuchKey' || err.name === 'NotFound');
+}
+
+/** True when the failure is "never reached the endpoint" rather than an S3
+ *  API error. Node's happy-eyeballs connect wraps the per-address errnos in
+ *  an AggregateError, which is exactly the unreachable-MinIO case.
+ *  ECONNRESET is NOT here on purpose — a reset means we did reach the
+ *  endpoint, so "unreachable" would point the operator at the wrong thing. */
+function isConnectFailure(err: unknown): boolean {
+  if (err instanceof AggregateError) return true;
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  if (
+    code &&
+    ['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EAI_AGAIN', 'EHOSTUNREACH'].includes(code)
+  ) {
+    return true;
+  }
+  const cause = (err as { cause?: unknown } | undefined)?.cause;
+  return cause ? isConnectFailure(cause) : false;
 }
 
 /** Strip path separators / control chars and bound the length so a

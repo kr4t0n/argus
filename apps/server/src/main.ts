@@ -1,9 +1,10 @@
 import 'reflect-metadata';
-import { NestFactory } from '@nestjs/core';
+import { NestFactory, HttpAdapterHost } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import compression from 'compression';
 import { AppModule } from './app.module';
+import { AllExceptionsFilter } from './common/all-exceptions.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: false });
@@ -22,6 +23,10 @@ async function bootstrap() {
       forbidNonWhitelisted: false,
     }),
   );
+  // Same responses as Nest's default handler, but message-less errors
+  // (notably Node's connect AggregateError) get logged with their causes
+  // instead of as a bare class name.
+  app.useGlobalFilters(new AllExceptionsFilter(app.get(HttpAdapterHost).httpAdapter));
 
   const config = app.get(ConfigService);
   const port = config.get<number>('SERVER_PORT', 4000);

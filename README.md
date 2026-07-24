@@ -195,6 +195,13 @@ a host-oriented `.env` value can't leak into the container) and drop the
 `minio` services; `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` stay
 env-overridable. Only the server needs to reach the bucket.
 
+Attachments are optional: with `S3_ENDPOINT` unset the server logs
+`S3_ENDPOINT is not set — file attachments are disabled` at boot and
+uploads answer `503 file attachments are not configured on this server`.
+If it *is* set but the bucket can't be reached, uploads answer `503
+attachment storage is unreachable` and the server log carries the
+endpoint plus the per-address connect error.
+
 The dashboard is at [http://localhost:5173](http://localhost:5173). Sign in with the seeded admin
 credentials (`admin@argus.local` / `changeme` by default — change them in
 `.env`).
@@ -525,7 +532,7 @@ See `[.env.example](./.env.example)` for the full list. Highlights:
 | `ARGUS_WS_URL`         | Runtime URL the web app uses for Socket.IO; defaults to `ARGUS_API_URL` |
 | `VITE_API_URL`         | Build-time fallback baked into the web bundle (only used if you build your own image) |
 | `VITE_WS_URL`          | Build-time fallback for Socket.IO (only used if you build your own image) |
-| `S3_ENDPOINT`          | S3-compatible endpoint for attachment storage (bundled MinIO by default) |
+| `S3_ENDPOINT`          | S3-compatible endpoint for attachment storage (bundled MinIO by default); **empty = attachments disabled**, uploads answer 503 instead of failing at connect time |
 | `S3_BUCKET`            | Bucket attachments are stored in (`argus-attachments`)  |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | Object-store credentials                     |
 | `S3_REGION`            | Region sent to the S3 client (`us-east-1`; ignored by MinIO) |
