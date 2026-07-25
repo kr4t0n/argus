@@ -355,6 +355,16 @@ struct SessionView: View {
                     .frame(maxWidth: 720)
                     .frame(maxWidth: .infinity)
                 }
+                // The ONLY way to put the keyboard away: the composer is a
+                // multi-line field (`axis: .vertical`), so its on-screen
+                // return key inserts a newline rather than submitting, and
+                // SwiftUI dismisses on neither an outside tap nor a plain
+                // ScrollView drag by default — leaving the keyboard with no
+                // exit at all on iPhone. Drag was chosen over tap-to-dismiss
+                // because a container tap gesture competes with the
+                // transcript's own targets, above all the `path:line`
+                // citation links routed through AnswerView's openURL.
+                .scrollDismissesKeyboard(.interactively)
                 .onChange(of: model.turns) {
                     // Follow a live stream only while the user is at the
                     // bottom — scrolled-up reading stays put.

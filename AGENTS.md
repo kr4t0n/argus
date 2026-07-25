@@ -824,6 +824,21 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   turn's thumbnails — both stores merge instead (web
   `sessionStore.upsertCommand`, iOS `TranscriptState.upsert`), keeping
   existing attachments when an update arrives without them.
+- **The composer's keyboard has exactly one exit: dragging the
+  transcript.** The field is `axis: .vertical` for multi-line prompts, so
+  its on-screen return key inserts a newline instead of submitting (the
+  `.onKeyPress(.return)` send path sees *hardware* Enter only). SwiftUI
+  dismisses on neither an outside tap nor a plain `ScrollView` drag by
+  default, which left the keyboard with no exit at all on iPhone —
+  `.scrollDismissesKeyboard(.interactively)` on the transcript is what
+  provides one. Tap-to-dismiss was considered and rejected: a
+  container-level tap gesture competes with the transcript's own targets,
+  above all the `path:line` citation links `AnswerView` routes through
+  `OpenURLAction`. If you ever add one, use `.simultaneousGesture`, never
+  `.onTapGesture`, and device-test those citations with the keyboard up.
+  Dismissing on send was also rejected for now — `send()` is shared by
+  the queue-a-follow-up button and by two hardware-keyboard callers
+  (⌘↩ and plain Enter), where dropping focus strands the next keystroke.
 - **Session view-model cache (stale-while-revalidate).** `AppModel`
   keeps `SessionViewModel`s alive across session switches (LRU, cap 8,
   never evicts the on-screen one, cleared on logout), so re-opening a
