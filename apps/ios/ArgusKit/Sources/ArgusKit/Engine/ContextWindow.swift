@@ -61,6 +61,18 @@ public enum ContextWindows {
             window: 1_000_000,
             family: "Claude Fable"
         ),
+        // Claude Opus 5 — like Fable, 1M is the DEFAULT rather than an
+        // opt-in facet, so a turn run without `context: "1m"` reports the
+        // bare `claude-opus-5` and would otherwise hit the 200k baseline
+        // (ring 5x too full). Version-gated on `5`: the Opus 4.x ids
+        // share the family word and are NOT covered here. `[-\s]?` spans
+        // the API id `claude-opus-5` and cursor-cli's "Opus 5 …" display
+        // form; the trailing boundary keeps it off a future `opus-50`.
+        Entry(
+            match: { $0.firstMatch(of: #/(^|[^a-z0-9])opus[-\s]?5([^a-z0-9]|$)/#) != nil },
+            window: 1_000_000,
+            family: "Claude Opus 5"
+        ),
         Entry(match: { isAnthropicFamily($0) }, window: 200_000, family: "Claude"),
         Entry(match: { $0.contains("gpt-5") }, window: 400_000, family: "GPT-5"),
         Entry(match: { $0.contains("gpt-4.1") }, window: 1_000_000, family: "GPT-4.1"),

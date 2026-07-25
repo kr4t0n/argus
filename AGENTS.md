@@ -1789,7 +1789,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   total in `exec --json`, so their rings can still overcount on multi-call
   turns — codex's per-call figure lives in the richer `app-server`
   protocol (`thread/tokenUsage/updated` → `tokenUsage.last`), not adopted
-  here. When a new model
+  here. **Gotcha (hit twice — Fable 5, then Opus 5):** a Claude family
+  whose 1M window is the *default* rather than an opt-in facet carries no
+  `[1m]` token in its id, so the generic 200k Claude baseline silently
+  claims it and the ring reads 5x too full. Those families each need
+  their own entry ABOVE the baseline, version-gated where siblings share
+  the family word (`opus[-\s]?5` covers Opus 5 without claiming the Opus
+  4.x ids). The CLI itself is the cheapest oracle for the real number:
+  `result.modelUsage[<id>].contextWindow` in a one-line `claude -p
+  --output-format stream-json` run. When a new model
   family ships (Anthropic / OpenAI / Cursor announcement), bump the
   table as `chore(shared): update model context windows` — verify
   against the upstream announcement, not release-note rumors. Unknown
