@@ -845,8 +845,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   does NOT fall through to a line break — SwiftUI just drops the event
   (found on a real iPad + Magic Keyboard). The composer's handler
   catches shift-only Return and calls `ComposerKeyboard.insertNewline()`,
-  which reaches the UIKit first responder and `insertText("\n")`s at the
-  caret, so selection replacement and the binding update come free.
+  which reaches the UIKit first responder and replaces the selection
+  with "\n" via `UITextInput.replace(_:withText:)` — caret placement
+  and the binding update come free. It must NOT use `insertText("\n")`:
+  that is the key-input path, and the field treats the programmatic
+  newline as the return key — text inserts but the field submits and
+  RESIGNS FOCUS (also device-found).
   Related: Caps Lock rides along in `press.modifiers` while latched, so
   the handler strips it before classifying — otherwise plain Return
   stops sending the moment Caps Lock is on.

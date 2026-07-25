@@ -1111,13 +1111,17 @@ enum ComposerKeyboard {
 
     /// Shift+Return's newline. SwiftUI's vertical-axis TextField takes
     /// newlines from the software return key but drops hardware
-    /// Shift+Return outright, so the composer inserts one itself:
-    /// `insertText` on the focused field goes through the normal
-    /// editing pipeline (replaces the selection, moves the caret,
-    /// updates the SwiftUI binding).
+    /// Shift+Return outright, so the composer inserts one itself.
+    /// NOT via `insertText`: that is the key-input path, and the field
+    /// treats a programmatic "\n" there as the return key — the newline
+    /// lands but the field submits and resigns focus (device-verified).
+    /// `replace(_:withText:)` is a plain edit with the same semantics —
+    /// caret-aware, selection-replacing, updates the SwiftUI binding —
+    /// and leaves focus alone.
     static func insertNewline() -> Bool {
-        guard let input = firstResponder() as? UITextInput else { return false }
-        input.insertText("\n")
+        guard let input = firstResponder() as? UITextInput,
+              let selection = input.selectedTextRange else { return false }
+        input.replace(selection, withText: "\n")
         return true
     }
 
