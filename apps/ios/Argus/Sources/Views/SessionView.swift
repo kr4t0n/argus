@@ -494,14 +494,23 @@ struct SessionView: View {
                 // events, so the on-screen return key still inserts a
                 // newline. Web parity details: an unmodified Return is
                 // ALWAYS swallowed (send() no-ops via canSend when
-                // there's nothing to send — Enter never newlines), any
-                // modifier falls through (Shift+Return → the field's
-                // newline; ⌘↩ → the send button's shortcut), and Return
-                // mid-IME-composition confirms the marked text instead
-                // of sending (the web's isComposing guard).
+                // there's nothing to send — Enter never newlines),
+                // Shift+Return inserts the line break through UIKit
+                // (a vertical-axis TextField drops hardware
+                // Shift+Return outright — .ignored does NOT become a
+                // newline), other modifiers fall through (⌘↩ → the
+                // send button's shortcut), and Return mid-IME-
+                // composition confirms the marked text instead of
+                // sending (the web's isComposing guard). Caps Lock
+                // rides along in `modifiers` while latched, so strip
+                // it before classifying.
                 .onKeyPress(.return, phases: .down) { press in
-                    guard press.modifiers.isEmpty else { return .ignored }
                     guard !ComposerKeyboard.isComposingMarkedText else { return .ignored }
+                    let modifiers = press.modifiers.subtracting(.capsLock)
+                    if modifiers == .shift {
+                        return ComposerKeyboard.insertNewline() ? .handled : .ignored
+                    }
+                    guard modifiers.isEmpty else { return .ignored }
                     send()
                     return .handled
                 }
@@ -1098,6 +1107,18 @@ enum ComposerKeyboard {
     static var isComposingMarkedText: Bool {
         guard let input = firstResponder() as? UITextInput else { return false }
         return input.markedTextRange != nil
+    }
+
+    /// Shift+Return's newline. SwiftUI's vertical-axis TextField takes
+    /// newlines from the software return key but drops hardware
+    /// Shift+Return outright, so the composer inserts one itself:
+    /// `insertText` on the focused field goes through the normal
+    /// editing pipeline (replaces the selection, moves the caret,
+    /// updates the SwiftUI binding).
+    static func insertNewline() -> Bool {
+        guard let input = firstResponder() as? UITextInput else { return false }
+        input.insertText("\n")
+        return true
     }
 
     private static func firstResponder() -> UIResponder? {
