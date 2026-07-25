@@ -839,6 +839,27 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Dismissing on send was also rejected for now — `send()` is shared by
   the queue-a-follow-up button and by two hardware-keyboard callers
   (⌘↩ and plain Enter), where dropping focus strands the next keystroke.
+- **Hardware Shift+Return newlines are hand-fed.** A vertical-axis
+  `TextField` only inserts newlines from the on-screen return key;
+  returning `.ignored` from `onKeyPress` for a hardware Shift+Return
+  does NOT fall through to a line break — SwiftUI just drops the event
+  (found on a real iPad + Magic Keyboard). The composer's handler
+  catches shift-only Return and calls `ComposerKeyboard.insertNewline()`,
+  which reaches the UIKit first responder and replaces the selection
+  with "\n" via `UITextInput.replace(_:withText:)` — caret placement
+  and the binding update come free. Second trap on top: UIKit RESIGNS
+  the field on a hardware Return/Shift+Return no matter what onKeyPress
+  returns — `.handled` doesn't stop it (Apple Forums #760511 says
+  as-designed; device-confirmed with both `insertText` and `replace`,
+  so it's the keypress, not the edit API). The composer undoes exactly
+  that one resign: the shift branch arms `refocusAfterNewline`, and an
+  `onChange(of: composerFocused)` grabs focus back when the resign
+  lands (async, after the key handler returns — a re-set inside the
+  handler fires too early). The flag disarms on any focus change so it
+  can never trap focus in the composer.
+  Related: Caps Lock rides along in `press.modifiers` while latched, so
+  the handler strips it before classifying — otherwise plain Return
+  stops sending the moment Caps Lock is on.
 - **Session view-model cache (stale-while-revalidate).** `AppModel`
   keeps `SessionViewModel`s alive across session switches (LRU, cap 8,
   never evicts the on-screen one, cleared on logout), so re-opening a
