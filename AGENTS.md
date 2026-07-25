@@ -847,10 +847,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   catches shift-only Return and calls `ComposerKeyboard.insertNewline()`,
   which reaches the UIKit first responder and replaces the selection
   with "\n" via `UITextInput.replace(_:withText:)` — caret placement
-  and the binding update come free. It must NOT use `insertText("\n")`:
-  that is the key-input path, and the field treats the programmatic
-  newline as the return key — text inserts but the field submits and
-  RESIGNS FOCUS (also device-found).
+  and the binding update come free. Second trap on top: UIKit RESIGNS
+  the field on a hardware Return/Shift+Return no matter what onKeyPress
+  returns — `.handled` doesn't stop it (Apple Forums #760511 says
+  as-designed; device-confirmed with both `insertText` and `replace`,
+  so it's the keypress, not the edit API). The composer undoes exactly
+  that one resign: the shift branch arms `refocusAfterNewline`, and an
+  `onChange(of: composerFocused)` grabs focus back when the resign
+  lands (async, after the key handler returns — a re-set inside the
+  handler fires too early). The flag disarms on any focus change so it
+  can never trap focus in the composer.
   Related: Caps Lock rides along in `press.modifiers` while latched, so
   the handler strips it before classifying — otherwise plain Return
   stops sending the moment Caps Lock is on.
