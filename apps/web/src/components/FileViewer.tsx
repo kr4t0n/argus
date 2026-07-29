@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { markdownRemarkPlugins, markdownRehypePlugins } from '../lib/markdown';
 import { Code2, Download, Eye, FileWarning, Loader2 } from 'lucide-react';
 import type { FSReadResult } from '@argus/shared-types';
 import { ApiError, api } from '../lib/api';
@@ -182,7 +182,9 @@ function PreviewableTextViewer({
         <TextViewer path={path} content={content} line={line} />
       ) : previewKind === 'markdown' ? (
         <div className="markdown h-full overflow-auto px-6 py-5 text-sm leading-relaxed text-fg-primary">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>
+            {content}
+          </ReactMarkdown>
         </div>
       ) : (
         <HtmlPreview content={content} name={name} />

@@ -32,7 +32,8 @@ token-level streaming with reconnect-safe replay.
 ## Features
 
 - **Streaming-first UI** — typewriter deltas, tool-call pills, stdout/stderr
-blocks, sticky auto-scroll, and replay-on-reconnect.
+blocks, sticky auto-scroll, and replay-on-reconnect. Answers render GFM
+markdown plus LaTeX math (KaTeX, `$…$` inline and `$$…$$` display).
 - **Machine-driven runners** — each host runs one `argus-sidecar` daemon that
 self-registers as a *Machine* and starts one runner per installed CLI. Create
 **sessions** from the dashboard (hover a project → `+`); each pins to a
