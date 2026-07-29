@@ -1,6 +1,7 @@
 @import '@fontsource-variable/instrument-sans';
 @import '@fontsource-variable/onest';
 @import '@fontsource-variable/fira-code';
+@import 'katex/dist/katex.min.css';
 
 @tailwind base;
 @tailwind components;
@@ -238,6 +239,12 @@ textarea::-webkit-scrollbar-corner {
 }
 .markdown tbody tr:nth-child(even) {
   @apply bg-surface-1/30;
+}
+/* Long display equations scroll sideways (like tables above) instead of
+   widening the answer column. The touch of vertical padding keeps the
+   horizontal scrollbar off the glyphs' descenders. */
+.markdown .katex-display {
+  @apply my-3 overflow-x-auto overflow-y-hidden py-1;
 }
 
 .shiki-host pre.shiki {
