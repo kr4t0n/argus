@@ -520,7 +520,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   plain text until a real-transcript sample justifies a normalization
   pass. rehype-katex replaces math nodes *before* the `components` map
   runs, so `MarkdownCodeBlock` (custom `<pre>`) never sees equations;
-  invalid TeX renders as red source text instead of throwing. KaTeX CSS
+  invalid TeX renders as red source text instead of throwing. GOTCHA:
+  the app's `katex` dep (source of that CSS) must stay on the same
+  minor as the `katex` that `rehype-katex` itself resolves (v7 pins
+  `^0.16`) — KaTeX's markup/CSS contract shifts between 0.x minors, and
+  a mismatched pair (markup 0.16 + CSS 0.18) renders every
+  sub/superscript vertically collapsed. KaTeX CSS
   rides `index.css` (`@import 'katex/dist/katex.min.css'`), and
   `.markdown .katex-display` gets sideways overflow-scroll like tables.
   While a turn streams, an unclosed `$$` shows raw until the closing
