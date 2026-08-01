@@ -312,8 +312,11 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   as SwiftMath-rendered images sitting on the text baseline via
   `.baselineOffset(-descent)` (metrics read from
   `MTMathUILabel.displayList`), cached per (latex, appearance) in
-  `MathImageRenderer`. Scope limits, deliberate: math inside list
-  items / headings / quotes / tables stays raw dollars (per-block-type
-  Text assembly isn't worth it yet), and the activity timeline's
-  thinking text still renders raw (apply `MathSegments` in
-  `ActivityViews.swift` if it grates).
+  `MathImageRenderer`. Flat (unnested) list items get the same
+  treatment via `.inlineList` — `InlineMathList` re-creates the
+  theme's "•"/"n." markers — because Claude bullets math constantly
+  and cmark eats raw list-item `_` subscripts as emphasis. Scope
+  limits, deliberate: math inside nested lists / headings / quotes /
+  tables stays raw dollars (per-block-type Text assembly isn't worth
+  it yet), and the activity timeline's thinking text still renders
+  raw (apply `MathSegments` in `ActivityViews.swift` if it grates).

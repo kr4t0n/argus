@@ -9,6 +9,22 @@ public enum MathSegment: Equatable, Sendable {
     /// A plain paragraph carrying inline `$…$` math — render as an
     /// assembled Text with SwiftMath images (see InlineMath.runs).
     case inlineParagraph(String)
+    /// A flat (unnested) list whose items carry inline math — render as
+    /// marker + assembled Text rows.
+    case inlineList([MathListItem])
+}
+
+/// One item of a flat list that gets the inline-math treatment.
+public struct MathListItem: Equatable, Sendable {
+    /// The literal source marker: `-`, `*`, `+`, or `3.` / `3)`.
+    public let marker: String
+    /// Item content; lazy-continuation lines joined with newlines.
+    public let text: String
+
+    public init(marker: String, text: String) {
+        self.marker = marker
+        self.text = text
+    }
 }
 
 /// Splits answer markdown into text, `$$…$$` display-math, and
@@ -23,11 +39,13 @@ public enum MathSegment: Equatable, Sendable {
 /// - A standalone `$$…$$` single line renders as *display* math here but
 ///   *inline* math on the web (micromark treats it as math-text). Claude
 ///   emits that shape constantly, and display beats raw dollars.
-/// - Inline `$…$` renders ONLY in plain paragraphs. Math inside list
-///   items, headings, quotes, and tables stays raw — those blocks would
-///   need per-block-type Text assembly to keep their chrome (markers,
-///   cells), which isn't worth it until raw dollars there actually
-///   grate. The web renders math everywhere.
+/// - Inline `$…$` renders in plain paragraphs and FLAT list items
+///   (Claude's math bullets are overwhelmingly flat single-level
+///   lists — and raw list-item dollars don't just look bad, cmark eats
+///   their `_` subscripts as emphasis). Math inside nested lists,
+///   headings, quotes, and tables stays raw — those need per-block-type
+///   Text assembly that isn't worth it until they actually grate. The
+///   web renders math everywhere.
 ///
 /// Rules, scanned line by line:
 /// - A line that is exactly `$$` (after trimming) opens a block; the
@@ -98,9 +116,49 @@ public enum MathSegments {
             }
         }
 
+        /// Parses a block as a FLAT list: every line is either a
+        /// top-level (indent 0) marker line or a lazy continuation of
+        /// the previous item. Anything else — indented markers
+        /// (nesting), a leading non-marker line — returns nil and the
+        /// block stays plain markdown.
+        func flatListItems(_ block: [String]) -> [MathListItem]? {
+            func marker(_ s: Substring) -> (token: String, content: String)? {
+                guard let first = s.first else { return nil }
+                if first == "-" || first == "*" || first == "+" {
+                    let after = s.dropFirst()
+                    guard after.first == " " else { return nil }
+                    return (String(first), String(after.dropFirst()))
+                }
+                if first.isNumber {
+                    let digits = s.prefix(while: \.isNumber)
+                    let rest = s.dropFirst(digits.count)
+                    guard digits.count <= 9, let punct = rest.first,
+                          punct == "." || punct == ")",
+                          rest.dropFirst().first == " " else { return nil }
+                    return (String(digits) + String(punct), String(rest.dropFirst(2)))
+                }
+                return nil
+            }
+            var items: [MathListItem] = []
+            for line in block {
+                let indent = line.prefix(while: { $0 == " " }).count
+                let rest = line.drop(while: { $0 == " " })
+                if let m = marker(rest) {
+                    guard indent == 0 else { return nil } // nested → bail
+                    items.append(MathListItem(marker: m.token, text: m.content))
+                } else if let last = items.last {
+                    items[items.count - 1] = MathListItem(
+                        marker: last.marker, text: last.text + "\n" + String(rest))
+                } else {
+                    return nil
+                }
+            }
+            return items.isEmpty ? nil : items
+        }
+
         /// Emit the buffered markdown, carving out plain paragraphs
-        /// that carry inline math. Fences are re-tracked here because
-        /// the outer loop buffers fence bodies verbatim.
+        /// and flat lists that carry inline math. Fences are re-tracked
+        /// here because the outer loop buffers fence bodies verbatim.
         func flushBuffered() {
             let buffered = buffer
             buffer = []
@@ -151,6 +209,10 @@ public enum MathSegments {
                 if block.allSatisfy(isPlainParagraphLine), InlineMath.containsMath(blockText) {
                     flushMarkdownRun()
                     segments.append(.inlineParagraph(blockText))
+                } else if let items = flatListItems(block),
+                          items.contains(where: { InlineMath.containsMath($0.text) }) {
+                    flushMarkdownRun()
+                    segments.append(.inlineList(items))
                 } else {
                     mdRun.append(contentsOf: block)
                 }

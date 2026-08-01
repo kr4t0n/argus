@@ -18,13 +18,50 @@ import ArgusKit
 /// MathCompat) fall back to their raw `$…$` source per-span.
 struct InlineMathParagraph: View {
     let text: String
+
+    var body: some View {
+        InlineMathText(text: text)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 12) // web p my-3
+    }
+}
+
+/// A flat list whose items carry inline math: marker + assembled-Text
+/// rows, mirroring the MarkdownUI theme's plain "•"/"n." markers.
+struct InlineMathList: View {
+    let items: [MathListItem]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(items.indices, id: \.self) { index in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    marker(items[index].marker)
+                    InlineMathText(text: items[index].text)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(.vertical, 12) // web ul/ol my-3
+    }
+
+    private func marker(_ token: String) -> Text {
+        if token == "-" || token == "*" || token == "+" {
+            return Text("•").foregroundColor(.secondary)
+        }
+        // Normalize "3)" to the theme's "3." style.
+        let label = token.hasSuffix(")") ? String(token.dropLast()) + "." : token
+        return Text(label).monospacedDigit().foregroundColor(.secondary)
+    }
+}
+
+/// The Text-assembly core shared by paragraph and list-item rendering.
+struct InlineMathText: View {
+    let text: String
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         assembled
             .font(.system(size: 15)) // MarkdownUI body FontSize(15)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 12) // web p my-3
     }
 
     private var assembled: Text {

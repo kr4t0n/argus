@@ -15,10 +15,53 @@ struct MathSegmentsTests {
         #expect(MathSegments.split(text) == [.inlineParagraph(text)])
     }
 
-    @Test("inline math in list items / headings stays raw markdown (scope)")
-    func inlineOnlyInPlainParagraphs() {
+    @Test("flat bullet list with math becomes .inlineList")
+    func flatListWithMath() {
         let list = "- where $\\pi_\\theta$ is the policy\n- and $R$ the reward"
-        #expect(MathSegments.split(list) == [.markdown(list)])
+        #expect(MathSegments.split(list) == [.inlineList([
+            MathListItem(marker: "-", text: "where $\\pi_\\theta$ is the policy"),
+            MathListItem(marker: "-", text: "and $R$ the reward"),
+        ])])
+    }
+
+    @Test("ordered list with math keeps its numbering tokens")
+    func orderedListWithMath() {
+        let list = "1. sample $y$\n2) filter $R$"
+        #expect(MathSegments.split(list) == [.inlineList([
+            MathListItem(marker: "1.", text: "sample $y$"),
+            MathListItem(marker: "2)", text: "filter $R$"),
+        ])])
+    }
+
+    @Test("the on-device regression: bold + math inside a bullet")
+    func boldMathBullet() {
+        let list = "- **On-policy REINFORCE** (binary reward): "
+            + "$\\mathbb{E}_{y\\sim\\pi_\\theta}[R(y)\\nabla_\\theta \\log \\pi_\\theta(y)]$"
+        let segments = MathSegments.split(list)
+        guard case .inlineList(let items)? = segments.first, segments.count == 1 else {
+            Issue.record("expected one .inlineList, got \(segments)")
+            return
+        }
+        #expect(items.count == 1)
+        // Underscores must survive verbatim — cmark ate them when this
+        // block fell through to MarkdownUI.
+        #expect(items[0].text.contains("\\mathbb{E}_{y\\sim\\pi_\\theta}"))
+    }
+
+    @Test("lazy continuation lines join into the item")
+    func listContinuation() {
+        let list = "- first line with $x$\n  continues here"
+        #expect(MathSegments.split(list) == [.inlineList([
+            MathListItem(marker: "-", text: "first line with $x$\ncontinues here"),
+        ])])
+    }
+
+    @Test("lists without math, nested lists, and headings stay raw markdown")
+    func listScopeLimits() {
+        let plain = "- no math here\n- none here either"
+        #expect(MathSegments.split(plain + " $ ") == [.markdown(plain + " $ ")])
+        let nested = "- outer $x$\n  - inner $y$"
+        #expect(MathSegments.split(nested) == [.markdown(nested)])
         let heading = "## About $\\pi_\\theta$"
         #expect(MathSegments.split(heading) == [.markdown(heading)])
     }

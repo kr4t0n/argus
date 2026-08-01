@@ -533,10 +533,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   iOS counterpart: ArgusKit `Engine/MathSegments.swift` +
   `Views/MathRender.swift` render `$$` display math natively via
   SwiftMath, and `Engine/InlineMath.swift` + `Views/InlineMathRender.swift`
-  render inline `$…$` in plain paragraphs as baseline-aligned SwiftMath
-  images inside hand-assembled Text (final answer only; list/heading/
-  quote/table math stays raw; deviations from the web's delimiter
-  semantics documented in MathSegments). SwiftMath
+  render inline `$…$` in plain paragraphs AND flat list items as
+  baseline-aligned SwiftMath images inside hand-assembled Text (final
+  answer only; nested-list/heading/quote/table math stays raw;
+  deviations from the web's delimiter semantics documented in
+  MathSegments). SwiftMath
   1.7.3 parses a smaller subset than KaTeX — `Engine/MathCompat.swift`
   rewrites the gap Claude actually hits (`\big[`, `\operatorname`,
   `\dots`, `\lVert`); a formula that still fails parse renders as raw
