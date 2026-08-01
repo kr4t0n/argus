@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftMath
+import ArgusKit
 
 /// A `$$…$$` display-math block — the native counterpart of the web's
 /// KaTeX `.katex-display`. SwiftMath lays the equation out with
@@ -12,9 +13,13 @@ struct MathBlock: View {
     let latex: String
 
     var body: some View {
-        if MTMathListBuilder.build(fromString: latex) != nil {
+        // MathCompat maps Claude's KaTeX-isms (`\big[`, `\operatorname`)
+        // into SwiftMath's subset; the fallback shows the ORIGINAL
+        // source — what the model wrote, not our rewrite.
+        let compat = MathCompat.swiftMathLatex(latex)
+        if MTMathListBuilder.build(fromString: compat) != nil {
             ScrollView(.horizontal, showsIndicators: false) {
-                MathLabel(latex: latex)
+                MathLabel(latex: compat)
             }
             .padding(.vertical, 12) // web .katex-display my-3
         } else {

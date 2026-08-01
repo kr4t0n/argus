@@ -297,7 +297,10 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   `MathSegments` splits the markdown around display-math blocks (code
   fences immune, unclosed `$$` stays raw while streaming) and
   `AnswerView` interleaves `MathBlock` views between Markdown segments;
-  LaTeX outside SwiftMath's TeX subset falls back to raw source in a
+  `MathCompat` first rewrites Claude's KaTeX-isms that SwiftMath 1.7.3
+  lacks (`\big[` sizing → dropped, `\operatorname` → `\mathrm`,
+  `\dots`/`\lVert` aliases — all found the hard way on device), and
+  LaTeX still outside SwiftMath's subset falls back to raw source in a
   code block. Inline `$…$` (which the web renders) is deferred — it
   can't be embedded in MarkdownUI's `Text` runs without image
   attachments. Thinking/thought text in the activity timeline also
