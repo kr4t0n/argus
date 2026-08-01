@@ -29,6 +29,8 @@ struct AnswerView: View {
                     Markdown(text)
                 case .displayMath(let latex):
                     MathBlock(latex: latex)
+                case .inlineParagraph(let text):
+                    InlineMathParagraph(text: text)
                 }
             }
         }

@@ -301,8 +301,19 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   lacks (`\big[` sizing → dropped, `\operatorname` → `\mathrm`,
   `\dots`/`\lVert` aliases — all found the hard way on device), and
   LaTeX still outside SwiftMath's subset falls back to raw source in a
-  code block. Inline `$…$` (which the web renders) is deferred — it
-  can't be embedded in MarkdownUI's `Text` runs without image
-  attachments. Thinking/thought text in the activity timeline also
-  still renders math as raw dollars (web renders it); apply
-  `MathSegments` in `ActivityViews.swift` if that starts to grate.
+  code block.
+- **Inline LaTeX (this):** plain paragraphs carrying `$…$` spans become
+  `.inlineParagraph` segments (ArgusKit `InlineMath` scans with
+  web/micromark parity — equal-length dollar runs, backtick code spans
+  immune, `\$` escapes, including the accepted "$5 and then $10" false
+  positive). `InlineMathParagraph` hand-assembles the paragraph as
+  concatenated `Text`: prose runs via `AttributedString(markdown:)`
+  (code accent + link color re-themed to match MarkdownUI), math runs
+  as SwiftMath-rendered images sitting on the text baseline via
+  `.baselineOffset(-descent)` (metrics read from
+  `MTMathUILabel.displayList`), cached per (latex, appearance) in
+  `MathImageRenderer`. Scope limits, deliberate: math inside list
+  items / headings / quotes / tables stays raw dollars (per-block-type
+  Text assembly isn't worth it yet), and the activity timeline's
+  thinking text still renders raw (apply `MathSegments` in
+  `ActivityViews.swift` if it grates).

@@ -3,10 +3,40 @@ import Testing
 
 @Suite("MathSegments — $$ display-math extraction for the transcript")
 struct MathSegmentsTests {
-    @Test("no math → single markdown segment, text untouched")
+    @Test("no dollars → single markdown segment, text untouched")
     func noMathPassthrough() {
-        let text = "Just prose with $5 and inline $x+y$ math."
+        let text = "Just prose, no math anywhere.\n\n- a list\n- of things"
         #expect(MathSegments.split(text) == [.markdown(text)])
+    }
+
+    @Test("plain paragraph with inline $…$ becomes .inlineParagraph")
+    func inlineParagraph() {
+        let text = "Sample $y \\sim \\pi_{\\theta_0}(\\cdot|x)$, keep $R(x,y)\\in\\{0,1\\}$, then SFT:"
+        #expect(MathSegments.split(text) == [.inlineParagraph(text)])
+    }
+
+    @Test("inline math in list items / headings stays raw markdown (scope)")
+    func inlineOnlyInPlainParagraphs() {
+        let list = "- where $\\pi_\\theta$ is the policy\n- and $R$ the reward"
+        #expect(MathSegments.split(list) == [.markdown(list)])
+        let heading = "## About $\\pi_\\theta$"
+        #expect(MathSegments.split(heading) == [.markdown(heading)])
+    }
+
+    @Test("dollars only inside backtick code spans stay markdown")
+    func inlineCodeSpanImmune() {
+        let text = "Use `$PATH` and `$HOME` here."
+        #expect(MathSegments.split(text) == [.markdown(text)])
+    }
+
+    @Test("mixed answer: text, inline paragraph, display block")
+    func mixedSegments() {
+        let text = "Intro line.\n\nWith $x$ inline.\n\n$$\ny = x^2\n$$"
+        #expect(MathSegments.split(text) == [
+            .markdown("Intro line.\n"),
+            .inlineParagraph("With $x$ inline."),
+            .displayMath("y = x^2"),
+        ])
     }
 
     @Test("fenced $$ block splits into text/math/text")
@@ -86,10 +116,10 @@ struct MathSegmentsTests {
         #expect(MathSegments.split(text) == [.displayMath("a"), .displayMath("b")])
     }
 
-    @Test("several $$…$$ spans fused on one line stay raw")
-    func fusedSpansStayRaw() {
+    @Test("several $$…$$ spans on one line go to the inline pass, not display")
+    func fusedSpansGoInline() {
         let text = "$$a$$ and $$b$$"
-        #expect(MathSegments.split(text) == [.markdown(text)])
+        #expect(MathSegments.split(text) == [.inlineParagraph(text)])
     }
 
     @Test("empty $$$$ and bare $$ $$ are not math")
