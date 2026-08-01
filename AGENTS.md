@@ -530,6 +530,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `.markdown .katex-display` gets sideways overflow-scroll like tables.
   While a turn streams, an unclosed `$$` shows raw until the closing
   delimiter arrives, then snaps into rendered math — self-correcting.
+  iOS counterpart: ArgusKit `Engine/MathSegments.swift` +
+  `Views/MathRender.swift` render `$$` display math natively via
+  SwiftMath (final answer only; inline `$…$` deferred; deviations from
+  the web's delimiter semantics documented in MathSegments). SwiftMath
+  1.7.3 parses a smaller subset than KaTeX — `Engine/MathCompat.swift`
+  rewrites the gap Claude actually hits (`\big[`, `\operatorname`,
+  `\dots`, `\lVert`); a formula that still fails parse renders as raw
+  source in a code block, deliberately visible rather than mangled.
 - `stores/` — Zustand slices: `authStore`, `machineStore`, `sessionStore`,
   `projectStore`, `uiStore` (no `agentStore` — it was deleted with the
   Agent entity). Sessions are stored by id with their full `chunks`

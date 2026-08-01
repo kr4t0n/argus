@@ -16,7 +16,22 @@ struct AnswerView: View {
     var isStreaming = false
 
     var body: some View {
-        Markdown(markdown)
+        // `$$…$$` display math renders OUTSIDE MarkdownUI — cmark-gfm
+        // has no math node, so ArgusKit's MathSegments interleaves
+        // native SwiftMath blocks between Markdown segments. The theme
+        // chain hangs on the container: MarkdownUI's style modifiers
+        // travel by environment, so every child Markdown inherits them.
+        let segments = MathSegments.split(markdown)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(segments.indices, id: \.self) { index in
+                switch segments[index] {
+                case .markdown(let text):
+                    Markdown(text)
+                case .displayMath(let latex):
+                    MathBlock(latex: latex)
+                }
+            }
+        }
             // Body ≈ web's text-sm (14px); a touch larger for mobile.
             .markdownTextStyle(\.text) {
                 FontSize(15)
