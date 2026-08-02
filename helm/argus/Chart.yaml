@@ -29,9 +29,10 @@ version: 0.3.2
 # tabs/previews auto-refresh in place when a CLI edits the file (web +
 # iOS), attachment-upload failures surface real error messages instead
 # of an opaque AggregateError, and the context ring knows Opus 5's 1M
-# window. Works with sidecar v0.3.1 on agent hosts; a follow-up sidecar
-# release adds the claude-code 2.1.217 vcs_state_changed /
-# code_change_published event mapping already in-tree.
+# window. Pair with sidecar v0.3.2 on agent hosts — it adds the
+# claude-code ≥ 2.1.217 vcs_state_changed / code_change_published event
+# mapping (keeps the file tree / Commits / Diff panes live on newer
+# CLIs); v0.3.1 sidecars otherwise keep working.
 #
 # 0.3.1 is a control-plane + sidecar release with NO schema change —
 # compatible with 0.3.0, no forced migration. appVersion pins the 0.3.1
