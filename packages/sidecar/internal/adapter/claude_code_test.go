@@ -59,6 +59,90 @@ func TestMapClaudeAPIRetry(t *testing.T) {
 	}
 }
 
+// TestMapClaudeVCSStateChanged verifies the `system`/`vcs_state_changed`
+// event (new in claude 2.1.217) is forwarded content-less with its
+// classification in Meta, so the runner can turn it into a git-changed
+// notify without it also rendering as a junk "system" row.
+func TestMapClaudeVCSStateChanged(t *testing.T) {
+	line := `{"type":"system","subtype":"vcs_state_changed","kind":"push",` +
+		`"cwd":"/home/kyle/projects/argus","uuid":"u1","session_id":"s1"}`
+	chunks := mapClaudeLine(line, nil, nil, nil, "")
+
+	if len(chunks) != 1 {
+		t.Fatalf("want 1 chunk, got %d: %+v", len(chunks), chunks)
+	}
+	c := chunks[0]
+	if c.Kind != protocol.KindProgress {
+		t.Fatalf("want KindProgress, got %q", c.Kind)
+	}
+	if c.Content != "" {
+		t.Fatalf("want empty content (no junk row), got %q", c.Content)
+	}
+	if got := c.Meta["contentType"]; got != "vcs_state_changed" {
+		t.Fatalf("want contentType=vcs_state_changed, got %v", got)
+	}
+	if got := c.Meta["kind"]; got != "push" {
+		t.Fatalf("want kind=push, got %v", got)
+	}
+	if got := c.Meta["cwd"]; got != "/home/kyle/projects/argus" {
+		t.Fatalf("want cwd passed through, got %v", got)
+	}
+
+	// `kind` is an open set — an unrecognized value must still be
+	// forwarded (it means the same thing: something changed, go look),
+	// and a kind-less event must not become a junk row either.
+	for _, ev := range []string{
+		`{"type":"system","subtype":"vcs_state_changed","kind":"bisect"}`,
+		`{"type":"system","subtype":"vcs_state_changed"}`,
+	} {
+		got := mapClaudeLine(ev, nil, nil, nil, "")
+		if len(got) != 1 || got[0].Content != "" ||
+			got[0].Meta["contentType"] != "vcs_state_changed" {
+			t.Fatalf("%s: want one tagged content-less chunk, got %+v", ev, got)
+		}
+	}
+}
+
+// TestMapClaudeCodeChangePublished verifies the `system`/
+// `code_change_published` event (new in claude 2.1.217) carries the PR
+// binding in Meta and stays content-less. Re-emission for the same URL is
+// expected — the mapper is stateless here, so every event maps 1:1 and
+// consumers dedupe.
+func TestMapClaudeCodeChangePublished(t *testing.T) {
+	line := `{"type":"system","subtype":"code_change_published","provider":"github",` +
+		`"url":"https://github.com/kr4t0n/argus/pull/36","repo":"kr4t0n/argus",` +
+		`"identifier":"36","uuid":"u1","session_id":"s1"}`
+	chunks := mapClaudeLine(line, nil, nil, nil, "")
+
+	if len(chunks) != 1 {
+		t.Fatalf("want 1 chunk, got %d: %+v", len(chunks), chunks)
+	}
+	c := chunks[0]
+	if c.Kind != protocol.KindProgress {
+		t.Fatalf("want KindProgress, got %q", c.Kind)
+	}
+	if c.Content != "" {
+		t.Fatalf("want empty content (no junk row), got %q", c.Content)
+	}
+	want := map[string]any{
+		"contentType": "code_change_published",
+		"provider":    "github",
+		"url":         "https://github.com/kr4t0n/argus/pull/36",
+		"repo":        "kr4t0n/argus",
+		"identifier":  "36",
+	}
+	for k, v := range want {
+		if got := c.Meta[k]; got != v {
+			t.Fatalf("meta[%q]: want %v, got %v", k, v, got)
+		}
+	}
+	// `identifier` is a *string* on the wire even though it's a PR number;
+	// forwarding it as anything else would break clients that build URLs.
+	if _, ok := c.Meta["identifier"].(string); !ok {
+		t.Fatalf("identifier must stay a string, got %T", c.Meta["identifier"])
+	}
+}
+
 // TestMapClaudeUnknownSystemSubtype pins the deliberate fall-through: system
 // events with subtypes we don't handle yet must stay VISIBLE (Content ==
 // "system") — that junk row is the observability breadcrumb that tells us a

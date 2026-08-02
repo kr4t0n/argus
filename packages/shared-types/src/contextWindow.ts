@@ -85,6 +85,23 @@ const CONTEXT_WINDOWS: Array<{
     window: 1_000_000,
     family: 'Claude Fable',
   },
+  // Claude Opus 5 — like Fable, 1M is the DEFAULT rather than an opt-in
+  // facet, so a turn run without `context: "1m"` still reports the bare
+  // `claude-opus-5` and would otherwise fall through to the 200k
+  // baseline (ring 5x too full). Verified against the CLI's own
+  // `result.modelUsage["claude-opus-5"].contextWindow` = 1_000_000.
+  //
+  // Version-gated on `5` rather than the bare family word, because the
+  // Opus 4.x ids share it and are NOT covered by this entry. The
+  // `[-\s]?` separator spans both id shapes — the API id
+  // `claude-opus-5` (with or without a point-release suffix) and
+  // cursor-cli's display form "Opus 5 …" — while the trailing boundary
+  // keeps `opus-5` from swallowing a future `opus-50`.
+  {
+    match: (m) => /(^|[^a-z0-9])opus[-\s]?5([^a-z0-9]|$)/.test(m),
+    window: 1_000_000,
+    family: 'Claude Opus 5',
+  },
   {
     match: (m) => isAnthropicFamily(m),
     window: 200_000,

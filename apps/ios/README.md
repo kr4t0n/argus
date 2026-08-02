@@ -62,7 +62,7 @@ apps/ios/
 │       └── Engine/               TranscriptState reducer, DeltaSplit, UsageParser,
 │                                 ContextWindows (all pure + unit-tested)
 └── Argus/                        SwiftUI app target (XcodeGen; .xcodeproj generated)
-    ├── project.yml               targets, ATS exception, MarkdownUI + ArgusKit deps
+    ├── project.yml               targets, ATS exception, MarkdownUI + SwiftMath + ArgusKit deps
     └── Sources/
         ├── ArgusApp.swift        @main, root phase switch, scenePhase handling
         ├── AppModel.swift        auth, socket ownership, event routing, TokenBox
@@ -76,6 +76,7 @@ Ports that must stay in lockstep with their TS originals:
 | Swift | TypeScript original |
 | --- | --- |
 | `Engine/DeltaSplit.swift` | `apps/web/src/lib/deltaSplit.ts` |
+| `Engine/MathSegments.swift` | `apps/web/src/lib/markdown.ts` delimiter rules (semantic port; deliberate deviations documented in the file) |
 | `Engine/UsageMath.swift` | `packages/shared-types/src/usage.ts` |
 | `Engine/ContextWindow.swift` | `packages/shared-types/src/contextWindow.ts` |
 | `Realtime/StreamClient.swift` events | `packages/shared-types/src/ws.ts` |
@@ -291,3 +292,31 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   IME composition confirms the marked text (first-responder
   `markedTextRange` check — the web's `isComposing` guard); ⌘↩ and
   ⌘. keep working.
+- **LaTeX display math (this):** `$$…$$` blocks in the final answer
+  render natively via SwiftMath (no webview) — ArgusKit's
+  `MathSegments` splits the markdown around display-math blocks (code
+  fences immune, unclosed `$$` stays raw while streaming) and
+  `AnswerView` interleaves `MathBlock` views between Markdown segments;
+  `MathCompat` first rewrites Claude's KaTeX-isms that SwiftMath 1.7.3
+  lacks (`\big[` sizing → dropped, `\operatorname` → `\mathrm`,
+  `\dots`/`\lVert` aliases — all found the hard way on device), and
+  LaTeX still outside SwiftMath's subset falls back to raw source in a
+  code block.
+- **Inline LaTeX (this):** plain paragraphs carrying `$…$` spans become
+  `.inlineParagraph` segments (ArgusKit `InlineMath` scans with
+  web/micromark parity — equal-length dollar runs, backtick code spans
+  immune, `\$` escapes, including the accepted "$5 and then $10" false
+  positive). `InlineMathParagraph` hand-assembles the paragraph as
+  concatenated `Text`: prose runs via `AttributedString(markdown:)`
+  (code accent + link color re-themed to match MarkdownUI), math runs
+  as SwiftMath-rendered images sitting on the text baseline via
+  `.baselineOffset(-descent)` (metrics read from
+  `MTMathUILabel.displayList`), cached per (latex, appearance) in
+  `MathImageRenderer`. Flat (unnested) list items get the same
+  treatment via `.inlineList` — `InlineMathList` re-creates the
+  theme's "•"/"n." markers — because Claude bullets math constantly
+  and cmark eats raw list-item `_` subscripts as emphasis. Scope
+  limits, deliberate: math inside nested lists / headings / quotes /
+  tables stays raw dollars (per-block-type Text assembly isn't worth
+  it yet), and the activity timeline's thinking text still renders
+  raw (apply `MathSegments` in `ActivityViews.swift` if it grates).

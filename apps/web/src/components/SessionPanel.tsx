@@ -15,6 +15,7 @@ import { Composer } from './Composer';
 import { ContextPane } from './ContextPane';
 import { FileTabStrip } from './FileTabStrip';
 import { useProjectRef } from '../lib/projects';
+import { useFileTabAutoRefresh } from '../lib/useFileTabAutoRefresh';
 import { UsageBadge } from './UsageBadge';
 import { relativeTime } from '../lib/utils';
 
@@ -140,6 +141,11 @@ export function SessionPanel() {
       openFiles.find((f) => f.key === activeFileKey && f.scope === projectRef.projectId) ?? null
     );
   }, [openFiles, activeFileKey, projectRef]);
+
+  // Live file tabs: subscribe here rather than inside FileViewer, which
+  // is mounted only for the focused tab and so could never mark a
+  // background tab stale. Must sit above the `!sessionId` early return.
+  useFileTabAutoRefresh(projectRef);
 
   if (!sessionId) {
     return (

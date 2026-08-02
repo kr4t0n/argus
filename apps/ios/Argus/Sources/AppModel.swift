@@ -59,7 +59,55 @@ final class AppModel {
     /// Latest fs/git change events — inspector panels watch these and
     /// refetch when the event matches their project's
     /// (machineId, workingDir) pair.
-    private(set) var lastFSChange: FSChangedPayload?
+    ///
+    /// Observers watch `fsChangeSeq` and read `fsChanges` — never a
+    /// payload directly. Two properties, two distinct reasons:
+    ///
+    /// 1. `FSChangedPayload` is `{path, machineId, workingDir}` with no
+    ///    timestamp, and it's Equatable — so two consecutive writes to
+    ///    one directory are an IDENTICAL value, and `.onChange(of:)`
+    ///    fires only on inequality. Watching the payload silently drops
+    ///    every repeat edit to a directory, which is the common case
+    ///    while an agent works. A counter makes each delivery distinct.
+    /// 2. The batch, in turn, is why the counter advances once per FLUSH
+    ///    rather than once per event. Bumping per event let a burst
+    ///    (an agent touching several directories) advance it several
+    ///    times inside ONE SwiftUI frame, which trips the runtime fault
+    ///    "onChange(of:) action tried to update multiple times per
+    ///    frame" and makes delivery undefined.
+    private(set) var fsChanges: [FSChangedPayload] = []
+    private(set) var fsChangeSeq: Int = 0
+    private var pendingFSChanges: [FSChangedPayload] = []
+    private var fsFlushScheduled = false
+
+    /// How long to accumulate nudges before publishing one batch.
+    ///
+    /// A bare main-actor hop is NOT enough, which cost a round trip to
+    /// learn: the event pump is `for await event in stream.events`, so
+    /// every iteration is a suspension point, and a hop-scheduled flush
+    /// simply interleaves with the already-buffered events — one publish
+    /// per event again, i.e. the "multiple times per frame" fault
+    /// unchanged. Only a real time window makes a burst collapse.
+    private static let fsFlushWindow = Duration.milliseconds(150)
+
+    /// Publish the accumulated batch once per window, so N events drained
+    /// back-to-back become ONE observable update. The `fsFlushScheduled`
+    /// guard makes the window non-restarting: a nudge arriving mid-window
+    /// joins the pending batch instead of pushing the flush later, which
+    /// is what keeps updates flowing during sustained editing.
+    private func scheduleFSFlush() {
+        guard !fsFlushScheduled else { return }
+        fsFlushScheduled = true
+        Task { @MainActor in
+            try? await Task.sleep(for: Self.fsFlushWindow)
+            fsFlushScheduled = false
+            guard !pendingFSChanges.isEmpty else { return }
+            fsChanges = pendingFSChanges
+            pendingFSChanges.removeAll()
+            fsChangeSeq &+= 1
+        }
+    }
+
     private(set) var lastGitChange: GitChangedPayload?
 
     /// Latest background-task events (Progress extension) — the pane
@@ -523,6 +571,12 @@ final class AppModel {
             // Socket.IO rooms don't survive reconnects; delivery has no
             // replay. Rejoin + backfill, and refresh the lists we may
             // have missed events for.
+            //
+            // Project rooms were missing from this list: nothing
+            // re-subscribed them, so after a blip fs/git nudges stopped
+            // arriving until the holding view reappeared. StreamClient
+            // refcounts them, so it can replay exactly what's held.
+            stream?.rejoinProjectRooms()
             Task {
                 await refreshAll()
                 await activeSession?.handleReconnect()
@@ -589,7 +643,10 @@ final class AppModel {
             fleet.upsert(project: project)
 
         case .fsChanged(let payload):
-            lastFSChange = payload
+            // Dedupe within the batch: the same directory nudged twice
+            // before the flush is one refetch, not two.
+            if !pendingFSChanges.contains(payload) { pendingFSChanges.append(payload) }
+            scheduleFSFlush()
         case .gitChanged(let payload):
             lastGitChange = payload
 

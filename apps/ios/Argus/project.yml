@@ -20,6 +20,9 @@ packages:
   Highlightr:
     url: https://github.com/raspu/Highlightr
     from: 2.1.0
+  SwiftMath:
+    url: https://github.com/mgriebling/SwiftMath
+    from: 1.7.3
 
 targets:
   Argus:
@@ -38,6 +41,8 @@ targets:
         product: SwiftTerm
       - package: Highlightr
         product: Highlightr
+      - package: SwiftMath
+        product: SwiftMath
       - target: ArgusWidgets
         embed: true
     scheme: {}

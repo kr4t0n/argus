@@ -25,7 +25,7 @@ struct ContextWindowLockstepTests {
     ///   2. Extend ContextWindowTests.swift to cover it.
     ///   3. Re-pin: shasum -a 256 packages/shared-types/src/contextWindow.ts
     private static let pinnedSHA256 =
-        "d68b9e37e3fe61ba7c988015a02b274f100631090a32acba2b6a067024fe512b"
+        "db4fd72ffe2845a84ebf6c80378ca603114ed9f498243858f84ae6c6ed054ec5"
 
     @Test("shared contextWindow.ts is unchanged since the last mirror sync")
     func tsTableUnchanged() throws {

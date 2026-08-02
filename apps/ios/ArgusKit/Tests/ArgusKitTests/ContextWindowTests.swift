@@ -30,6 +30,24 @@ struct ContextWindowTests {
         #expect(ContextWindows.lookup(model: "Fable 5 1M Max Thinking")?.window == 1_000_000)
     }
 
+    @Test("Opus 5 is 1M by default — bare id, point release, and display name")
+    func opusFiveFamilies() {
+        let api = ContextWindows.lookup(model: "claude-opus-5")
+        #expect(api?.window == 1_000_000)
+        #expect(api?.family == "Claude Opus 5")
+        #expect(ContextWindows.lookup(model: "claude-opus-5-20260601")?.window == 1_000_000)
+        #expect(ContextWindows.lookup(model: "claude-opus-5[1m]")?.window == 1_000_000)
+        #expect(ContextWindows.lookup(model: "Opus 5 Max Thinking")?.window == 1_000_000)
+    }
+
+    @Test("Opus 5 entry does not claim the 200k Opus 4.x ids")
+    func opusFiveDoesNotOverreach() {
+        #expect(ContextWindows.lookup(model: "claude-opus-4-8")?.family == "Claude")
+        #expect(ContextWindows.lookup(model: "claude-opus-4-5")?.window == 200_000)
+        // Trailing boundary: a hypothetical `opus-50` must not match.
+        #expect(ContextWindows.lookup(model: "claude-opus-50")?.window == 200_000)
+    }
+
     @Test("word boundaries: 'affable' is not Fable")
     func fableFalsePositives() {
         #expect(ContextWindows.lookup(model: "affable-9000") == nil)

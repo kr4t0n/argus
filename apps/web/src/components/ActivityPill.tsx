@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Brain, ChevronDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { markdownRemarkPlugins, markdownRehypePlugins } from '../lib/markdown';
 import type { ResultChunkDTO } from '@argus/shared-types';
 import { cn } from '../lib/utils';
 import { splitDeltas } from '../lib/deltaSplit';
@@ -143,7 +143,9 @@ export function ActivityPanel({
               key={it.id}
               className="markdown max-w-none py-1.5 text-xs leading-relaxed text-fg-tertiary"
             >
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{it.text}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>
+                {it.text}
+              </ReactMarkdown>
             </div>
           );
         }
@@ -162,7 +164,9 @@ export function ActivityPanel({
                 <span className="text-xs italic text-fg-tertiary/70">[redacted]</span>
               ) : (
                 <div className="markdown max-w-none text-fg-tertiary/80">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{it.text}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>
+                {it.text}
+              </ReactMarkdown>
                 </div>
               )}
             </div>
@@ -190,7 +194,9 @@ export function ActivityPanel({
                 compaction summary
               </summary>
               <div className="markdown max-w-none py-1.5 text-xs leading-relaxed text-fg-tertiary">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{it.text}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>
+                {it.text}
+              </ReactMarkdown>
               </div>
             </details>
           );

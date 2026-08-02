@@ -16,6 +16,10 @@ type PendingAttachment = {
   id?: string;
   /** Object URL for an instant local image thumbnail (revoked on remove). */
   previewUrl?: string;
+  /** Server-supplied failure reason, shown on the error chip's tooltip —
+   *  "not configured" / "unreachable" are operator problems the user
+   *  otherwise can't distinguish from a bad file. */
+  error?: string;
 };
 
 let localSeq = 0;
@@ -96,9 +100,13 @@ export function Composer({
             prev.map((a) => (a.localId === localId ? { ...a, status: 'done', id: dto.id } : a)),
           ),
         )
-        .catch(() =>
+        .catch((err: unknown) =>
           setAttachments((prev) =>
-            prev.map((a) => (a.localId === localId ? { ...a, status: 'error' } : a)),
+            prev.map((a) =>
+              a.localId === localId
+                ? { ...a, status: 'error', error: err instanceof Error ? err.message : undefined }
+                : a,
+            ),
           ),
         );
     }
@@ -322,7 +330,7 @@ function AttachmentChip({
       {a.status === 'error' && (
         <div
           className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-red-500/50"
-          title="upload failed"
+          title={a.error ? `upload failed: ${a.error}` : 'upload failed'}
         >
           <AlertCircle className="h-4 w-4 text-white" />
         </div>

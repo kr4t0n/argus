@@ -493,6 +493,67 @@ func mapClaudeLine(line string, state *fileEditState, tasks *taskListState, comp
 				meta["estimatedTokensDelta"] = v
 			}
 			return []Chunk{{Kind: protocol.KindProgress, Meta: meta}}
+
+		case "vcs_state_changed":
+			// Claude Code 2.1.217+ classifies the git/gh operations it
+			// observes in Bash tool output and emits one event per observed
+			// `kind` (commit / push / merge / rebase) — so ONE compound
+			// command can fire several (`git merge && git push` → two).
+			// Deliberately payload-free beyond the classification: it
+			// reports that the repo changed, not what it changed to, so
+			// consumers re-read state instead of decoding the event.
+			// Best-effort — only foreground Bash mutations are observed, dry
+			// runs excluded — and `kind` is an open set, so an unrecognized
+			// value means exactly what a recognized one means. Both caveats
+			// are why this is a breadcrumb, not a state feed.
+			//
+			// Mapped ONLY to keep it out of the timeline as a junk "system"
+			// row. It deliberately does NOT drive a git-changed nudge: the
+			// per-workdir gitWatcher reading `.git/HEAD` + `refs/heads/` is
+			// the single source of truth for repo state, and this event is a
+			// *claim about shell output*, not an observation of the refs.
+			// It's also attributed to the session's cwd, so a `git -C
+			// ../other` would nudge the wrong repo. Everything it reports
+			// that the dashboard renders (commit / merge / rebase) already
+			// moves a ref the watcher sees.
+			meta := map[string]any{"contentType": "vcs_state_changed"}
+			if s, _ := ev["kind"].(string); s != "" {
+				meta["kind"] = s
+			}
+			// The session's cwd, NOT the mutated repo's path: `git -C` or an
+			// inner `cd` mutates somewhere else entirely. A hint for
+			// logging, never a routing key.
+			if s, _ := ev["cwd"].(string); s != "" {
+				meta["cwd"] = s
+			}
+			return []Chunk{{Kind: protocol.KindProgress, Meta: meta}}
+
+		case "code_change_published":
+			// The session is now associated with a published pull / merge
+			// request. Fires on creation AND whenever the session
+			// contributes to an existing one (`gh pr edit/close/ready`,
+			// `gh pr checkout`, or a plain push to a branch that already has
+			// an open PR), so the SAME url repeats many times in one session
+			// — consumers must treat it as idempotent rebinding, not a
+			// first-write-wins create.
+			//
+			// The fields are scraped from the command's captured output (the
+			// last PR-shaped URL printed), which includes output the forge
+			// CLI didn't write — hook output, or a file catted by the same
+			// command. So they are a display hint, never a verified
+			// identity: don't route authenticated requests at `url` on the
+			// strength of this event. `provider` is an open set; an unknown
+			// value is a forge we don't recognize, not an error.
+			//
+			// Content-less like the rest; the payload rides in Meta for a UI
+			// that wants to link a session to its PR.
+			meta := map[string]any{"contentType": "code_change_published"}
+			for _, k := range []string{"provider", "url", "repo", "identifier"} {
+				if s, _ := ev[k].(string); s != "" {
+					meta[k] = s
+				}
+			}
+			return []Chunk{{Kind: protocol.KindProgress, Meta: meta}}
 		}
 		return []Chunk{{Kind: protocol.KindProgress, Content: t, Meta: ev}}
 

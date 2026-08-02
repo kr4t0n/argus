@@ -14,6 +14,10 @@ struct SessionView: View {
 
     @State private var model: SessionViewModel?
     @State private var draft = ""
+    // Composer focus + the one-shot "undo the hardware-Return resign"
+    // flag — see the onChange below the composer's onKeyPress.
+    @FocusState private var composerFocused: Bool
+    @State private var refocusAfterNewline = false
     @State private var nearBottom = true
 
     // Attachments being composed (already uploaded — server holds bytes).
@@ -355,6 +359,16 @@ struct SessionView: View {
                     .frame(maxWidth: 720)
                     .frame(maxWidth: .infinity)
                 }
+                // The ONLY way to put the keyboard away: the composer is a
+                // multi-line field (`axis: .vertical`), so its on-screen
+                // return key inserts a newline rather than submitting, and
+                // SwiftUI dismisses on neither an outside tap nor a plain
+                // ScrollView drag by default — leaving the keyboard with no
+                // exit at all on iPhone. Drag was chosen over tap-to-dismiss
+                // because a container tap gesture competes with the
+                // transcript's own targets, above all the `path:line`
+                // citation links routed through AnswerView's openURL.
+                .scrollDismissesKeyboard(.interactively)
                 .onChange(of: model.turns) {
                     // Follow a live stream only while the user is at the
                     // bottom — scrolled-up reading stays put.
@@ -478,22 +492,52 @@ struct SessionView: View {
                 .lineLimit(1...5)
                 .padding(.vertical, 6)
                 .disabled(model == nil)
+                .focused($composerFocused)
                 // Hardware-keyboard Enter sends, Shift+Enter newlines —
                 // the web Composer's onKeyDown rule, for the iPad
                 // Magic-Keyboard flow. onKeyPress sees only hardware
                 // events, so the on-screen return key still inserts a
                 // newline. Web parity details: an unmodified Return is
                 // ALWAYS swallowed (send() no-ops via canSend when
-                // there's nothing to send — Enter never newlines), any
-                // modifier falls through (Shift+Return → the field's
-                // newline; ⌘↩ → the send button's shortcut), and Return
-                // mid-IME-composition confirms the marked text instead
-                // of sending (the web's isComposing guard).
+                // there's nothing to send — Enter never newlines),
+                // Shift+Return inserts the line break through UIKit
+                // (a vertical-axis TextField drops hardware
+                // Shift+Return outright — .ignored does NOT become a
+                // newline), other modifiers fall through (⌘↩ → the
+                // send button's shortcut), and Return mid-IME-
+                // composition confirms the marked text instead of
+                // sending (the web's isComposing guard). Caps Lock
+                // rides along in `modifiers` while latched, so strip
+                // it before classifying.
                 .onKeyPress(.return, phases: .down) { press in
-                    guard press.modifiers.isEmpty else { return .ignored }
                     guard !ComposerKeyboard.isComposingMarkedText else { return .ignored }
+                    let modifiers = press.modifiers.subtracting(.capsLock)
+                    if modifiers == .shift {
+                        guard ComposerKeyboard.insertNewline() else { return .ignored }
+                        refocusAfterNewline = true
+                        return .handled
+                    }
+                    guard modifiers.isEmpty else { return .ignored }
                     send()
                     return .handled
+                }
+                // UIKit resigns the field on a hardware Shift+Return no
+                // matter what onKeyPress returns — .handled does NOT
+                // stop it (Apple Forums #760511 calls it as-designed;
+                // device-confirmed here, with or without the manual
+                // insert). The newline survives; focus dies a beat
+                // later, asynchronously — so a re-set inside the key
+                // handler is too early. Instead the shift branch arms
+                // a one-shot flag and we take focus back the moment
+                // the resign reaches FocusState. The field keeps its
+                // text and caret across the bounce. The flag also
+                // disarms on ANY focus change, so if some future iOS
+                // stops resigning, this can misfire at most once and
+                // can never trap focus in the composer.
+                .onChange(of: composerFocused) { _, focused in
+                    guard refocusAfterNewline else { return }
+                    refocusAfterNewline = false
+                    if !focused { composerFocused = true }
                 }
 
                 if model?.isRunning == true {
@@ -1088,6 +1132,22 @@ enum ComposerKeyboard {
     static var isComposingMarkedText: Bool {
         guard let input = firstResponder() as? UITextInput else { return false }
         return input.markedTextRange != nil
+    }
+
+    /// Shift+Return's newline. SwiftUI's vertical-axis TextField takes
+    /// newlines from the software return key but drops hardware
+    /// Shift+Return outright, so the composer inserts one itself:
+    /// `replace(_:withText:)` on the current selection is a plain edit
+    /// — caret-aware, selection-replacing, updates the SwiftUI binding
+    /// — with no return-key semantics. Note this does NOT keep the
+    /// field focused: UIKit resigns it on the hardware keypress itself
+    /// regardless of what we do here — the composer's
+    /// `refocusAfterNewline` flag is what undoes that.
+    static func insertNewline() -> Bool {
+        guard let input = firstResponder() as? UITextInput,
+              let selection = input.selectedTextRange else { return false }
+        input.replace(selection, withText: "\n")
+        return true
     }
 
     private static func firstResponder() -> UIResponder? {

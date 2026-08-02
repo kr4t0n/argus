@@ -32,7 +32,8 @@ token-level streaming with reconnect-safe replay.
 ## Features
 
 - **Streaming-first UI** — typewriter deltas, tool-call pills, stdout/stderr
-blocks, sticky auto-scroll, and replay-on-reconnect.
+blocks, sticky auto-scroll, and replay-on-reconnect. Answers render GFM
+markdown plus LaTeX math (KaTeX, `$…$` inline and `$$…$$` display).
 - **Machine-driven runners** — each host runs one `argus-sidecar` daemon that
 self-registers as a *Machine* and starts one runner per installed CLI. Create
 **sessions** from the dashboard (hover a project → `+`); each pins to a
@@ -71,7 +72,9 @@ sidebar without losing history; one-click restore, and archives survive
 sidecar restarts.
 - **Live workingDir file tree** — a lazy-expanding, gitignore-aware tree kept
 in sync by the sidecar's `fsnotify` watcher; the header also shows the current
-git branch (or short SHA when detached).
+git branch (or short SHA when detached). Open a file and it stays live too:
+when an agent edits it, the viewer re-reads it in place, preserving your
+scroll position instead of flashing a spinner.
 - **File & image attachments** — drag-drop / paste / pick files in the
 composer. Images render inline and pass to the agent as vision; other files
 land on the sidecar host. Bytes live in any S3-compatible store (bundled
@@ -192,6 +195,13 @@ boot. To use a managed S3 / R2 / external MinIO instead, set the server's
 a host-oriented `.env` value can't leak into the container) and drop the
 `minio` services; `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` stay
 env-overridable. Only the server needs to reach the bucket.
+
+Attachments are optional: with `S3_ENDPOINT` unset the server logs
+`S3_ENDPOINT is not set — file attachments are disabled` at boot and
+uploads answer `503 file attachments are not configured on this server`.
+If it *is* set but the bucket can't be reached, uploads answer `503
+attachment storage is unreachable` and the server log carries the
+endpoint plus the per-address connect error.
 
 The dashboard is at [http://localhost:5173](http://localhost:5173). Sign in with the seeded admin
 credentials (`admin@argus.local` / `changeme` by default — change them in
@@ -523,7 +533,7 @@ See `[.env.example](./.env.example)` for the full list. Highlights:
 | `ARGUS_WS_URL`         | Runtime URL the web app uses for Socket.IO; defaults to `ARGUS_API_URL` |
 | `VITE_API_URL`         | Build-time fallback baked into the web bundle (only used if you build your own image) |
 | `VITE_WS_URL`          | Build-time fallback for Socket.IO (only used if you build your own image) |
-| `S3_ENDPOINT`          | S3-compatible endpoint for attachment storage (bundled MinIO by default) |
+| `S3_ENDPOINT`          | S3-compatible endpoint for attachment storage (bundled MinIO by default); **empty = attachments disabled**, uploads answer 503 instead of failing at connect time |
 | `S3_BUCKET`            | Bucket attachments are stored in (`argus-attachments`)  |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | Object-store credentials                     |
 | `S3_REGION`            | Region sent to the S3 client (`us-east-1`; ignored by MinIO) |

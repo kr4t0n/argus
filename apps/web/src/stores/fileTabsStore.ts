@@ -54,7 +54,11 @@ export type OpenFile = OpenWorkingFile | OpenAttachment;
 
 export type FileContentState =
   | { status: 'loading' }
-  | { status: 'ready'; result: FSReadResult }
+  /** `revision` is the `revisions[key]` value this content was read at.
+   *  It's what lets the viewer tell "already up to date" (re-focusing a
+   *  tab) apart from "stale" (a CLI wrote the file while you were
+   *  elsewhere), so switching tabs doesn't re-issue an fs-read. */
+  | { status: 'ready'; result: FSReadResult; revision: number }
   | { status: 'error'; message: string };
 
 interface FileTabsState {
@@ -62,6 +66,10 @@ interface FileTabsState {
   /** null = chat tab is active. */
   activeKey: string | null;
   contents: Record<string, FileContentState>;
+  /** Bumped per tab when a CLI writes into that file's directory. The
+   *  viewer's fetch effect keys off this, so a bump — not a content
+   *  write — is what re-reads the file. Absent means 0. */
+  revisions: Record<string, number>;
 
   openFile: (file: { project: ProjectRef; path: string; line?: number }) => void;
   openAttachment: (att: {
@@ -75,6 +83,16 @@ interface FileTabsState {
   closeFile: (key: string) => void;
   setActive: (key: string | null) => void;
   setContent: (key: string, state: FileContentState) => void;
+  /**
+   * Mark every open working-file tab that lives directly in `dir` as
+   * stale. Driven by `fs:changed`, whose payload is DIRECTORY-granular
+   * (the sidecar's fsWatcher deliberately bubbles the parent and drops
+   * the filename), so a sibling write invalidates too — accepted,
+   * because only the focused tab actually refetches.
+   *
+   * `dir` is relative to the project's workingDir; '' is the root.
+   */
+  invalidateDir: (scope: string, dir: string) => void;
   /** Drop every tab + cached content for a project scope. */
   clearScope: (scope: string) => void;
 }
@@ -87,10 +105,19 @@ const fileName = (path: string) => {
   return i === -1 ? path : path.slice(i + 1);
 };
 
+/** Parent directory of a workingDir-relative path. Root-level files
+ *  yield '' — matching how the sidecar reports the watched root — NOT
+ *  '.', which is what a naive posix dirname would give. */
+const dirName = (path: string) => {
+  const i = path.lastIndexOf('/');
+  return i === -1 ? '' : path.slice(0, i);
+};
+
 export const useFileTabsStore = create<FileTabsState>((set, get) => ({
   openFiles: [],
   activeKey: null,
   contents: {},
+  revisions: {},
 
   openFile({ project, path, line }) {
     const key = fileKey(project.projectId, path);
@@ -143,7 +170,9 @@ export const useFileTabsStore = create<FileTabsState>((set, get) => ({
       }
       const contents = { ...s.contents };
       delete contents[key];
-      return { openFiles: remaining, activeKey: nextActive, contents };
+      const revisions = { ...s.revisions };
+      delete revisions[key];
+      return { openFiles: remaining, activeKey: nextActive, contents, revisions };
     });
   },
 
@@ -155,6 +184,21 @@ export const useFileTabsStore = create<FileTabsState>((set, get) => ({
     set((s) => ({ contents: { ...s.contents, [key]: state } }));
   },
 
+  invalidateDir(scope, dir) {
+    set((s) => {
+      const hits = s.openFiles.filter(
+        (f) => f.kind === 'file' && f.scope === scope && dirName(f.path) === dir,
+      );
+      // Return the SAME state object when nothing matched: a new
+      // `revisions` identity on every unrelated fs event would re-render
+      // every subscriber for nothing.
+      if (hits.length === 0) return s;
+      const revisions = { ...s.revisions };
+      for (const f of hits) revisions[f.key] = (revisions[f.key] ?? 0) + 1;
+      return { revisions };
+    });
+  },
+
   clearScope(scope) {
     set((s) => {
       const remaining = s.openFiles.filter((f) => f.scope !== scope);
@@ -163,9 +207,13 @@ export const useFileTabsStore = create<FileTabsState>((set, get) => ({
       for (const k of Object.keys(s.contents)) {
         if (keep.has(k)) contents[k] = s.contents[k];
       }
+      const revisions: Record<string, number> = {};
+      for (const k of Object.keys(s.revisions)) {
+        if (keep.has(k)) revisions[k] = s.revisions[k];
+      }
       const activeKey =
         s.activeKey && keep.has(s.activeKey) ? s.activeKey : null;
-      return { openFiles: remaining, activeKey, contents };
+      return { openFiles: remaining, activeKey, contents, revisions };
     });
   },
 }));

@@ -38,6 +38,10 @@ Argus has **four** moving parts and one wire format:
        Split off from `lifecycle` so a build-burst of fs events can't
        MAXLEN-trim unread heartbeats (which flips healthy machines offline).
        Drained by the same MachineService XREADGROUP as `lifecycle`.
+       `git-changed` has exactly ONE producer — the per-workdir
+       `gitWatcher` — and that is a deliberate invariant, not an
+       accident of history; see the `vcs_state_changed` gotcha before
+       adding a second.
      - `agent:background`        — `argus-bg` task progress (see the
        background-task service note under Server modules).
      - `machine:{mid}:control`   — server → sidecar daemon
@@ -211,6 +215,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   command, mints **15-min pull tokens** for the wire `Command.attachments`,
   and returns/loads **1-h display tokens** in `AttachmentDTO.url`
   (`SessionService.withAttachments` batches them onto the transcript).
+  The feature is **optional and endpoint-gated**: `S3ClientProvider`
+  returns `null` when `S3_ENDPOINT` is unset (no localhost fallback), and
+  every store call goes through `sendToStore`, which logs the flattened
+  cause chain (see the `AggregateError` gotcha) and maps failures to
+  **404** when the object itself is gone (`NoSuchKey`/`NotFound` — the row
+  outlived its bytes) or **503** otherwise, worded "not configured" vs
+  "unreachable" vs "rejected the request". The 404 test is keyed on the
+  error *name*, not the status: `NoSuchBucket` is also a 404 from S3 but
+  means the deployment is misconfigured, so it stays a 503.
 - `result-ingestor/` — single XREADGROUP across **all** runner result
   streams (refreshed every 5s): `machine:{id}:cli:{type}:result`, one per
   entry in each machine's `availableAdapters`. Persists each chunk and
@@ -497,6 +510,38 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `lib/api.ts` — typed REST client.
 - `lib/ws.ts` — single Socket.IO connection with reconnect; broadcasts events
   to a small set of subscribed handlers.
+- `lib/markdown.ts` — the shared remark/rehype plugin sets for every
+  `ReactMarkdown` surface (StreamViewer answers, ActivityPill
+  thought/thinking/compact-summary, FileViewer `.md` preview): GFM +
+  `remark-math`/`rehype-katex` for LaTeX. Single-dollar inline math is
+  deliberately ON (Claude emits `$\pi_\theta$`-style inline math), so
+  prose like "$5 and $10" can false-positive as math — accepted trade.
+  Only `$…$`/`$$…$$` are recognized; `\(…\)`/`\[…\]` pass through as
+  plain text until a real-transcript sample justifies a normalization
+  pass. rehype-katex replaces math nodes *before* the `components` map
+  runs, so `MarkdownCodeBlock` (custom `<pre>`) never sees equations;
+  invalid TeX renders as red source text instead of throwing. GOTCHA:
+  the app's `katex` dep (source of that CSS) must stay on the same
+  minor as the `katex` that `rehype-katex` itself resolves (v7 pins
+  `^0.16`) — KaTeX's markup/CSS contract shifts between 0.x minors, and
+  a mismatched pair (markup 0.16 + CSS 0.18) renders every
+  sub/superscript vertically collapsed. KaTeX CSS
+  rides `index.css` (`@import 'katex/dist/katex.min.css'`), and
+  `.markdown .katex-display` gets sideways overflow-scroll like tables.
+  While a turn streams, an unclosed `$$` shows raw until the closing
+  delimiter arrives, then snaps into rendered math — self-correcting.
+  iOS counterpart: ArgusKit `Engine/MathSegments.swift` +
+  `Views/MathRender.swift` render `$$` display math natively via
+  SwiftMath, and `Engine/InlineMath.swift` + `Views/InlineMathRender.swift`
+  render inline `$…$` in plain paragraphs AND flat list items as
+  baseline-aligned SwiftMath images inside hand-assembled Text (final
+  answer only; nested-list/heading/quote/table math stays raw;
+  deviations from the web's delimiter semantics documented in
+  MathSegments). SwiftMath
+  1.7.3 parses a smaller subset than KaTeX — `Engine/MathCompat.swift`
+  rewrites the gap Claude actually hits (`\big[`, `\operatorname`,
+  `\dots`, `\lVert`); a formula that still fails parse renders as raw
+  source in a code block, deliberately visible rather than mangled.
 - `stores/` — Zustand slices: `authStore`, `machineStore`, `sessionStore`,
   `projectStore`, `uiStore` (no `agentStore` — it was deleted with the
   Agent entity). Sessions are stored by id with their full `chunks`
@@ -504,7 +549,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   duplicates by `id`.
 - `components/StreamViewer.tsx` — the streaming display. Groups chunks by
   command, concatenates `delta`s, renders tool pills, stdout, errors, and a
-  cursor while running. Final-answer markdown is rendered with
+  cursor while running. Final-answer markdown is rendered with the shared
+  plugin sets from `lib/markdown.ts` (GFM + KaTeX math) and with
   `MarkdownCodeBlock` as the custom `<pre>` renderer; that component
   detects ```` ```html ```` fenced blocks and renders them through the
   shared `HtmlPreview` component, defaulting to the rendered view with
@@ -662,6 +708,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   WS room; file tabs are scoped by projectId (`fileTabsStore.scope`), and
   the queue drainer's reachability check is machine-level, resolved
   through the same ProjectRef.
+- **Open file tabs auto-refresh when a CLI edits the file** — see the
+  "Live file tabs" gotcha for the mechanism and why the traffic is
+  bounded. `lib/useFileTabAutoRefresh.ts` is mounted from `SessionPanel`
+  (NOT `FileViewer`, which exists only for the focused tab).
 - `components/MachinePanel.tsx` — `/machines/:id` route. Header with
   machine glyph + name + status dot + sidecar-update button. Below the
   header: Host KV + a `Supports` footer of installed adapters (from
@@ -807,6 +857,42 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   turn's thumbnails — both stores merge instead (web
   `sessionStore.upsertCommand`, iOS `TranscriptState.upsert`), keeping
   existing attachments when an update arrives without them.
+- **The composer's keyboard has exactly one exit: dragging the
+  transcript.** The field is `axis: .vertical` for multi-line prompts, so
+  its on-screen return key inserts a newline instead of submitting (the
+  `.onKeyPress(.return)` send path sees *hardware* Enter only). SwiftUI
+  dismisses on neither an outside tap nor a plain `ScrollView` drag by
+  default, which left the keyboard with no exit at all on iPhone —
+  `.scrollDismissesKeyboard(.interactively)` on the transcript is what
+  provides one. Tap-to-dismiss was considered and rejected: a
+  container-level tap gesture competes with the transcript's own targets,
+  above all the `path:line` citation links `AnswerView` routes through
+  `OpenURLAction`. If you ever add one, use `.simultaneousGesture`, never
+  `.onTapGesture`, and device-test those citations with the keyboard up.
+  Dismissing on send was also rejected for now — `send()` is shared by
+  the queue-a-follow-up button and by two hardware-keyboard callers
+  (⌘↩ and plain Enter), where dropping focus strands the next keystroke.
+- **Hardware Shift+Return newlines are hand-fed.** A vertical-axis
+  `TextField` only inserts newlines from the on-screen return key;
+  returning `.ignored` from `onKeyPress` for a hardware Shift+Return
+  does NOT fall through to a line break — SwiftUI just drops the event
+  (found on a real iPad + Magic Keyboard). The composer's handler
+  catches shift-only Return and calls `ComposerKeyboard.insertNewline()`,
+  which reaches the UIKit first responder and replaces the selection
+  with "\n" via `UITextInput.replace(_:withText:)` — caret placement
+  and the binding update come free. Second trap on top: UIKit RESIGNS
+  the field on a hardware Return/Shift+Return no matter what onKeyPress
+  returns — `.handled` doesn't stop it (Apple Forums #760511 says
+  as-designed; device-confirmed with both `insertText` and `replace`,
+  so it's the keypress, not the edit API). The composer undoes exactly
+  that one resign: the shift branch arms `refocusAfterNewline`, and an
+  `onChange(of: composerFocused)` grabs focus back when the resign
+  lands (async, after the key handler returns — a re-set inside the
+  handler fires too early). The flag disarms on any focus change so it
+  can never trap focus in the composer.
+  Related: Caps Lock rides along in `press.modifiers` while latched, so
+  the handler strips it before classifying — otherwise plain Return
+  stops sending the moment Caps Lock is on.
 - **Session view-model cache (stale-while-revalidate).** `AppModel`
   keeps `SessionViewModel`s alive across session switches (LRU, cap 8,
   never evicts the on-screen one, cleared on logout), so re-opening a
@@ -1143,7 +1229,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   tells us a new subtype appeared and needs explicit handling. Don't
   "fix" it by making the fallback content-less — special-case known-noisy
   subtypes individually instead (as done for `thinking_tokens`,
-  `task_notification`, and `api_retry`).
+  `task_notification`, `api_retry`, `vcs_state_changed`, and
+  `code_change_published`).
+  *Worked example of the breadcrumb doing its job:* a burst of "system"
+  rows in a release session on `claude` 2.1.217 turned out to be two
+  subtypes added since 2.1.210 (`vcs_state_changed`,
+  `code_change_published`), both below. Method, if it happens again: the
+  session transcript (`~/.claude/projects/<slug>/<id>.jsonl`) does **not**
+  record `system` events — they're synthesized at the output layer — so
+  diff `strings` of the two `~/.local/share/claude/versions/<v>` binaries
+  for `type:"system",subtype:"…"` instead. In `-p` mode the CLI drains its
+  event queue to stdout **unfiltered** (the interactive REPL bridge
+  applies an allowlist), so the sidecar sees strictly more subtypes than
+  the interactive UI does.
 - **`api_retry` (Claude Code)**: `{"type":"system","subtype":"api_retry",
   "error_status":502,"attempt":N,"max_retries":10,"retry_delay_ms":…}`
   fires when an API call fails retryably and the CLI is backing off; it
@@ -1152,6 +1250,59 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   render as a junk "system" row. No UI affordance yet — a future
   improvement could read `meta` to show "retrying N/10" while the turn
   stalls in backoff.
+- **`vcs_state_changed` (Claude Code ≥ 2.1.217)**:
+  `{"type":"system","subtype":"vcs_state_changed","kind":"commit"|"push"|
+  "merge"|"rebase","cwd":"…"}` — the CLI classifies git/gh operations it
+  observes in **its own Bash tool output** and emits one event per kind,
+  so a single compound command fires several (`git checkout dev && git
+  merge --ff-only main && git push origin dev` → `merge` + `push`).
+  Payload-free by design: it says the repo changed, not what it changed
+  to. Mapped to a content-less `progress` chunk with
+  `meta.contentType="vcs_state_changed"` + `kind`/`cwd`, and **nothing
+  else** — it is silenced, not consumed.
+  **Design decision, considered and rejected (2026-07-24):** wiring this
+  to a `git-changed` nudge so the dashboard reacts to `git push` (which
+  `gitWatcher` structurally cannot see — a push moves
+  `refs/remotes/<remote>/…`, and the watcher only watches `.git/HEAD` +
+  `.git/refs/heads/`). Rejected on three counts, and the reasoning is
+  worth keeping because the idea is tempting:
+  1. **Refs on disk are the source of truth; this event is a claim.**
+     It's the CLI's classification of its own shell output, not an
+     observation of the repository. `gitWatcher` stays the single
+     producer of `git-changed`.
+  2. **It's attributed to the wrong directory.** `cwd` is the *session's*
+     dir, not the mutated repo's — a turn running `git -C ../other push`
+     emits `kind:"push"` with the session's cwd, nudging a repo that
+     didn't change. A false positive the watcher cannot have.
+  3. **The overlap is total where it matters, and the gap is empty.**
+     Every kind the dashboard renders (commit / merge / rebase) already
+     moves a ref `gitWatcher` sees. The one kind it uniquely catches —
+     `push` — changes nothing the git panel displays: `git.go` puts
+     ahead/behind explicitly out of scope, and `GitLogPanel` renders
+     branch + short SHA + commit list, none of which a push alters.
+  If ahead/behind ever lands in `GitStatus` (cheap now — `ReadGitLog`
+  already shells out, so it's one `git rev-list --left-right --count
+  @{u}...HEAD`), revisit (1) and (2) *first*: the honest fix is probably
+  for `gitWatcher` to also watch `refs/remotes/`, not to trust the CLI's
+  self-report. Remaining wire gotchas either way: `kind` is an **open
+  set** (treat unknown values as "something changed"), and detection is
+  best-effort — dry runs excluded, and a backgrounded command whose
+  confirming output hadn't printed emits nothing.
+- **`code_change_published` (Claude Code ≥ 2.1.217)**:
+  `{"type":"system","subtype":"code_change_published","provider":"github",
+  "url":"…/pull/36","repo":"owner/name","identifier":"36"}` — fires when
+  the harness binds the session to a pull/merge request, on creation
+  **and** on every later contribution (`gh pr edit/close/ready`, `gh pr
+  checkout`, or a plain push to a branch with an open PR). It repeats for
+  the same URL many times per session (11× in the session that surfaced
+  it), so it is idempotent rebinding, not a create — dedupe downstream.
+  Mapped to a content-less `progress` chunk carrying the four fields in
+  `meta`. No UI affordance yet; the obvious one is a PR link in the
+  session header. *Gotcha:* the fields are **scraped from captured
+  command output** (last PR-shaped URL printed), which can include hook
+  output or a file the same command catted — a display hint, not a
+  verified identity. Never send credentials to `url` on its strength;
+  `provider` is an open set too.
 - **Extended thinking (Claude Code)**: newer `claude` emits two distinct
   thinking signals, handled in `mapClaudeLine`:
   1. `{"type":"system","subtype":"thinking_tokens","estimated_tokens":N,
@@ -1254,6 +1405,32 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   has one. (Claude's *Read tool* is unreliable for images — several
   upstream issues — but we never depend on it; the path-in-prompt route
   is the documented, working one.)
+- **A bare `ERROR [ExceptionsHandler] AggregateError` means "could not
+  open a TCP connection", nothing else**. Node's happy-eyeballs connect
+  (`autoSelectFamily`, default-on since Node 20) wraps the per-address
+  errnos in an `AggregateError` whose own `message` is the **empty
+  string**. Nest's `BaseExceptionFilter.handleUnknownError` treats a
+  message-less error as a non-Error and logs the raw object — which
+  stringifies to just the class name, with no stack and no causes. The
+  reported instance was attachment upload: `S3ClientProvider` used to
+  default `S3_ENDPOINT` to `http://localhost:9000`, so any deployment
+  that didn't set it (the Helm chart omits every `S3_*` var when
+  `objectStore.endpoint` is empty) pointed the S3 client at the server
+  pod's own loopback and every `PutObject` died at connect. Two guards
+  now exist: `AttachmentService.sendToStore` translates store failures
+  into a 503 while logging endpoint + flattened causes, and
+  `AllExceptionsFilter` (`src/common/`) flattens any message-less error
+  for every other route — both share `common/describe-error.ts`. The
+  filter is **HTTP-only by construction**: `@nestjs/websockets` builds its
+  chain from an `ExceptionFiltersContext` whose `getGlobalMetadata()`
+  returns `[]`, so a global `@Catch()` never reaches the gateways (it
+  would misbehave there — `BaseExceptionFilter` assumes an HTTP response
+  at `getArgByIndex(1)`). The original bare line still follows ours in
+  the log; the base filter re-logs it and suppressing that would mean
+  reimplementing its response handling. **Never give a network endpoint a
+  localhost default** — an unset endpoint should disable the feature (the
+  provider now yields a `null` client), not silently point at the server
+  itself.
 - **Attachment lifecycle is keep-for-session; S3 orphans are a TODO**.
   Files stay under `.argus/uploads/` and in S3 for the life of the
   session so `--resume` turns can re-reference them. Deleting a command
@@ -1261,6 +1438,120 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the S3 object on the upload-failure
   path — a periodic orphan sweep (objects whose row is gone, and unlinked
   `commandId IS NULL` uploads abandoned before send) is a follow-up.
+- **Live file tabs (frontend)**: an open file tab re-reads itself when a
+  CLI writes the file. Entirely client-side — the signal already ran end
+  to end, `FileViewer` just cached forever (`if (cached) return`).
+  `fsWatcher` fires on content edits, not only create/delete: verified
+  against the real watcher that an in-place rewrite, an atomic
+  write-temp-then-rename, AND a 5-write burst each produce exactly one
+  debounced dir nudge.
+  Flow: `fs:changed` → `useFileTabAutoRefresh` (mounted in `SessionPanel`)
+  → `fileTabsStore.invalidateDir` bumps `revisions[key]` for every open
+  tab in that dir → the bump is in `useFetchFileContent`'s dep array,
+  which is what re-reads the file.
+  **The traffic budget is the whole design.** `fs-read` responses ride
+  the byte-capped `lifecycle` stream (MAXLEN 500 *entries*, ≤1 MB each,
+  shared with heartbeats on a ~30 MB Redis) — the same budget the
+  "Redis fills up" incident blew. Four things bound it, and none are
+  decoration:
+  1. Only the FOCUSED tab's `FileViewer` is mounted (`SessionPanel`'s
+     `activeFile ? <FileViewer/> : <StreamViewer/>`), so at most one file
+     per dashboard is ever in flight. Background tabs just carry a bumped
+     revision and re-read when you click them.
+  2. `contents[key]` records the `revision` it was read at, so
+     re-focusing a tab does NOT re-read. Drop that and tab switching
+     itself becomes fs-read traffic.
+  3. A 400 ms trailing debounce on top of the sidecar's own 250 ms.
+  4. Nothing invalidates while `document.hidden`; dirs stay pending and
+     flush on the way back to visible.
+  Known-and-accepted: `fs:changed` is DIRECTORY-granular (the sidecar
+  drops the filename), so a sibling write refreshes your file too. Making
+  it exact means putting the basename on the wire across sidecar +
+  shared-types + server + web + iOS — considered and deferred, since (1)
+  already bounds the cost and the fallback path such a change would need
+  is exactly today's behaviour.
+  UX rules the implementation must keep: refresh is
+  stale-while-revalidate (never flip a readable file to a spinner —
+  `TextViewer` deliberately does not `setHtml(null)` on re-highlight);
+  `scrollTop` is captured before the swap and restored in a *layout*
+  effect; a cited `line` re-applies its marker on every re-highlight but
+  only re-scrolls when the citation itself changed; and a FAILED refresh
+  keeps the last good render rather than showing an error, because an
+  atomic rename leaves a window where the path briefly doesn't resolve.
+- **Live file tabs, iOS side**: same feature, different shape, because
+  `FilePreviewSheet` is a MODAL SHEET with no cache — `@State result`
+  dies on dismiss and only one file is open at a time. So none of the
+  web's `revisions` / stamped-content bookkeeping is needed; the "only
+  the focused file refetches" bound is structural. Three iOS-specific
+  problems it does have, none of which are transcription:
+  1. **`FSChangedPayload` has no timestamp** (`{path, machineId,
+     workingDir}`) and is Equatable, so two consecutive writes to one
+     directory are an identical value and `.onChange(of:)` — which fires
+     only on inequality — swallows every repeat. Observers watch
+     **`AppModel.fsChangeSeq`** and read the **`fsChanges`** batch. This
+     also silently affected the inspector's file tree before the counter
+     existed. *Second-order gotcha, found on device:* the counter must
+     advance once per FLUSH, not per event. Bumping it per event let a
+     burst advance it several times inside one SwiftUI frame, which
+     trips the runtime fault `onChange(of: Int) action tried to update
+     multiple times per frame`. `AppModel.scheduleFSFlush` accumulates
+     into `pendingFSChanges` and publishes once per **time window**, so a
+     burst is one observable update carrying every changed directory —
+     which is why consumers iterate a batch instead of reading a single
+     latest payload. A bare `Task { @MainActor in … }` hop is NOT a
+     window and does not fix this: the event pump is
+     `for await event in stream.events`, so every iteration is already a
+     suspension point and a hop-scheduled flush just interleaves with the
+     buffered events — one publish per event, fault unchanged. Cost a
+     full device round trip to learn.
+  2. **The project room is often not joined when the sheet opens.** Only
+     `InspectorPane` joined it, and the inspector is
+     `.inspector(isPresented:)` — routinely closed on iPhone. But the
+     sheet also opens from chat citations / FileChips in `SessionView`,
+     where nothing else holds the room. The sheet now joins it itself,
+     which is only safe because `StreamClient` refcounts (below).
+  3. **`TextFileView` highlighted only on appear** (bare `.task`), so a
+     refreshed file would render new text under the OLD file's colors —
+     content and highlight are two separate arrays here, unlike the
+     web's single shiki HTML blob. Now `.task(id: HighlightKey)`, which
+     also folds in the former separate colorScheme observer.
+  Scroll is held via `.scrollPosition(id:)` + `.scrollTargetLayout()`
+  (iOS 17) rather than the web's `scrollTop` capture/restore.
+  **Debounce windows on both clients are NON-RESTARTING, and that is
+  load-bearing.** `schedule()` (web) and `scheduleRefresh()` (iOS) both
+  early-return when a window is already open, rather than cancelling and
+  re-arming. A restarting trailing debounce STARVES under exactly the
+  conditions this feature exists for: the sidecar emits about every
+  250 ms while an agent edits, the window is 400 ms, so every nudge
+  would cancel the pending read and the refresh would only land once
+  editing stopped — presenting as "auto-refresh doesn't work at all".
+  The iOS port originally cancelled-and-re-armed and had precisely that
+  symptom; if you touch either debounce, keep the early return.
+- **Project WS rooms are refcounted on BOTH clients** — `lib/ws.ts` on
+  web, `StreamClient` on iOS (`projectRooms: [ProjectRoomKey: Int]`,
+  replayed by `rejoinProjectRooms()` from `AppModel`'s `.connected`
+  handler). iOS deliberately does NOT replay from the socket's own
+  connect callback: SocketIO is a `@preconcurrency` import so those
+  closures run outside the actor and must only touch `continuation` —
+  which is why every other handler in that file does exactly that.
+  `ProjectRoomKey` is a file-scope Hashable struct, not nested in the
+  `@MainActor` class (nested types inherit that isolation, which fights
+  `Sendable`) and not a joined string (`("a","b/c")` and `("a/b","c")`
+  would collide). Details of the web side:
+- **Project WS rooms are refcounted (`lib/ws.ts`)**: `joinProject` /
+  `leaveProject` count holders and only emit `subscribe:` /
+  `unsubscribe:project` at the 0↔1 edges. Socket.io's `leave` is not
+  refcounted, so the first unmounting holder used to kick the socket out
+  of the room and silently starve the others of `fs:changed` /
+  `git:changed`. This was latent — `ContextPane` renders FileTree /
+  GitLogPanel / ProgressPane as mutually exclusive tabs, so only one ever
+  held a room — and went live the moment `useFileTabAutoRefresh` added a
+  holder that has to outlive the Files tab. The same map is replayed on
+  `connect`: rooms are per-CONNECTION, and nothing re-joined them after a
+  reconnect, so a network blip used to stop live updates until the
+  subscriber happened to remount. `resetSocket` clears the map — every
+  holder is an effect that re-joins on its next mount, and a surviving
+  count would suppress that.
 - **Attachment viewing is unified with the file tree (frontend)**: a sent
   attachment opens as a `FileViewer` **tab** on double-click — same
   gesture and destination as the Files panel, not a floating modal.
@@ -1567,7 +1858,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   total in `exec --json`, so their rings can still overcount on multi-call
   turns — codex's per-call figure lives in the richer `app-server`
   protocol (`thread/tokenUsage/updated` → `tokenUsage.last`), not adopted
-  here. When a new model
+  here. **Gotcha (hit twice — Fable 5, then Opus 5):** a Claude family
+  whose 1M window is the *default* rather than an opt-in facet carries no
+  `[1m]` token in its id, so the generic 200k Claude baseline silently
+  claims it and the ring reads 5x too full. Those families each need
+  their own entry ABOVE the baseline, version-gated where siblings share
+  the family word (`opus[-\s]?5` covers Opus 5 without claiming the Opus
+  4.x ids). The CLI itself is the cheapest oracle for the real number:
+  `result.modelUsage[<id>].contextWindow` in a one-line `claude -p
+  --output-format stream-json` run. When a new model
   family ships (Anthropic / OpenAI / Cursor announcement), bump the
   table as `chore(shared): update model context windows` — verify
   against the upstream announcement, not release-note rumors. Unknown

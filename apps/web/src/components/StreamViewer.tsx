@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { markdownRemarkPlugins, markdownRehypePlugins } from '../lib/markdown';
 import { AlertCircle, Check, Copy, FileText, GitBranch, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import type { AttachmentDTO, CommandDTO, ResultChunkDTO } from '@argus/shared-types';
@@ -643,7 +643,8 @@ function AnswerBlock({
       {bodyText && (
         <div className="markdown text-sm leading-relaxed text-fg-primary max-w-none">
           <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
+            remarkPlugins={markdownRemarkPlugins}
+            rehypePlugins={markdownRehypePlugins}
             components={markdownComponents}
             urlTransform={fileLinkUrlTransform}
           >
