@@ -12,10 +12,26 @@ type: application
 # field — see helm-publish.yml. Prerelease versions (-rc.N) are hidden
 # from plain `helm search`/`helm upgrade`; install them with
 # `--version 0.2.7-rc.3` (or `--devel`).
-version: 0.3.1
+version: 0.3.2
 # App version tracks the Docker image tags pulled by default. Bump in
 # lockstep with `version` whenever the chart starts requiring features
 # only present in newer images; otherwise it can lag.
+#
+# 0.3.2 is a control-plane + iOS release with NO schema change —
+# compatible with 0.3.1, no forced migration. appVersion pins the 0.3.2
+# server/web images. Highlights: LaTeX math rendering everywhere — the
+# web transcript renders inline $…$ and $$ display math via KaTeX
+# (answers, thinking text, .md previews), and the native iOS client
+# renders it with SwiftMath (no webviews): display blocks plus inline
+# math in paragraphs and flat list items, with a compat shim for
+# KaTeX-isms (\big[, \operatorname, …) and a visible raw-source
+# fallback for anything beyond SwiftMath's subset. Also: open file
+# tabs/previews auto-refresh in place when a CLI edits the file (web +
+# iOS), attachment-upload failures surface real error messages instead
+# of an opaque AggregateError, and the context ring knows Opus 5's 1M
+# window. Works with sidecar v0.3.1 on agent hosts; a follow-up sidecar
+# release adds the claude-code 2.1.217 vcs_state_changed /
+# code_change_published event mapping already in-tree.
 #
 # 0.3.1 is a control-plane + sidecar release with NO schema change —
 # compatible with 0.3.0, no forced migration. appVersion pins the 0.3.1
@@ -119,7 +135,7 @@ version: 0.3.1
 # 0.2.0 shipped file/image attachments — the default images include the
 # attachment module, so `objectStore` works out of the box (set the
 # endpoint + bucket + creds to enable it).
-appVersion: "0.3.1"
+appVersion: "0.3.2"
 
 home: https://github.com/kr4t0n/argus
 sources:
