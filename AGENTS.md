@@ -1405,6 +1405,21 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   has one. (Claude's *Read tool* is unreliable for images — several
   upstream issues — but we never depend on it; the path-in-prompt route
   is the documented, working one.)
+- **`ShowAll` is a DISPLAY switch, never a traversal switch** (`fs.go`).
+  The "show gitignored" eye toggle used to disable the matcher outright,
+  which left every entry flagged `Gitignored: false` — and the BFS's
+  descent guard keys on exactly that flag. So flipping the toggle sent a
+  depth-3 prefetch straight into `node_modules`; one pnpm `.pnpm`
+  directory (~1.2k entries to read + stat) overran the server's
+  `FS_LIST_TIMEOUT_MS = 5000`, and the panel reported **"agent did not
+  respond — the machine may be offline"** even though the sidecar was
+  alive and still walking. The index is now built unconditionally and
+  `ShowAll` only decides whether an ignored entry is filtered OUT of the
+  listing. An ignored subtree stays reachable by requesting it *by
+  path* — the guard gates enqueueing children, not the requested root —
+  so a depth-N request inside one self-limits to a single level. Note
+  the toggle still costs a refetch: ignored entries are dropped
+  server-side, so the client has nothing cached to reveal.
 - **gitignore is per-directory, and the matcher must be too**
   (`internal/machine/gitignore.go`). The sidecar honors a `.gitignore`
   in EVERY directory, not just the workingDir root. It used to read only

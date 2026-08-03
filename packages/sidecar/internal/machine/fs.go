@@ -37,9 +37,14 @@ type ListDirRequest struct {
 	// Path is the client's request, relative to WorkingDir. Empty / "."
 	// means the root.
 	Path string
-	// ShowAll disables gitignore filtering and shows dotfiles, but does
-	// NOT expose `.git` itself — that directory is never useful in a
-	// tree view and rendering it only adds noise.
+	// ShowAll includes gitignored entries in the listing (still flagged
+	// `Gitignored`, so the client can render them differently) instead
+	// of dropping them. It is a DISPLAY switch only: the recursive walk
+	// never descends into an ignored directory either way, so turning it
+	// on reveals `node_modules` as a row without prefetching what's
+	// inside it. Ask for that path directly to go in. `.git` is never
+	// exposed regardless — that directory is never useful in a tree view
+	// and rendering it only adds noise.
 	ShowAll bool
 }
 
@@ -183,7 +188,10 @@ func listDirWith(workingDir, relPath string, showAll bool, matcher *ignoreIndex)
 // the requested path as level 1, so maxDepth<=1 degenerates to a
 // single-level listing. Never descends into gitignored or symlinked
 // subdirectories — both blow up the walk (symlink loops, whole
-// node_modules trees) for no user benefit.
+// node_modules trees) for no user benefit. That holds for ShowAll too:
+// it changes what is listed, never what is entered. The requested path
+// itself is always listed, so an ignored subtree stays reachable one
+// deliberate level at a time.
 //
 // `descentBudget` bounds how deep the walk expands: once the total
 // entries collected so far reaches the budget, the BFS stops
@@ -207,10 +215,18 @@ func ListDirs(req ListDirRequest, maxDepth, descentBudget int) (map[string][]FSE
 		descentBudget = 1 << 30 // effectively uncapped
 	}
 
-	var matcher *ignoreIndex
-	if !req.ShowAll {
-		matcher = newIgnoreIndex(req.WorkingDir)
-	}
+	// ALWAYS build the index, even for ShowAll. ShowAll decides whether
+	// an ignored entry is *displayed*; it must not decide whether the
+	// BFS *walks into* it — the descent guard below keys on
+	// `e.Gitignored`, so leaving the index nil here marked everything
+	// un-ignored and sent a depth-N prefetch straight into node_modules.
+	// One .pnpm directory is ~1.2k entries to read and stat, which blew
+	// past the server's 5s fs-list timeout and surfaced as "agent did
+	// not respond". An ignored subtree is still reachable — asking for
+	// it *by path* lists it, since the guard only gates enqueueing
+	// children — so the toggle reveals what's there without ever
+	// prefetching a tree nobody asked for.
+	matcher := newIgnoreIndex(req.WorkingDir)
 
 	// Normalize the starting path: protocol says root is "" but
 	// callers may hand us "." interchangeably. Collapsing both to ""
