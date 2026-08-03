@@ -373,7 +373,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   - `fs.go` / `fswatch.go` / `git.go` — workingDir browsing for the
     dashboard's right-pane file tree. `ListDirs` BFS-walks up to
     `maxDepth` levels (reusing a single `listDirWith` core + one
-    preloaded gitignore matcher) and returns a `path → entries` map
+    shared `ignoreIndex`) and returns a `path → entries` map
     so depth-N prefetch lands in one round trip. Both jail to the
     request's workingDir, always strip `.git` AND `.argus/`, and
     respect gitignore. `fsWatcher` registers one fsnotify watch per
@@ -1405,6 +1405,26 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   has one. (Claude's *Read tool* is unreliable for images — several
   upstream issues — but we never depend on it; the path-in-prompt route
   is the documented, working one.)
+- **gitignore is per-directory, and the matcher must be too**
+  (`internal/machine/gitignore.go`). The sidecar honors a `.gitignore`
+  in EVERY directory, not just the workingDir root. It used to read only
+  `<root>/.gitignore`, which silently ignored this repo's own
+  `apps/ios/.gitignore` and `site/.gitignore` — so `DerivedData/`,
+  `.build/`, `xcuserdata/` and `.astro/` were listed as ordinary files
+  *and* handed one fsnotify watch per directory inside them. On a
+  machine with an active Xcode build that is thousands of watch
+  descriptors against `max_user_watches` (the EMFILE path in
+  `fswatch.go`), plus an `FSChangedEvent` for every build write. It hid
+  for so long because the root file covers the universal junk and an
+  unslashed pattern matches at any depth, so `node_modules/` did reach
+  `apps/web/node_modules/` — only *subdir-specific* rules fell through.
+  `ignoreIndex` scopes patterns by the directory their file was found in
+  (go-git's "domain"), memoizes each directory's accumulated slice, and
+  reads a `.gitignore` only when something asks about that subtree.
+  **Do not switch it to go-git's own `ReadPatterns`**: that recurses the
+  entire tree — `node_modules` included — hunting for ignore files, and
+  the lister builds an index per request, so it would put a full-tree
+  walk in front of every click.
 - **A bare `ERROR [ExceptionsHandler] AggregateError` means "could not
   open a TCP connection", nothing else**. Node's happy-eyeballs connect
   (`autoSelectFamily`, default-on since Node 20) wraps the per-address

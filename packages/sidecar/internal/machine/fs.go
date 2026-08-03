@@ -16,8 +16,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	gitignore "github.com/sabhiram/go-gitignore"
 )
 
 // FSEntry mirrors protocol.FSEntry but is declared here locally so the
@@ -106,10 +104,10 @@ func withinRoot(path, root string) bool {
 // then files, each alphabetical case-insensitive — the exact ordering
 // the UI renders without needing client-side sort.
 //
-// The matcher is passed in rather than loaded here so ListDirs' BFS
-// reuses a single compiled matcher across every level instead of
-// re-reading .gitignore from disk N times.
-func listDirWith(workingDir, relPath string, showAll bool, matcher *gitignore.GitIgnore) ([]FSEntry, error) {
+// The index is passed in rather than built here so ListDirs' BFS shares
+// one memoized set of patterns across every level instead of re-reading
+// .gitignore files from disk N times.
+func listDirWith(workingDir, relPath string, showAll bool, matcher *ignoreIndex) ([]FSEntry, error) {
 	abs, err := resolvePath(workingDir, relPath)
 	if err != nil {
 		return nil, err
@@ -142,17 +140,10 @@ func listDirWith(workingDir, relPath string, showAll bool, matcher *gitignore.Gi
 		relpath, _ := filepath.Rel(rootAbs, abspath)
 		isDir := e.IsDir()
 
-		var ignored bool
-		if matcher != nil {
-			match := filepath.ToSlash(relpath)
-			if isDir {
-				// Dir-only gitignore patterns match with a trailing slash;
-				// doing this here means we match both `build/` and `build`
-				// forms correctly.
-				match += "/"
-			}
-			ignored = matcher.MatchesPath(match)
-		}
+		// isDir is passed through rather than encoded as a trailing
+		// slash: the matcher needs it to honor dir-only rules (`build/`
+		// matches the directory, not a file of the same name).
+		ignored := matcher.Match(relpath, isDir)
 		if !showAll && ignored {
 			continue
 		}
@@ -216,9 +207,9 @@ func ListDirs(req ListDirRequest, maxDepth, descentBudget int) (map[string][]FSE
 		descentBudget = 1 << 30 // effectively uncapped
 	}
 
-	var matcher *gitignore.GitIgnore
+	var matcher *ignoreIndex
 	if !req.ShowAll {
-		matcher, _ = loadGitignore(req.WorkingDir)
+		matcher = newIgnoreIndex(req.WorkingDir)
 	}
 
 	// Normalize the starting path: protocol says root is "" but
@@ -407,15 +398,4 @@ func isLikelyText(b []byte) bool {
 		}
 	}
 	return float64(printable)/float64(n) >= 0.9
-}
-
-// loadGitignore builds a matcher rooted at `root`. Missing .gitignore
-// is NOT an error — we return an empty matcher so callers can treat
-// the nil-check uniformly.
-func loadGitignore(root string) (*gitignore.GitIgnore, error) {
-	path := filepath.Join(root, ".gitignore")
-	if _, err := os.Stat(path); err != nil {
-		return gitignore.CompileIgnoreLines(), nil
-	}
-	return gitignore.CompileIgnoreFile(path)
 }
