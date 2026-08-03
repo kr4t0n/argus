@@ -21,10 +21,10 @@ import (
 // fallback rather than a broken picker.
 
 type codexCatalogModel struct {
-	Slug                     string   `json:"slug"`
-	DisplayName              string   `json:"display_name"`
-	Description              string   `json:"description"`
-	DefaultReasoningLevel    string   `json:"default_reasoning_level"`
+	Slug                     string `json:"slug"`
+	DisplayName              string `json:"display_name"`
+	Description              string `json:"description"`
+	DefaultReasoningLevel    string `json:"default_reasoning_level"`
 	SupportedReasoningLevels []struct {
 		Effort string `json:"effort"`
 	} `json:"supported_reasoning_levels"`

@@ -54,10 +54,10 @@ const tagPrefix = "argus-sidecar-v"
 // Options controls a single update run. Zero values pick safe defaults
 // (kr4t0n/argus, stable releases only, std logger).
 type Options struct {
-	Repo              string      // owner/name; defaults to DefaultRepo
-	IncludePrerelease bool        // include releases marked prerelease
-	CurrentVersion    string      // for "already up to date" detection; "" => always update
-	Force             bool        // re-download even if already on latest
+	Repo              string       // owner/name; defaults to DefaultRepo
+	IncludePrerelease bool         // include releases marked prerelease
+	CurrentVersion    string       // for "already up to date" detection; "" => always update
+	Force             bool         // re-download even if already on latest
 	HTTPClient        *http.Client // optional override; defaults to a 60s-timeout client
 	Logger            *log.Logger
 }
