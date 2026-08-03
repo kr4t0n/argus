@@ -35,6 +35,25 @@ function tlsOptions(url: string): { tls?: { servername: string } } {
 }
 
 /**
+ * Mask the password in a connection string so it can be logged. `REDIS_URL`
+ * carries credentials in prod (`rediss://default:PASSWORD@host:6379`), and a
+ * log sink is not a secret store. The username is kept — it is usually just
+ * `default` and it makes the line useful for debugging. Anything unparseable
+ * is returned as-is: this is only ever a log string, and ioredis accepts
+ * non-URL forms (a bare port, `host:port`) that `URL` rejects.
+ */
+function redactUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    if (!u.password) return url;
+    u.password = '***';
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
+/**
  * Thin Redis wrapper with Streams helpers. We maintain one shared
  * command client plus one DEDICATED connection per blocking consumer
  * loop:
@@ -77,7 +96,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(`redis readBackground error: ${err.message}`),
     );
     await this._cmd.ping();
-    this.logger.log(`Connected to ${url}`);
+    this.logger.log(`Connected to ${redactUrl(url)}`);
   }
 
   async onModuleDestroy() {

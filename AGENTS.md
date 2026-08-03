@@ -302,8 +302,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `project:{machineId}:{workingDir}` (fs/git nudges + background tasks).
   Authenticates the handshake using the same JWT used for REST. The
   gateway is the **only** thing that emits live data to clients.
-- `infra/redis/` — wrapper that owns *two* connections: one for blocking
-  XREADGROUP, one for everything else (ioredis requires this).
+- `infra/redis/` — wrapper that owns *four* connections: one shared `cmd`
+  client, plus a dedicated one per blocking consumer loop (lifecycle+notify,
+  result ingestor, background tasks). ioredis requires the split — a parked
+  `XREADGROUP` blocks every other call on that socket.
 - `infra/prisma/` — Prisma client.
 
 ### `packages/sidecar/internal/`
@@ -1079,8 +1081,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   *imported*. The blank `_ "..."` trick isn't needed today because they're
   all under the same package, but keep it in mind when adding adapters in a
   separate package.
-- **Two Redis connections**: do **not** call `XREADGROUP` on the shared
-  `cmd` ioredis client — it parks the socket and starves every other call.
+- **One connection per blocking loop** (four total today): do **not** call
+  `XREADGROUP` on the shared `cmd` ioredis client — it parks the socket and
+  starves every other call. Two loops sharing one socket serialize behind
+  each other's `BLOCK` window too, so every consumer loop gets its own.
 - **Command consumption is per-CLI-runner, bounded per machine**: each
   runner `XREADGROUP`s its own `machine:{mid}:cli:{type}:cmd` stream, so a
   machine holds a *constant* number of blocking Redis connections (one per
