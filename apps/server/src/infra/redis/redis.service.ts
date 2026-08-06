@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import { streamMaxLen } from '@argus/shared-types';
 import { isIP } from 'node:net';
-import Redis from 'ioredis';
+import Redis, { RedisOptions } from 'ioredis';
 
 /**
  * Build the TLS options for a `rediss://` URL, pinning the SNI server name.
@@ -54,6 +54,48 @@ function redactUrl(url: string): string {
 }
 
 /**
+ * Socket-liveness settings applied to every connection.
+ *
+ * A managed Redis behind a shared proxy (Redis Cloud, Upstash) can drop a
+ * connection without ever sending a FIN, leaving the socket open forever
+ * from Node's side. With `maxRetriesPerRequest: null` a blocking
+ * XREADGROUP on such a half-open socket never settles AND never emits
+ * 'error', so the consumer loop awaiting it parks permanently: nothing in
+ * the logs, no reconnect, the consumer simply stops issuing reads.
+ * Observed live — the lifecycle and result readers sat at 52 minutes idle
+ * while the background reader on a sibling connection stayed at 2s, so
+ * every machine showed offline while the sidecars were polling happily.
+ *
+ * Three layers, each covering the previous one's blind spot:
+ *
+ *  - `keepAlive` puts TCP probes on the wire, so a peer that vanished is
+ *    eventually noticed by the kernel even with no application traffic.
+ *  - `socketTimeout` destroys the stream when a written command receives
+ *    no bytes at all inside the window. This is the layer that actually
+ *    recovers a half-open socket: ioredis reconnects and the loop
+ *    resumes. It arms only while a command is in flight and re-arms only
+ *    while the command queue is non-empty, so an idle connection is never
+ *    torn down. It MUST stay above the longest BLOCK window (5s) plus
+ *    link RTT, or it would kill healthy blocking reads.
+ *  - `blockingTimeout` enables ioredis's client-side deadline for
+ *    blocking commands. It resolves the promise with `null` — the exact
+ *    shape every loop already reads as "nothing this cycle" — so a loop
+ *    cannot park on an await even if socket teardown is delayed.
+ *
+ * `blockingTimeoutGrace` is deliberately far above the stock 100ms. The
+ * effective deadline for a BLOCK-carrying command is BLOCK + grace, and a
+ * spurious fire is not free: Redis may have already moved a batch into
+ * this consumer's PEL, and resolving `null` locally abandons entries that
+ * then stay pending forever. At the ~150ms RTT this fleet sees to a
+ * managed endpoint, a 100ms grace sits inside the noise; 5s makes a false
+ * fire implausible while still bounding a genuine wedge to ~10s.
+ */
+const KEEPALIVE_MS = 30_000;
+const SOCKET_TIMEOUT_MS = 15_000;
+const BLOCKING_TIMEOUT_MS = 15_000;
+const BLOCKING_TIMEOUT_GRACE_MS = 5_000;
+
+/**
  * Thin Redis wrapper with Streams helpers. We maintain one shared
  * command client plus one DEDICATED connection per blocking consumer
  * loop:
@@ -77,29 +119,55 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   private _read!: Redis;
   private _readResults!: Redis;
   private _readBackground!: Redis;
+  /** Set on shutdown so the expected teardown doesn't log as churn. */
+  private closing = false;
 
   constructor(private readonly config: ConfigService) {}
 
   async onModuleInit() {
     const url = this.config.get<string>('REDIS_URL', 'redis://localhost:6379');
-    const opts = { maxRetriesPerRequest: null, lazyConnect: false, ...tlsOptions(url) };
-    this._cmd = new Redis(url, opts);
-    this._read = new Redis(url, opts);
-    this._readResults = new Redis(url, opts);
-    this._readBackground = new Redis(url, opts);
-    this._cmd.on('error', (err) => this.logger.error(`redis cmd error: ${err.message}`));
-    this._read.on('error', (err) => this.logger.error(`redis read error: ${err.message}`));
-    this._readResults.on('error', (err) =>
-      this.logger.error(`redis readResults error: ${err.message}`),
-    );
-    this._readBackground.on('error', (err) =>
-      this.logger.error(`redis readBackground error: ${err.message}`),
-    );
+    const opts: RedisOptions = {
+      maxRetriesPerRequest: null,
+      lazyConnect: false,
+      keepAlive: KEEPALIVE_MS,
+      socketTimeout: SOCKET_TIMEOUT_MS,
+      blockingTimeout: BLOCKING_TIMEOUT_MS,
+      blockingTimeoutGrace: BLOCKING_TIMEOUT_GRACE_MS,
+      ...tlsOptions(url),
+    };
+    this._cmd = this.open(url, opts, 'cmd');
+    this._read = this.open(url, opts, 'read');
+    this._readResults = this.open(url, opts, 'readResults');
+    this._readBackground = this.open(url, opts, 'readBackground');
     await this._cmd.ping();
     this.logger.log(`Connected to ${redactUrl(url)}`);
   }
 
+  /**
+   * Build one connection and wire its lifecycle events.
+   *
+   * Only 'error' was logged before, which is exactly the event a
+   * half-open socket never emits — the teardown that matters is the
+   * silent one. Logging 'close'/'reconnecting' turns a recovered drop
+   * into visible churn rather than an unexplained gap in consumption,
+   * which is the signal that was missing while the readers were wedged.
+   * The `error` line keeps its original wording (`redis <label> error:`)
+   * because the runbook greps for it.
+   */
+  private open(url: string, opts: RedisOptions, label: string): Redis {
+    const conn = new Redis(url, opts);
+    conn.on('error', (err: Error) => this.logger.error(`redis ${label} error: ${err.message}`));
+    conn.on('close', () => {
+      if (!this.closing) this.logger.warn(`redis ${label} socket closed`);
+    });
+    conn.on('reconnecting', (ms: number) => {
+      if (!this.closing) this.logger.warn(`redis ${label} reconnecting in ${ms}ms`);
+    });
+    return conn;
+  }
+
   async onModuleDestroy() {
+    this.closing = true;
     await this._cmd?.quit();
     await this._read?.quit();
     await this._readResults?.quit();
