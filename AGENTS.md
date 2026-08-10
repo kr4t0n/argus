@@ -302,8 +302,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `project:{machineId}:{workingDir}` (fs/git nudges + background tasks).
   Authenticates the handshake using the same JWT used for REST. The
   gateway is the **only** thing that emits live data to clients.
-- `infra/redis/` — wrapper that owns *two* connections: one for blocking
-  XREADGROUP, one for everything else (ioredis requires this).
+- `infra/redis/` — wrapper that owns *four* connections: one shared `cmd`
+  client, plus a dedicated one per blocking consumer loop (lifecycle+notify,
+  result ingestor, background tasks). ioredis requires the split — a parked
+  `XREADGROUP` blocks every other call on that socket.
 - `infra/prisma/` — Prisma client.
 
 ### `packages/sidecar/internal/`
@@ -1079,8 +1081,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   *imported*. The blank `_ "..."` trick isn't needed today because they're
   all under the same package, but keep it in mind when adding adapters in a
   separate package.
-- **Two Redis connections**: do **not** call `XREADGROUP` on the shared
-  `cmd` ioredis client — it parks the socket and starves every other call.
+- **One connection per blocking loop** (four total today): do **not** call
+  `XREADGROUP` on the shared `cmd` ioredis client — it parks the socket and
+  starves every other call. Two loops sharing one socket serialize behind
+  each other's `BLOCK` window too, so every consumer loop gets its own.
 - **Command consumption is per-CLI-runner, bounded per machine**: each
   runner `XREADGROUP`s its own `machine:{mid}:cli:{type}:cmd` stream, so a
   machine holds a *constant* number of blocking Redis connections (one per
@@ -1112,6 +1116,25 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `CLIENT KILL` go-redis conns with `idle>300` and `cmd≠xreadgroup`
   (parked stream readers always show `idle≤5`; go-redis re-dials
   transparently, and Postgres is the source of truth).
+- **`rediss://` SNI must be set explicitly on the server side** — ioredis
+  only flips `tls: true` (a *boolean*) when it sees the scheme, and its
+  connector's `Object.assign(connectionOptions, options.tls)` copies nothing
+  from a boolean, so the socket opens as `tls.connect({ host, port })`. Node
+  sends the SNI extension **only** when `servername` is set explicitly; there
+  is no fallback to `host` (see the `if (options.servername)` guard in
+  `lib/_tls_wrap.js` — the docs claim a host-name default, the implementation
+  disagrees). `RedisService` therefore derives `tls.servername` from the URL
+  host itself. The Go side needs nothing: `redis.ParseURL` already sets
+  `TLSConfig.ServerName` for `rediss://`. Before the fix the two disagreed,
+  and the signature was distinctive — **sidecars connect fine while the
+  server cannot**, on the same `REDIS_URL` — because managed Redis (Upstash,
+  Redis Cloud) fronts many tenants with one TLS terminator that needs SNI to
+  pick a certificate. Note this was never an auth downgrade:
+  `rejectUnauthorized` stays on and `checkServerIdentity` validates against
+  `host`, so it breaks cert *selection*, not verification. IP literals are
+  excluded deliberately (RFC 6066 forbids them in SNI; Node warns DEP0123) —
+  and `URL.hostname` keeps the brackets on IPv6, which `isIP` rejects, so
+  they must be stripped before that check.
 - **Stream MAXLEN is silent message loss, not just memory pressure**:
   every `XADD` on both sides (`apps/server/src/infra/redis/redis.service.ts`
   and `packages/sidecar/internal/bus/bus.go`) trims with `MAXLEN ~ N`,
