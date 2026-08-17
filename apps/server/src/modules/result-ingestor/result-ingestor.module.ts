@@ -3,10 +3,11 @@ import { CommandModule } from '../command/command.module';
 import { GatewayModule } from '../gateway/gateway.module';
 import { PushModule } from '../push/push.module';
 import { SessionModule } from '../session/session.module';
+import { SearchModule } from '../search/search.module';
 import { ResultIngestorService } from './result-ingestor.service';
 
 @Module({
-  imports: [GatewayModule, SessionModule, CommandModule, PushModule],
+  imports: [GatewayModule, SessionModule, CommandModule, PushModule, SearchModule],
   providers: [ResultIngestorService],
 })
 export class ResultIngestorModule {}

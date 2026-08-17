@@ -19,6 +19,7 @@ import type {
   ProjectNotesResponse,
   ResultChunkDTO,
   SessionDTO,
+  SessionSearchResponse,
   SidecarUpdateAccepted,
   SidecarUpdateBatchAccepted,
   SidecarVersionInfo,
@@ -142,6 +143,16 @@ export const api = {
 
   listSessions: (opts?: { includeArchived?: boolean }) =>
     http<SessionDTO[]>(`/sessions${opts?.includeArchived ? '?includeArchived=true' : ''}`),
+
+  /** Content search across every session the caller owns, archived
+   *  included — the palette filters/labels client-side. */
+  searchSessions: (q: string, opts?: { limit?: number; signal?: AbortSignal }) => {
+    const params = new URLSearchParams({ q });
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    return http<SessionSearchResponse>(`/search/sessions?${params.toString()}`, {
+      signal: opts?.signal,
+    });
+  },
   getSession: (id: string, opts?: { tailCommands?: number }) => {
     const q = new URLSearchParams();
     if (opts?.tailCommands) q.set('tailCommands', String(opts.tailCommands));

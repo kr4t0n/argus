@@ -15,6 +15,7 @@ import { StreamGateway } from '../gateway/stream.gateway';
 import { SessionService } from '../session/session.service';
 import { CommandService } from '../command/command.service';
 import { PushService } from '../push/push.service';
+import { SearchService } from '../search/search.service';
 
 const CONSUMER = 'server-1';
 const REFRESH_RUNNER_STREAMS_MS = 5_000;
@@ -44,6 +45,7 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
     private readonly gateway: StreamGateway,
     private readonly sessions: SessionService,
     private readonly push: PushService,
+    private readonly search: SearchService,
   ) {}
 
   async onModuleInit() {
@@ -275,6 +277,13 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
         .findUnique({ where: { id: chunk.commandId } })
         .then((cmd) => cmd && this.gateway.emitCommandUpdated(CommandService.toDto(cmd)))
         .catch(() => {});
+      // Materialize this turn's full-text search doc. Sits inside the
+      // finalize-once guard so it runs exactly once per turn, and after
+      // the status write so every chunk is already persisted — the doc
+      // is assembled from ResultChunk rows, so indexing earlier would
+      // capture a half-streamed answer. Fire-and-forget: a search-index
+      // failure must never stall chunk ingestion.
+      this.search.indexCommandSafe(chunk.commandId);
       // Terminal: success lands lifecycle-`idle`, error lands `failed`,
       // and either way the result is unread until the user opens it —
       // that `unread` flag is what surfaces the sidebar dot.

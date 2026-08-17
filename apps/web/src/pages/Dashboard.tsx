@@ -5,6 +5,7 @@ import { SidebarRail } from '../components/SidebarRail';
 import { SessionPanel } from '../components/SessionPanel';
 import { MachinePanel } from '../components/MachinePanel';
 import { UserPanel } from './UserPanel';
+import { SearchPalette } from '../components/SearchPalette';
 import { ResizeHandle } from '../components/ui/ResizeHandle';
 import { useUIStore } from '../stores/uiStore';
 
@@ -64,6 +65,10 @@ export function Dashboard() {
       <main className="flex-1 min-w-0 h-full">
         {isUserPane ? <UserPanel /> : machineId ? <MachinePanel /> : <SessionPanel />}
       </main>
+
+      {/* Mounted once at the shell so ⌘K works from any pane. Renders
+          null until opened; the hotkey listener is all that stays live. */}
+      <SearchPalette />
     </div>
   );
 }

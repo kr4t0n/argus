@@ -261,6 +261,49 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   background-tasks?workingDir=...` hydrates a tab opening mid-run.
   No DB persistence — JSONL on the machine's disk is authoritative if
   you need history.
+- `search/` — content search across sessions (`GET /search/sessions?q=`,
+  the ⌘K palette's backend). Reads `CommandSearchDoc`, a materialized
+  one-row-per-turn table holding that turn's conversation text plus a
+  GENERATED `tsvector`, GIN-indexed.
+  **Why a derived table and not a query over `ResultChunk`:** an answer
+  is persisted as a STREAM of `delta` fragments, so a keyword can
+  straddle two rows and row-level matching misses it *silently*. The doc
+  concatenates deltas in `seq` order with **no separator** — a space
+  would manufacture a word boundary mid-token and reintroduce the bug.
+  The doc definition lives in exactly one place, the
+  `argus_command_doc(text)` SQL function created by the migration, which
+  both the backfill and the runtime upsert call, so they cannot drift.
+  **What's indexed:** `Command.prompt` + `delta` + `final` content.
+  Deliberately NOT `stdout` / `tool` / `progress` / `stderr` — on the
+  corpus this was sized against those are ~78 MB / 22 MB / 1 MB / 1 MB
+  against ~36 MB of actual conversation, i.e. indexing them would triple
+  the index and bury real hits under `npm WARN` lines. Adding tool output
+  later is a filter chip, not a redesign.
+  **Two passes:** a GIN `tsvector` match with the last term
+  prefix-matched (so it filters as you type), and — only when that
+  returns nothing — a raw `ILIKE` scan. The fallback exists because
+  `tsvector` matches stemmed *words*, and this is a developer tool where
+  `MAXLEN`, `rediss://` and mid-identifier substrings are exactly what
+  people search for. Measured on a 7k-doc / 34 MB corpus: a selective
+  full-text query is **~2 ms**, a term matching every document ~245 ms
+  (the `count(*) OVER (PARTITION BY sessionId)` has to sort every match
+  before the LIMIT), and the substring fallback **~270–350 ms**. That
+  fallback would be indefensible on a large corpus; it is affordable
+  here only because the corpus is small, so re-check it if the fleet
+  grows an order of magnitude.
+  Results are one-per-session (`DISTINCT ON`) so a chatty session can't
+  crowd out the rest, with `matchCount` reporting how many of its turns
+  matched. Snippets come from `ts_headline` and wrap matches in
+  `[[hl]]`/`[[/hl]]` — NOT `<b>`, so clients split on the sentinels and
+  transcript text never reaches an HTML sink.
+  Maintained by `SearchService.indexCommandSafe()`, called from the
+  result ingestor's finalize-once guard: exactly once per turn, after
+  the status write (the doc is assembled from persisted `ResultChunk`
+  rows, so indexing earlier would capture a half-streamed answer), and
+  fire-and-forget so an index failure can never stall ingestion.
+  The endpoint returns archived sessions too — scope is a client
+  decision, and in practice ~93% of sessions are archived, so a
+  server-side "visible only" default would hide most of the corpus.
 - `push/` — APNs sender for native clients. `DeviceController`
   (`POST /me/devices` upsert-by-token — re-homing a token that moved
   accounts — and idempotent `DELETE /me/devices/:token`) plus
@@ -678,6 +721,27 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   (and their archived-visibility filter); the machine→project sort owns
   display order. Sessions within a project stay newest-first — that sort
   lives in the callers, not here.
+- `components/SearchPalette.tsx` — the ⌘K/Ctrl+K content-search overlay,
+  mounted once in `Dashboard` so the hotkey works from any pane (it
+  renders null until opened; only the listener stays live). Portals to
+  `document.body` with Escape + body-scroll-lock, cloning
+  `ImageLightbox`'s pattern so it escapes the transcript's scroll/clip
+  containers. The listener is registered in the **capture** phase and
+  `preventDefault`s: the xterm terminal pane would otherwise forward the
+  keystroke to the PTY, and Firefox maps Ctrl+K to its own search bar.
+  A modifier combo is why this needs no "is the user typing?" guard —
+  the bare-key alternative (space) was rejected because Argus's primary
+  surfaces are scroll containers where space is page-down, so every
+  stray keypress while reading would pop the palette.
+  Searches ALL sessions with no scope control — ~93% of sessions are
+  archived, so a "visible only" default would search a sliver of history
+  and make the scope toggle the real interface; archived hits are
+  labelled instead of hidden. Queries are debounced 200 ms and carry an
+  `AbortController`, without which a slow early request can resolve
+  after a fast later one and overwrite good results with stale ones.
+  Session metadata (title, project, machine, cliType) is resolved from
+  the stores the app already holds — the full session list is hydrated
+  at boot — so the search response carries only ids and snippets.
 - `components/SidebarRail.tsx` — collapsed-mode rail (48px wide).
   Renders one tile per project using the same `groupProjects()`
   derivation as the main sidebar, with `ProjectIconGlyph` for the
@@ -949,6 +1013,32 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Drop only when a *specific* socket is lagging (TODO — see follow-ups).
 
 ## Gotchas
+
+- **`CommandSearchDoc.tsv` is invisible to Prisma, and that is
+  load-bearing.** Prisma cannot represent `tsvector`, so the field is
+  declared `Unsupported("tsvector")?` — which means the Prisma client
+  can neither read nor write it. That is exactly what we want: the
+  column is `GENERATED ALWAYS AS (to_tsvector('english', "doc")) STORED`,
+  so Postgres keeps it in lockstep with `doc` and nothing can write the
+  two into disagreement. Every query that touches it is raw SQL in
+  `SearchService`. Consequences: (1) `prisma migrate dev` cannot see the
+  GENERATED clause or the `argus_command_doc()` function and may emit a
+  migration that drops them — **read any generated migration touching
+  this table before applying it**, and hand-edit as the backfill
+  migrations in this repo already do; (2) if you ever change what goes
+  into a doc, change `argus_command_doc()` in a new migration and
+  re-run the backfill — editing the TypeScript alone changes nothing,
+  because the doc is assembled entirely server-side.
+
+- **Search snippets use `[[hl]]` sentinels, never HTML.** `ts_headline`
+  defaults to wrapping matches in `<b>`/`</b>`; we override
+  `StartSel`/`StopSel` because the highlighted text is model- and
+  user-authored transcript content and must never reach
+  `dangerouslySetInnerHTML`. Clients split on the sentinels and build
+  text nodes. The constants are exported from shared-types
+  (`SEARCH_HL_START`/`SEARCH_HL_STOP`) and duplicated in the server's
+  `SearchService` — if you change one, change both. The substring
+  fallback emits the same markup by hand so clients need one render path.
 
 - **Model detection is LATEST-match, in both clients**: the right-panel
   model line and the context ring's window lookup derive the model from

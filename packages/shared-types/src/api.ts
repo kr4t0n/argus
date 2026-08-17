@@ -641,3 +641,41 @@ export interface LiveActivityDTO {
   sessionId: string;
   createdAt: string;
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Session content search (`GET /search/sessions`)
+// ─────────────────────────────────────────────────────────────────────
+
+/** Matched terms inside `SessionSearchHitDTO.snippet` are wrapped in
+ *  these sentinels. Deliberately not HTML: clients split on them to build
+ *  native text nodes, so transcript content never reaches an HTML sink.
+ *  Kept in sync with `HL_START`/`HL_STOP` in the server's SearchService. */
+export const SEARCH_HL_START = '[[hl]]';
+export const SEARCH_HL_STOP = '[[/hl]]';
+
+/** One matching session. The server returns the single best-ranked turn
+ *  per session (so one chatty session can't crowd out the results) plus
+ *  how many of its turns matched in total. Session metadata — title,
+ *  project, machine — is deliberately absent: every client already holds
+ *  the full session list, so re-sending it per hit would be redundant. */
+export interface SessionSearchHitDTO {
+  sessionId: string;
+  /** The best-matching turn. Reserved for deep-linking into the
+   *  transcript; today clients open the session itself. */
+  commandId: string;
+  /** Total matching turns in this session, not just the one shown. */
+  matchCount: number;
+  /** Text window around the match, with terms wrapped in
+   *  SEARCH_HL_START/SEARCH_HL_STOP. */
+  snippet: string;
+}
+
+export interface SessionSearchResponse {
+  /** The trimmed query the server actually ran. */
+  query: string;
+  hits: SessionSearchHitDTO[];
+  /** Which pass produced these. `fulltext` is the indexed tsvector match;
+   *  `substring` means that found nothing and the raw scan ran instead —
+   *  which is the normal path for code strings and partial identifiers. */
+  mode: 'fulltext' | 'substring';
+}
