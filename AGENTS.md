@@ -1192,6 +1192,47 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   wedged all lifecycle consumption forever after a notify DEL). The
   result-ingestor's NOGROUP branch handles the same trap for destroyed
   agents' result streams.
+- **A half-open socket parks a blocking XREADGROUP forever — silently**:
+  managed Redis behind a shared proxy (Redis Cloud, Upstash) can drop a
+  connection without sending a FIN. The socket stays open from Node's
+  side, and with `maxRetriesPerRequest: null` the in-flight blocking
+  XREADGROUP never settles and never emits `'error'` — so the consume
+  loop awaits a promise that will never resolve. There is nothing in the
+  logs: no error line, no reconnect, just a consumer that stops issuing
+  reads. Diagnose from Redis, not from the server: `XINFO CONSUMERS
+  <stream> <group>` shows `idle` climbing without bound (observed Aug
+  2026: `agent:lifecycle` and every `:result` consumer at 52 minutes
+  idle while `agent:background` — a *sibling connection* on the same
+  process — sat at 2s). The tell is per-connection, not per-process: the
+  server is alive and `_cmd` still works, so health checks pass while
+  every machine shows offline and the sidecars poll happily. Left alone
+  it never self-heals, and MAXLEN keeps trimming heartbeats the stuck
+  consumer will never reach (lag 503 against a 502-entry stream).
+  `RedisService` now defends in three layers — `keepAlive` (kernel-level
+  probes), `socketTimeout` (destroys a data-starved socket so ioredis
+  reconnects; MUST exceed the longest BLOCK window of 5s plus RTT, or it
+  kills healthy blocking reads), and `blockingTimeout` +
+  `blockingTimeoutGrace` (client-side deadline that resolves the promise
+  with `null`, the shape every loop already reads as "nothing this
+  cycle"). Keep the grace well above ioredis's stock 100ms: the deadline
+  is BLOCK + grace, and a *spurious* fire abandons a batch Redis already
+  moved into the PEL, stranding it permanently. Do not read
+  `blocked_clients` from `INFO` on Redis Cloud when investigating this —
+  see the "`blocked_clients` is a phantom" gotcha.
+- **`blocked_clients` from `INFO` is a phantom on Redis Cloud — don't
+  size anything off it**: the Enterprise proxy reports a value that does
+  not track real blocked clients. Verified empirically (Aug 2026):
+  adding six genuinely blocked clients moved `connected_clients` by
+  exactly +6 while `blocked_clients` stayed pinned at 16 across ~40
+  minutes of sampling, through every connection add and release. It is
+  dangerously easy to add it to `connected_clients`, land on exactly
+  `maxclients`, and conclude the fleet is out of connections — a false
+  positive that sends you tuning pool caps during an unrelated outage.
+  `connected_clients` is accurate and is the only number to trust
+  against `maxclients`; `rejected_connections` is the ground truth for
+  whether the cap is actually being hit. Same caution applies to
+  `CLIENT LIST`, which returns only the issuing proxy thread's clients
+  (14 rows while the counters described the whole database).
 - **MAXLEN caps entry COUNT, not bytes — one fat chunk can blow the
   whole budget**: the `streamMaxLen` caps above bound the *number* of
   entries, so the memory model silently assumes each entry is small
