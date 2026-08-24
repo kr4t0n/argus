@@ -261,6 +261,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   background-tasks?workingDir=...` hydrates a tab opening mid-run.
   No DB persistence — JSONL on the machine's disk is authoritative if
   you need history.
+- `session/` transcript windowing — three read shapes, all returning
+  `{commands, chunks, hasMore, hasMoreNewer}`-ish payloads:
+  `?tailCommands=N` (the default open-a-session path, newest N turns),
+  `?aroundCommand=<id>&beforeCount=&afterCount=` (`getWindowAround` — the
+  deep-link path, a window CENTRED on one turn), and
+  `/history?before=<id>` / `?after=<id>` (`getOlderHistory` /
+  `getNewerHistory`, one page in one direction; passing both or neither is
+  a 400 because `hasMore` would be ambiguous). `getWindowAround` is the
+  only path that can return `hasMoreNewer: true` — see the transcript
+  window invariant under Gotchas before consuming it. All the command
+  queries order by `[createdAt, id]`, not `createdAt` alone: two turns can
+  share a millisecond, and cursor pagination against a non-unique sort
+  skips or repeats rows at the page boundary.
 - `search/` — content search across sessions (`GET /search/sessions?q=`,
   the ⌘K palette's backend). Reads `CommandSearchDoc`, a materialized
   one-row-per-turn table holding that turn's conversation text plus a
@@ -721,6 +734,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   (and their archived-visibility filter); the machine→project sort owns
   display order. Sessions within a project stay newest-first — that sort
   lives in the callers, not here.
+- `stores/sessionStore.ts` window model — `SessionEntry` carries both
+  edges (`hasMore`/`loadingOlder`, `hasMoreNewer`/`loadingNewer`) plus
+  `focusCommandId`, the deep-link target that drives the viewer's
+  scroll-to + ring. `loadSessionAround(id, commandId)` always refetches:
+  the caller is asking to be moved somewhere specific, so a cached tail
+  window is never a valid answer. Read the transcript window invariant
+  under Gotchas before touching `appendChunk`, `upsertCommand` or
+  `backfill` — all three are gated on it.
 - `components/SearchPalette.tsx` — the ⌘K/Ctrl+K content-search overlay,
   mounted once in `Dashboard` so the hotkey works from any pane (it
   renders null until opened; only the listener stays live). Portals to
@@ -742,6 +763,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Session metadata (title, project, machine, cliType) is resolved from
   the stores the app already holds — the full session list is hydrated
   at boot — so the search response carries only ids and snippets.
+  Selecting a hit navigates to `/sessions/:id?turn=<commandId>`; the turn
+  lives in the URL rather than transient state so a reload or a shared
+  link lands in the same place. `SessionPanel` reads `?turn=` and routes
+  the load to `loadSessionAround`, falling back to the tail window if the
+  anchor 404s (a deleted turn is a positioning hint, not an error worth a
+  full-panel failure state).
 - `components/SidebarRail.tsx` — collapsed-mode rail (48px wide).
   Renders one tile per project using the same `groupProjects()`
   derivation as the main sidebar, with `ProjectIconGlyph` for the
@@ -1013,6 +1040,52 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Drop only when a *specific* socket is lagging (TODO — see follow-ups).
 
 ## Gotchas
+
+- **The transcript window invariant.** A viewer holds a CONTIGUOUS window
+  of a session's turns, and `SessionEntry.hasMoreNewer` says whether that
+  window reaches the present:
+
+      hasMoreNewer === false  ⟺  window contains the newest turn
+                              ⟺  live appends are safe.
+
+  Every tail load (`loadSession`, `tailCommands`) sets it false. Only a
+  deep-link load (`loadSessionAround` → `?aroundCommand=`) can set it
+  true, and while it is true three things MUST stay disarmed, because each
+  of them silently assumes the window reaches the present:
+  1. `upsertCommand` must not APPEND a turn the window doesn't hold — a
+     new turn belongs hundreds of turns below the window, and appending it
+     renders turn 210 directly beneath turn 34. Updating a turn already
+     held is always fine.
+  2. `appendChunk` must drop chunks whose command isn't in the window,
+     or the entry accumulates chunks that will never render — invisible,
+     unbounded growth while the user reads history during a live turn.
+     The check is deliberately NOT applied to tail windows: WS ordering
+     between `command:updated` and a turn's first chunk isn't guaranteed,
+     so a live window has to accept chunks for a command it hasn't been
+     told about yet.
+  3. Stick-to-bottom / `scrollMemory.atBottom` must not arm, because the
+     bottom of the scrollport is the bottom of a WINDOW, not the newest
+     turn. `StreamViewer` gates both on `liveTail = !hasMoreNewer` and
+     offers "jump to latest" instead.
+
+  If you add a third load path, decide which side of this line it sits on
+  before writing it. Plain navigation into a session deliberately RESETS a
+  floating window back to the tail (`loadSession` treats a cached
+  `hasMoreNewer` entry as stale) — the only way to be off the tail is to
+  ask for it explicitly.
+
+- **`GET /sessions/:id/chunks` returns EVERY command in the session**, not
+  a window — it has no `tailCommands`. The reconnect backfill in
+  `App.tsx` calls it, so `sessionStore.backfill` filters the merge rather
+  than trusting the payload: in-window turns update, turns newer than the
+  newest loaded are accepted (created while disconnected), and everything
+  else is dropped. Before that filter existed, every WS reconnect injected
+  the session's entire history into the window, rendering a few hundred
+  CONTENTLESS turns above the tail — contentless because their chunks are
+  filtered out by `afterSeq`, so only the command rows landed. If you
+  touch this, note that `ResultChunk.seq` restarts at 1 PER COMMAND, so
+  `lastSeq` is a max-across-commands, not a session-wide cursor, and
+  `WHERE seq > lastSeq` cannot be used to mean "everything new".
 
 - **`CommandSearchDoc.tsv` is invisible to Prisma, and that is
   load-bearing.** Prisma cannot represent `tsvector`, so the field is

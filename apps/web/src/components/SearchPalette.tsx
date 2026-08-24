@@ -123,7 +123,9 @@ export function SearchPalette() {
 
   const openHit = useCallback(
     (hit: SessionSearchHitDTO) => {
-      navigate(`/sessions/${hit.sessionId}`);
+      // `?turn=` lands the viewer on the turn that actually matched rather
+      // than the newest one — the session loads a window centred there.
+      navigate(`/sessions/${hit.sessionId}?turn=${encodeURIComponent(hit.commandId)}`);
       setOpen(false);
     },
     [navigate],

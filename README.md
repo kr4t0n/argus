@@ -76,7 +76,14 @@ highlighted snippets. Postgres full-text with prefix matching so it filters as
 you type, plus a substring fallback so code strings like `MAXLEN` or
 `rediss://` still hit. Build logs, tool output and status noise are excluded
 from the index on purpose — searching `pool` finds the answer that explained
-the pool, not the `npm WARN` that mentioned one.
+the pool, not the `npm WARN` that mentioned one. Picking a result jumps to the
+**turn** that matched, not just the session.
+- **Windowed transcripts** — a session viewer holds a bounded window of turns
+rather than the whole thread, and pages in either direction as you scroll.
+Opening a session loads the newest few turns; a deep link (`?turn=<id>`) loads
+a window centred on that turn regardless of how far back it sits, so jumping
+to a match 300 turns deep costs one request instead of paging through
+everything in between.
 - **Live workingDir file tree** — a lazy-expanding, gitignore-aware tree kept
 in sync by the sidecar's `fsnotify` watcher; the header also shows the current
 git branch (or short SHA when detached). Open a file and it stays live too:

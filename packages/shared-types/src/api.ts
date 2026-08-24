@@ -679,3 +679,42 @@ export interface SessionSearchResponse {
    *  which is the normal path for code strings and partial identifiers. */
   mode: 'fulltext' | 'substring';
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Transcript windowing
+//
+// A viewer holds a CONTIGUOUS window of a session's turns, not the whole
+// thread. Two flags describe its edges, and `hasMoreNewer` is the
+// load-bearing one:
+//
+//   hasMoreNewer === false  ⟺  the window reaches the session's newest
+//                              turn  ⟺  live appends are safe.
+//
+// Every tail-anchored load (the default) reports false. Only a deep-link
+// load (`?aroundCommand=`) can report true, and while it does, clients
+// must NOT append live chunks or newly created commands for turns outside
+// the window — doing so makes the window discontiguous, which renders as
+// turn 34 sitting directly above turn 210. See the transcript window
+// invariant in AGENTS.md.
+// ─────────────────────────────────────────────────────────────────────
+
+/** A loaded window of a session: the session row, its commands in
+ *  ascending `createdAt` order, and their chunks. */
+export interface SessionWindowResponse {
+  session: SessionDTO;
+  commands: CommandDTO[];
+  chunks: ResultChunkDTO[];
+  /** Older turns exist above the window (page with `?before=`). */
+  hasMore: boolean;
+  /** Newer turns exist below the window (page with `?after=`). False on
+   *  every tail-anchored load. */
+  hasMoreNewer: boolean;
+}
+
+/** One page of history in either direction. `hasMore` describes the
+ *  direction that was requested — older for `before`, newer for `after`. */
+export interface SessionHistoryPage {
+  commands: CommandDTO[];
+  chunks: ResultChunkDTO[];
+  hasMore: boolean;
+}

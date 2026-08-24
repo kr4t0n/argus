@@ -19,7 +19,9 @@ import type {
   ProjectNotesResponse,
   ResultChunkDTO,
   SessionDTO,
+  SessionHistoryPage,
   SessionSearchResponse,
+  SessionWindowResponse,
   SidecarUpdateAccepted,
   SidecarUpdateBatchAccepted,
   SidecarVersionInfo,
@@ -153,16 +155,27 @@ export const api = {
       signal: opts?.signal,
     });
   },
-  getSession: (id: string, opts?: { tailCommands?: number }) => {
+  /** Load a session window. Pass `aroundCommand` for a deep link — the
+   *  server centres the window on that turn and the response may report
+   *  `hasMoreNewer: true`, meaning the window does NOT reach the newest
+   *  turn. Otherwise a tail window is returned and `hasMoreNewer` is
+   *  always false. */
+  getSession: (
+    id: string,
+    opts?: {
+      tailCommands?: number;
+      aroundCommand?: string;
+      beforeCount?: number;
+      afterCount?: number;
+    },
+  ) => {
     const q = new URLSearchParams();
     if (opts?.tailCommands) q.set('tailCommands', String(opts.tailCommands));
+    if (opts?.aroundCommand) q.set('aroundCommand', opts.aroundCommand);
+    if (opts?.beforeCount != null) q.set('beforeCount', String(opts.beforeCount));
+    if (opts?.afterCount != null) q.set('afterCount', String(opts.afterCount));
     const qs = q.toString();
-    return http<{
-      session: SessionDTO;
-      commands: CommandDTO[];
-      chunks: ResultChunkDTO[];
-      hasMore: boolean;
-    }>(`/sessions/${id}${qs ? `?${qs}` : ''}`);
+    return http<SessionWindowResponse>(`/sessions/${id}${qs ? `?${qs}` : ''}`);
   },
   getSessionChunks: (id: string, afterSeq = 0) =>
     http<{ commands: CommandDTO[]; chunks: ResultChunkDTO[] }>(
@@ -170,11 +183,13 @@ export const api = {
     ),
   getSessionHistory: (id: string, beforeCommandId: string, limit = 20) => {
     const q = new URLSearchParams({ before: beforeCommandId, limit: String(limit) });
-    return http<{
-      commands: CommandDTO[];
-      chunks: ResultChunkDTO[];
-      hasMore: boolean;
-    }>(`/sessions/${id}/history?${q.toString()}`);
+    return http<SessionHistoryPage>(`/sessions/${id}/history?${q.toString()}`);
+  },
+  /** Forward page — the turns NEWER than `afterCommandId`. Only reachable
+   *  from a deep-linked window that hasn't caught up to the newest turn. */
+  getSessionHistoryAfter: (id: string, afterCommandId: string, limit = 20) => {
+    const q = new URLSearchParams({ after: afterCommandId, limit: String(limit) });
+    return http<SessionHistoryPage>(`/sessions/${id}/history?${q.toString()}`);
   },
   createSession: (body: CreateSessionRequest) =>
     http<{
