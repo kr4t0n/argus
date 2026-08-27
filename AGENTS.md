@@ -970,6 +970,21 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   via `workflow_dispatch` for refactor branches.
   **If you change a shared-types DTO, update the Swift mirror and
   re-capture the fixtures in the same PR.**
+- **iOS CI can break with no iOS commit.** Every SPM dependency in
+  `apps/ios/Argus/project.yml` uses a floating `from:` range, and
+  XcodeGen regenerates the `.xcodeproj` each run — so no `Package.resolved`
+  survives and CI re-resolves to the newest in-range version *every
+  time*. On 2026-08-27 SwiftTerm drifted 1.15.0 → 1.20.0, which attached
+  a build-tool plugin (`SwiftTermBuildInfoPlugin`) to the library target;
+  Xcode gates plugins behind an interactive trust prompt, so the
+  headless build died at *plugin validation* — exit 65, before compiling
+  anything. Hence `-skipPackagePluginValidation` on the xcodebuild step,
+  which is the CI-correct posture regardless of version. Symptom to
+  recognize: `Validate plug-in "…"` listed under "The following build
+  commands failed" while the ArgusKit job stays green. If a *build*
+  suddenly fails on an unrelated branch, diff the "Resolved source
+  packages" block against the last green run before suspecting your
+  code. Pinning the ranges is the real fix and is still open.
 - Swift is authored on Linux but only compiles on macOS —
   `.github/workflows/ios.yml` (macOS runner, `swift build` + `swift
   test`) is the primary verifier, not the dev box.
