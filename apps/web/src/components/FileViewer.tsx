@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { markdownRemarkPlugins, markdownRehypePlugins } from '../lib/markdown';
+import { markdownRemarkPlugins, markdownRehypePlugins, normalizeMathDelimiters } from '../lib/markdown';
 import { Code2, Download, Eye, FileWarning, Loader2 } from 'lucide-react';
 import type { FSReadResult } from '@argus/shared-types';
 import { ApiError, api } from '../lib/api';
@@ -183,7 +183,7 @@ function PreviewableTextViewer({
       ) : previewKind === 'markdown' ? (
         <div className="markdown h-full overflow-auto px-6 py-5 text-sm leading-relaxed text-fg-primary">
           <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>
-            {content}
+            {normalizeMathDelimiters(content)}
           </ReactMarkdown>
         </div>
       ) : (

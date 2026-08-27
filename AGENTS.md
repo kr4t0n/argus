@@ -574,9 +574,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `remark-math`/`rehype-katex` for LaTeX. Single-dollar inline math is
   deliberately ON (Claude emits `$\pi_\theta$`-style inline math), so
   prose like "$5 and $10" can false-positive as math — accepted trade.
-  Only `$…$`/`$$…$$` are recognized; `\(…\)`/`\[…\]` pass through as
-  plain text until a real-transcript sample justifies a normalization
-  pass. rehype-katex replaces math nodes *before* the `components` map
+  remark-math recognizes only `$…$`/`$$…$$`, so `normalizeMathDelimiters`
+  (same module) folds **Codex's `\[…\]`/`\(…\)` into them pre-parse** —
+  every call site passes its source through it. Codex is the only CLI
+  that emits brackets (24 display + 13 inline spans across a 2232-answer
+  survey), and left alone they don't just show as literal brackets:
+  markdown pairs the `_` subscripts inside as emphasis and eats them. A
+  span converts only if it's *paired* (so CommonMark's escaped `\[` is
+  safe, and a half-streamed opener stays raw then snaps into math),
+  non-blank, `$`-free, blank-line-free, and outside fences/code spans —
+  the last one is load-bearing: a real transcript had
+  `find . \( -name "*.h" \)` inside a ```bash fence. All five guards cost
+  zero conversions on the survey corpus. Keep in step with ArgusKit's
+  `Engine/MathDelimiters.swift`. rehype-katex replaces math nodes *before* the `components` map
   runs, so `MarkdownCodeBlock` (custom `<pre>`) never sees equations;
   invalid TeX renders as red source text instead of throwing. GOTCHA:
   the app's `katex` dep (source of that CSS) must stay on the same
@@ -588,7 +598,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `.markdown .katex-display` gets sideways overflow-scroll like tables.
   While a turn streams, an unclosed `$$` shows raw until the closing
   delimiter arrives, then snaps into rendered math — self-correcting.
-  iOS counterpart: ArgusKit `Engine/MathSegments.swift` +
+  iOS counterpart: ArgusKit `Engine/MathDelimiters.swift` runs the same
+  bracket normalization at the top of `MathSegments.split`, then
+  `Engine/MathSegments.swift` +
   `Views/MathRender.swift` render `$$` display math natively via
   SwiftMath, and `Engine/InlineMath.swift` + `Views/InlineMathRender.swift`
   render inline `$…$` in plain paragraphs AND flat list items as
@@ -970,6 +982,21 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   via `workflow_dispatch` for refactor branches.
   **If you change a shared-types DTO, update the Swift mirror and
   re-capture the fixtures in the same PR.**
+- **iOS CI can break with no iOS commit.** Every SPM dependency in
+  `apps/ios/Argus/project.yml` uses a floating `from:` range, and
+  XcodeGen regenerates the `.xcodeproj` each run — so no `Package.resolved`
+  survives and CI re-resolves to the newest in-range version *every
+  time*. On 2026-08-27 SwiftTerm drifted 1.15.0 → 1.20.0, which attached
+  a build-tool plugin (`SwiftTermBuildInfoPlugin`) to the library target;
+  Xcode gates plugins behind an interactive trust prompt, so the
+  headless build died at *plugin validation* — exit 65, before compiling
+  anything. Hence `-skipPackagePluginValidation` on the xcodebuild step,
+  which is the CI-correct posture regardless of version. Symptom to
+  recognize: `Validate plug-in "…"` listed under "The following build
+  commands failed" while the ArgusKit job stays green. If a *build*
+  suddenly fails on an unrelated branch, diff the "Resolved source
+  packages" block against the last green run before suspecting your
+  code. Pinning the ranges is the real fix and is still open.
 - Swift is authored on Linux but only compiles on macOS —
   `.github/workflows/ios.yml` (macOS runner, `swift build` + `swift
   test`) is the primary verifier, not the dev box.
