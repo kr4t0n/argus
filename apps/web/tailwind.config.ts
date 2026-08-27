@@ -57,8 +57,8 @@ export default {
         // configured iteration count the highlight is simply gone — no
         // fill-mode, and nothing left behind to clear in JS.
         'turn-flash': {
-          '0%, 100%': { boxShadow: '0 0 0 3px hsl(var(--flash-ring) / 0)' },
-          '50%': { boxShadow: '0 0 0 3px hsl(var(--flash-ring) / 0.55)' },
+          '0%, 100%': { boxShadow: '0 0 0 2px hsl(var(--flash-ring) / 0)' },
+          '50%': { boxShadow: '0 0 0 2px hsl(var(--flash-ring) / 0.3)' },
         },
       },
       animation: {
