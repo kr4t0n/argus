@@ -70,6 +70,11 @@ APNs, and reading the session on any client withdraws the phone banner
 - **Soft-archive everywhere** — hide a session or a whole project from the
 sidebar without losing history; one-click restore, and archives survive
 sidecar restarts.
+- **⌘P quick switch** — jump to a session by name without touching the
+sidebar. Fuzzy-matches title, project, machine and CLI type over the list
+already in memory, so it's instant and works offline of the API; an empty
+box lists your recent sessions, making a switch two keystrokes. `Tab`
+hands the same query over to ⌘K.
 - **⌘K content search** — search what was actually *said* across every
 session, archived included: prompts and assistant answers, ranked, with
 highlighted snippets. Postgres full-text with prefix matching so it filters as
