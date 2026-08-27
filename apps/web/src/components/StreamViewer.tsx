@@ -36,10 +36,26 @@ type Props = {
   /** Called when the user scrolls near the top and we should fetch the
    *  next page of older commands. */
   onLoadOlder?: () => void;
+  /**
+   * True iff NEWER turns exist below the loaded window — i.e. this is a
+   * deep-linked window that does not reach the present. While true, the
+   * bottom of the scrollport is NOT the newest turn, so stick-to-bottom is
+   * disarmed and the footer offers a way back to the tail.
+   */
+  hasMoreNewer?: boolean;
+  loadingNewer?: boolean;
+  onLoadNewer?: () => void;
+  /** Deep-link target: scroll this turn into view and ring it. */
+  focusCommandId?: string | null;
+  /** Reload the tail window — the "jump to latest" escape hatch out of a
+   *  floating window. */
+  onJumpToLatest?: () => void;
 };
 
 /** How close to the top (px) before we trigger a fetch of older history. */
 const LOAD_OLDER_THRESHOLD = 200;
+/** Same, for the forward direction. */
+const LOAD_NEWER_THRESHOLD = 200;
 
 /** Per-session chat scroll position, remembered across unmounts so that
  *  opening a file tab — which swaps StreamViewer out for FileViewer — and
@@ -65,11 +81,22 @@ export function StreamViewer({
   hasMore = false,
   loadingOlder = false,
   onLoadOlder,
+  hasMoreNewer = false,
+  loadingNewer = false,
+  onLoadNewer,
+  focusCommandId = null,
+  onJumpToLatest,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
-  const [stickBottom, setStickBottom] = useState<boolean>(
-    () => scrollMemory.get(sessionId)?.atBottom ?? true,
-  );
+  // The window reaches the present. Everything "live" — stick-to-bottom,
+  // auto-scroll on new chunks — is only meaningful when this holds.
+  const liveTail = !hasMoreNewer;
+  const [stickBottom, setStickBottom] = useState<boolean>(() => {
+    // A deep link explicitly asks to land mid-history, so never open it
+    // pinned to the bottom — that would fight the focus scroll below.
+    if (focusCommandId) return false;
+    return scrollMemory.get(sessionId)?.atBottom ?? true;
+  });
 
   // Restore the chat's remembered scroll position on (re)mount — a file
   // tab swaps this component out and back, and without this the chat would
@@ -110,14 +137,17 @@ export function StreamViewer({
   }, [commands, chunks]);
 
   useEffect(() => {
-    if (!stickBottom) return;
+    // `!liveTail` means the bottom of the scrollport is the bottom of a
+    // WINDOW, not the newest turn — snapping there would strand the user
+    // in the middle of history and look like a scroll glitch.
+    if (!stickBottom || !liveTail) return;
     const el = ref.current;
     if (el) el.scrollTop = el.scrollHeight;
     // Track commands too: a freshly-sent prompt appends a CommandDTO
     // (the user bubble) before any chunks land. Without this dep the
     // bubble would render below the fold until the agent's first
     // chunk bumped chunks.length.
-  }, [chunks.length, commands.length, stickBottom]);
+  }, [chunks.length, commands.length, stickBottom, liveTail]);
 
   // Scroll-preservation on prepend.
   //
@@ -167,28 +197,76 @@ export function StreamViewer({
     onLoadOlder();
   }, [commands, hasMore, loadingOlder, onLoadOlder]);
 
-  // Cover the case where the initial tail fits inside the viewport with
-  // no scrollbar: the user can't scroll to the top because they're
-  // already there, so the scroll handler never fires. We auto-page
-  // older history in that scenario until the viewport fills.
-  useEffect(() => {
-    if (!hasMore || loadingOlder) return;
+  // Forward paging. No anchor compensation needed: appending below the
+  // viewport grows scrollHeight without moving anything the user is
+  // looking at, which is why this is the easy direction.
+  const maybeLoadNewer = useCallback(() => {
+    if (!onLoadNewer || !hasMoreNewer || loadingNewer) return;
     const el = ref.current;
     if (!el) return;
-    if (el.scrollHeight <= el.clientHeight + LOAD_OLDER_THRESHOLD) {
-      maybeLoadOlder();
-    }
-  }, [hasMore, loadingOlder, commands, maybeLoadOlder]);
+    const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (fromBottom >= LOAD_NEWER_THRESHOLD) return;
+    onLoadNewer();
+  }, [hasMoreNewer, loadingNewer, onLoadNewer]);
+
+  // Deep-link focus: scroll the targeted turn into view once per target.
+  //
+  // The ref guard is what keeps this from re-yanking the user — this
+  // effect re-runs on every commands/chunks change (a streaming turn
+  // elsewhere in the window is enough), and without it every delta would
+  // drag the viewport back to the anchor.
+  const focusedRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (!focusCommandId) return;
+    if (focusedRef.current === focusCommandId) return;
+    const el = ref.current;
+    if (!el) return;
+    const target = el.querySelector<HTMLElement>(`[data-cmd-id="${CSS.escape(focusCommandId)}"]`);
+    if (!target) return; // window hasn't rendered it yet; retry next commit
+    focusedRef.current = focusCommandId;
+    // `center` rather than `start`: the matched turn reads as part of a
+    // conversation only if some of the preceding turn is visible above it.
+    target.scrollIntoView({ block: 'center' });
+  }, [focusCommandId, commands, chunks]);
+
+  // Cover the case where the loaded window fits inside the viewport with
+  // no scrollbar: the user can't scroll to an edge because they're already
+  // at both, so the scroll handler never fires. Auto-page until the
+  // viewport fills. Skipped while a focus scroll is still pending, so
+  // prepended history can't move the target before we've landed on it.
+  useEffect(() => {
+    const focusPending = !!focusCommandId && focusedRef.current !== focusCommandId;
+    if (focusPending) return;
+    const el = ref.current;
+    if (!el) return;
+    if (el.scrollHeight > el.clientHeight + LOAD_OLDER_THRESHOLD) return;
+    if (hasMore && !loadingOlder) maybeLoadOlder();
+    else if (hasMoreNewer && !loadingNewer) maybeLoadNewer();
+  }, [
+    hasMore,
+    loadingOlder,
+    hasMoreNewer,
+    loadingNewer,
+    commands,
+    focusCommandId,
+    maybeLoadOlder,
+    maybeLoadNewer,
+  ]);
 
   function onScroll() {
     const el = ref.current;
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-    setStickBottom(nearBottom);
+    // In a floating window "at the bottom" means the bottom of the window,
+    // not of the session, so it must never arm stick-to-bottom — otherwise
+    // paging forward would keep snapping the user to the newest loaded
+    // turn as each page lands.
+    setStickBottom(nearBottom && liveTail);
     // Record continuously so the position survives this component's unmount
     // (opening a file tab) — reading the element at unmount is unreliable.
-    scrollMemory.set(sessionId, { top: el.scrollTop, atBottom: nearBottom });
+    scrollMemory.set(sessionId, { top: el.scrollTop, atBottom: nearBottom && liveTail });
     maybeLoadOlder();
+    maybeLoadNewer();
   }
 
   return (
@@ -224,8 +302,33 @@ export function StreamViewer({
             workingDir={workingDir}
             project={project}
             isFirst={i === 0}
+            focused={g.command.id === focusCommandId}
           />
         ))}
+        {/* Forward edge. Only ever rendered for a deep-linked window —
+            a tail window has nothing newer, so this is invisible in
+            normal use. */}
+        {hasMoreNewer && (
+          <div className="flex items-center justify-center gap-3 py-4 text-xs text-fg-tertiary">
+            {loadingNewer ? (
+              <span className="inline-flex items-center gap-2">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                loading later turns…
+              </span>
+            ) : (
+              <span className="text-fg-muted">scroll down for later turns</span>
+            )}
+            {onJumpToLatest && (
+              <button
+                type="button"
+                onClick={onJumpToLatest}
+                className="rounded-md border border-default px-2 py-0.5 text-fg-secondary transition-colors hover:bg-surface-2"
+              >
+                jump to latest
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -270,6 +373,10 @@ type CommandBlockProps = {
   workingDir?: string | null;
   project: ProjectRef | null;
   isFirst: boolean;
+  /** This turn is a deep-link target: ring it, and open its activity
+   *  panel so a match that landed in mid-turn narration is actually
+   *  visible rather than hidden behind a collapsed chevron. */
+  focused?: boolean;
 };
 
 // memo so unchanged turns don't re-render when a chunk lands on the
@@ -285,6 +392,7 @@ const CommandBlock = memo(function CommandBlock({
   workingDir,
   project,
   isFirst,
+  focused = false,
 }: CommandBlockProps) {
   // Only deltas AFTER the last tool/output chunk count as the user-facing
   // answer — earlier deltas are "thinking"/preamble the model emitted
@@ -327,7 +435,11 @@ const CommandBlock = memo(function CommandBlock({
   // Activity panel open-state lives here (lifted out of ActivityPill) so
   // the capsule can ride inside a sticky header band while the expanded
   // panel scrolls naturally below it.
-  const [activityOpen, setActivityOpen] = useState(false);
+  // Initial-state only, deliberately: once the deep-link focus clears the
+  // panel must STAY open. Search indexes prompts, streamed deltas and the
+  // final answer, and mid-turn narration deltas render inside this panel —
+  // so a hit can be text the user cannot see until it's expanded.
+  const [activityOpen, setActivityOpen] = useState(focused);
   const bandRef = useRef<HTMLDivElement>(null);
 
   // Snap THIS turn's band to the top of the scrollport on every toggle,
@@ -396,7 +508,16 @@ const CommandBlock = memo(function CommandBlock({
   // a sliver of body bg would briefly show between turns where neither
   // band is pinned.
   return (
-    <div data-cmd-id={command.id}>
+    <div
+      data-cmd-id={command.id}
+      // Two soft pulses and gone. The animation ends transparent, so the
+      // class can stay applied without leaving a permanent box — nothing
+      // has to race to remove it. It does NOT replay on re-render: React
+      // reuses the element (CommandBlock is keyed by command id), and a CSS
+      // animation only restarts if the element or the class is swapped, so
+      // a turn streaming elsewhere in the window can't retrigger it.
+      className={focused ? 'rounded-lg animate-turn-flash' : undefined}
+    >
       <div
         ref={bandRef}
         className={`sticky top-0 z-10 space-y-3 bg-surface-0 pb-3 ${isFirst ? 'pt-2' : 'pt-6'}`}

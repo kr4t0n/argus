@@ -70,6 +70,20 @@ APNs, and reading the session on any client withdraws the phone banner
 - **Soft-archive everywhere** — hide a session or a whole project from the
 sidebar without losing history; one-click restore, and archives survive
 sidecar restarts.
+- **⌘K content search** — search what was actually *said* across every
+session, archived included: prompts and assistant answers, ranked, with
+highlighted snippets. Postgres full-text with prefix matching so it filters as
+you type, plus a substring fallback so code strings like `MAXLEN` or
+`rediss://` still hit. Build logs, tool output and status noise are excluded
+from the index on purpose — searching `pool` finds the answer that explained
+the pool, not the `npm WARN` that mentioned one. Picking a result jumps to the
+**turn** that matched, not just the session.
+- **Windowed transcripts** — a session viewer holds a bounded window of turns
+rather than the whole thread, and pages in either direction as you scroll.
+Opening a session loads the newest few turns; a deep link (`?turn=<id>`) loads
+a window centred on that turn regardless of how far back it sits, so jumping
+to a match 300 turns deep costs one request instead of paging through
+everything in between.
 - **Live workingDir file tree** — a lazy-expanding, gitignore-aware tree kept
 in sync by the sidecar's `fsnotify` watcher; the header also shows the current
 git branch (or short SHA when detached). Open a file and it stays live too:
@@ -126,6 +140,11 @@ same minor version across all three. The server applies its Prisma migrations
 on boot, so a routine upgrade is just "pull the new images, restart, then
 update the sidecars" (`argus-sidecar update`, or the dashboard's **Update all
 sidecars…**).
+
+> **Upgrading into ⌘K search:** the migration that adds the search index
+> backfills one row per historical turn in a single pass, so first boot after
+> the upgrade is slower than usual — seconds on a corpus of a few thousand
+> turns. No action needed; searches simply return nothing until it finishes.
 
 ### v0.3.0 — the runner refactor (breaking; not compatible with < 0.3.0)
 

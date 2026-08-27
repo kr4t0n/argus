@@ -18,6 +18,27 @@ interface SessionEntry {
    *  turns in on scroll-up until this goes false. */
   hasMore: boolean;
   loadingOlder: boolean;
+  /**
+   * True iff NEWER commands exist below the window — i.e. the window does
+   * NOT reach the session's newest turn.
+   *
+   * This is the transcript window invariant, and everything live keys off
+   * it:
+   *
+   *   hasMoreNewer === false  ⟺  window reaches the newest turn
+   *                           ⟺  live appends are safe.
+   *
+   * Only a deep-link load (`loadSessionAround`) can set it true. While it
+   * is true, `appendChunk` and `upsertCommand` must DROP anything for a
+   * turn outside the window — appending would splice turn 210 directly
+   * below turn 34 and render a discontiguous transcript. Tail loads always
+   * reset it to false.
+   */
+  hasMoreNewer: boolean;
+  loadingNewer: boolean;
+  /** The turn a deep link asked for, if this window came from one. Drives
+   *  the scroll-to + highlight in the viewer; cleared once consumed. */
+  focusCommandId: string | null;
 }
 
 /** Default initial window for `loadSession`. Deliberately small: the
@@ -26,6 +47,13 @@ interface SessionEntry {
  *  short tail keeps first paint fast; scroll-up pages the rest in. */
 const DEFAULT_TAIL = 4;
 const OLDER_PAGE = 20;
+/** Turns of context loaded either side of a deep-link anchor. Asymmetric
+ *  on purpose: the target lands slightly below the top of the viewport,
+ *  so a little history above it reads as context rather than a hard cut.
+ *  Small because the payload is dominated by chunks per turn, not turn
+ *  count — the same reason DEFAULT_TAIL is 4. */
+const AROUND_BEFORE = 5;
+const AROUND_AFTER = 4;
 
 interface SessionState {
   sessions: Record<string, SessionDTO>;
@@ -43,6 +71,21 @@ interface SessionState {
   /** Fetch the next page of older commands for a session already in the
    *  store. No-op if nothing more is available or a fetch is in flight. */
   loadOlder: (id: string) => Promise<void>;
+  /**
+   * Load a window CENTRED on `commandId` instead of the tail — the
+   * deep-link path (⌘K search result → the turn that matched). Always
+   * refetches: the caller is asking to be moved somewhere specific, so a
+   * cached tail window is never an acceptable answer.
+   *
+   * The resulting window may not reach the newest turn (`hasMoreNewer`).
+   */
+  loadSessionAround: (id: string, commandId: string) => Promise<SessionEntry>;
+  /** Fetch the next page of NEWER commands. Only meaningful while
+   *  `hasMoreNewer` — a tail window has nothing newer to page. */
+  loadNewer: (id: string) => Promise<void>;
+  /** Clear the deep-link focus marker once the viewer has scrolled to it,
+   *  so re-renders don't keep yanking the user back to that turn. */
+  clearFocusCommand: (id: string) => void;
 
   upsertSession: (s: SessionDTO) => void;
   /** Apply a `session:status` WS event (status + unread) to the list and
@@ -64,6 +107,14 @@ interface SessionState {
 function bySeq(a: ResultChunkDTO, b: ResultChunkDTO) {
   if (a.commandId !== b.commandId) return a.commandId < b.commandId ? -1 : 1;
   return a.seq - b.seq;
+}
+
+/** Ascending turn order, matching what the server returns and the viewer
+ *  renders. `id` breaks createdAt ties so the order is total — two turns
+ *  can share a millisecond. */
+function byCreatedAt(a: CommandDTO, b: CommandDTO) {
+  if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
 function sortOrder(sessions: Record<string, SessionDTO>): string[] {
@@ -103,7 +154,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   async loadSession(id, opts) {
     const existing = get().entries[id];
-    if (existing?.loaded && !opts?.force) return existing;
+    // A cached DEEP-LINKED window is never a valid answer here: plain
+    // navigation into a session means "show me the present", and a
+    // floating window would drop the user back into the middle of history
+    // with live turns invisible. Only an explicit loadSessionAround call
+    // puts the viewer off the tail, so reaching this function is itself
+    // the signal to come back.
+    const stale = !!existing?.hasMoreNewer;
+    if (existing?.loaded && !opts?.force && !stale) return existing;
     const data = await api.getSession(id, { tailCommands: DEFAULT_TAIL });
     // lastSeq tracks the high-water-mark seq we've seen across the whole
     // session — NOT just what we loaded. Reconnect backfill uses this to
@@ -122,12 +180,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       : data.session;
     const entry: SessionEntry = {
       session,
-      commands: data.commands,
+      commands: data.commands.slice().sort(byCreatedAt),
       chunks: data.chunks.slice().sort(bySeq),
       lastSeq,
       loaded: true,
       hasMore: data.hasMore,
       loadingOlder: false,
+      // A tail window reaches the newest turn by construction, which is
+      // what re-arms live append / stick-to-bottom.
+      hasMoreNewer: false,
+      loadingNewer: false,
+      focusCommandId: null,
     };
     const sessions = { ...get().sessions, [id]: session };
     set({
@@ -185,6 +248,84 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
+  async loadSessionAround(id, commandId) {
+    const data = await api.getSession(id, {
+      aroundCommand: commandId,
+      beforeCount: AROUND_BEFORE,
+      afterCount: AROUND_AFTER,
+    });
+    const prevSession = get().sessions[id];
+    const session = isStaleUpdate(prevSession, data.session.updatedAt)
+      ? prevSession!
+      : data.session;
+    const entry: SessionEntry = {
+      session,
+      commands: data.commands.slice().sort(byCreatedAt),
+      chunks: data.chunks.slice().sort(bySeq),
+      // `seq` restarts per command, so this is a per-window high-water
+      // mark, not a session-wide one. It is only ever used by the
+      // reconnect backfill, which `hasMoreNewer` gates off entirely for a
+      // floating window — see the backfill comment.
+      lastSeq: data.chunks.reduce((m, c) => Math.max(m, c.seq), 0),
+      loaded: true,
+      hasMore: data.hasMore,
+      loadingOlder: false,
+      hasMoreNewer: data.hasMoreNewer,
+      loadingNewer: false,
+      focusCommandId: commandId,
+    };
+    const sessions = { ...get().sessions, [id]: session };
+    set({
+      entries: { ...get().entries, [id]: entry },
+      sessions,
+      order: sortOrder(sessions),
+    });
+    return entry;
+  },
+
+  async loadNewer(id) {
+    const e = get().entries[id];
+    if (!e || !e.hasMoreNewer || e.loadingNewer || e.commands.length === 0) return;
+    const anchor = e.commands[e.commands.length - 1]!; // newest loaded
+    set({ entries: { ...get().entries, [id]: { ...e, loadingNewer: true } } });
+    try {
+      const data = await api.getSessionHistoryAfter(id, anchor.id, OLDER_PAGE);
+      // Re-read after the await: the window may have moved under us (the
+      // user could have hit "jump to latest" mid-flight, which resets to a
+      // tail window). Merging this page into a window that is no longer
+      // floating would re-introduce the discontiguity we are avoiding.
+      const cur = get().entries[id];
+      if (!cur || !cur.hasMoreNewer) return;
+      const seenCmd = new Set(cur.commands.map((c) => c.id));
+      const newCommands = data.commands.filter((c) => !seenCmd.has(c.id));
+      const seenChunk = new Set(cur.chunks.map((c) => c.id));
+      const newChunks = data.chunks.filter((c) => !seenChunk.has(c.id));
+      set({
+        entries: {
+          ...get().entries,
+          [id]: {
+            ...cur,
+            // Append: this page is strictly newer than everything loaded.
+            commands: [...cur.commands, ...newCommands],
+            chunks: [...cur.chunks, ...newChunks].sort(bySeq),
+            hasMoreNewer: data.hasMore,
+            loadingNewer: false,
+          },
+        },
+      });
+    } catch {
+      const cur = get().entries[id];
+      if (!cur) return;
+      set({ entries: { ...get().entries, [id]: { ...cur, loadingNewer: false } } });
+    }
+  },
+
+  clearFocusCommand(id) {
+    const e = get().entries[id];
+    if (!e || e.focusCommandId === null) return;
+    set({ entries: { ...get().entries, [id]: { ...e, focusCommandId: null } } });
+  },
+
   upsertSession(s) {
     // Drop a stale full-DTO upsert (e.g. a reordered session:updated) so
     // it can't roll back a newer status/unread write we already applied.
@@ -235,6 +376,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       existing && !c.attachments?.length && existing.attachments?.length
         ? { ...c, attachments: existing.attachments }
         : c;
+    // Updating a turn already in the window is always safe — it's a
+    // status/usage flip for something on screen. ADDING one is only safe
+    // while the window reaches the newest turn: in a floating deep-link
+    // window a brand-new turn belongs hundreds of turns below what's
+    // loaded, and appending it would render turn 210 directly under turn
+    // 34. Drop it instead; "jump to latest" reloads the tail and picks it
+    // up. See the transcript window invariant on SessionEntry.
+    if (idx < 0 && e.hasMoreNewer) return;
     const commands =
       idx >= 0 ? e.commands.map((x) => (x.id === c.id ? merged : x)) : [...e.commands, merged];
     set({
@@ -247,6 +396,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (!e) return;
     // Guard against duplicates (at-least-once delivery).
     if (e.chunks.some((x) => x.id === chunk.id)) return;
+    // In a floating deep-link window, only accept chunks for turns the
+    // window actually holds. Without this the store accumulates chunks
+    // whose command will never render — invisible, unbounded growth for as
+    // long as the user sits in history while a turn streams.
+    //
+    // The check is deliberately NOT applied to live (tail) windows: WS
+    // ordering between `command:updated` and the first chunk of a turn
+    // isn't guaranteed, so a live window must accept chunks for a command
+    // it hasn't been told about yet.
+    if (e.hasMoreNewer && !e.commands.some((c) => c.id === chunk.commandId)) return;
     const chunks = [...e.chunks, chunk];
     const lastSeq = Math.max(e.lastSeq, chunk.seq);
     set({
@@ -260,19 +419,52 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   backfill(id, commands, chunks) {
     const e = get().entries[id];
     if (!e) return;
-    const seen = new Set(e.chunks.map((c) => c.id));
-    const merged = [...e.chunks];
-    for (const c of chunks) {
-      if (!seen.has(c.id)) merged.push(c);
+
+    // `GET /sessions/:id/chunks` has no window parameters — it returns
+    // EVERY command in the session. Merging that wholesale is wrong in two
+    // different ways, so the merge is filtered to what the window is
+    // entitled to:
+    //
+    //  • Floating (deep-linked) window: accept updates for turns already
+    //    held and nothing else. Letting the reconnect inject the whole
+    //    session would silently un-window the view the user deep-linked
+    //    into.
+    //  • Tail window: accept turns already held, plus any created while we
+    //    were disconnected (strictly newer than the newest loaded). This
+    //    also fixes a pre-existing bug — the unfiltered merge used to
+    //    inject every ancient turn in the session on every reconnect,
+    //    which rendered a few hundred empty turns above the tail (their
+    //    chunks are filtered out by `afterSeq`, so they arrive contentless)
+    //    and left `hasMore` claiming there was still more to page.
+    const held = new Map(e.commands.map((c) => [c.id, c]));
+    const newest = e.commands.length ? e.commands[e.commands.length - 1]!.createdAt : null;
+    for (const c of commands) {
+      if (held.has(c.id)) {
+        held.set(c.id, c);
+        continue;
+      }
+      if (e.hasMoreNewer) continue; // floating: never widen
+      if (newest !== null && c.createdAt < newest) continue; // ancient: not ours
+      held.set(c.id, c);
     }
-    merged.sort(bySeq);
-    const lastSeq = merged.reduce((m, c) => Math.max(m, c.seq), 0);
-    const cmdMap = new Map(e.commands.map((c) => [c.id, c]));
-    for (const c of commands) cmdMap.set(c.id, c);
+    const mergedCommands = [...held.values()].sort(byCreatedAt);
+
+    // Chunks for turns outside the window would never render; dropping
+    // them keeps the entry from growing without bound.
+    const inWindow = new Set(mergedCommands.map((c) => c.id));
+    const seen = new Set(e.chunks.map((c) => c.id));
+    const mergedChunks = [...e.chunks];
+    for (const c of chunks) {
+      if (seen.has(c.id)) continue;
+      if (!inWindow.has(c.commandId)) continue;
+      mergedChunks.push(c);
+    }
+    mergedChunks.sort(bySeq);
+    const lastSeq = mergedChunks.reduce((m, c) => Math.max(m, c.seq), 0);
     set({
       entries: {
         ...get().entries,
-        [id]: { ...e, chunks: merged, commands: [...cmdMap.values()], lastSeq },
+        [id]: { ...e, chunks: mergedChunks, commands: mergedCommands, lastSeq },
       },
     });
   },
