@@ -510,11 +510,13 @@ const CommandBlock = memo(function CommandBlock({
   return (
     <div
       data-cmd-id={command.id}
-      className={
-        focused
-          ? 'rounded-lg ring-2 ring-amber-400/50 ring-offset-2 ring-offset-surface-0'
-          : undefined
-      }
+      // Two soft pulses and gone. The animation ends transparent, so the
+      // class can stay applied without leaving a permanent box — nothing
+      // has to race to remove it. It does NOT replay on re-render: React
+      // reuses the element (CommandBlock is keyed by command id), and a CSS
+      // animation only restarts if the element or the class is swapped, so
+      // a turn streaming elsewhere in the window can't retrigger it.
+      className={focused ? 'rounded-lg animate-turn-flash' : undefined}
     >
       <div
         ref={bandRef}

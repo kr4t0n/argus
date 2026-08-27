@@ -51,6 +51,19 @@ export default {
           custom: '#a3a3a3',
         },
       },
+      keyframes: {
+        // Deep-link landing marker: a soft box that pulses in and back out.
+        // Both the 0% and 100% stops are fully transparent, so after the
+        // configured iteration count the highlight is simply gone — no
+        // fill-mode, and nothing left behind to clear in JS.
+        'turn-flash': {
+          '0%, 100%': { boxShadow: '0 0 0 3px hsl(var(--flash-ring) / 0)' },
+          '50%': { boxShadow: '0 0 0 3px hsl(var(--flash-ring) / 0.55)' },
+        },
+      },
+      animation: {
+        'turn-flash': 'turn-flash 0.6s ease-in-out 2',
+      },
     },
   },
   plugins: [animate],

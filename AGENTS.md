@@ -737,7 +737,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `stores/sessionStore.ts` window model — `SessionEntry` carries both
   edges (`hasMore`/`loadingOlder`, `hasMoreNewer`/`loadingNewer`) plus
   `focusCommandId`, the deep-link target that drives the viewer's
-  scroll-to + ring. `loadSessionAround(id, commandId)` always refetches:
+  scroll-to + landing flash (`animate-turn-flash`: two soft pulses that
+  end transparent, so nothing has to clear the highlight afterwards; the
+  flash colour is `--flash-ring`, white in dark mode and mid-grey in
+  light, since light-mode `--surface-0` is 97.3% and a white flash on
+  near-white is invisible). `loadSessionAround(id, commandId)` always refetches:
   the caller is asking to be moved somewhere specific, so a cached tail
   window is never a valid answer. Read the transcript window invariant
   under Gotchas before touching `appendChunk`, `upsertCommand` or
