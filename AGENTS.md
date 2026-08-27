@@ -746,24 +746,55 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   window is never a valid answer. Read the transcript window invariant
   under Gotchas before touching `appendChunk`, `upsertCommand` or
   `backfill` — all three are gated on it.
-- `components/SearchPalette.tsx` — the ⌘K/Ctrl+K content-search overlay,
-  mounted once in `Dashboard` so the hotkey works from any pane (it
-  renders null until opened; only the listener stays live). Portals to
-  `document.body` with Escape + body-scroll-lock, cloning
-  `ImageLightbox`'s pattern so it escapes the transcript's scroll/clip
-  containers. The listener is registered in the **capture** phase and
-  `preventDefault`s: the xterm terminal pane would otherwise forward the
-  keystroke to the PTY, and Firefox maps Ctrl+K to its own search bar.
-  A modifier combo is why this needs no "is the user typing?" guard —
-  the bare-key alternative (space) was rejected because Argus's primary
-  surfaces are scroll containers where space is page-down, so every
-  stray keypress while reading would pop the palette.
-  Searches ALL sessions with no scope control — ~93% of sessions are
-  archived, so a "visible only" default would search a sliver of history
-  and make the scope toggle the real interface; archived hits are
-  labelled instead of hidden. Queries are debounced 200 ms and carry an
-  `AbortController`, without which a slow early request can resolve
-  after a fast later one and overwrite good results with stale ones.
+- `components/CommandPalette.tsx` — ONE overlay with two modes, mounted
+  once in `Dashboard` so both hotkeys work from any pane (it renders null
+  until opened; only the listeners stay live):
+  - **⌘P `session`** — switch by NAME. Ranked entirely client-side over
+    the session list the app already hydrates at boot, so it is instant
+    and needs no API at all. An EMPTY query is the important case, not a
+    degenerate one: it lists recent live sessions, making a switch two
+    keystrokes (⌘P, Enter). Archived never appear there — with ~93% of
+    sessions archived they would bury the handful in play — but they are
+    reachable by typing, ranked strictly below every live match.
+  - **⌘K `content`** — search what was SAID. Server-side full text,
+    archived included (a different default on purpose: ⌘K is for
+    excavating history, ⌘P for navigating the present). Debounced 200 ms
+    with an `AbortController`, without which a slow early request can
+    resolve after a fast later one and overwrite good results.
+  `Tab` switches mode and KEEPS the query — the whole point is re-running
+  the same words against the other index. One component rather than two
+  overlays because the alternative is two of them negotiating which is
+  visible when you press the other's hotkey; here that press is a mode
+  change. Portals to `document.body` with Escape + body-scroll-lock,
+  cloning `ImageLightbox`'s pattern so it escapes the transcript's
+  scroll/clip containers.
+  ⌘P navigates WITHOUT `?turn=` (plain navigation → tail window: "switch
+  to this session" means show me the present); ⌘K navigates WITH it.
+- `lib/sessionMatch.ts` — pure ranking for ⌘P. Two-tier `fuzzyScore`
+  (contiguous substring, bonused at a prefix/word boundary; else a
+  subsequence walk rewarding runs) capped so a subsequence can never
+  outrank a substring. Scored across title / project / machine / cliType
+  with descending weights, because titles are auto-derived from the first
+  60 chars of the opening prompt and are often truncated near-duplicates.
+  Recency is ADDITIVE (~10-day half-life), not a tiebreak: a loose match
+  on a session touched this morning genuinely is the better answer than a
+  tight match from March.
+- `lib/useGlobalHotkey.ts` — the one home for app-level shortcuts, so the
+  guards are written once. Capture phase + `preventDefault` (the terminal
+  would forward the key to the PTY; browsers claim Ctrl+K for Firefox's
+  search bar and ⌘P for Print). Shifted/alted variants pass through so
+  ⌘⇧P stays bindable. **Readline exception:** Ctrl+K is kill-line and
+  Ctrl+P is previous-command, so when focus is inside `.xterm` the CTRL
+  form defers to the shell — ⌘ is never forwarded to a PTY, so the Cmd
+  binding still works everywhere including in the terminal. Before this
+  hook existed, ⌘K's raw listener swallowed Ctrl+K unconditionally and
+  broke kill-line in the terminal pane for Ctrl-modifier users.
+- `stores/paletteStore.ts` — `mode: 'session' | 'content' | null`, where
+  null is closed; collapsing open-ness and mode into one field is what
+  makes each hotkey a toggle and the other hotkey a mode switch.
+  Deliberately NOT in `uiStore`: that store is `persist`ed with no
+  `partialize`, and an open palette restored on reload is a bug, not a
+  preference.
   Session metadata (title, project, machine, cliType) is resolved from
   the stores the app already holds — the full session list is hydrated
   at boot — so the search response carries only ids and snippets.
