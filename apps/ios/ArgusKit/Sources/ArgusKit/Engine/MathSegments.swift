@@ -47,6 +47,9 @@ public struct MathListItem: Equatable, Sendable {
 ///   Text assembly that isn't worth it until they actually grate. The
 ///   web renders math everywhere.
 ///
+/// Bracket delimiters are folded to dollars first (MathDelimiters), so
+/// every rule below applies to Codex's `\[…\]`/`\(…\)` too.
+///
 /// Rules, scanned line by line:
 /// - A line that is exactly `$$` (after trimming) opens a block; the
 ///   next exactly-`$$` line closes it. Unclosed at end of text → the
@@ -64,7 +67,15 @@ public struct MathListItem: Equatable, Sendable {
 ///   are NOT recognized as fences; a literal `$$` line inside one would
 ///   mathify. Accepted: CLIs fence code, indented blocks barely occur.
 public enum MathSegments {
-    public static func split(_ text: String) -> [MathSegment] {
+    public static func split(_ source: String) -> [MathSegment] {
+        // Codex writes `\[…\]`/`\(…\)`; fold those into the dollar forms
+        // this scanner and InlineMath speak before anything else looks
+        // at the text. Segments therefore carry the NORMALIZED source —
+        // a span that survives into a `.markdown` segment (math in a
+        // heading, a table cell) shows as `$…$` rather than the original
+        // brackets, which is what Claude's raw math already looks like
+        // in those positions.
+        let text = MathDelimiters.normalize(source)
         // Fast path: virtually every answer has no math at all.
         guard text.contains("$") else { return [.markdown(text)] }
 

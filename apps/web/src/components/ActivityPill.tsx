@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Brain, ChevronDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { markdownRemarkPlugins, markdownRehypePlugins } from '../lib/markdown';
+import { markdownRemarkPlugins, markdownRehypePlugins, normalizeMathDelimiters } from '../lib/markdown';
 import type { ResultChunkDTO } from '@argus/shared-types';
 import { cn } from '../lib/utils';
 import { splitDeltas } from '../lib/deltaSplit';
@@ -144,7 +144,7 @@ export function ActivityPanel({
               className="markdown max-w-none py-1.5 text-xs leading-relaxed text-fg-tertiary"
             >
               <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>
-                {it.text}
+                {normalizeMathDelimiters(it.text)}
               </ReactMarkdown>
             </div>
           );
@@ -165,7 +165,7 @@ export function ActivityPanel({
               ) : (
                 <div className="markdown max-w-none text-fg-tertiary/80">
                   <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>
-                {it.text}
+                {normalizeMathDelimiters(it.text)}
               </ReactMarkdown>
                 </div>
               )}
@@ -195,7 +195,7 @@ export function ActivityPanel({
               </summary>
               <div className="markdown max-w-none py-1.5 text-xs leading-relaxed text-fg-tertiary">
                 <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>
-                {it.text}
+                {normalizeMathDelimiters(it.text)}
               </ReactMarkdown>
               </div>
             </details>

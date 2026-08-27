@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
-import { markdownRemarkPlugins, markdownRehypePlugins } from '../lib/markdown';
+import { markdownRemarkPlugins, markdownRehypePlugins, normalizeMathDelimiters } from '../lib/markdown';
 import { AlertCircle, Check, Copy, FileText, GitBranch, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import type { AttachmentDTO, CommandDTO, ResultChunkDTO } from '@argus/shared-types';
@@ -769,7 +769,7 @@ function AnswerBlock({
             components={markdownComponents}
             urlTransform={fileLinkUrlTransform}
           >
-            {bodyText}
+            {normalizeMathDelimiters(bodyText)}
           </ReactMarkdown>
         </div>
       )}

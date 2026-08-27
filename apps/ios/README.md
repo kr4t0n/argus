@@ -320,3 +320,14 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   tables stays raw dollars (per-block-type Text assembly isn't worth
   it yet), and the activity timeline's thinking text still renders
   raw (apply `MathSegments` in `ActivityViews.swift` if it grates).
+- **Bracket delimiters (this):** Codex writes `\[…\]`/`\(…\)` where
+  Claude writes dollars, so `MathDelimiters` folds the former into the
+  latter at the top of `MathSegments.split` — everything downstream is
+  unchanged. Rare per answer (24 display + 13 inline spans over a
+  2232-answer survey) but a hard failure when it lands: without the
+  pass the formula reaches cmark, which eats its `_` subscripts as
+  emphasis. Only *paired* spans convert, so CommonMark's escaped `\[`
+  survives and a half-streamed opener stays raw until its closer
+  arrives; fences and code spans are immune (a real transcript had
+  `find . \( -name "*.h" \)` in a ```bash block). Mirrors the web's
+  `normalizeMathDelimiters` — keep the two in step.

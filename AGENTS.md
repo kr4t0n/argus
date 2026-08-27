@@ -574,9 +574,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `remark-math`/`rehype-katex` for LaTeX. Single-dollar inline math is
   deliberately ON (Claude emits `$\pi_\theta$`-style inline math), so
   prose like "$5 and $10" can false-positive as math — accepted trade.
-  Only `$…$`/`$$…$$` are recognized; `\(…\)`/`\[…\]` pass through as
-  plain text until a real-transcript sample justifies a normalization
-  pass. rehype-katex replaces math nodes *before* the `components` map
+  remark-math recognizes only `$…$`/`$$…$$`, so `normalizeMathDelimiters`
+  (same module) folds **Codex's `\[…\]`/`\(…\)` into them pre-parse** —
+  every call site passes its source through it. Codex is the only CLI
+  that emits brackets (24 display + 13 inline spans across a 2232-answer
+  survey), and left alone they don't just show as literal brackets:
+  markdown pairs the `_` subscripts inside as emphasis and eats them. A
+  span converts only if it's *paired* (so CommonMark's escaped `\[` is
+  safe, and a half-streamed opener stays raw then snaps into math),
+  non-blank, `$`-free, blank-line-free, and outside fences/code spans —
+  the last one is load-bearing: a real transcript had
+  `find . \( -name "*.h" \)` inside a ```bash fence. All five guards cost
+  zero conversions on the survey corpus. Keep in step with ArgusKit's
+  `Engine/MathDelimiters.swift`. rehype-katex replaces math nodes *before* the `components` map
   runs, so `MarkdownCodeBlock` (custom `<pre>`) never sees equations;
   invalid TeX renders as red source text instead of throwing. GOTCHA:
   the app's `katex` dep (source of that CSS) must stay on the same
@@ -588,7 +598,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `.markdown .katex-display` gets sideways overflow-scroll like tables.
   While a turn streams, an unclosed `$$` shows raw until the closing
   delimiter arrives, then snaps into rendered math — self-correcting.
-  iOS counterpart: ArgusKit `Engine/MathSegments.swift` +
+  iOS counterpart: ArgusKit `Engine/MathDelimiters.swift` runs the same
+  bracket normalization at the top of `MathSegments.split`, then
+  `Engine/MathSegments.swift` +
   `Views/MathRender.swift` render `$$` display math natively via
   SwiftMath, and `Engine/InlineMath.swift` + `Views/InlineMathRender.swift`
   render inline `$…$` in plain paragraphs AND flat list items as
