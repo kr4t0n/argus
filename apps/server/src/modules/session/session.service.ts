@@ -17,6 +17,18 @@ import { AttachmentService } from '../attachment/attachment.service';
 import { PushService } from '../push/push.service';
 import { MachineService } from '../machine/machine.service';
 
+/**
+ * Command statuses that mean "this turn is over".
+ *
+ * Exported because the result ingestor has to agree with this list in TWO
+ * places that pull in opposite directions: the finalize branch refuses to
+ * re-finalize a command already in one of these states, and the live
+ * branch must refuse to mark a session active for one. They were written
+ * independently and only the first was guarded, which is exactly how a
+ * late chunk could un-finalize a session.
+ */
+export const TERMINAL_COMMAND_STATUSES = ['completed', 'failed', 'cancelled'] as const;
+
 /** Internal shape of `create` — a project-first session (machineId +
  *  cliType + optional workingDir). `agentId` is gone since Phase 4. */
 export interface CreateSessionInput {
@@ -471,6 +483,44 @@ export class SessionService {
       data: { externalId },
     });
     this.gateway.emitSessionUpdated(SessionService.toDto(s));
+  }
+
+  /**
+   * Flip a session to `active` because a chunk arrived for `commandId` —
+   * but ONLY while that command is still running.
+   *
+   * Every non-terminal chunk takes this path, and without the guard a
+   * chunk that lands AFTER its turn finished silently un-finalizes the
+   * session: status goes back to `active` and `unread` is cleared, so the
+   * sidebar dot never resolves, the completion notification is suppressed,
+   * and `queueDrainer` refuses to drain that session forever (it reads
+   * `status === 'active'` as "mid-turn"). Observed in the wild on sessions
+   * stuck for over a month.
+   *
+   * Two real producers of late chunks, which is why this is keyed on the
+   * COMMAND's terminal state rather than "have we seen a final yet":
+   *   - Claude Code's bridge re-announces `system/init` from a
+   *     fire-and-forget async path that can land after the turn's
+   *     `result` (measured: it lands after, every time).
+   *   - Background sub-agent flows legitimately keep streaming after an
+   *     inner `result`, so "anything after a final is bogus" would be
+   *     wrong for them.
+   *
+   * Returns null when the write was skipped, so callers can skip the
+   * follow-on side effects too.
+   */
+  async setActiveForCommand(sessionId: string, commandId: string) {
+    const cmd = await this.prisma.command.findUnique({
+      where: { id: commandId },
+      select: { status: true },
+    });
+    // Unknown command (at-least-once delivery racing the command insert)
+    // keeps the historical behaviour — better a spurious `active` than a
+    // turn that never shows as running at all.
+    if (cmd && (TERMINAL_COMMAND_STATUSES as readonly string[]).includes(cmd.status)) {
+      return null;
+    }
+    return this.setStatus(sessionId, 'active', { unread: false });
   }
 
   async bumpUpdatedAt(id: string) {

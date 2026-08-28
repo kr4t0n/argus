@@ -1103,6 +1103,35 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Gotchas
 
+- **A chunk can arrive AFTER its own turn finalized — the live branch must
+  be idempotent too.** The result ingestor's finalize branch has always
+  been guarded (`updateMany ... status notIn TERMINAL_COMMAND_STATUSES`,
+  so only the first terminal chunk wins). Its `else` branch — "a fresh
+  turn is running" — was NOT, and marked the session `active` +
+  `unread: false` for any non-terminal chunk. A late chunk therefore
+  silently *un-finalized* the session, and nothing ever put it right:
+  only a LATER turn's final rewrites the status. Sessions were found
+  stuck "running" for over a month, with the sidebar dot spinning,
+  completion notifications suppressed (`App.tsx` skips when
+  `status === 'active'`), and `queueDrainer` refusing to drain them
+  forever (it reads `active` as "mid-turn"). Fixed by
+  `SessionService.setActiveForCommand`, which skips the write when the
+  chunk's COMMAND is already terminal; `20260827120000_repair_stuck_active_sessions`
+  repairs rows already written.
+  Two real producers of late chunks, which is why the guard keys on the
+  command's state and NOT on "have we seen a final yet":
+  1. Claude Code's bridge re-announces `system/init` from a
+     fire-and-forget async path that lands after the turn's `result` —
+     measured after, in 30 of 30 sampled turns. See
+     [[model_line_1m_suffix_drop_accepted]] for why that second init
+     exists at all.
+  2. Background sub-agent flows legitimately keep streaming after an
+     inner `result` (same reason `splitDeltas` only treats a `final` as a
+     boundary when more text follows it).
+  `TERMINAL_COMMAND_STATUSES` is exported from `session.service.ts` and
+  used by both branches — they were written independently with duplicate
+  inline literals, and that divergence was the bug.
+
 - **The transcript window invariant.** A viewer holds a CONTIGUOUS window
   of a session's turns, and `SessionEntry.hasMoreNewer` says whether that
   window reaches the present:

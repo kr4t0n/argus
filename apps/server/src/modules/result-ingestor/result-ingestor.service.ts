@@ -12,7 +12,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import { StreamGateway } from '../gateway/stream.gateway';
-import { SessionService } from '../session/session.service';
+import { SessionService, TERMINAL_COMMAND_STATUSES } from '../session/session.service';
 import { CommandService } from '../command/command.service';
 import { PushService } from '../push/push.service';
 import { SearchService } from '../search/search.service';
@@ -245,7 +245,7 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
         .updateMany({
           where: {
             id: chunk.commandId,
-            status: { notIn: ['completed', 'failed', 'cancelled'] },
+            status: { notIn: [...TERMINAL_COMMAND_STATUSES] },
           },
           data: {
             status,
@@ -306,7 +306,23 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
     } else {
       // A fresh turn is running: clear any prior unread result so the
       // dot doesn't linger while the amber "active" indicator shows.
-      const dto = await this.sessions.setStatus(chunk.sessionId, 'active', { unread: false });
+      //
+      // GUARDED on the command still being live. A chunk can arrive after
+      // its own turn finalized — Claude Code's bridge re-announces
+      // `system/init` from a fire-and-forget async path that lands after
+      // the turn's `result` — and without the guard that late chunk
+      // silently un-finalizes the session: status back to `active`,
+      // `unread` cleared. Nothing ever puts it right, because only a
+      // LATER turn's final rewrites the status, so the sidebar dot spins
+      // forever, the completion notification is suppressed, and
+      // `queueDrainer` never drains that session again (it reads
+      // `active` as "mid-turn"). Sessions were found stuck this way for
+      // over a month.
+      //
+      // The finalize branch above has always been idempotent; this one
+      // was not, and that asymmetry was the whole bug.
+      const dto = await this.sessions.setActiveForCommand(chunk.sessionId, chunk.commandId);
+      if (!dto) return; // late chunk for a finished turn — nothing to announce
       // Same supersedence for the phone banner: a "completed" alert
       // about a session that's running again is stale. Runs per chunk
       // but costs a Set lookup unless an alert is actually outstanding
