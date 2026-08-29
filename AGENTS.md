@@ -611,7 +611,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   1.7.3 parses a smaller subset than KaTeX — `Engine/MathCompat.swift`
   rewrites the gap the models actually hit (`\big[`, `\operatorname`,
   `\dots`, `\lVert`, and the under/over annotations `\underbrace`,
-  `\overbrace`, `\underset`, `\overset` → `\atop` stacks); a formula
+  `\overbrace`, `\underset`, `\overset` → `\atop` stacks). SwiftMath has
+  no extensible horizontal brace, so `\atop` can only put a *rule* under
+  the base — a stray-looking line. `MathCompat.displaySegments` therefore
+  splits an equation at **top-level** braces and `MathBlock` re-assembles
+  it with a brace drawn as a SwiftUI `Shape` (parametric, so the stroke
+  keeps constant weight at any width) on a shared math-baseline guide.
+  Only top-level braces split — one nested in `\frac` can't be sliced out
+  without breaking both halves, so it keeps the rule; `\underset`/
+  `\overset` keep `\atop` too, since a centered stack is already correct
+  for them. A formula
   that still fails parse renders as raw source in a code block,
   deliberately visible rather than mangled. GOTCHA: the parse is
   all-or-nothing — ONE unsupported command dumps the whole equation

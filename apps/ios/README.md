@@ -301,11 +301,22 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   lacks (`\big[` sizing → dropped, `\operatorname` → `\mathrm`,
   `\dots`/`\lVert` aliases — all found the hard way on device; plus
   `\underbrace{X}_{Y}`/`\overbrace`/`\underset`/`\overset` → `\atop`
-  stacks, where the brace degrades to a rule but the label survives),
-  and LaTeX still outside SwiftMath's subset falls back to raw source
-  in a code block. The parse is all-or-nothing, so a single stray
-  command costs the whole equation — which is what makes these
+  stacks), and LaTeX still outside SwiftMath's subset falls back to raw
+  source in a code block. The parse is all-or-nothing, so a single
+  stray command costs the whole equation — which is what makes these
   rewrites worth their weight.
+- **Horizontal braces (this):** `\atop` can only draw a *rule* under
+  the base, which reads as a stray line, and SwiftMath has no
+  extensible brace glyph to rewrite toward. So `displaySegments`
+  splits the equation at top-level `\underbrace`/`\overbrace` and
+  `MathBlock` re-assembles it with the brace drawn as a SwiftUI
+  `Shape` — parametric rather than a stretched character, so the
+  stroke keeps constant weight at any base width. Segments share a
+  math-baseline alignment guide that mirrors
+  `MTMathUILabel._layoutSubviews`, clamp included. Braces nested in
+  another construct keep the rule (slicing one out of `\frac` would
+  leave both halves unparseable), and every piece must parse on its
+  own or the whole equation falls back to raw source.
 - **Inline LaTeX (this):** plain paragraphs carrying `$…$` spans become
   `.inlineParagraph` segments (ArgusKit `InlineMath` scans with
   web/micromark parity — equal-length dollar runs, backtick code spans
