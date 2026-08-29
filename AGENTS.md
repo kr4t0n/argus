@@ -609,9 +609,28 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   deviations from the web's delimiter semantics documented in
   MathSegments). SwiftMath
   1.7.3 parses a smaller subset than KaTeX — `Engine/MathCompat.swift`
-  rewrites the gap Claude actually hits (`\big[`, `\operatorname`,
-  `\dots`, `\lVert`); a formula that still fails parse renders as raw
-  source in a code block, deliberately visible rather than mangled.
+  rewrites the gap the models actually hit (`\big[`, `\operatorname`,
+  `\dots`, `\lVert`, and the under/over annotations `\underbrace`,
+  `\overbrace`, `\underset`, `\overset` → `\atop` stacks). SwiftMath has
+  no extensible horizontal brace, so `\atop` can only put a *rule* under
+  the base — a stray-looking line. `MathCompat.displaySegments` therefore
+  splits an equation at **top-level** braces and `MathBlock` re-assembles
+  it with a brace drawn as a SwiftUI `Shape` (parametric, so the stroke
+  keeps constant weight at any width) on a shared math-baseline guide.
+  Only top-level braces split — one nested in `\frac` can't be sliced out
+  without breaking both halves, so it keeps the rule; `\underset`/
+  `\overset` keep `\atop` too, since a centered stack is already correct
+  for them. A formula
+  that still fails parse renders as raw source in a code block,
+  deliberately visible rather than mangled. GOTCHA: the parse is
+  all-or-nothing — ONE unsupported command dumps the whole equation
+  into the fallback, even when everything else in it is renderable.
+  That's why the shim pays off: both real-corpus failures
+  (`\underbrace`, `\underset`) used nothing else outside the subset.
+  When adding a rewrite, check the target against SwiftMath's actual
+  tables (`MTMathAtomFactory` + `MTMathListBuilder` string literals)
+  rather than assuming KaTeX parity — `\atop` is supported, `\array`
+  and `\substack` are not.
 - `stores/` — Zustand slices: `authStore`, `machineStore`, `sessionStore`,
   `projectStore`, `uiStore` (no `agentStore` — it was deleted with the
   Agent entity). Sessions are stored by id with their full `chunks`
@@ -1102,6 +1121,35 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Drop only when a *specific* socket is lagging (TODO — see follow-ups).
 
 ## Gotchas
+
+- **A chunk can arrive AFTER its own turn finalized — the live branch must
+  be idempotent too.** The result ingestor's finalize branch has always
+  been guarded (`updateMany ... status notIn TERMINAL_COMMAND_STATUSES`,
+  so only the first terminal chunk wins). Its `else` branch — "a fresh
+  turn is running" — was NOT, and marked the session `active` +
+  `unread: false` for any non-terminal chunk. A late chunk therefore
+  silently *un-finalized* the session, and nothing ever put it right:
+  only a LATER turn's final rewrites the status. Sessions were found
+  stuck "running" for over a month, with the sidebar dot spinning,
+  completion notifications suppressed (`App.tsx` skips when
+  `status === 'active'`), and `queueDrainer` refusing to drain them
+  forever (it reads `active` as "mid-turn"). Fixed by
+  `SessionService.setActiveForCommand`, which skips the write when the
+  chunk's COMMAND is already terminal; `20260827120000_repair_stuck_active_sessions`
+  repairs rows already written.
+  Two real producers of late chunks, which is why the guard keys on the
+  command's state and NOT on "have we seen a final yet":
+  1. Claude Code's bridge re-announces `system/init` from a
+     fire-and-forget async path that lands after the turn's `result` —
+     measured after, in 30 of 30 sampled turns. See
+     [[model_line_1m_suffix_drop_accepted]] for why that second init
+     exists at all.
+  2. Background sub-agent flows legitimately keep streaming after an
+     inner `result` (same reason `splitDeltas` only treats a `final` as a
+     boundary when more text follows it).
+  `TERMINAL_COMMAND_STATUSES` is exported from `session.service.ts` and
+  used by both branches — they were written independently with duplicate
+  inline literals, and that divergence was the bug.
 
 - **The transcript window invariant.** A viewer holds a CONTIGUOUS window
   of a session's turns, and `SessionEntry.hasMoreNewer` says whether that
