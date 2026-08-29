@@ -297,11 +297,15 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   `MathSegments` splits the markdown around display-math blocks (code
   fences immune, unclosed `$$` stays raw while streaming) and
   `AnswerView` interleaves `MathBlock` views between Markdown segments;
-  `MathCompat` first rewrites Claude's KaTeX-isms that SwiftMath 1.7.3
+  `MathCompat` first rewrites the KaTeX-isms that SwiftMath 1.7.3
   lacks (`\big[` sizing → dropped, `\operatorname` → `\mathrm`,
-  `\dots`/`\lVert` aliases — all found the hard way on device), and
-  LaTeX still outside SwiftMath's subset falls back to raw source in a
-  code block.
+  `\dots`/`\lVert` aliases — all found the hard way on device; plus
+  `\underbrace{X}_{Y}`/`\overbrace`/`\underset`/`\overset` → `\atop`
+  stacks, where the brace degrades to a rule but the label survives),
+  and LaTeX still outside SwiftMath's subset falls back to raw source
+  in a code block. The parse is all-or-nothing, so a single stray
+  command costs the whole equation — which is what makes these
+  rewrites worth their weight.
 - **Inline LaTeX (this):** plain paragraphs carrying `$…$` spans become
   `.inlineParagraph` segments (ArgusKit `InlineMath` scans with
   web/micromark parity — equal-length dollar runs, backtick code spans

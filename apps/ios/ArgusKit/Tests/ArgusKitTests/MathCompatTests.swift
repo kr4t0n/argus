@@ -55,4 +55,44 @@ struct MathCompatTests {
     func trailingBackslash() {
         #expect(MathCompat.swiftMathLatex("x\\") == "x\\")
     }
+
+    @Test("the reported bug: \\underbrace{X}_{Y} becomes an \\atop stack")
+    func underbrace() {
+        let source = "\\underbrace{\\pi_{\\theta_T}(a\\mid x)}_{\\text{frozen teacher}}"
+        #expect(MathCompat.swiftMathLatex(source)
+            == "{\\underline{\\pi_{\\theta_T}(a\\mid x)} \\atop \\text{frozen teacher}}")
+    }
+
+    @Test("\\overbrace puts the label on top, over an \\overline base")
+    func overbrace() {
+        #expect(MathCompat.swiftMathLatex("\\overbrace{a+b}^{n}")
+            == "{n \\atop \\overline{a+b}}")
+    }
+
+    @Test("an unlabelled brace degrades to the bare rule")
+    func braceWithoutLabel() {
+        #expect(MathCompat.swiftMathLatex("\\underbrace{x}") == "\\underline{x}")
+        #expect(MathCompat.swiftMathLatex("\\overbrace{x}") == "\\overline{x}")
+    }
+
+    @Test("\\underset/\\overset take annotation-first, base-second")
+    func setCommands() {
+        #expect(MathCompat.swiftMathLatex("\\underset{y}{\\arg\\max}")
+            == "{\\arg\\max \\atop y}")
+        #expect(MathCompat.swiftMathLatex("\\overset{def}{=}") == "{def \\atop =}")
+    }
+
+    @Test("arguments are rewritten recursively, and \\{ escapes survive")
+    func recursiveArguments() {
+        #expect(MathCompat.swiftMathLatex("\\underbrace{\\big[x\\big]}_{\\operatorname{tag}}")
+            == "{\\underline{[x]} \\atop \\mathrm{tag}}")
+        #expect(MathCompat.swiftMathLatex("\\underbrace{x_{\\{a\\}}}_{y}")
+            == "{\\underline{x_{\\{a\\}}} \\atop y}")
+    }
+
+    @Test("an unbalanced group (mid-stream) is left untouched, never mangled")
+    func unbalancedGroup() {
+        #expect(MathCompat.swiftMathLatex("\\underbrace{a") == "\\underbrace{a")
+        #expect(MathCompat.swiftMathLatex("\\underset{y}") == "\\underset{y}")
+    }
 }

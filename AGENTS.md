@@ -609,9 +609,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   deviations from the web's delimiter semantics documented in
   MathSegments). SwiftMath
   1.7.3 parses a smaller subset than KaTeX — `Engine/MathCompat.swift`
-  rewrites the gap Claude actually hits (`\big[`, `\operatorname`,
-  `\dots`, `\lVert`); a formula that still fails parse renders as raw
-  source in a code block, deliberately visible rather than mangled.
+  rewrites the gap the models actually hit (`\big[`, `\operatorname`,
+  `\dots`, `\lVert`, and the under/over annotations `\underbrace`,
+  `\overbrace`, `\underset`, `\overset` → `\atop` stacks); a formula
+  that still fails parse renders as raw source in a code block,
+  deliberately visible rather than mangled. GOTCHA: the parse is
+  all-or-nothing — ONE unsupported command dumps the whole equation
+  into the fallback, even when everything else in it is renderable.
+  That's why the shim pays off: both real-corpus failures
+  (`\underbrace`, `\underset`) used nothing else outside the subset.
+  When adding a rewrite, check the target against SwiftMath's actual
+  tables (`MTMathAtomFactory` + `MTMathListBuilder` string literals)
+  rather than assuming KaTeX parity — `\atop` is supported, `\array`
+  and `\substack` are not.
 - `stores/` — Zustand slices: `authStore`, `machineStore`, `sessionStore`,
   `projectStore`, `uiStore` (no `agentStore` — it was deleted with the
   Agent entity). Sessions are stored by id with their full `chunks`
