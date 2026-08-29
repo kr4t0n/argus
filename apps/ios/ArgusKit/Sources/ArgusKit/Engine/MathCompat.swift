@@ -147,6 +147,96 @@ public enum MathCompat {
         return (ruled, first.end)
     }
 
+    /// One piece of a display equation split around brace annotations.
+    public enum DisplaySegment: Equatable, Sendable {
+        /// An ordinary run — hand it to SwiftMath as-is.
+        case latex(String)
+        /// A `\underbrace`/`\overbrace` group, so the app can draw the
+        /// horizontal brace SwiftMath has no glyph for.
+        case brace(base: String, label: String?, under: Bool)
+    }
+
+    /// Splits a display equation at **top-level** `\underbrace`/`\overbrace`
+    /// so the renderer can draw a real brace around the base and stack the
+    /// label under (or over) it.
+    ///
+    /// SwiftMath 1.7.3 has no extensible horizontal brace, and no amount of
+    /// rewriting invents one — `swiftMathLatex` can only degrade the brace to
+    /// an `\underline` rule. Drawing it natively is the only way to match
+    /// KaTeX here, and it needs the base and label as separate pieces.
+    ///
+    /// Returns nil when there is nothing to split (no top-level brace), so
+    /// callers keep the plain single-label path. Only *top-level* commands
+    /// split: a brace nested inside `\frac{…}` stays inside its run and still
+    /// gets the `\atop` degradation, because slicing a subexpression out of
+    /// its surrounding TeX would leave both halves unparseable.
+    public static func displaySegments(_ latex: String) -> [DisplaySegment]? {
+        guard latex.contains("\\underbrace") || latex.contains("\\overbrace") else { return nil }
+
+        var segments: [DisplaySegment] = []
+        var run = ""
+        var depth = 0
+        var i = latex.startIndex
+        var found = false
+
+        while i < latex.endIndex {
+            let char = latex[i]
+            if char == "\\" {
+                let next = latex.index(after: i)
+                guard next < latex.endIndex, latex[next].isLetter else {
+                    // Escaped literal (`\{`, `\,`) — never a group delimiter.
+                    run.append(char)
+                    if next < latex.endIndex { run.append(latex[next]) }
+                    i = next < latex.endIndex ? latex.index(after: next) : next
+                    continue
+                }
+                var end = next
+                while end < latex.endIndex, latex[end].isLetter {
+                    end = latex.index(after: end)
+                }
+                let command = String(latex[next..<end])
+                if depth == 0, command == "underbrace" || command == "overbrace",
+                   let group = braceGroup(command, in: latex, from: end) {
+                    if !run.isEmpty {
+                        segments.append(.latex(run))
+                        run = ""
+                    }
+                    segments.append(group.segment)
+                    i = group.end
+                    found = true
+                    continue
+                }
+                run += "\\" + command
+                i = end
+                continue
+            }
+            if char == "{" { depth += 1 }
+            if char == "}" { depth -= 1 }
+            run.append(char)
+            i = latex.index(after: i)
+        }
+
+        guard found else { return nil }
+        if !run.isEmpty { segments.append(.latex(run)) }
+        return segments
+    }
+
+    /// Reads `{base}` plus an optional `_{label}` / `^{label}` for a brace
+    /// command, returning the segment and where to resume.
+    private static func braceGroup(
+        _ command: String, in latex: String, from start: String.Index
+    ) -> (segment: DisplaySegment, end: String.Index)? {
+        guard let base = readGroup(latex, at: skipSpaces(latex, start)) else { return nil }
+        let under = command == "underbrace"
+        let marker: Character = under ? "_" : "^"
+        let afterBase = skipSpaces(latex, base.end)
+        if afterBase < latex.endIndex, latex[afterBase] == marker,
+           let label = readGroup(latex, at: skipSpaces(latex, latex.index(after: afterBase))) {
+            return (.brace(base: base.inner, label: label.inner, under: under), label.end)
+        }
+        return (.brace(base: base.inner, label: nil, under: under), base.end)
+    }
+
     private static func skipSpaces(_ latex: String, _ from: String.Index) -> String.Index {
         var i = from
         while i < latex.endIndex, latex[i] == " " || latex[i] == "\n" || latex[i] == "\t" {

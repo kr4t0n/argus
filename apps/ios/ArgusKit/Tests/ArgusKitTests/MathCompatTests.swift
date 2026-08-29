@@ -95,4 +95,56 @@ struct MathCompatTests {
         #expect(MathCompat.swiftMathLatex("\\underbrace{a") == "\\underbrace{a")
         #expect(MathCompat.swiftMathLatex("\\underset{y}") == "\\underset{y}")
     }
+
+    // MARK: - displaySegments (drives the natively drawn brace)
+
+    @Test("a top-level brace splits into base + label, keeping the runs around it")
+    func splitsTopLevelBraces() {
+        let source = "\\underbrace{\\pi(a)}_{\\text{teacher}}\n\\rightarrow\n"
+            + "\\underbrace{\\pi(b)}_{\\text{student}}"
+        #expect(MathCompat.displaySegments(source) == [
+            .brace(base: "\\pi(a)", label: "\\text{teacher}", under: true),
+            .latex("\n\\rightarrow\n"),
+            .brace(base: "\\pi(b)", label: "\\text{student}", under: true),
+        ])
+    }
+
+    @Test("runs before and after a mid-expression brace are preserved")
+    func splitsMidExpression() {
+        #expect(MathCompat.displaySegments("x + \\underbrace{y}_{z} + w") == [
+            .latex("x + "),
+            .brace(base: "y", label: "z", under: true),
+            .latex(" + w"),
+        ])
+    }
+
+    @Test("\\overbrace reports under: false; a missing label is nil")
+    func overbraceAndBareBrace() {
+        #expect(MathCompat.displaySegments("\\overbrace{a+b}^{n}") == [
+            .brace(base: "a+b", label: "n", under: false)
+        ])
+        #expect(MathCompat.displaySegments("\\underbrace{a}") == [
+            .brace(base: "a", label: nil, under: true)
+        ])
+    }
+
+    @Test("a nested brace does not split — it keeps the \\atop degradation")
+    func nestedBraceIsNotSplit() {
+        // Slicing a subexpression out of \frac would leave both halves
+        // unparseable, so displaySegments declines and swiftMathLatex runs.
+        #expect(MathCompat.displaySegments("\\frac{\\underbrace{a}_{b}}{c}") == nil)
+        #expect(MathCompat.swiftMathLatex("\\frac{\\underbrace{a}_{b}}{c}")
+            == "\\frac{{\\underline{a} \\atop b}}{c}")
+    }
+
+    @Test("equations with no brace opt out entirely")
+    func noBraceReturnsNil() {
+        #expect(MathCompat.displaySegments("\\frac{a}{b}") == nil)
+        #expect(MathCompat.displaySegments("\\underset{y}{x}") == nil)
+    }
+
+    @Test("an unterminated brace (mid-stream) opts out rather than half-splitting")
+    func unterminatedBrace() {
+        #expect(MathCompat.displaySegments("\\underbrace{a") == nil)
+    }
 }
