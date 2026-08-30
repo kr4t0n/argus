@@ -297,11 +297,26 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   `MathSegments` splits the markdown around display-math blocks (code
   fences immune, unclosed `$$` stays raw while streaming) and
   `AnswerView` interleaves `MathBlock` views between Markdown segments;
-  `MathCompat` first rewrites Claude's KaTeX-isms that SwiftMath 1.7.3
+  `MathCompat` first rewrites the KaTeX-isms that SwiftMath 1.7.3
   lacks (`\big[` sizing → dropped, `\operatorname` → `\mathrm`,
-  `\dots`/`\lVert` aliases — all found the hard way on device), and
-  LaTeX still outside SwiftMath's subset falls back to raw source in a
-  code block.
+  `\dots`/`\lVert` aliases — all found the hard way on device; plus
+  `\underbrace{X}_{Y}`/`\overbrace`/`\underset`/`\overset` → `\atop`
+  stacks), and LaTeX still outside SwiftMath's subset falls back to raw
+  source in a code block. The parse is all-or-nothing, so a single
+  stray command costs the whole equation — which is what makes these
+  rewrites worth their weight.
+- **Horizontal braces (this):** `\atop` can only draw a *rule* under
+  the base, which reads as a stray line, and SwiftMath has no
+  extensible brace glyph to rewrite toward. So `displaySegments`
+  splits the equation at top-level `\underbrace`/`\overbrace` and
+  `MathBlock` re-assembles it with the brace drawn as a SwiftUI
+  `Shape` — parametric rather than a stretched character, so the
+  stroke keeps constant weight at any base width. Segments share a
+  math-baseline alignment guide that mirrors
+  `MTMathUILabel._layoutSubviews`, clamp included. Braces nested in
+  another construct keep the rule (slicing one out of `\frac` would
+  leave both halves unparseable), and every piece must parse on its
+  own or the whole equation falls back to raw source.
 - **Inline LaTeX (this):** plain paragraphs carrying `$…$` spans become
   `.inlineParagraph` segments (ArgusKit `InlineMath` scans with
   web/micromark parity — equal-length dollar runs, backtick code spans
@@ -320,3 +335,14 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   tables stays raw dollars (per-block-type Text assembly isn't worth
   it yet), and the activity timeline's thinking text still renders
   raw (apply `MathSegments` in `ActivityViews.swift` if it grates).
+- **Bracket delimiters (this):** Codex writes `\[…\]`/`\(…\)` where
+  Claude writes dollars, so `MathDelimiters` folds the former into the
+  latter at the top of `MathSegments.split` — everything downstream is
+  unchanged. Rare per answer (24 display + 13 inline spans over a
+  2232-answer survey) but a hard failure when it lands: without the
+  pass the formula reaches cmark, which eats its `_` subscripts as
+  emphasis. Only *paired* spans convert, so CommonMark's escaped `\[`
+  survives and a half-streamed opener stays raw until its closer
+  arrives; fences and code spans are immune (a real transcript had
+  `find . \( -name "*.h" \)` in a ```bash block). Mirrors the web's
+  `normalizeMathDelimiters` — keep the two in step.

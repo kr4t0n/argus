@@ -12,10 +12,44 @@ type: application
 # field — see helm-publish.yml. Prerelease versions (-rc.N) are hidden
 # from plain `helm search`/`helm upgrade`; install them with
 # `--version 0.2.7-rc.3` (or `--devel`).
-version: 0.3.2
+version: 0.3.3
 # App version tracks the Docker image tags pulled by default. Bump in
 # lockstep with `version` whenever the chart starts requiring features
 # only present in newer images; otherwise it can lag.
+#
+# 0.3.3 is a control-plane release that ADDS TABLES — additive, not
+# breaking, and compatible with 0.3.x sidecars. appVersion pins the
+# 0.3.3 server/web images. Carries TWO migrations, applied on boot via
+# `prisma migrate deploy`: `20260817120000_command_search_doc` creates
+# the materialized per-turn search document (a generated tsvector with
+# a GIN index) and BACKFILLS every historical turn in a single pass —
+# first boot after upgrading is slower than usual (seconds on a few
+# thousand turns) and searches return nothing until it finishes; and
+# `20260827120000_repair_stuck_active_sessions` repairs sessions left
+# stuck at status='active' by a chunk that landed after its own turn
+# had finalized. That repair is a one-shot for rows already written —
+# the ingestor's live branch is now guarded so it cannot recur — and it
+# leaves genuinely in-flight sessions alone.
+#
+# Highlights: ⌘K searches what was actually SAID across every session,
+# archived included — prompts and assistant answers, ranked, with
+# highlighted snippets — and opens the TURN that matched, not just the
+# session. Build logs and tool output are deliberately excluded from
+# the index, so searching `pool` finds the answer that explained the
+# pool rather than the npm warning that mentioned one. The transcript
+# now holds a bounded WINDOW that pages in both directions, so that
+# deep link costs one request no matter how far back the turn sits.
+# ⌘P is a new quick switcher — fuzzy over title / project / machine /
+# CLI type, entirely client-side, and an empty box lists recent
+# sessions so switching is two keystrokes. Codex's \(…\) and \[…\]
+# LaTeX now renders on web and iOS, and iOS draws real horizontal
+# braces for \underbrace / \overbrace. Also fixes a session that
+# could stay "running" forever (see the repair migration above) and
+# Redis readers wedging on half-open sockets. Pair with sidecar v0.3.3
+# on agent hosts — it honors .gitignore in EVERY directory instead of
+# only the repo root, which was showing and hiding the wrong entries in
+# the file tree for nested projects; earlier 0.3.x sidecars keep
+# working.
 #
 # 0.3.2 is a control-plane + iOS release with NO schema change —
 # compatible with 0.3.1, no forced migration. appVersion pins the 0.3.2
@@ -136,7 +170,7 @@ version: 0.3.2
 # 0.2.0 shipped file/image attachments — the default images include the
 # attachment module, so `objectStore` works out of the box (set the
 # endpoint + bucket + creds to enable it).
-appVersion: "0.3.2"
+appVersion: "0.3.3"
 
 home: https://github.com/kr4t0n/argus
 sources:

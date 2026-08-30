@@ -33,9 +33,9 @@ var claudeContextFacet = &protocol.ModelContextFacet{Options: []string{"default"
 
 var claudeModelCatalog = []protocol.ModelCatalogEntry{
 	{
-		ID:          "fable",
-		DisplayName: "Fable 5",
-		Description: "Most capable; long autonomous sessions. Always runs with 1M context.",
+		ID:            "fable",
+		DisplayName:   "Fable 5",
+		Description:   "Most capable; long autonomous sessions. Always runs with 1M context.",
 		ContextWindow: 1_000_000,
 		Facets: &protocol.ModelCatalogFacets{
 			Effort: claudeEffort("low", "medium", "high", "xhigh", "max"),

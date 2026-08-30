@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -18,6 +19,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  Max,
   Min,
   MinLength,
 } from 'class-validator';
@@ -93,13 +95,48 @@ class ChunkQueryDto {
   @IsInt()
   @Min(1)
   tailCommands?: number;
+
+  /** Deep-link load: return a window CENTRED on this command instead of
+   *  the tail. Mutually exclusive with `tailCommands` (this wins). The
+   *  returned window may not reach the newest turn — see `hasMoreNewer`. */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  aroundCommand?: string;
+
+  /** Turns of context to include before / after the anchor. Capped so a
+   *  hand-rolled request can't ask for the whole session and undo the
+   *  point of a bounded window. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(50)
+  beforeCount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(50)
+  afterCount?: number;
 }
 
 class HistoryQueryDto {
-  /** Cursor command id: return the N commands created strictly before this. */
+  /** Cursor command id: return the N commands created strictly before
+   *  this. Exactly one of `before` / `after` must be set. */
+  @IsOptional()
   @IsString()
   @MinLength(1)
-  before!: string;
+  before?: string;
+
+  /** Forward cursor: the N commands created strictly after this. Only
+   *  meaningful for a deep-linked window that hasn't reached the newest
+   *  turn yet. */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  after?: string;
 
   @IsOptional()
   @Type(() => Number)
@@ -178,6 +215,17 @@ export class SessionController {
     @Param('id') id: string,
     @Query() q: ChunkQueryDto,
   ) {
+    // Deep-link load takes precedence over the tail window: a caller that
+    // names an anchor wants that turn on screen, not the newest one.
+    if (q.aroundCommand) {
+      return this.sessions.getWindowAround(
+        req.user.id,
+        id,
+        q.aroundCommand,
+        q.beforeCount ?? 5,
+        q.afterCount ?? 4,
+      );
+    }
     return this.sessions.getWithChunks(
       req.user.id,
       id,
@@ -206,12 +254,17 @@ export class SessionController {
     @Param('id') id: string,
     @Query() q: HistoryQueryDto,
   ) {
-    return this.sessions.getOlderHistory(
-      req.user.id,
-      id,
-      q.before,
-      q.limit ?? 20,
-    );
+    // Exactly one direction. Accepting both would make the response shape
+    // ambiguous (which cursor does `hasMore` describe?), and accepting
+    // neither used to be impossible when `before` was required — now that
+    // both are optional the guard has to be explicit.
+    if (!!q.before === !!q.after) {
+      throw new BadRequestException('pass exactly one of `before` or `after`');
+    }
+    const limit = q.limit ?? 20;
+    return q.after
+      ? this.sessions.getNewerHistory(req.user.id, id, q.after, limit)
+      : this.sessions.getOlderHistory(req.user.id, id, q.before!, limit);
   }
 
   @Patch(':id')

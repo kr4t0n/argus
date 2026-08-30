@@ -261,6 +261,62 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   background-tasks?workingDir=...` hydrates a tab opening mid-run.
   No DB persistence — JSONL on the machine's disk is authoritative if
   you need history.
+- `session/` transcript windowing — three read shapes, all returning
+  `{commands, chunks, hasMore, hasMoreNewer}`-ish payloads:
+  `?tailCommands=N` (the default open-a-session path, newest N turns),
+  `?aroundCommand=<id>&beforeCount=&afterCount=` (`getWindowAround` — the
+  deep-link path, a window CENTRED on one turn), and
+  `/history?before=<id>` / `?after=<id>` (`getOlderHistory` /
+  `getNewerHistory`, one page in one direction; passing both or neither is
+  a 400 because `hasMore` would be ambiguous). `getWindowAround` is the
+  only path that can return `hasMoreNewer: true` — see the transcript
+  window invariant under Gotchas before consuming it. All the command
+  queries order by `[createdAt, id]`, not `createdAt` alone: two turns can
+  share a millisecond, and cursor pagination against a non-unique sort
+  skips or repeats rows at the page boundary.
+- `search/` — content search across sessions (`GET /search/sessions?q=`,
+  the ⌘K palette's backend). Reads `CommandSearchDoc`, a materialized
+  one-row-per-turn table holding that turn's conversation text plus a
+  GENERATED `tsvector`, GIN-indexed.
+  **Why a derived table and not a query over `ResultChunk`:** an answer
+  is persisted as a STREAM of `delta` fragments, so a keyword can
+  straddle two rows and row-level matching misses it *silently*. The doc
+  concatenates deltas in `seq` order with **no separator** — a space
+  would manufacture a word boundary mid-token and reintroduce the bug.
+  The doc definition lives in exactly one place, the
+  `argus_command_doc(text)` SQL function created by the migration, which
+  both the backfill and the runtime upsert call, so they cannot drift.
+  **What's indexed:** `Command.prompt` + `delta` + `final` content.
+  Deliberately NOT `stdout` / `tool` / `progress` / `stderr` — on the
+  corpus this was sized against those are ~78 MB / 22 MB / 1 MB / 1 MB
+  against ~36 MB of actual conversation, i.e. indexing them would triple
+  the index and bury real hits under `npm WARN` lines. Adding tool output
+  later is a filter chip, not a redesign.
+  **Two passes:** a GIN `tsvector` match with the last term
+  prefix-matched (so it filters as you type), and — only when that
+  returns nothing — a raw `ILIKE` scan. The fallback exists because
+  `tsvector` matches stemmed *words*, and this is a developer tool where
+  `MAXLEN`, `rediss://` and mid-identifier substrings are exactly what
+  people search for. Measured on a 7k-doc / 34 MB corpus: a selective
+  full-text query is **~2 ms**, a term matching every document ~245 ms
+  (the `count(*) OVER (PARTITION BY sessionId)` has to sort every match
+  before the LIMIT), and the substring fallback **~270–350 ms**. That
+  fallback would be indefensible on a large corpus; it is affordable
+  here only because the corpus is small, so re-check it if the fleet
+  grows an order of magnitude.
+  Results are one-per-session (`DISTINCT ON`) so a chatty session can't
+  crowd out the rest, with `matchCount` reporting how many of its turns
+  matched. Snippets come from `ts_headline` and wrap matches in
+  `[[hl]]`/`[[/hl]]` — NOT `<b>`, so clients split on the sentinels and
+  transcript text never reaches an HTML sink.
+  Maintained by `SearchService.indexCommandSafe()`, called from the
+  result ingestor's finalize-once guard: exactly once per turn, after
+  the status write (the doc is assembled from persisted `ResultChunk`
+  rows, so indexing earlier would capture a half-streamed answer), and
+  fire-and-forget so an index failure can never stall ingestion.
+  The endpoint returns archived sessions too — scope is a client
+  decision, and in practice ~93% of sessions are archived, so a
+  server-side "visible only" default would hide most of the corpus.
 - `push/` — APNs sender for native clients. `DeviceController`
   (`POST /me/devices` upsert-by-token — re-homing a token that moved
   accounts — and idempotent `DELETE /me/devices/:token`) plus
@@ -302,8 +358,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `project:{machineId}:{workingDir}` (fs/git nudges + background tasks).
   Authenticates the handshake using the same JWT used for REST. The
   gateway is the **only** thing that emits live data to clients.
-- `infra/redis/` — wrapper that owns *two* connections: one for blocking
-  XREADGROUP, one for everything else (ioredis requires this).
+- `infra/redis/` — wrapper that owns *four* connections: one shared `cmd`
+  client, plus a dedicated one per blocking consumer loop (lifecycle+notify,
+  result ingestor, background tasks). ioredis requires the split — a parked
+  `XREADGROUP` blocks every other call on that socket.
 - `infra/prisma/` — Prisma client.
 
 ### `packages/sidecar/internal/`
@@ -373,7 +431,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   - `fs.go` / `fswatch.go` / `git.go` — workingDir browsing for the
     dashboard's right-pane file tree. `ListDirs` BFS-walks up to
     `maxDepth` levels (reusing a single `listDirWith` core + one
-    preloaded gitignore matcher) and returns a `path → entries` map
+    shared `ignoreIndex`) and returns a `path → entries` map
     so depth-N prefetch lands in one round trip. Both jail to the
     request's workingDir, always strip `.git` AND `.argus/`, and
     respect gitignore. `fsWatcher` registers one fsnotify watch per
@@ -516,9 +574,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `remark-math`/`rehype-katex` for LaTeX. Single-dollar inline math is
   deliberately ON (Claude emits `$\pi_\theta$`-style inline math), so
   prose like "$5 and $10" can false-positive as math — accepted trade.
-  Only `$…$`/`$$…$$` are recognized; `\(…\)`/`\[…\]` pass through as
-  plain text until a real-transcript sample justifies a normalization
-  pass. rehype-katex replaces math nodes *before* the `components` map
+  remark-math recognizes only `$…$`/`$$…$$`, so `normalizeMathDelimiters`
+  (same module) folds **Codex's `\[…\]`/`\(…\)` into them pre-parse** —
+  every call site passes its source through it. Codex is the only CLI
+  that emits brackets (24 display + 13 inline spans across a 2232-answer
+  survey), and left alone they don't just show as literal brackets:
+  markdown pairs the `_` subscripts inside as emphasis and eats them. A
+  span converts only if it's *paired* (so CommonMark's escaped `\[` is
+  safe, and a half-streamed opener stays raw then snaps into math),
+  non-blank, `$`-free, blank-line-free, and outside fences/code spans —
+  the last one is load-bearing: a real transcript had
+  `find . \( -name "*.h" \)` inside a ```bash fence. All five guards cost
+  zero conversions on the survey corpus. Keep in step with ArgusKit's
+  `Engine/MathDelimiters.swift`. rehype-katex replaces math nodes *before* the `components` map
   runs, so `MarkdownCodeBlock` (custom `<pre>`) never sees equations;
   invalid TeX renders as red source text instead of throwing. GOTCHA:
   the app's `katex` dep (source of that CSS) must stay on the same
@@ -530,7 +598,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `.markdown .katex-display` gets sideways overflow-scroll like tables.
   While a turn streams, an unclosed `$$` shows raw until the closing
   delimiter arrives, then snaps into rendered math — self-correcting.
-  iOS counterpart: ArgusKit `Engine/MathSegments.swift` +
+  iOS counterpart: ArgusKit `Engine/MathDelimiters.swift` runs the same
+  bracket normalization at the top of `MathSegments.split`, then
+  `Engine/MathSegments.swift` +
   `Views/MathRender.swift` render `$$` display math natively via
   SwiftMath, and `Engine/InlineMath.swift` + `Views/InlineMathRender.swift`
   render inline `$…$` in plain paragraphs AND flat list items as
@@ -539,9 +609,28 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   deviations from the web's delimiter semantics documented in
   MathSegments). SwiftMath
   1.7.3 parses a smaller subset than KaTeX — `Engine/MathCompat.swift`
-  rewrites the gap Claude actually hits (`\big[`, `\operatorname`,
-  `\dots`, `\lVert`); a formula that still fails parse renders as raw
-  source in a code block, deliberately visible rather than mangled.
+  rewrites the gap the models actually hit (`\big[`, `\operatorname`,
+  `\dots`, `\lVert`, and the under/over annotations `\underbrace`,
+  `\overbrace`, `\underset`, `\overset` → `\atop` stacks). SwiftMath has
+  no extensible horizontal brace, so `\atop` can only put a *rule* under
+  the base — a stray-looking line. `MathCompat.displaySegments` therefore
+  splits an equation at **top-level** braces and `MathBlock` re-assembles
+  it with a brace drawn as a SwiftUI `Shape` (parametric, so the stroke
+  keeps constant weight at any width) on a shared math-baseline guide.
+  Only top-level braces split — one nested in `\frac` can't be sliced out
+  without breaking both halves, so it keeps the rule; `\underset`/
+  `\overset` keep `\atop` too, since a centered stack is already correct
+  for them. A formula
+  that still fails parse renders as raw source in a code block,
+  deliberately visible rather than mangled. GOTCHA: the parse is
+  all-or-nothing — ONE unsupported command dumps the whole equation
+  into the fallback, even when everything else in it is renderable.
+  That's why the shim pays off: both real-corpus failures
+  (`\underbrace`, `\underset`) used nothing else outside the subset.
+  When adding a rewrite, check the target against SwiftMath's actual
+  tables (`MTMathAtomFactory` + `MTMathListBuilder` string literals)
+  rather than assuming KaTeX parity — `\atop` is supported, `\array`
+  and `\substack` are not.
 - `stores/` — Zustand slices: `authStore`, `machineStore`, `sessionStore`,
   `projectStore`, `uiStore` (no `agentStore` — it was deleted with the
   Agent entity). Sessions are stored by id with their full `chunks`
@@ -676,6 +765,76 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   (and their archived-visibility filter); the machine→project sort owns
   display order. Sessions within a project stay newest-first — that sort
   lives in the callers, not here.
+- `stores/sessionStore.ts` window model — `SessionEntry` carries both
+  edges (`hasMore`/`loadingOlder`, `hasMoreNewer`/`loadingNewer`) plus
+  `focusCommandId`, the deep-link target that drives the viewer's
+  scroll-to + landing flash (`animate-turn-flash`: two soft pulses that
+  end transparent, so nothing has to clear the highlight afterwards; the
+  flash colour is `--flash-ring`, white in dark mode and mid-grey in
+  light, since light-mode `--surface-0` is 97.3% and a white flash on
+  near-white is invisible). `loadSessionAround(id, commandId)` always refetches:
+  the caller is asking to be moved somewhere specific, so a cached tail
+  window is never a valid answer. Read the transcript window invariant
+  under Gotchas before touching `appendChunk`, `upsertCommand` or
+  `backfill` — all three are gated on it.
+- `components/CommandPalette.tsx` — ONE overlay with two modes, mounted
+  once in `Dashboard` so both hotkeys work from any pane (it renders null
+  until opened; only the listeners stay live):
+  - **⌘P `session`** — switch by NAME. Ranked entirely client-side over
+    the session list the app already hydrates at boot, so it is instant
+    and needs no API at all. An EMPTY query is the important case, not a
+    degenerate one: it lists recent live sessions, making a switch two
+    keystrokes (⌘P, Enter). Archived never appear there — with ~93% of
+    sessions archived they would bury the handful in play — but they are
+    reachable by typing, ranked strictly below every live match.
+  - **⌘K `content`** — search what was SAID. Server-side full text,
+    archived included (a different default on purpose: ⌘K is for
+    excavating history, ⌘P for navigating the present). Debounced 200 ms
+    with an `AbortController`, without which a slow early request can
+    resolve after a fast later one and overwrite good results.
+  `Tab` switches mode and KEEPS the query — the whole point is re-running
+  the same words against the other index. One component rather than two
+  overlays because the alternative is two of them negotiating which is
+  visible when you press the other's hotkey; here that press is a mode
+  change. Portals to `document.body` with Escape + body-scroll-lock,
+  cloning `ImageLightbox`'s pattern so it escapes the transcript's
+  scroll/clip containers.
+  ⌘P navigates WITHOUT `?turn=` (plain navigation → tail window: "switch
+  to this session" means show me the present); ⌘K navigates WITH it.
+- `lib/sessionMatch.ts` — pure ranking for ⌘P. Two-tier `fuzzyScore`
+  (contiguous substring, bonused at a prefix/word boundary; else a
+  subsequence walk rewarding runs) capped so a subsequence can never
+  outrank a substring. Scored across title / project / machine / cliType
+  with descending weights, because titles are auto-derived from the first
+  60 chars of the opening prompt and are often truncated near-duplicates.
+  Recency is ADDITIVE (~10-day half-life), not a tiebreak: a loose match
+  on a session touched this morning genuinely is the better answer than a
+  tight match from March.
+- `lib/useGlobalHotkey.ts` — the one home for app-level shortcuts, so the
+  guards are written once. Capture phase + `preventDefault` (the terminal
+  would forward the key to the PTY; browsers claim Ctrl+K for Firefox's
+  search bar and ⌘P for Print). Shifted/alted variants pass through so
+  ⌘⇧P stays bindable. **Readline exception:** Ctrl+K is kill-line and
+  Ctrl+P is previous-command, so when focus is inside `.xterm` the CTRL
+  form defers to the shell — ⌘ is never forwarded to a PTY, so the Cmd
+  binding still works everywhere including in the terminal. Before this
+  hook existed, ⌘K's raw listener swallowed Ctrl+K unconditionally and
+  broke kill-line in the terminal pane for Ctrl-modifier users.
+- `stores/paletteStore.ts` — `mode: 'session' | 'content' | null`, where
+  null is closed; collapsing open-ness and mode into one field is what
+  makes each hotkey a toggle and the other hotkey a mode switch.
+  Deliberately NOT in `uiStore`: that store is `persist`ed with no
+  `partialize`, and an open palette restored on reload is a bug, not a
+  preference.
+  Session metadata (title, project, machine, cliType) is resolved from
+  the stores the app already holds — the full session list is hydrated
+  at boot — so the search response carries only ids and snippets.
+  Selecting a hit navigates to `/sessions/:id?turn=<commandId>`; the turn
+  lives in the URL rather than transient state so a reload or a shared
+  link lands in the same place. `SessionPanel` reads `?turn=` and routes
+  the load to `loadSessionAround`, falling back to the tail window if the
+  anchor 404s (a deleted turn is a positioning hint, not an error worth a
+  full-panel failure state).
 - `components/SidebarRail.tsx` — collapsed-mode rail (48px wide).
   Renders one tile per project using the same `groupProjects()`
   derivation as the main sidebar, with `ProjectIconGlyph` for the
@@ -842,6 +1001,21 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   via `workflow_dispatch` for refactor branches.
   **If you change a shared-types DTO, update the Swift mirror and
   re-capture the fixtures in the same PR.**
+- **iOS CI can break with no iOS commit.** Every SPM dependency in
+  `apps/ios/Argus/project.yml` uses a floating `from:` range, and
+  XcodeGen regenerates the `.xcodeproj` each run — so no `Package.resolved`
+  survives and CI re-resolves to the newest in-range version *every
+  time*. On 2026-08-27 SwiftTerm drifted 1.15.0 → 1.20.0, which attached
+  a build-tool plugin (`SwiftTermBuildInfoPlugin`) to the library target;
+  Xcode gates plugins behind an interactive trust prompt, so the
+  headless build died at *plugin validation* — exit 65, before compiling
+  anything. Hence `-skipPackagePluginValidation` on the xcodebuild step,
+  which is the CI-correct posture regardless of version. Symptom to
+  recognize: `Validate plug-in "…"` listed under "The following build
+  commands failed" while the ArgusKit job stays green. If a *build*
+  suddenly fails on an unrelated branch, diff the "Resolved source
+  packages" block against the last green run before suspecting your
+  code. Pinning the ranges is the real fix and is still open.
 - Swift is authored on Linux but only compiles on macOS —
   `.github/workflows/ios.yml` (macOS runner, `swift build` + `swift
   test`) is the primary verifier, not the dev box.
@@ -947,6 +1121,107 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Drop only when a *specific* socket is lagging (TODO — see follow-ups).
 
 ## Gotchas
+
+- **A chunk can arrive AFTER its own turn finalized — the live branch must
+  be idempotent too.** The result ingestor's finalize branch has always
+  been guarded (`updateMany ... status notIn TERMINAL_COMMAND_STATUSES`,
+  so only the first terminal chunk wins). Its `else` branch — "a fresh
+  turn is running" — was NOT, and marked the session `active` +
+  `unread: false` for any non-terminal chunk. A late chunk therefore
+  silently *un-finalized* the session, and nothing ever put it right:
+  only a LATER turn's final rewrites the status. Sessions were found
+  stuck "running" for over a month, with the sidebar dot spinning,
+  completion notifications suppressed (`App.tsx` skips when
+  `status === 'active'`), and `queueDrainer` refusing to drain them
+  forever (it reads `active` as "mid-turn"). Fixed by
+  `SessionService.setActiveForCommand`, which skips the write when the
+  chunk's COMMAND is already terminal; `20260827120000_repair_stuck_active_sessions`
+  repairs rows already written.
+  Two real producers of late chunks, which is why the guard keys on the
+  command's state and NOT on "have we seen a final yet":
+  1. Claude Code's bridge re-announces `system/init` from a
+     fire-and-forget async path that lands after the turn's `result` —
+     measured after, in 30 of 30 sampled turns. See
+     [[model_line_1m_suffix_drop_accepted]] for why that second init
+     exists at all.
+  2. Background sub-agent flows legitimately keep streaming after an
+     inner `result` (same reason `splitDeltas` only treats a `final` as a
+     boundary when more text follows it).
+  `TERMINAL_COMMAND_STATUSES` is exported from `session.service.ts` and
+  used by both branches — they were written independently with duplicate
+  inline literals, and that divergence was the bug.
+
+- **The transcript window invariant.** A viewer holds a CONTIGUOUS window
+  of a session's turns, and `SessionEntry.hasMoreNewer` says whether that
+  window reaches the present:
+
+      hasMoreNewer === false  ⟺  window contains the newest turn
+                              ⟺  live appends are safe.
+
+  Every tail load (`loadSession`, `tailCommands`) sets it false. Only a
+  deep-link load (`loadSessionAround` → `?aroundCommand=`) can set it
+  true, and while it is true three things MUST stay disarmed, because each
+  of them silently assumes the window reaches the present:
+  1. `upsertCommand` must not APPEND a turn the window doesn't hold — a
+     new turn belongs hundreds of turns below the window, and appending it
+     renders turn 210 directly beneath turn 34. Updating a turn already
+     held is always fine.
+  2. `appendChunk` must drop chunks whose command isn't in the window,
+     or the entry accumulates chunks that will never render — invisible,
+     unbounded growth while the user reads history during a live turn.
+     The check is deliberately NOT applied to tail windows: WS ordering
+     between `command:updated` and a turn's first chunk isn't guaranteed,
+     so a live window has to accept chunks for a command it hasn't been
+     told about yet.
+  3. Stick-to-bottom / `scrollMemory.atBottom` must not arm, because the
+     bottom of the scrollport is the bottom of a WINDOW, not the newest
+     turn. `StreamViewer` gates both on `liveTail = !hasMoreNewer` and
+     offers "jump to latest" instead.
+
+  If you add a third load path, decide which side of this line it sits on
+  before writing it. Plain navigation into a session deliberately RESETS a
+  floating window back to the tail (`loadSession` treats a cached
+  `hasMoreNewer` entry as stale) — the only way to be off the tail is to
+  ask for it explicitly.
+
+- **`GET /sessions/:id/chunks` returns EVERY command in the session**, not
+  a window — it has no `tailCommands`. The reconnect backfill in
+  `App.tsx` calls it, so `sessionStore.backfill` filters the merge rather
+  than trusting the payload: in-window turns update, turns newer than the
+  newest loaded are accepted (created while disconnected), and everything
+  else is dropped. Before that filter existed, every WS reconnect injected
+  the session's entire history into the window, rendering a few hundred
+  CONTENTLESS turns above the tail — contentless because their chunks are
+  filtered out by `afterSeq`, so only the command rows landed. If you
+  touch this, note that `ResultChunk.seq` restarts at 1 PER COMMAND, so
+  `lastSeq` is a max-across-commands, not a session-wide cursor, and
+  `WHERE seq > lastSeq` cannot be used to mean "everything new".
+
+- **`CommandSearchDoc.tsv` is invisible to Prisma, and that is
+  load-bearing.** Prisma cannot represent `tsvector`, so the field is
+  declared `Unsupported("tsvector")?` — which means the Prisma client
+  can neither read nor write it. That is exactly what we want: the
+  column is `GENERATED ALWAYS AS (to_tsvector('english', "doc")) STORED`,
+  so Postgres keeps it in lockstep with `doc` and nothing can write the
+  two into disagreement. Every query that touches it is raw SQL in
+  `SearchService`. Consequences: (1) `prisma migrate dev` cannot see the
+  GENERATED clause or the `argus_command_doc()` function and may emit a
+  migration that drops them — **read any generated migration touching
+  this table before applying it**, and hand-edit as the backfill
+  migrations in this repo already do; (2) if you ever change what goes
+  into a doc, change `argus_command_doc()` in a new migration and
+  re-run the backfill — editing the TypeScript alone changes nothing,
+  because the doc is assembled entirely server-side.
+
+- **Search snippets use `[[hl]]` sentinels, never HTML.** `ts_headline`
+  defaults to wrapping matches in `<b>`/`</b>`; we override
+  `StartSel`/`StopSel` because the highlighted text is model- and
+  user-authored transcript content and must never reach
+  `dangerouslySetInnerHTML`. Clients split on the sentinels and build
+  text nodes. The constants are exported from shared-types
+  (`SEARCH_HL_START`/`SEARCH_HL_STOP`) and duplicated in the server's
+  `SearchService` — if you change one, change both. The substring
+  fallback emits the same markup by hand so clients need one render path.
 
 - **Model detection is LATEST-match, in both clients**: the right-panel
   model line and the context ring's window lookup derive the model from
@@ -1079,8 +1354,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   *imported*. The blank `_ "..."` trick isn't needed today because they're
   all under the same package, but keep it in mind when adding adapters in a
   separate package.
-- **Two Redis connections**: do **not** call `XREADGROUP` on the shared
-  `cmd` ioredis client — it parks the socket and starves every other call.
+- **One connection per blocking loop** (four total today): do **not** call
+  `XREADGROUP` on the shared `cmd` ioredis client — it parks the socket and
+  starves every other call. Two loops sharing one socket serialize behind
+  each other's `BLOCK` window too, so every consumer loop gets its own.
 - **Command consumption is per-CLI-runner, bounded per machine**: each
   runner `XREADGROUP`s its own `machine:{mid}:cli:{type}:cmd` stream, so a
   machine holds a *constant* number of blocking Redis connections (one per
@@ -1112,6 +1389,25 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `CLIENT KILL` go-redis conns with `idle>300` and `cmd≠xreadgroup`
   (parked stream readers always show `idle≤5`; go-redis re-dials
   transparently, and Postgres is the source of truth).
+- **`rediss://` SNI must be set explicitly on the server side** — ioredis
+  only flips `tls: true` (a *boolean*) when it sees the scheme, and its
+  connector's `Object.assign(connectionOptions, options.tls)` copies nothing
+  from a boolean, so the socket opens as `tls.connect({ host, port })`. Node
+  sends the SNI extension **only** when `servername` is set explicitly; there
+  is no fallback to `host` (see the `if (options.servername)` guard in
+  `lib/_tls_wrap.js` — the docs claim a host-name default, the implementation
+  disagrees). `RedisService` therefore derives `tls.servername` from the URL
+  host itself. The Go side needs nothing: `redis.ParseURL` already sets
+  `TLSConfig.ServerName` for `rediss://`. Before the fix the two disagreed,
+  and the signature was distinctive — **sidecars connect fine while the
+  server cannot**, on the same `REDIS_URL` — because managed Redis (Upstash,
+  Redis Cloud) fronts many tenants with one TLS terminator that needs SNI to
+  pick a certificate. Note this was never an auth downgrade:
+  `rejectUnauthorized` stays on and `checkServerIdentity` validates against
+  `host`, so it breaks cert *selection*, not verification. IP literals are
+  excluded deliberately (RFC 6066 forbids them in SNI; Node warns DEP0123) —
+  and `URL.hostname` keeps the brackets on IPv6, which `isIP` rejects, so
+  they must be stripped before that check.
 - **Stream MAXLEN is silent message loss, not just memory pressure**:
   every `XADD` on both sides (`apps/server/src/infra/redis/redis.service.ts`
   and `packages/sidecar/internal/bus/bus.go`) trims with `MAXLEN ~ N`,
@@ -1169,6 +1465,47 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   wedged all lifecycle consumption forever after a notify DEL). The
   result-ingestor's NOGROUP branch handles the same trap for destroyed
   agents' result streams.
+- **A half-open socket parks a blocking XREADGROUP forever — silently**:
+  managed Redis behind a shared proxy (Redis Cloud, Upstash) can drop a
+  connection without sending a FIN. The socket stays open from Node's
+  side, and with `maxRetriesPerRequest: null` the in-flight blocking
+  XREADGROUP never settles and never emits `'error'` — so the consume
+  loop awaits a promise that will never resolve. There is nothing in the
+  logs: no error line, no reconnect, just a consumer that stops issuing
+  reads. Diagnose from Redis, not from the server: `XINFO CONSUMERS
+  <stream> <group>` shows `idle` climbing without bound (observed Aug
+  2026: `agent:lifecycle` and every `:result` consumer at 52 minutes
+  idle while `agent:background` — a *sibling connection* on the same
+  process — sat at 2s). The tell is per-connection, not per-process: the
+  server is alive and `_cmd` still works, so health checks pass while
+  every machine shows offline and the sidecars poll happily. Left alone
+  it never self-heals, and MAXLEN keeps trimming heartbeats the stuck
+  consumer will never reach (lag 503 against a 502-entry stream).
+  `RedisService` now defends in three layers — `keepAlive` (kernel-level
+  probes), `socketTimeout` (destroys a data-starved socket so ioredis
+  reconnects; MUST exceed the longest BLOCK window of 5s plus RTT, or it
+  kills healthy blocking reads), and `blockingTimeout` +
+  `blockingTimeoutGrace` (client-side deadline that resolves the promise
+  with `null`, the shape every loop already reads as "nothing this
+  cycle"). Keep the grace well above ioredis's stock 100ms: the deadline
+  is BLOCK + grace, and a *spurious* fire abandons a batch Redis already
+  moved into the PEL, stranding it permanently. Do not read
+  `blocked_clients` from `INFO` on Redis Cloud when investigating this —
+  see the "`blocked_clients` is a phantom" gotcha.
+- **`blocked_clients` from `INFO` is a phantom on Redis Cloud — don't
+  size anything off it**: the Enterprise proxy reports a value that does
+  not track real blocked clients. Verified empirically (Aug 2026):
+  adding six genuinely blocked clients moved `connected_clients` by
+  exactly +6 while `blocked_clients` stayed pinned at 16 across ~40
+  minutes of sampling, through every connection add and release. It is
+  dangerously easy to add it to `connected_clients`, land on exactly
+  `maxclients`, and conclude the fleet is out of connections — a false
+  positive that sends you tuning pool caps during an unrelated outage.
+  `connected_clients` is accurate and is the only number to trust
+  against `maxclients`; `rejected_connections` is the ground truth for
+  whether the cap is actually being hit. Same caution applies to
+  `CLIENT LIST`, which returns only the issuing proxy thread's clients
+  (14 rows while the counters described the whole database).
 - **MAXLEN caps entry COUNT, not bytes — one fat chunk can blow the
   whole budget**: the `streamMaxLen` caps above bound the *number* of
   entries, so the memory model silently assumes each entry is small
@@ -1405,6 +1742,41 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   has one. (Claude's *Read tool* is unreliable for images — several
   upstream issues — but we never depend on it; the path-in-prompt route
   is the documented, working one.)
+- **`ShowAll` is a DISPLAY switch, never a traversal switch** (`fs.go`).
+  The "show gitignored" eye toggle used to disable the matcher outright,
+  which left every entry flagged `Gitignored: false` — and the BFS's
+  descent guard keys on exactly that flag. So flipping the toggle sent a
+  depth-3 prefetch straight into `node_modules`; one pnpm `.pnpm`
+  directory (~1.2k entries to read + stat) overran the server's
+  `FS_LIST_TIMEOUT_MS = 5000`, and the panel reported **"agent did not
+  respond — the machine may be offline"** even though the sidecar was
+  alive and still walking. The index is now built unconditionally and
+  `ShowAll` only decides whether an ignored entry is filtered OUT of the
+  listing. An ignored subtree stays reachable by requesting it *by
+  path* — the guard gates enqueueing children, not the requested root —
+  so a depth-N request inside one self-limits to a single level. Note
+  the toggle still costs a refetch: ignored entries are dropped
+  server-side, so the client has nothing cached to reveal.
+- **gitignore is per-directory, and the matcher must be too**
+  (`internal/machine/gitignore.go`). The sidecar honors a `.gitignore`
+  in EVERY directory, not just the workingDir root. It used to read only
+  `<root>/.gitignore`, which silently ignored this repo's own
+  `apps/ios/.gitignore` and `site/.gitignore` — so `DerivedData/`,
+  `.build/`, `xcuserdata/` and `.astro/` were listed as ordinary files
+  *and* handed one fsnotify watch per directory inside them. On a
+  machine with an active Xcode build that is thousands of watch
+  descriptors against `max_user_watches` (the EMFILE path in
+  `fswatch.go`), plus an `FSChangedEvent` for every build write. It hid
+  for so long because the root file covers the universal junk and an
+  unslashed pattern matches at any depth, so `node_modules/` did reach
+  `apps/web/node_modules/` — only *subdir-specific* rules fell through.
+  `ignoreIndex` scopes patterns by the directory their file was found in
+  (go-git's "domain"), memoizes each directory's accumulated slice, and
+  reads a `.gitignore` only when something asks about that subtree.
+  **Do not switch it to go-git's own `ReadPatterns`**: that recurses the
+  entire tree — `node_modules` included — hunting for ignore files, and
+  the lister builds an index per request, so it would put a full-tree
+  walk in front of every click.
 - **A bare `ERROR [ExceptionsHandler] AggregateError` means "could not
   open a TCP connection", nothing else**. Node's happy-eyeballs connect
   (`autoSelectFamily`, default-on since Node 20) wraps the per-address

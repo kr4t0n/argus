@@ -641,3 +641,80 @@ export interface LiveActivityDTO {
   sessionId: string;
   createdAt: string;
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Session content search (`GET /search/sessions`)
+// ─────────────────────────────────────────────────────────────────────
+
+/** Matched terms inside `SessionSearchHitDTO.snippet` are wrapped in
+ *  these sentinels. Deliberately not HTML: clients split on them to build
+ *  native text nodes, so transcript content never reaches an HTML sink.
+ *  Kept in sync with `HL_START`/`HL_STOP` in the server's SearchService. */
+export const SEARCH_HL_START = '[[hl]]';
+export const SEARCH_HL_STOP = '[[/hl]]';
+
+/** One matching session. The server returns the single best-ranked turn
+ *  per session (so one chatty session can't crowd out the results) plus
+ *  how many of its turns matched in total. Session metadata — title,
+ *  project, machine — is deliberately absent: every client already holds
+ *  the full session list, so re-sending it per hit would be redundant. */
+export interface SessionSearchHitDTO {
+  sessionId: string;
+  /** The best-matching turn. Reserved for deep-linking into the
+   *  transcript; today clients open the session itself. */
+  commandId: string;
+  /** Total matching turns in this session, not just the one shown. */
+  matchCount: number;
+  /** Text window around the match, with terms wrapped in
+   *  SEARCH_HL_START/SEARCH_HL_STOP. */
+  snippet: string;
+}
+
+export interface SessionSearchResponse {
+  /** The trimmed query the server actually ran. */
+  query: string;
+  hits: SessionSearchHitDTO[];
+  /** Which pass produced these. `fulltext` is the indexed tsvector match;
+   *  `substring` means that found nothing and the raw scan ran instead —
+   *  which is the normal path for code strings and partial identifiers. */
+  mode: 'fulltext' | 'substring';
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Transcript windowing
+//
+// A viewer holds a CONTIGUOUS window of a session's turns, not the whole
+// thread. Two flags describe its edges, and `hasMoreNewer` is the
+// load-bearing one:
+//
+//   hasMoreNewer === false  ⟺  the window reaches the session's newest
+//                              turn  ⟺  live appends are safe.
+//
+// Every tail-anchored load (the default) reports false. Only a deep-link
+// load (`?aroundCommand=`) can report true, and while it does, clients
+// must NOT append live chunks or newly created commands for turns outside
+// the window — doing so makes the window discontiguous, which renders as
+// turn 34 sitting directly above turn 210. See the transcript window
+// invariant in AGENTS.md.
+// ─────────────────────────────────────────────────────────────────────
+
+/** A loaded window of a session: the session row, its commands in
+ *  ascending `createdAt` order, and their chunks. */
+export interface SessionWindowResponse {
+  session: SessionDTO;
+  commands: CommandDTO[];
+  chunks: ResultChunkDTO[];
+  /** Older turns exist above the window (page with `?before=`). */
+  hasMore: boolean;
+  /** Newer turns exist below the window (page with `?after=`). False on
+   *  every tail-anchored load. */
+  hasMoreNewer: boolean;
+}
+
+/** One page of history in either direction. `hasMore` describes the
+ *  direction that was requested — older for `before`, newer for `after`. */
+export interface SessionHistoryPage {
+  commands: CommandDTO[];
+  chunks: ResultChunkDTO[];
+  hasMore: boolean;
+}

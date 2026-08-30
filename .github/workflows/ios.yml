@@ -65,10 +65,26 @@ jobs:
         run: brew install xcodegen
       - name: Generate project
         run: xcodegen generate
+      # `-skipPackagePluginValidation` is not optional here. A SwiftPM
+      # build-tool plugin runs arbitrary code at build time, so Xcode
+      # gates it behind an interactive "Trust & Enable" prompt; a fresh
+      # runner has no recorded trust and nobody to click it, so the
+      # *validation step itself* fails the build (exit 65) before a
+      # single source file compiles.
+      #
+      # This bit us on 2026-08-27: SwiftTerm is declared `from: 1.2.0`
+      # and XcodeGen regenerates the project every run, so nothing pins
+      # the resolve — CI drifted 1.15.0 (last green, 08-02) → 1.20.0,
+      # which moved to tools-version 6.0 and attached a new
+      # `SwiftTermBuildInfoPlugin` to the SwiftTerm library target we
+      # link. The flag is the CI-correct answer regardless of version;
+      # the deeper fix is pinning the dependency so the toolchain stops
+      # changing underneath us on a calendar date.
       - name: Build for Simulator
         run: >-
           xcodebuild build
           -project Argus.xcodeproj
           -scheme Argus
           -destination 'generic/platform=iOS Simulator'
+          -skipPackagePluginValidation
           CODE_SIGNING_ALLOWED=NO

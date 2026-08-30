@@ -361,8 +361,52 @@ model Command {
   session     Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   chunks      ResultChunk[]
   attachments Attachment[]
+  searchDoc   CommandSearchDoc?
 
   @@index([sessionId, createdAt])
+}
+
+// Materialized full-text search document — one row per Command, holding
+// that turn's conversation text reconstructed into a single string.
+//
+// Why a derived table instead of searching ResultChunk directly: an
+// assistant answer is stored as a STREAM of `delta` fragments, so a
+// keyword can straddle two rows and row-level matching silently misses
+// real hits. Concatenating per-command (in `seq` order, with NO
+// separator between deltas — a space would split words) is what makes
+// the match correct. The doc definition lives in ONE place, the
+// `argus_command_doc(text)` SQL function, so the backfill migration and
+// the runtime upsert can never drift apart.
+//
+// What goes in: `Command.prompt` + `delta` chunks + `final` content —
+// i.e. what the human asked and what the assistant answered. Deliberately
+// EXCLUDED: `stdout` (78 MB of build logs and test spew, ~3x the size of
+// the actual conversation, and it buries real hits), `tool` output (MCP
+// payloads run to 40 KB), `progress` (avg 12 chars of status noise), and
+// `stderr`. Adding tool output later is a filter chip, not a redesign.
+//
+// `tsv` is a GENERATED column so it can never disagree with `doc`.
+// Prisma cannot represent `tsvector`, hence `Unsupported` — the field is
+// unreadable/unwritable from the Prisma client by design, and every
+// query that touches it is raw SQL in SearchService. See the "tsvector
+// column is Prisma-invisible" gotcha in AGENTS.md before running
+// `prisma migrate dev`.
+//
+// `userId`/`sessionId` are denormalized off Session so a search is a
+// single indexed scan with no joins. They're derived — a full rebuild
+// fixes any drift.
+model CommandSearchDoc {
+  commandId String                   @id
+  sessionId String
+  userId    String
+  doc       String                   @db.Text
+  tsv       Unsupported("tsvector")?
+  updatedAt DateTime                 @default(now()) @updatedAt
+
+  command Command @relation(fields: [commandId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([sessionId])
 }
 
 // A file the user attached to a turn. Bytes live in S3/MinIO under

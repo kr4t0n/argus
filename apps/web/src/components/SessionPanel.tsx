@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { Menu, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
@@ -34,6 +34,14 @@ export function SessionPanel() {
   const entry = useSessionStore((s) => (sessionId ? s.entries[sessionId] : undefined));
   const loadSession = useSessionStore((s) => s.loadSession);
   const loadOlder = useSessionStore((s) => s.loadOlder);
+  const loadNewer = useSessionStore((s) => s.loadNewer);
+  const loadSessionAround = useSessionStore((s) => s.loadSessionAround);
+  const clearFocusCommand = useSessionStore((s) => s.clearFocusCommand);
+  // `?turn=<commandId>` is the deep link (⌘K search result → the matching
+  // turn). Keeping it in the URL rather than in transient state means a
+  // reload or a shared link lands in the same place.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const turnParam = searchParams.get('turn');
   // Reachability is a property of the machine now (the Agent entity is
   // retired). Resolve the session's project, then its machine, and gate
   // the composer on the machine being offline — undefined (boot race /
@@ -86,14 +94,23 @@ export function SessionPanel() {
     const cached = useSessionStore.getState().entries[sessionId];
     const cachedRunning =
       cached?.commands.some((c) => ['pending', 'sent', 'running'].includes(c.status)) ?? false;
-    loadSession(sessionId, { force: !!cached?.loaded && cachedRunning })
+    // A `?turn=` deep link asks for a window centred on that turn instead
+    // of the tail. If the anchor has since been deleted the server 404s;
+    // fall back to the tail rather than showing the user an error page for
+    // what is only a positioning hint.
+    const load = turnParam
+      ? loadSessionAround(sessionId, turnParam).catch(() =>
+          loadSession(sessionId, { force: true }),
+        )
+      : loadSession(sessionId, { force: !!cached?.loaded && cachedRunning });
+    load
       .catch((err) => setError(err.message ?? 'failed to load session'))
       .finally(() => setLoading(false));
     joinSession(sessionId);
     return () => {
       leaveSession(sessionId);
     };
-  }, [sessionId, loadSession]);
+  }, [sessionId, loadSession, loadSessionAround, turnParam]);
 
   // `unread` is the terminal-result marker the result-ingestor sets when
   // a turn finishes (success or error); the sidebar surfaces it as a
@@ -127,6 +144,29 @@ export function SessionPanel() {
   const onLoadOlder = useCallback(() => {
     if (sessionId) void loadOlder(sessionId);
   }, [sessionId, loadOlder]);
+
+  const onLoadNewer = useCallback(() => {
+    if (sessionId) void loadNewer(sessionId);
+  }, [sessionId, loadNewer]);
+
+  // Leaving a floating window: drop the ring and the `?turn=` param first
+  // so the reload can't be re-interpreted as another deep link, then pull
+  // the tail window back.
+  const onJumpToLatest = useCallback(() => {
+    if (!sessionId) return;
+    // Drop the ring immediately so the click feels instant rather than
+    // waiting on the refetch.
+    clearFocusCommand(sessionId);
+    if (turnParam) {
+      // Removing `?turn=` re-runs the load effect, which pulls the tail
+      // window — so don't also fetch here or the same GET goes out twice.
+      const next = new URLSearchParams(searchParams);
+      next.delete('turn');
+      setSearchParams(next, { replace: true });
+      return;
+    }
+    void loadSession(sessionId, { force: true });
+  }, [sessionId, clearFocusCommand, turnParam, searchParams, setSearchParams, loadSession]);
 
   // File tabs: filtered to the current project so the strip stays in
   // context. The active tab is "the chat" when nothing's selected OR
@@ -274,6 +314,11 @@ export function SessionPanel() {
               hasMore={entry.hasMore}
               loadingOlder={entry.loadingOlder}
               onLoadOlder={onLoadOlder}
+              hasMoreNewer={entry.hasMoreNewer}
+              loadingNewer={entry.loadingNewer}
+              onLoadNewer={onLoadNewer}
+              focusCommandId={entry.focusCommandId}
+              onJumpToLatest={onJumpToLatest}
             />
           )}
         </div>

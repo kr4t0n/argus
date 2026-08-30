@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	gitignore "github.com/sabhiram/go-gitignore"
 )
 
 const fsWatcherDebounce = 250 * time.Millisecond
@@ -29,7 +28,7 @@ const fsWatcherDebounce = 250 * time.Millisecond
 // the caller can forward them verbatim as FSChangedEvent.Path.
 type fsWatcher struct {
 	root    string
-	matcher *gitignore.GitIgnore
+	matcher *ignoreIndex
 	inner   *fsnotify.Watcher
 	emit    func(relDir string)
 	log     *log.Logger
@@ -61,7 +60,7 @@ func newFSWatcher(ctx context.Context, root string, emit func(relDir string), lo
 	if err != nil {
 		return nil, err
 	}
-	matcher, _ := loadGitignore(abs)
+	matcher := newIgnoreIndex(abs)
 	w := &fsWatcher{
 		root:    abs,
 		matcher: matcher,
@@ -110,10 +109,7 @@ func (w *fsWatcher) ignoredDir(abspath string) bool {
 	if rel == ".argus" || strings.HasPrefix(rel, ".argus/") {
 		return true
 	}
-	if w.matcher == nil {
-		return false
-	}
-	return w.matcher.MatchesPath(rel + "/")
+	return w.matcher.Match(rel, true)
 }
 
 // walkAndRegister adds fsnotify watches for every non-ignored

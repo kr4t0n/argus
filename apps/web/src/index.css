@@ -30,6 +30,11 @@
     --primary-fg: 0 0% 100%;
     --selection-bg: 0 0% 80%;
     --selection-fg: 0 0% 9%;
+    /* Deep-link "here is the turn you searched for" flash. White in dark
+       mode as designed; light mode needs a mid grey instead, because
+       --surface-0 there is 97.3% and a white flash on near-white is no
+       flash at all. */
+    --flash-ring: 0 0% 42%;
   }
 
   :root.dark {
@@ -44,6 +49,7 @@
     --fg-secondary: 0 0% 83%;
     --fg-tertiary: 0 0% 64%;
     --fg-muted: 0 0% 45%;
+    --flash-ring: 0 0% 100%;
     --primary-bg: 0 0% 96%;
     --primary-bg-hover: 0 0% 100%;
     --primary-fg: 0 0% 9%;

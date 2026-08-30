@@ -17,6 +17,18 @@ import { AttachmentService } from '../attachment/attachment.service';
 import { PushService } from '../push/push.service';
 import { MachineService } from '../machine/machine.service';
 
+/**
+ * Command statuses that mean "this turn is over".
+ *
+ * Exported because the result ingestor has to agree with this list in TWO
+ * places that pull in opposite directions: the finalize branch refuses to
+ * re-finalize a command already in one of these states, and the live
+ * branch must refuse to mark a session active for one. They were written
+ * independently and only the first was guarded, which is exactly how a
+ * late chunk could un-finalize a session.
+ */
+export const TERMINAL_COMMAND_STATUSES = ['completed', 'failed', 'cancelled'] as const;
+
 /** Internal shape of `create` — a project-first session (machineId +
  *  cliType + optional workingDir). `agentId` is gone since Phase 4. */
 export interface CreateSessionInput {
@@ -473,6 +485,44 @@ export class SessionService {
     this.gateway.emitSessionUpdated(SessionService.toDto(s));
   }
 
+  /**
+   * Flip a session to `active` because a chunk arrived for `commandId` —
+   * but ONLY while that command is still running.
+   *
+   * Every non-terminal chunk takes this path, and without the guard a
+   * chunk that lands AFTER its turn finished silently un-finalizes the
+   * session: status goes back to `active` and `unread` is cleared, so the
+   * sidebar dot never resolves, the completion notification is suppressed,
+   * and `queueDrainer` refuses to drain that session forever (it reads
+   * `status === 'active'` as "mid-turn"). Observed in the wild on sessions
+   * stuck for over a month.
+   *
+   * Two real producers of late chunks, which is why this is keyed on the
+   * COMMAND's terminal state rather than "have we seen a final yet":
+   *   - Claude Code's bridge re-announces `system/init` from a
+   *     fire-and-forget async path that can land after the turn's
+   *     `result` (measured: it lands after, every time).
+   *   - Background sub-agent flows legitimately keep streaming after an
+   *     inner `result`, so "anything after a final is bogus" would be
+   *     wrong for them.
+   *
+   * Returns null when the write was skipped, so callers can skip the
+   * follow-on side effects too.
+   */
+  async setActiveForCommand(sessionId: string, commandId: string) {
+    const cmd = await this.prisma.command.findUnique({
+      where: { id: commandId },
+      select: { status: true },
+    });
+    // Unknown command (at-least-once delivery racing the command insert)
+    // keeps the historical behaviour — better a spurious `active` than a
+    // turn that never shows as running at all.
+    if (cmd && (TERMINAL_COMMAND_STATUSES as readonly string[]).includes(cmd.status)) {
+      return null;
+    }
+    return this.setStatus(sessionId, 'active', { unread: false });
+  }
+
   async bumpUpdatedAt(id: string) {
     const s = await this.prisma.session.update({
       where: { id },
@@ -503,9 +553,12 @@ export class SessionService {
     if (tailCommands && tailCommands > 0) {
       // Take N+1 to detect whether older rows exist without a separate
       // count query; drop the overflow row and reverse to ascending.
+      // `id` breaks createdAt ties so the ordering is total. Two turns can
+      // share a millisecond, and cursor pagination against a non-unique
+      // sort silently skips or repeats rows at the page boundary.
       const recent = await this.prisma.command.findMany({
         where: { sessionId: id },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: tailCommands + 1,
       });
       hasMore = recent.length > tailCommands;
@@ -513,7 +566,7 @@ export class SessionService {
     } else {
       commands = await this.prisma.command.findMany({
         where: { sessionId: id },
-        orderBy: { createdAt: 'asc' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       });
     }
     const commandIds = commands.map((c) => c.id);
@@ -528,6 +581,11 @@ export class SessionService {
       commands: await this.withAttachments(commands),
       chunks,
       hasMore,
+      // A tail window always reaches the newest turn — that is what makes
+      // live append, reconnect backfill and stick-to-bottom safe on this
+      // path. Reported explicitly so clients can key the invariant off one
+      // flag regardless of which load path produced the window.
+      hasMoreNewer: false,
     };
   }
 
@@ -544,20 +602,121 @@ export class SessionService {
     // itself so we only return commands strictly older than it.
     const older = await this.prisma.command.findMany({
       where: { sessionId: id },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       cursor: { id: beforeCommandId },
       skip: 1,
       take: limit + 1,
     });
     const hasMore = older.length > limit;
     const commands = older.slice(0, limit).reverse();
-    const commandIds = commands.map((c) => c.id);
-    const chunks = commandIds.length
-      ? await this.prisma.resultChunk.findMany({
-          where: { commandId: { in: commandIds } },
-          orderBy: [{ commandId: 'asc' }, { seq: 'asc' }],
-        })
-      : [];
-    return { commands: await this.withAttachments(commands), chunks, hasMore };
+    return {
+      commands: await this.withAttachments(commands),
+      chunks: await this.chunksForCommands(commands.map((c) => c.id)),
+      hasMore,
+    };
+  }
+
+  /**
+   * Fetch the N commands NEWER than `afterCommandId` — the forward mirror
+   * of `getOlderHistory`. Only reachable when the viewer holds a window
+   * that does NOT reach the newest turn (a deep-linked window); a
+   * tail-anchored window has nothing newer to page.
+   */
+  async getNewerHistory(userId: string, id: string, afterCommandId: string, limit: number) {
+    await this.get(userId, id); // auth guard
+    const newer = await this.prisma.command.findMany({
+      where: { sessionId: id },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      cursor: { id: afterCommandId },
+      skip: 1,
+      take: limit + 1,
+    });
+    const hasMore = newer.length > limit;
+    const commands = newer.slice(0, limit);
+    return {
+      commands: await this.withAttachments(commands),
+      chunks: await this.chunksForCommands(commands.map((c) => c.id)),
+      hasMore,
+    };
+  }
+
+  /**
+   * Return a window of commands CENTRED on `commandId`, plus their chunks.
+   *
+   * This is the deep-link load: the ⌘K palette knows which turn matched,
+   * and paging backwards from the tail to reach it would cost one
+   * sequential round-trip per 20 turns and pull every intervening turn's
+   * stdout. A centred window is one request with a bounded payload
+   * regardless of how deep the target sits.
+   *
+   * Unlike every other read path, the window it returns may not contain
+   * the session's newest turn — hence `hasMoreNewer`. Clients MUST treat
+   * that flag as "live appends are not safe here" (see the transcript
+   * window invariant in AGENTS.md), because the assumption that the
+   * loaded window reaches the present is baked into live chunk append,
+   * reconnect backfill, and stick-to-bottom scrolling.
+   */
+  async getWindowAround(
+    userId: string,
+    id: string,
+    commandId: string,
+    before: number,
+    after: number,
+  ) {
+    const session = await this.get(userId, id);
+    // Scope the anchor to this session: a command id from ANOTHER session
+    // would otherwise page against the wrong thread, and the caller's
+    // own session guard above wouldn't catch it.
+    const anchor = await this.prisma.command.findFirst({
+      where: { id: commandId, sessionId: id },
+    });
+    if (!anchor) throw new NotFoundException('command not found in this session');
+
+    // Take limit+1 on each side to learn whether more exists without a
+    // second count query — same trick as the tail path.
+    const [olderRows, newerRows] = await Promise.all([
+      this.prisma.command.findMany({
+        where: { sessionId: id },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        cursor: { id: commandId },
+        skip: 1,
+        take: before + 1,
+      }),
+      this.prisma.command.findMany({
+        where: { sessionId: id },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        cursor: { id: commandId },
+        skip: 1,
+        take: after + 1,
+      }),
+    ]);
+
+    const hasMore = olderRows.length > before;
+    const hasMoreNewer = newerRows.length > after;
+    // `olderRows` comes back newest-first; flip it so the whole window is
+    // ascending like every other command list the clients render.
+    const commands = [
+      ...olderRows.slice(0, before).reverse(),
+      anchor,
+      ...newerRows.slice(0, after),
+    ];
+
+    return {
+      session: SessionService.toDto(session),
+      commands: await this.withAttachments(commands),
+      chunks: await this.chunksForCommands(commands.map((c) => c.id)),
+      hasMore,
+      hasMoreNewer,
+    };
+  }
+
+  /** Chunks for a set of commands, in the (commandId, seq) order the
+   *  viewers concatenate deltas in. */
+  private async chunksForCommands(commandIds: string[]) {
+    if (commandIds.length === 0) return [];
+    return this.prisma.resultChunk.findMany({
+      where: { commandId: { in: commandIds } },
+      orderBy: [{ commandId: 'asc' }, { seq: 'asc' }],
+    });
   }
 }

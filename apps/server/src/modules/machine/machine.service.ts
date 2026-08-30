@@ -71,6 +71,8 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
   private running = false;
   private sweepTimer?: NodeJS.Timeout;
   private loopPromise?: Promise<void>;
+  /** Guards reclaimStalePending against overlapping reconnect storms. */
+  private reclaiming = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -90,6 +92,38 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     this.running = true;
     this.loopPromise = this.consumeLoop();
     this.sweepTimer = setInterval(() => this.sweepStale(), SWEEP_INTERVAL_MS);
+    // A reconnect strands the PEL exactly the way a crash does: the loop
+    // resumes reading with '>' under the same fixed consumer name, so
+    // whatever Redis had already delivered before the socket died is
+    // never redelivered. Left alone that backlog is permanent and grows
+    // once per stall (50 entries were stuck at the moment the reader
+    // wedged). Re-run the boot-time drop on every reconnect so a stall
+    // costs one backlog instead of a monotonically growing PEL.
+    this.redis.read.on('ready', () => void this.reclaimAfterReconnect());
+  }
+
+  /**
+   * Drop the pending backlog stranded by a reader reconnect.
+   *
+   * Unlike the boot call this runs while consumeLoop is live, so the two
+   * share the `read` connection: the '0' reads queue behind whatever
+   * BLOCK is in flight and then interleave with the loop's '>' reads.
+   * That is safe — the two ID forms address disjoint sets (PEL vs new),
+   * and a double XACK of the same id is a no-op — it is only slower than
+   * the exclusive boot pass. The guard keeps a reconnect storm from
+   * stacking overlapping drains on one connection.
+   */
+  private async reclaimAfterReconnect(): Promise<void> {
+    if (!this.running || this.reclaiming) return;
+    this.reclaiming = true;
+    try {
+      this.logger.warn('lifecycle reader reconnected — dropping stranded pending entries');
+      await this.reclaimStalePending();
+    } catch (err) {
+      this.logger.error(`reclaim after reconnect failed: ${(err as Error).message}`);
+    } finally {
+      this.reclaiming = false;
+    }
   }
 
   /**

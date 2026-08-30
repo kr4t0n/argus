@@ -33,7 +33,8 @@ token-level streaming with reconnect-safe replay.
 
 - **Streaming-first UI** — typewriter deltas, tool-call pills, stdout/stderr
 blocks, sticky auto-scroll, and replay-on-reconnect. Answers render GFM
-markdown plus LaTeX math (KaTeX, `$…$` inline and `$$…$$` display).
+markdown plus LaTeX math (KaTeX, `$…$` inline and `$$…$$` display —
+Codex's `\(…\)`/`\[…\]` are normalized to those before parsing).
 - **Machine-driven runners** — each host runs one `argus-sidecar` daemon that
 self-registers as a *Machine* and starts one runner per installed CLI. Create
 **sessions** from the dashboard (hover a project → `+`); each pins to a
@@ -70,6 +71,25 @@ APNs, and reading the session on any client withdraws the phone banner
 - **Soft-archive everywhere** — hide a session or a whole project from the
 sidebar without losing history; one-click restore, and archives survive
 sidecar restarts.
+- **⌘P quick switch** — jump to a session by name without touching the
+sidebar. Fuzzy-matches title, project, machine and CLI type over the list
+already in memory, so it's instant and works offline of the API; an empty
+box lists your recent sessions, making a switch two keystrokes. `Tab`
+hands the same query over to ⌘K.
+- **⌘K content search** — search what was actually *said* across every
+session, archived included: prompts and assistant answers, ranked, with
+highlighted snippets. Postgres full-text with prefix matching so it filters as
+you type, plus a substring fallback so code strings like `MAXLEN` or
+`rediss://` still hit. Build logs, tool output and status noise are excluded
+from the index on purpose — searching `pool` finds the answer that explained
+the pool, not the `npm WARN` that mentioned one. Picking a result jumps to the
+**turn** that matched, not just the session.
+- **Windowed transcripts** — a session viewer holds a bounded window of turns
+rather than the whole thread, and pages in either direction as you scroll.
+Opening a session loads the newest few turns; a deep link (`?turn=<id>`) loads
+a window centred on that turn regardless of how far back it sits, so jumping
+to a match 300 turns deep costs one request instead of paging through
+everything in between.
 - **Live workingDir file tree** — a lazy-expanding, gitignore-aware tree kept
 in sync by the sidecar's `fsnotify` watcher; the header also shows the current
 git branch (or short SHA when detached). Open a file and it stays live too:
@@ -126,6 +146,11 @@ same minor version across all three. The server applies its Prisma migrations
 on boot, so a routine upgrade is just "pull the new images, restart, then
 update the sidecars" (`argus-sidecar update`, or the dashboard's **Update all
 sidecars…**).
+
+> **Upgrading into ⌘K search:** the migration that adds the search index
+> backfills one row per historical turn in a single pass, so first boot after
+> the upgrade is slower than usual — seconds on a corpus of a few thousand
+> turns. No action needed; searches simply return nothing until it finishes.
 
 ### v0.3.0 — the runner refactor (breaking; not compatible with < 0.3.0)
 
