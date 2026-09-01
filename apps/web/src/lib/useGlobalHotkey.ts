@@ -7,7 +7,8 @@ import { useEffect, useRef } from 'react';
  * once instead of copied per binding. Registered in the CAPTURE phase and
  * `preventDefault`ed: the xterm terminal pane would otherwise forward the
  * keystroke to the PTY, and browsers claim several of these themselves
- * (Ctrl+K is Firefox's search bar, ⌘P/Ctrl+P is Print everywhere).
+ * (Ctrl+K is Firefox's search bar, ⌘P/Ctrl+P is Print everywhere, ⌘D/Ctrl+D
+ * is add-bookmark).
  *
  * A modifier combo is why this needs no "is the user typing?" guard —
  * unlike a bare key it can't fire by accident mid-sentence, so it works
@@ -30,7 +31,8 @@ export function useGlobalHotkey(key: string, handler: () => void): void {
       // shortcut in every editor, and swallowing it here would make it
       // impossible to bind later.
       if (e.shiftKey || e.altKey) return;
-      // Readline owns Ctrl+K (kill-line) and Ctrl+P (previous-command).
+      // Readline owns Ctrl+K (kill-line) and Ctrl+P (previous-command),
+      // and Ctrl+D is EOF — stealing that one would break exiting a shell.
       // While the terminal has focus those belong to the shell, so only
       // the Ctrl form defers — ⌘ is never forwarded to a PTY, so the Cmd
       // binding keeps working everywhere including inside the terminal.

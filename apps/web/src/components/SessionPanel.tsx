@@ -5,6 +5,7 @@ import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
 import { useFileTabsStore } from '../stores/fileTabsStore';
+import { usePaletteStore } from '../stores/paletteStore';
 import { api } from '../lib/api';
 import { joinSession, leaveSession } from '../lib/ws';
 import { AgentTypeIcon } from './ui/AgentTypeIcon';
@@ -16,6 +17,7 @@ import { ContextPane } from './ContextPane';
 import { FileTabStrip } from './FileTabStrip';
 import { useProjectRef } from '../lib/projects';
 import { useFileTabAutoRefresh } from '../lib/useFileTabAutoRefresh';
+import { useGlobalHotkey } from '../lib/useGlobalHotkey';
 import { UsageBadge } from './UsageBadge';
 import { relativeTime } from '../lib/utils';
 
@@ -187,6 +189,46 @@ export function SessionPanel() {
   // background tab stale. Must sit above the `!sessionId` early return.
   useFileTabAutoRefresh(projectRef);
 
+  // ⌘D archives the session you're reading — and, pressed again, restores
+  // it. Making it a TOGGLE rather than a one-way archive is what makes the
+  // binding safe to put on this key at all: the browser's own ⌘D is "add
+  // bookmark", so a misfire is expected, and the undo then has to be the
+  // same keystroke rather than a hunt through the sidebar's archived
+  // reveal. For the same reason it deliberately does NOT navigate away the
+  // way the sidebar's archive action does (that one bounces to `/` because
+  // the row you clicked is about to vanish from under the cursor) — you
+  // keep reading the session, and the header badge both reports the new
+  // state and doubles as a click-to-restore affordance.
+  //
+  // Ctrl+D needs no special-casing here: `useGlobalHotkey` already defers
+  // the Ctrl form while the terminal has focus, so EOF still reaches the
+  // shell. Must sit above the early returns below, like the hook above it.
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const upsertSession = useSessionStore((s) => s.upsertSession);
+  const archived = !!entry?.session.archivedAt;
+
+  const toggleArchive = useCallback(async () => {
+    if (!sessionId || archiveBusy) return;
+    // The palette is a modal that owns the keyboard while it's open, and
+    // it can be showing a different session entirely — archiving the one
+    // behind it would be both invisible and the wrong target.
+    if (usePaletteStore.getState().mode !== null) return;
+    setArchiveBusy(true);
+    try {
+      const updated = archived
+        ? await api.unarchiveSession(sessionId)
+        : await api.archiveSession(sessionId);
+      upsertSession(updated);
+    } catch {
+      /* swallow — same posture as the sidebar's archive action; there is
+         no toast surface wired for this yet */
+    } finally {
+      setArchiveBusy(false);
+    }
+  }, [sessionId, archived, archiveBusy, upsertSession]);
+
+  useGlobalHotkey('d', () => void toggleArchive());
+
   if (!sessionId) {
     return (
       <div className="relative flex h-full items-center justify-center text-fg-tertiary text-sm">
@@ -258,6 +300,20 @@ export function SessionPanel() {
             <div className="font-display text-base font-semibold tracking-tight text-fg-primary truncate">
               {entry.session.title}
             </div>
+            {/* Both the confirmation that ⌘D landed and the one-click undo
+                for a ⌘D the user meant as "bookmark". Styled to match the
+                archived badge the command palette's rows already use. */}
+            {archived && (
+              <button
+                type="button"
+                onClick={() => void toggleArchive()}
+                disabled={archiveBusy}
+                title="archived — click or press ⌘D to restore"
+                className="shrink-0 rounded bg-surface-2 px-1 py-px text-[10px] uppercase tracking-wide text-fg-muted transition-colors hover:text-fg-primary disabled:opacity-40"
+              >
+                archived
+              </button>
+            )}
             {elapsed && <span className="text-xs text-fg-tertiary">· {elapsed}</span>}
           </div>
           <div className="ml-auto flex items-center gap-2">

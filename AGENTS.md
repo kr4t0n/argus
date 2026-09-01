@@ -813,13 +813,24 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `lib/useGlobalHotkey.ts` — the one home for app-level shortcuts, so the
   guards are written once. Capture phase + `preventDefault` (the terminal
   would forward the key to the PTY; browsers claim Ctrl+K for Firefox's
-  search bar and ⌘P for Print). Shifted/alted variants pass through so
-  ⌘⇧P stays bindable. **Readline exception:** Ctrl+K is kill-line and
-  Ctrl+P is previous-command, so when focus is inside `.xterm` the CTRL
+  search bar, ⌘P for Print, ⌘D for add-bookmark). Shifted/alted variants
+  pass through so ⌘⇧P stays bindable. **Readline exception:** Ctrl+K is
+  kill-line, Ctrl+P is previous-command and Ctrl+D is EOF, so when focus is
+  inside `.xterm` the CTRL
   form defers to the shell — ⌘ is never forwarded to a PTY, so the Cmd
   binding still works everywhere including in the terminal. Before this
   hook existed, ⌘K's raw listener swallowed Ctrl+K unconditionally and
   broke kill-line in the terminal pane for Ctrl-modifier users.
+  **The binding registry** (grep `useGlobalHotkey(` to keep this honest):
+  `⌘P` / `⌘K` open the palette's two modes (`CommandPalette.tsx`, mounted
+  once in `Dashboard` so they fire from any pane); `⌘D` toggles archive on
+  the open session (`SessionPanel.tsx`). Scope follows the mount point —
+  a binding registered in `SessionPanel` is inert on `/machines/:id` and
+  `/user` because the panel isn't mounted there, which is cheaper than
+  a route check inside the handler. A binding that must work everywhere
+  belongs in `Dashboard`. Every *other* keydown listener in the web app is
+  component-scoped (popover Escape, composer Enter, `ui/Select`); this hook
+  is the only global one, so a new app-level shortcut is a one-liner.
 - `stores/paletteStore.ts` — `mode: 'session' | 'content' | null`, where
   null is closed; collapsing open-ness and mode into one field is what
   makes each hotkey a toggle and the other hotkey a mode switch.

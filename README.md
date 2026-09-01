@@ -84,6 +84,13 @@ you type, plus a substring fallback so code strings like `MAXLEN` or
 from the index on purpose — searching `pool` finds the answer that explained
 the pool, not the `npm WARN` that mentioned one. Picking a result jumps to the
 **turn** that matched, not just the session.
+- **⌘D archive / restore** — archive the session you're reading without
+reaching for the sidebar. It's a *toggle*, not a one-way action: ⌘D is the
+browser's own "add bookmark", so a misfire is expected and the undo has to
+be the same keystroke. Archiving keeps you on the session rather than
+bouncing you home, and an `archived` badge appears in the header that is
+itself a click-to-restore button. Inside the terminal pane the Ctrl form
+still reaches the shell as EOF.
 - **Windowed transcripts** — a session viewer holds a bounded window of turns
 rather than the whole thread, and pages in either direction as you scroll.
 Opening a session loads the newest few turns; a deep link (`?turn=<id>`) loads
