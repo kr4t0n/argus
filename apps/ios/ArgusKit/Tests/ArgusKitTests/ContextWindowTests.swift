@@ -121,4 +121,37 @@ struct ContextWindowTests {
         #expect(ContextWindows.resolve(model: "totally-new-model", catalog: []) == nil)
         #expect(ContextWindows.resolve(model: nil, catalog: nil) == nil)
     }
+
+    @Test("a turn-reported window outranks both catalog and table")
+    func reportedWindowWins() {
+        let catalog = [entry(id: "gpt-5.6-sol", window: 272_000)]
+        // Codex reports the usable ceiling (272000 * 0.95), not the nominal.
+        let info = ContextWindows.resolve(
+            model: "gpt-5.6-sol", catalog: catalog, reportedWindow: 258_400
+        )
+        #expect(info?.window == 258_400)
+        // Label still comes from the name-keyed source.
+        #expect(info?.family == "GPT-5.6-SOL")
+    }
+
+    @Test("a reported window is trusted for a model nothing else recognises")
+    func reportedWindowWithoutName() {
+        let info = ContextWindows.resolve(
+            model: "totally-new-model", catalog: [], reportedWindow: 300_000
+        )
+        #expect(info?.window == 300_000)
+        #expect(info?.family == "totally-new-model")
+    }
+
+    @Test("a missing or non-positive reported window falls through")
+    func reportedWindowIgnoredWhenAbsent() {
+        #expect(
+            ContextWindows.resolve(model: "gpt-5.6-sol", catalog: nil, reportedWindow: nil)?.window
+                == 272_000
+        )
+        #expect(
+            ContextWindows.resolve(model: "gpt-5.6-sol", catalog: nil, reportedWindow: 0)?.window
+                == 272_000
+        )
+    }
 }

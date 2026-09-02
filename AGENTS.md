@@ -2283,23 +2283,31 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   launch. Codex's catalog command lives under `codex debug models` —
   machine-readable JSON but nominally a debug surface; the parser is
   defensive and any failure degrades to the free-text input.
-- **Context-window lookup is catalog-first, table-fallback**: the donut
-  on the session header's `UsageBadge` gets its denominator from
-  `resolveContextWindow`, which prefers the agent's own model catalog
-  (`ModelCatalogEntry.contextWindow` — codex parses it out of
-  `codex debug models`, so it tracks new releases with no code change)
-  and falls back to the hardcoded family → window map in
-  `packages/shared-types/src/contextWindow.ts` when the catalog is
-  unreachable. Catalog ids match exact-then-case-insensitively, NOT by
-  substring like the table, so a slug can't borrow a sibling's window.
-  The table is a real hazard on its own: it read 400k for the whole
-  gpt-5 family against a true 272k (per `codex debug models`), i.e. the
-  ring looked ~32% emptier than reality — the unsafe direction, since
-  the ring exists to warn before overflow. Treat a table edit as a
-  stopgap and check whether the catalog can answer instead. NOTE: iOS
-  ships the corrected table and a mirrored `ContextWindows.resolve`,
-  but `SessionViewModel` does not yet hold a catalog, so the iOS ring
-  still resolves via the fallback path.
+- **Context-window denominator has three sources, most authoritative
+  first** (`resolveContextWindow`, mirrored as `ContextWindows.resolve`):
+  1. `meta.modelContextWindow` off the newest `final` chunk — what the
+     turn itself reported. The only source that knows the window actually
+     in effect: it is per-thread, and it is the USABLE ceiling, not the
+     nominal one. Codex reports 258400 where its own catalog says 272000,
+     the difference being `effective_context_window_percent` (95). A
+     name-keyed source cannot express that, nor the fact that one model id
+     can run with different windows (`gpt-5.6-sol` lists context_window
+     272000 but max_context_window 872000).
+  2. The agent's model catalog (`ModelCatalogEntry.contextWindow`, parsed
+     from `codex debug models`) — tracks new releases with no code change.
+     Ids match exact-then-case-insensitively, NOT by substring like the
+     table, so a slug can't borrow a sibling's window.
+  3. The static family → window map in
+     `packages/shared-types/src/contextWindow.ts`, for transcripts whose
+     machine is offline or whose agent is gone.
+
+  The table is a real hazard on its own: it read 400k for the whole gpt-5
+  family against a true 272k, i.e. the ring looked ~32% emptier than
+  reality — the unsafe direction, since the ring exists to warn before
+  overflow. Treat a table edit as a stopgap and check whether source 1 or
+  2 can answer instead. iOS reads source 1 in `TranscriptEngine`
+  (`contextSnapshot`) and shares source 3; it does not yet wire source 2,
+  because `SessionViewModel` holds no catalog.
   The "current context used" numerator is the LATEST `final` chunk's
   `inputTokens + cacheReadTokens + cacheWriteTokens` — not a sum across
   turns — because each CLI re-sends the full history on `--resume`,

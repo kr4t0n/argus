@@ -186,35 +186,52 @@ export function lookupContextWindow(
 }
 
 /**
- * Resolve a model's context window, preferring the agent's own catalog
- * over the static table above.
+ * Resolve a model's context window. Three sources, most authoritative
+ * first.
  *
- * The catalog is the CLI's own answer — `codex debug models` reports
- * `context_window` per slug, and the sidecar already parses it into
- * `ModelCatalogEntry.contextWindow`. That tracks new model releases with
- * no code change, where `CONTEXT_WINDOWS` needs a matcher edit per family
- * and fails silently when it drifts (it read 400k for gpt-5.x against a
- * real 272k until this was wired up).
+ * 1. `reportedWindow` — what the turn itself said, read off the final
+ *    chunk's `meta.modelContextWindow`. This is the only source that knows
+ *    the window ACTUALLY in effect: it is per-thread, and it accounts for
+ *    the usable ceiling rather than the nominal one. Codex reports 258400
+ *    where its catalog says 272000, the difference being the model's
+ *    `effective_context_window_percent` (95) — the 5% it holds back. A
+ *    name-keyed source cannot express either, since the same model id can
+ *    run with different windows (`gpt-5.6-sol` lists context_window 272000
+ *    but max_context_window 872000).
+ * 2. The agent's model catalog — the CLI's own answer per slug
+ *    (`codex debug models` → `ModelCatalogEntry.contextWindow`). Tracks
+ *    new releases with no code change.
+ * 3. `CONTEXT_WINDOWS` — the static table, for transcripts whose machine
+ *    is offline or whose agent is gone. It needs a matcher edit per family
+ *    and fails silently when it drifts (it read 400k for gpt-5.x against a
+ *    real 272k until this was wired up).
  *
- * Falls back to the table when the catalog is unavailable (machine
- * offline, catalog not yet pushed) or lists no window for the model, so
- * historical transcripts keep rendering a ring.
- *
- * Matching is exact-then-case-insensitive on the entry id, NOT the
+ * Catalog matching is exact-then-case-insensitive on the entry id, NOT the
  * substring matching the table uses: a catalog id is the CLI's own slug,
  * so a loose match risks pairing a model with a sibling's window.
+ *
+ * A reported window is trusted even when neither name-keyed source
+ * recognises the model — the number is authoritative on its own, and the
+ * family label is only cosmetic.
  */
 export function resolveContextWindow(
   model: string | null | undefined,
   catalog: ModelCatalogEntry[] | null | undefined,
+  reportedWindow?: number | null,
 ): ContextWindowInfo | null {
+  let named: ContextWindowInfo | null = null;
   if (model && catalog?.length) {
     const lc = model.toLowerCase();
     const hit =
       catalog.find((e) => e.id === model) ?? catalog.find((e) => e.id.toLowerCase() === lc);
     if (hit?.contextWindow && hit.contextWindow > 0) {
-      return { window: hit.contextWindow, family: hit.displayName || hit.id };
+      named = { window: hit.contextWindow, family: hit.displayName || hit.id };
     }
   }
-  return lookupContextWindow(model);
+  named ??= lookupContextWindow(model);
+
+  if (typeof reportedWindow === 'number' && reportedWindow > 0) {
+    return { window: reportedWindow, family: named?.family ?? model ?? 'model' };
+  }
+  return named;
 }

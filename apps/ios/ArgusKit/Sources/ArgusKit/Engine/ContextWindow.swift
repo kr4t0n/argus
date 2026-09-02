@@ -106,35 +106,55 @@ public enum ContextWindows {
         return nil
     }
 
-    /// Resolve a model's context window, preferring the agent's own
-    /// catalog over the static table.
+    /// Resolve a model's context window. Three sources, most
+    /// authoritative first.
     ///
     /// Port of `resolveContextWindow` in
-    /// packages/shared-types/src/contextWindow.ts. The catalog is the
-    /// CLI's own answer (codex from `codex debug models`), so it tracks
-    /// new releases with no code change; the table is the fallback for an
-    /// offline machine or a transcript whose agent is gone.
+    /// packages/shared-types/src/contextWindow.ts.
     ///
-    /// Matching is exact-then-case-insensitive on the entry id, NOT the
-    /// substring matching the table uses: a catalog id is the CLI's own
-    /// slug, so a loose match risks pairing a model with a sibling's
-    /// window.
+    /// 1. `reportedWindow` — what the turn itself said, read off the final
+    ///    chunk's `meta.modelContextWindow`. The only source that knows the
+    ///    window ACTUALLY in effect: per-thread, and the usable ceiling
+    ///    rather than the nominal one. Codex reports 258400 where its
+    ///    catalog says 272000 — the 5% held back by the model's
+    ///    `effective_context_window_percent`.
+    /// 2. The agent's catalog (codex from `codex debug models`), which
+    ///    tracks new releases with no code change.
+    /// 3. The static table, for transcripts whose agent is gone.
+    ///
+    /// Catalog matching is exact-then-case-insensitive on the entry id,
+    /// NOT the substring matching the table uses: a catalog id is the
+    /// CLI's own slug, so a loose match risks pairing a model with a
+    /// sibling's window.
     public static func resolve(
         model: String?,
-        catalog: [ModelCatalogEntry]?
+        catalog: [ModelCatalogEntry]? = nil,
+        reportedWindow: Int? = nil
     ) -> ContextWindowInfo? {
+        var named: ContextWindowInfo?
         if let model, !model.isEmpty, let catalog, !catalog.isEmpty {
             let lowercased = model.lowercased()
             let hit =
                 catalog.first { $0.id == model }
                 ?? catalog.first { $0.id.lowercased() == lowercased }
             if let hit, let window = hit.contextWindow, window > 0 {
-                return ContextWindowInfo(
+                named = ContextWindowInfo(
                     window: window,
                     family: hit.displayName.isEmpty ? hit.id : hit.displayName
                 )
             }
         }
-        return lookup(model: model)
+        if named == nil { named = lookup(model: model) }
+
+        // Trusted even when neither name-keyed source recognises the
+        // model: the number is authoritative on its own and the family
+        // label is only cosmetic.
+        if let reportedWindow, reportedWindow > 0 {
+            return ContextWindowInfo(
+                window: reportedWindow,
+                family: named?.family ?? model ?? "model"
+            )
+        }
+        return named
     }
 }

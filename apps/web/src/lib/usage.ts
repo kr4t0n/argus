@@ -116,13 +116,18 @@ export interface SessionContext {
  *   - the agent type is unknown (no parser to pick),
  *   - no `final` chunk has surfaced usage yet (mid-first-turn, all turns
  *     cancelled), or
- *   - the active model isn't in the context-window lookup table — better
- *     to hide the ring than show a misleading percentage against a
- *     guessed denominator.
+ *   - no window could be resolved for the active model — better to hide
+ *     the ring than show a misleading percentage against a guessed
+ *     denominator.
+ *
+ * The denominator comes from `resolveContextWindow`: what the turn itself
+ * reported (`meta.modelContextWindow`) first, then the agent's model
+ * catalog, then the static table.
  *
  * Adapter-specific defaults: if a Codex transcript predates the app-server
- * transport's resolved-model progress metadata, assume `gpt-5.5` (400k
- * window). Other adapters reliably carry a model and need no fallback.
+ * transport's resolved-model progress metadata, assume `gpt-5.5` (272k
+ * window per `codex debug models`). Other adapters reliably carry a model
+ * and need no fallback.
  *
  * Memoized on (chunks reference, agentType) — same dependency shape as
  * `useSessionUsage` so the recompute fires exactly when a chunk lands.
@@ -136,10 +141,25 @@ export function useSessionContext(
   return useMemo(() => {
     if (!agentType) return null;
     const model = detected ?? (agentType === 'codex' ? 'gpt-5.5' : null);
-    // Catalog first: it is the CLI's own answer for this exact machine, so
-    // it stays right across model releases. The static table is the
-    // fallback for an offline machine or a transcript whose agent is gone.
-    const info: ContextWindowInfo | null = resolveContextWindow(model, catalog);
+    // What the turn itself reported, if anything. Scanned separately from
+    // the `used` walk below because the newest context signal may be a
+    // compact_boundary (a progress chunk, which carries no window), and we
+    // still want the window off the newest final.
+    let reportedWindow = 0;
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      const c = chunks[i];
+      if (c.kind !== 'final') continue;
+      const w = ((c.meta ?? {}) as Record<string, unknown>).modelContextWindow;
+      const n = typeof w === 'number' ? w : typeof w === 'string' ? Number(w) : NaN;
+      if (Number.isFinite(n) && n > 0) {
+        reportedWindow = n;
+        break;
+      }
+    }
+    // Reported window first (per-thread and usable-ceiling aware), then the
+    // agent's catalog, then the static table for transcripts whose machine
+    // is gone.
+    const info: ContextWindowInfo | null = resolveContextWindow(model, catalog, reportedWindow);
     if (!info) return null;
 
     // Walk backward for the newest context signal: a usage-bearing
