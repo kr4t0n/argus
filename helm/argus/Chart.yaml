@@ -12,10 +12,30 @@ type: application
 # field — see helm-publish.yml. Prerelease versions (-rc.N) are hidden
 # from plain `helm search`/`helm upgrade`; install them with
 # `--version 0.2.7-rc.3` (or `--devel`).
-version: 0.3.3
+version: 0.3.4
 # App version tracks the Docker image tags pulled by default. Bump in
 # lockstep with `version` whenever the chart starts requiring features
 # only present in newer images; otherwise it can lag.
+#
+# 0.3.4 is a control-plane PATCH with no schema change and no sidecar
+# change — a drop-in over 0.3.3, and the sidecar stays at v0.3.3.
+# appVersion pins the 0.3.4 server/web images.
+#
+# Fixes one bug that silently swallowed turns. A CLI that restarts
+# mid-turn emits a `result` for the abandoned inner run, and the result
+# ingestor took that as the end of the turn: observed with a command
+# finalized at 08:50:28 while 42 more chunks kept streaming in until
+# 08:52:10. The dashboard faithfully honours the server's "completed",
+# so the turn rendered done-and-empty — activity pill not live, response
+# body blank — and only a hard browser refresh brought the answer back.
+# The ingestor now RE-OPENS a command when real work (delta / tool /
+# stdout) arrives after it finalized, while still ignoring the trailing
+# `progress` announce that 0.3.3 was written to handle — the two look
+# identical at arrival, so the chunk kind is the discriminator. The
+# viewer also now takes the LAST `final` of a turn rather than the
+# first, so an abandoned inner result (typically empty) can no longer
+# blank the body permanently for turns whose text lives in the final
+# chunk rather than in streamed deltas.
 #
 # 0.3.3 is a control-plane release that ADDS TABLES — additive, not
 # breaking, and compatible with 0.3.x sidecars. appVersion pins the
@@ -170,7 +190,7 @@ version: 0.3.3
 # 0.2.0 shipped file/image attachments — the default images include the
 # attachment module, so `objectStore` works out of the box (set the
 # endpoint + bucket + creds to enable it).
-appVersion: "0.3.3"
+appVersion: "0.3.4"
 
 home: https://github.com/kr4t0n/argus
 sources:
