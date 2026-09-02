@@ -8,6 +8,7 @@ import { UserPanel } from './UserPanel';
 import { CommandPalette } from '../components/CommandPalette';
 import { ResizeHandle } from '../components/ui/ResizeHandle';
 import { useGlobalHotkey } from '../lib/useGlobalHotkey';
+import { HOTKEYS } from '../lib/hotkeys';
 import { useUIStore } from '../stores/uiStore';
 
 const RAIL_WIDTH = 48;
@@ -43,7 +44,7 @@ export function Dashboard() {
   // default prefix, and readline's backward-char. `useGlobalHotkey` defers
   // the Ctrl form whenever `.xterm` holds focus, so only the ⌘ form gets
   // here — which is also why this binding needs no guard of its own.
-  useGlobalHotkey('b', toggleSidebar);
+  useGlobalHotkey(HOTKEYS.toggleSidebar, toggleSidebar);
 
   return (
     <div className="h-screen w-screen flex overflow-x-hidden">

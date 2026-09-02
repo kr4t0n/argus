@@ -18,6 +18,7 @@ import { FileTabStrip } from './FileTabStrip';
 import { useProjectRef } from '../lib/projects';
 import { useFileTabAutoRefresh } from '../lib/useFileTabAutoRefresh';
 import { useGlobalHotkey } from '../lib/useGlobalHotkey';
+import { HOTKEYS } from '../lib/hotkeys';
 import { UsageBadge } from './UsageBadge';
 import { relativeTime } from '../lib/utils';
 
@@ -227,7 +228,7 @@ export function SessionPanel() {
     }
   }, [sessionId, archived, archiveBusy, upsertSession]);
 
-  useGlobalHotkey('d', () => void toggleArchive());
+  useGlobalHotkey(HOTKEYS.archiveSession, () => void toggleArchive());
 
   // ⌘. stops the turn that's running, from anywhere in the session — the
   // transcript, a file tab, the context pane. The composer already cancels
@@ -250,7 +251,7 @@ export function SessionPanel() {
     if (active) await api.cancelCommand(active.id);
   }, [entry]);
 
-  useGlobalHotkey('.', () => {
+  useGlobalHotkey(HOTKEYS.cancelTurn, () => {
     // No-op rather than an error when nothing is running — a stop key
     // that reports failure for "nothing to stop" is just noise.
     if (!running) return;

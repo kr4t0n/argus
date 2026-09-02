@@ -16,6 +16,7 @@ import { usePaletteStore, type PaletteMode } from '../stores/paletteStore';
 import { basename, resolveProjectRef } from '../lib/projects';
 import { rankSessions, type SessionCandidate } from '../lib/sessionMatch';
 import { useGlobalHotkey } from '../lib/useGlobalHotkey';
+import { HOTKEYS } from '../lib/hotkeys';
 import { AgentTypeIcon } from './ui/AgentTypeIcon';
 import { cn } from '../lib/utils';
 
@@ -60,8 +61,14 @@ export function CommandPalette() {
   const listRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
-  useGlobalHotkey('p', useCallback(() => toggle('session'), [toggle]));
-  useGlobalHotkey('k', useCallback(() => toggle('content'), [toggle]));
+  useGlobalHotkey(
+    HOTKEYS.paletteSession,
+    useCallback(() => toggle('session'), [toggle]),
+  );
+  useGlobalHotkey(
+    HOTKEYS.paletteContent,
+    useCallback(() => toggle('content'), [toggle]),
+  );
 
   const open = mode !== null;
 

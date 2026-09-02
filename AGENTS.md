@@ -821,7 +821,17 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   binding still works everywhere including in the terminal. Before this
   hook existed, ⌘K's raw listener swallowed Ctrl+K unconditionally and
   broke kill-line in the terminal pane for Ctrl-modifier users.
-  **The binding registry** (grep `useGlobalHotkey(` to keep this honest):
+  **The binding registry is `lib/hotkeys.ts`**, and the hook takes a
+  `HotkeyBinding` from it rather than a bare key string — a raw-string call
+  site would be a binding the shortcuts overlay could never render, so the
+  type makes that unrepresentable. The same table is what the overlay reads
+  and what a dev-only module-load check scans for two bindings claiming one
+  key (a silent failure otherwise: both handlers fire, in mount order).
+  `LOCAL_KEYS` in the same file documents the context-local keys the hook
+  does NOT own (composer Enter/Escape, palette arrows/Tab, and the terminal
+  Ctrl keys that deliberately reach the shell) — deliberately separate,
+  since putting them in `HOTKEYS` would imply something registers them.
+  Current bindings:
   `⌘P` / `⌘K` open the palette's two modes (`CommandPalette.tsx`, mounted
   once in `Dashboard` so they fire from any pane); `⌘D` toggles archive on
   the open session and `⌘.` cancels its running turn (both
