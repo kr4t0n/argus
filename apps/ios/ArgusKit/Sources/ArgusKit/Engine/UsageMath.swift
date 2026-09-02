@@ -66,11 +66,13 @@ public enum UsageParser {
     }
 
     /// Live context size — the prompt the model saw on its most recent
-    /// SINGLE API call. Differs from `parseUsage` for claude-code only:
+    /// SINGLE API call. Differs from `parseUsage` for claude-code and
+    /// app-server Codex:
     /// its `result` usage is a cumulative aggregate across every API
     /// round-trip in the turn (a 6-call turn overcounts ~6×); the
     /// per-call breakdown rides `usage.iterations`, whose LAST element is
-    /// the real live context. Everything else falls through to
+    /// the real live context. Codex carries the equivalent value in
+    /// `lastUsage`. Everything else falls through to
     /// `parseUsage`. Only the context ring should use this; totals keep
     /// using `parseUsage`.
     public static func parseContextUsage(
@@ -83,6 +85,14 @@ public enum UsageParser {
            case .object = last {
             let synthetic: [String: JSONValue] = ["usage": last]
             if let perCall = parseUsage(adapterType: KnownAgentType.claudeCode, meta: synthetic) {
+                return perCall
+            }
+        }
+        if adapterType == KnownAgentType.codex,
+           let lastUsage = meta?["lastUsage"],
+           case .object = lastUsage {
+            let synthetic: [String: JSONValue] = ["usage": lastUsage]
+            if let perCall = parseUsage(adapterType: KnownAgentType.codex, meta: synthetic) {
                 return perCall
             }
         }

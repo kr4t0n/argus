@@ -79,7 +79,7 @@ Command ── emits ──▶ many ResultChunks (streamed)
   is no "agent" between the session and the runner.
 - A **Session** is a conversation thread pinned to one project + cliType.
   It maps 1-1 to the underlying CLI's native conversation id (Claude Code
-  `--resume`, Codex `resume`, Cursor CLI `--resume`) via
+  `--resume`, Codex app-server `threadId`, Cursor CLI `--resume`) via
   `Session.externalId`. The server stores the `externalId` after the
   sidecar reports it on the first turn.
   `Session.modelSelection` (nullable JSON) holds the session-default
@@ -465,10 +465,55 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   prefers the auto-detected string over anything baked in.
   - **Model selection** rides `Command.Options` as flat keys
     (`model` / `effort` / `context` / `speed`, constants in
-    `protocol`); each `Execute` appends only the flags its CLI knows:
-    claude-code `--model x[1m] --effort l`, codex `--model x -c
-    model_reasoning_effort=l -c service_tier=fast`, cursor-cli
-    `--model <slug>` (the slug already encodes everything).
+    `protocol`); each `Execute` passes only the settings its CLI knows:
+    claude-code `--model x[1m] --effort l`, Codex app-server
+    `turn/start.{model,effort,serviceTier}`, cursor-cli `--model <slug>`
+    (the slug already encodes everything).
+  - **Codex uses an app-server transport**, not one `codex exec` child per
+    turn. `codex_app_server.go` owns the JSONL stdio connection for the
+    turn, performs the initialize/initialized handshake, and correlates
+    request ids. Each concurrent turn has an isolated app-server connection,
+    so **the connection IS the turn** — notifications are delivered on the
+    connection they arrive on and are never filtered by `turnId`. The
+    notifications the adapter maps today do all carry one (`turn/completed`
+    carries `turn.id` instead), so filtering was not losing events — but 54
+    of app-server's 81 server notifications carry no `turnId` at all
+    (`configWarning`, `guardianWarning`, `account/rateLimits/updated`,
+    `thread/status/changed`, `process/*`), so anything surfaced later would
+    vanish silently. Dropping that layer also removes the reason
+    `deliverEvent` held a lock across a channel send: `request()` takes
+    `s.mu` *before* it selects on its context, so a lock held across a
+    blocking send made `Cancel` ignore its own deadline and, since the
+    runner dispatches cancels inline on the run loop, stalled command
+    delivery machine-wide. It closes cleanly BEFORE its terminal
+    chunk is published because app-server otherwise retains a loaded thread's
+    writer for a 30-minute unsubscribe grace period (blocking terminal
+    `codex resume`). Fresh sessions call `thread/start`, persisted sessions
+    call `thread/resume`, turns call `turn/start`, and cloning uses
+    `thread/read` + `thread/fork` rather
+    than copying rollout files. **Cancellation is graceful-then-forced**:
+    `turn/interrupt` first, so app-server finalizes the interrupted turn on
+    disk and a later resume sees a coherent thread — but the turn's event
+    loop also selects on the command context, and `Cancel` closes the
+    connection after a 3s grace period. Without that escalation an
+    app-server that acks the interrupt and never emits `turn/completed`
+    leaves the chunk stream open forever: the command is never acked and the
+    session shows "running" indefinitely. The process is not bound to the
+    command context, so nothing else would kill it. **app-server stderr is
+    published as `stderr` chunks**, via an `argus/stderr` synthetic event on
+    the same connection channel, so diagnostics printed while a turn
+    otherwise proceeds (expiring auth, sandbox warnings) stay visible instead
+    of surfacing only inside a crash message. Lines are ANSI-stripped
+    (tracing output is colourised), the every-teardown
+    `Failed to write to stdout: Broken pipe` line is filtered as noise, and
+    output is capped at 100 lines per turn because each chunk is a Redis
+    stream entry. The last 8 lines are still retained separately to decorate
+    a process-failure error. The runner also invokes
+    the optional `Closer` capability during shutdown. Because app-server's
+    `tokenUsage.total` is cumulative for the whole thread, the adapter
+    snapshots it before each turn and folds only the delta into the final
+    chunk as `meta.usage`; `meta.lastUsage` retains the last API call for the
+    context ring.
   - **Model catalogs** come from the optional `ModelLister` capability
     (`models_claude.go` static alias table, `models_codex.go` parses
     `codex debug models` JSON, `models_cursor.go` parses
@@ -1757,14 +1802,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   MAXLEN-trimming gotcha doesn't apply. If you ever want the sidecar to
   pull presigned-direct from S3 (server out of the byte path), gate it on
   the bucket being reachable from every sidecar host.
-- **Image vision is uniform-prompt-path + one per-adapter flag**. The
+- **Image vision is uniform-prompt-path + one per-adapter native input**. The
   cross-adapter floor is the prompt preamble: every agentic CLI opens a
   file whose path it's told, and — verified empirically against the real
   CLIs — `claude -p` over stdin **and** `cursor-agent -p` attach a
   path-mentioned image as *vision* (not just a text read). Codex is the
-  one exception: `codex exec` needs its native `--image <path>` flag for
-  vision (a bare path mention can be read as text), so `codex.go` emits
-  `--image` for every `image/*` attachment with a `LocalPath`. When
+  one exception: Codex needs a native image input for vision (a bare path
+  mention can be read as text), so `codex.go` adds a `localImage` item to
+  `turn/start.input` for every `image/*` attachment with a `LocalPath`. When
   adding an adapter, you get file access + (claude-style) image vision
   for free via the preamble; only wire a native image flag if that CLI
   has one. (Claude's *Read tool* is unreliable for images — several
@@ -2254,11 +2299,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   from `usage.iterations[-1]`; `parseUsage` (used by `useSessionUsage` and
   the server-side `/me/usage` aggregation) intentionally keeps the
   cumulative aggregate, which is the correct per-turn cost/usage total.
-  codex (`turn.completed.usage`) and cursor-cli expose only a turn-level
-  total in `exec --json`, so their rings can still overcount on multi-call
-  turns — codex's per-call figure lives in the richer `app-server`
-  protocol (`thread/tokenUsage/updated` → `tokenUsage.last`), not adopted
-  here. **Gotcha (hit twice — Fable 5, then Opus 5):** a Claude family
+  cursor-cli exposes only a turn-level total, so its ring can still overcount
+  on multi-call turns. Codex app-server's
+  `thread/tokenUsage/updated.tokenUsage.last` is preserved as
+  `meta.lastUsage`, and `parseContextUsage` uses it for the Codex ring while
+  accounting continues to use the total in `meta.usage`. **Gotcha (hit twice
+  — Fable 5, then Opus 5):** a Claude family
   whose 1M window is the *default* rather than an opt-in facet carries no
   `[1m]` token in its id, so the generic 200k Claude baseline silently
   claims it and the ring reads 5x too full. Those families each need

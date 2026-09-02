@@ -138,7 +138,8 @@ func (r *runner) pullAttachment(
 // This is the cross-adapter floor: Claude and Cursor attach an image as
 // vision when its path is mentioned in the prompt, and every agent can
 // open a non-image file it's told the path of. Codex additionally gets
-// images via --image, but listing them here too is harmless context.
+// images as app-server localImage inputs, but listing them here too is
+// harmless context.
 func appendAttachmentPreamble(prompt string, refs []protocol.AttachmentRef) string {
 	var b strings.Builder
 	b.WriteString(prompt)
