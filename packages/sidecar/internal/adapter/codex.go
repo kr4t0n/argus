@@ -554,20 +554,25 @@ func mapCodexAppEvent(ev codexAppEvent, state *codexAppEventState) []Chunk {
 	raw := map[string]any{"method": ev.method, "params": params}
 	switch ev.method {
 	case "item/agentMessage/delta":
-		delta := firstString(params, "delta")
-		if delta == "" {
-			return nil
-		}
-		return []Chunk{{Kind: protocol.KindDelta, Delta: delta}}
+		// Deliberately dropped. app-server streams these per token — a
+		// measured turn produced 69 deltas for 368 characters, median 5
+		// chars, arriving ~40/s inside a burst. Each one would become a
+		// Redis XADD, a Postgres row, a WS frame and a React render, and
+		// nothing downstream coalesces: claude-code emits one delta per
+		// message block, so the pipeline was never sized for token-level
+		// input. The authoritative text arrives once on item/completed.
+		return nil
 	case "item/started", "item/completed":
 		item := toMap(params["item"])
 		if item == nil {
 			return nil
 		}
 		item = normalizeCodexAppItem(item)
-		if item["type"] == "agent_message" {
-			// The authoritative completed item contains the whole accumulated
-			// answer; deltas above already streamed it to Argus.
+		if item["type"] == "userMessage" {
+			// app-server echoes back the prompt Argus itself just sent
+			// (turnStartParams sets clientUserMessageId). The UI renders the
+			// user's message from its own Command row, so this is a
+			// duplicate that only clutters the activity pill.
 			return nil
 		}
 		phase := "item.started"
@@ -731,6 +736,32 @@ func mapCodexItem(phase string, item, raw map[string]any, state *fileEditState) 
 	itemID, _ := item["id"].(string)
 
 	switch itemType {
+	case "reasoning":
+		// Mirrors the claude-code adapter's `thinking` handling: a progress
+		// chunk tagged contentType=thinking, NOT a delta, so private
+		// reasoning can't be concatenated into the visible answer. The
+		// ActivityPill renders this as its own labelled row instead of the
+		// generic type-name fallback.
+		if phase != "item.completed" {
+			return nil
+		}
+		// `summary` and `content` are ARRAYS of strings, not strings —
+		// firstString would silently yield "" and drop every reasoning
+		// block. Prefer the summary (what Codex intends to show); fall back
+		// to the raw content.
+		txt := joinCodexStrings(item["summary"])
+		if txt == "" {
+			txt = joinCodexStrings(item["content"])
+		}
+		if txt == "" {
+			return nil
+		}
+		return []Chunk{{
+			Kind:    protocol.KindProgress,
+			Content: txt,
+			Meta:    map[string]any{"contentType": "thinking"},
+		}}
+
 	case "agent_message":
 		if phase != "item.completed" {
 			return nil
@@ -908,7 +939,13 @@ func mapCodexItem(phase string, item, raw map[string]any, state *fileEditState) 
 		return out
 	}
 
-	// Unknown item type — keep it visible as progress instead of dropping.
+	// Unknown item type — keep it visible as progress instead of dropping,
+	// which is how a new CLI event shape gets noticed. Only on completion
+	// though: app-server emits both phases for every item, and a bare
+	// type-name row twice per item is noise, not a breadcrumb.
+	if phase != "item.completed" {
+		return nil
+	}
 	return []Chunk{{Kind: protocol.KindProgress, Content: itemType, Meta: raw}}
 }
 
@@ -918,6 +955,22 @@ func mapCodexItem(phase string, item, raw map[string]any, state *fileEditState) 
 // "updated" default: an added, deleted or renamed file all render as an
 // edit. A bare string is still accepted in case the shape is ever
 // flattened.
+// joinCodexStrings flattens a []string-shaped field into one block of text,
+// skipping empties. Reasoning items carry `summary`/`content` this way.
+func joinCodexStrings(v any) string {
+	parts := toAnySlice(v)
+	if len(parts) == 0 {
+		return ""
+	}
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if s, ok := p.(string); ok && strings.TrimSpace(s) != "" {
+			out = append(out, s)
+		}
+	}
+	return strings.Join(out, "\n\n")
+}
+
 func codexChangeKind(v any) string {
 	if s, ok := v.(string); ok {
 		return s
