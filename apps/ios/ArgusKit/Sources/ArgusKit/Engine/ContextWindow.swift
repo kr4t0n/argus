@@ -74,7 +74,14 @@ public enum ContextWindows {
             family: "Claude Opus 5"
         ),
         Entry(match: { isAnthropicFamily($0) }, window: 200_000, family: "Claude"),
-        Entry(match: { $0.contains("gpt-5") }, window: 400_000, family: "GPT-5"),
+        // OpenAI GPT-5 family — 272k. Verified against `codex debug
+        // models`, which reports context_window=272000 for every listed
+        // gpt-5.x slug (5.4, 5.5, 5.6-sol/terra/luna). This was 400_000,
+        // which made the ring read ~32% emptier than reality — the unsafe
+        // direction, since the ring exists to warn before overflow.
+        // Prefer `resolve(model:catalog:)`, which reads the CLI's own
+        // catalog; this entry is the fallback.
+        Entry(match: { $0.contains("gpt-5") }, window: 272_000, family: "GPT-5"),
         Entry(match: { $0.contains("gpt-4.1") }, window: 1_000_000, family: "GPT-4.1"),
         Entry(
             match: { $0.contains("gpt-4o") || $0.contains("gpt-4-turbo") },
@@ -97,5 +104,37 @@ public enum ContextWindows {
             return ContextWindowInfo(window: entry.window, family: entry.family)
         }
         return nil
+    }
+
+    /// Resolve a model's context window, preferring the agent's own
+    /// catalog over the static table.
+    ///
+    /// Port of `resolveContextWindow` in
+    /// packages/shared-types/src/contextWindow.ts. The catalog is the
+    /// CLI's own answer (codex from `codex debug models`), so it tracks
+    /// new releases with no code change; the table is the fallback for an
+    /// offline machine or a transcript whose agent is gone.
+    ///
+    /// Matching is exact-then-case-insensitive on the entry id, NOT the
+    /// substring matching the table uses: a catalog id is the CLI's own
+    /// slug, so a loose match risks pairing a model with a sibling's
+    /// window.
+    public static func resolve(
+        model: String?,
+        catalog: [ModelCatalogEntry]?
+    ) -> ContextWindowInfo? {
+        if let model, !model.isEmpty, let catalog, !catalog.isEmpty {
+            let lowercased = model.lowercased()
+            let hit =
+                catalog.first { $0.id == model }
+                ?? catalog.first { $0.id.lowercased() == lowercased }
+            if let hit, let window = hit.contextWindow, window > 0 {
+                return ContextWindowInfo(
+                    window: window,
+                    family: hit.displayName.isEmpty ? hit.id : hit.displayName
+                )
+            }
+        }
+        return lookup(model: model)
     }
 }

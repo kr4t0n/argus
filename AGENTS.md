@@ -2283,10 +2283,23 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   launch. Codex's catalog command lives under `codex debug models` —
   machine-readable JSON but nominally a debug surface; the parser is
   defensive and any failure degrades to the free-text input.
-- **Context-window lookup is hand-maintained**: the donut on the
-  session header's `UsageBadge` reads its denominator from
-  `packages/shared-types/src/contextWindow.ts`, a hardcoded family →
-  window map matched by lowercased substring on the active model id.
+- **Context-window lookup is catalog-first, table-fallback**: the donut
+  on the session header's `UsageBadge` gets its denominator from
+  `resolveContextWindow`, which prefers the agent's own model catalog
+  (`ModelCatalogEntry.contextWindow` — codex parses it out of
+  `codex debug models`, so it tracks new releases with no code change)
+  and falls back to the hardcoded family → window map in
+  `packages/shared-types/src/contextWindow.ts` when the catalog is
+  unreachable. Catalog ids match exact-then-case-insensitively, NOT by
+  substring like the table, so a slug can't borrow a sibling's window.
+  The table is a real hazard on its own: it read 400k for the whole
+  gpt-5 family against a true 272k (per `codex debug models`), i.e. the
+  ring looked ~32% emptier than reality — the unsafe direction, since
+  the ring exists to warn before overflow. Treat a table edit as a
+  stopgap and check whether the catalog can answer instead. NOTE: iOS
+  ships the corrected table and a mirrored `ContextWindows.resolve`,
+  but `SessionViewModel` does not yet hold a catalog, so the iOS ring
+  still resolves via the fallback path.
   The "current context used" numerator is the LATEST `final` chunk's
   `inputTokens + cacheReadTokens + cacheWriteTokens` — not a sum across
   turns — because each CLI re-sends the full history on `--resume`,

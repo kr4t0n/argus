@@ -1,12 +1,18 @@
 import { useMemo } from 'react';
-import type { AgentType, ContextWindowInfo, ResultChunkDTO, TokenUsage } from '@argus/shared-types';
+import type {
+  AgentType,
+  ContextWindowInfo,
+  ModelCatalogEntry,
+  ResultChunkDTO,
+  TokenUsage,
+} from '@argus/shared-types';
 import {
   ZERO_USAGE,
   hasUsage,
-  lookupContextWindow,
   parseContextUsage,
   parseModel,
   parseUsage,
+  resolveContextWindow,
   sumUsage,
 } from '@argus/shared-types';
 
@@ -124,12 +130,16 @@ export interface SessionContext {
 export function useSessionContext(
   chunks: ResultChunkDTO[],
   agentType: AgentType | undefined,
+  catalog?: ModelCatalogEntry[] | null,
 ): SessionContext | null {
   const detected = useSessionModel(chunks);
   return useMemo(() => {
     if (!agentType) return null;
     const model = detected ?? (agentType === 'codex' ? 'gpt-5.5' : null);
-    const info: ContextWindowInfo | null = lookupContextWindow(model);
+    // Catalog first: it is the CLI's own answer for this exact machine, so
+    // it stays right across model releases. The static table is the
+    // fallback for an offline machine or a transcript whose agent is gone.
+    const info: ContextWindowInfo | null = resolveContextWindow(model, catalog);
     if (!info) return null;
 
     // Walk backward for the newest context signal: a usage-bearing
@@ -165,7 +175,7 @@ export function useSessionContext(
 
     const percent = Math.min(100, Math.max(0, (used / info.window) * 100));
     return { used, window: info.window, percent, family: info.family };
-  }, [chunks, agentType, detected]);
+  }, [chunks, agentType, detected, catalog]);
 }
 
 /** k/M short form for token counts. Used by the compact header badge
