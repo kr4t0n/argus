@@ -15,8 +15,9 @@ import (
 )
 
 // codexAppServer is one turn-scoped JSONL connection to `codex app-server`.
-// Notifications are correlated by turn id, and closing stdin after the turn
-// makes app-server release its thread-store writer immediately.
+// The connection IS the turn: notifications need no correlation beyond the
+// connection they arrive on, and closing stdin after the turn makes
+// app-server release its thread-store writer immediately.
 type codexAppServer struct {
 	cmd   *exec.Cmd
 	stdin io.WriteCloser
@@ -24,11 +25,14 @@ type codexAppServer struct {
 	writeMu sync.Mutex
 	nextID  atomic.Int64
 
-	mu       sync.Mutex
-	pending  map[int64]chan appServerResponse
-	turns    map[string]*codexAppRun
-	buffered map[string][]codexAppEvent
-	usage    map[string]map[string]any
+	mu      sync.Mutex
+	pending map[int64]chan appServerResponse
+	usage   map[string]map[string]any
+
+	// events carries this turn's notifications. One connection serves
+	// exactly one turn, so the turn is established by connection identity
+	// and needs no turn-id demultiplexing on top.
+	events chan codexAppEvent
 
 	done      chan struct{}
 	closeOnce sync.Once
@@ -60,10 +64,6 @@ type codexAppEvent struct {
 	params json.RawMessage
 }
 
-type codexAppRun struct {
-	events chan codexAppEvent
-}
-
 func startCodexAppServer(ctx context.Context, binary, workingDir string, extraArgs []string) (*codexAppServer, error) {
 	args := append([]string{"app-server", "--stdio"}, extraArgs...)
 	cmd := exec.Command(binary, args...)
@@ -84,13 +84,12 @@ func startCodexAppServer(ctx context.Context, binary, workingDir string, extraAr
 	}
 
 	s := &codexAppServer{
-		cmd:      cmd,
-		stdin:    stdin,
-		pending:  make(map[int64]chan appServerResponse),
-		turns:    make(map[string]*codexAppRun),
-		buffered: make(map[string][]codexAppEvent),
-		usage:    make(map[string]map[string]any),
-		done:     make(chan struct{}),
+		cmd:     cmd,
+		stdin:   stdin,
+		pending: make(map[int64]chan appServerResponse),
+		usage:   make(map[string]map[string]any),
+		events:  make(chan codexAppEvent, 256),
+		done:    make(chan struct{}),
 	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start codex app-server: %w", err)
@@ -251,31 +250,28 @@ func (s *codexAppServer) deliverResponse(id int64, resp appServerResponse) {
 	}
 }
 
+// deliverEvent hands one notification to this turn's consumer. Every event
+// on a turn-scoped connection belongs to that turn, so nothing is filtered
+// on turn id — a thread-scoped notification such as
+// thread/tokenUsage/updated reaches the consumer whether or not app-server
+// happens to tag it.
+//
+// s.mu is released before the send. Holding a lock across an unbounded
+// channel send lets consumer backpressure wedge the whole connection:
+// request() takes s.mu before it selects on its context, so its deadline
+// cannot preempt a mutex, and Cancel would block past its own budget.
 func (s *codexAppServer) deliverEvent(ev codexAppEvent) {
-	turnID := eventTurnID(ev.params)
-	s.mu.Lock()
 	if ev.method == "thread/tokenUsage/updated" {
-		threadID, total := eventThreadUsage(ev.params)
-		if threadID != "" && total != nil {
+		if threadID, total := eventThreadUsage(ev.params); threadID != "" && total != nil {
+			s.mu.Lock()
 			s.usage[threadID] = total
+			s.mu.Unlock()
 		}
 	}
-	if turnID == "" {
-		s.mu.Unlock()
-		return
+	select {
+	case s.events <- ev:
+	case <-s.done:
 	}
-	run := s.turns[turnID]
-	if run == nil {
-		s.buffered[turnID] = append(s.buffered[turnID], ev)
-		s.mu.Unlock()
-		return
-	}
-	run.events <- ev
-	if ev.method == "turn/completed" {
-		delete(s.turns, turnID)
-		close(run.events)
-	}
-	s.mu.Unlock()
 }
 
 func eventThreadUsage(raw json.RawMessage) (string, map[string]any) {
@@ -293,36 +289,34 @@ func eventThreadUsage(raw json.RawMessage) (string, map[string]any) {
 	return p.ThreadID, p.TokenUsage.Total
 }
 
-func eventTurnID(raw json.RawMessage) string {
-	var p struct {
-		TurnID string `json:"turnId"`
-		Turn   struct {
-			ID string `json:"id"`
-		} `json:"turn"`
+// nextEvent returns the next notification for this turn. ok is false once
+// the connection has terminated or ctx is done, and the returned error says
+// which — giving the consumer a bounded exit even when app-server never
+// sends a cooperative turn/completed.
+//
+// A buffered event always wins over termination: a turn/completed racing the
+// process exit, or racing the command context being cancelled right after an
+// interrupt, must still be delivered rather than lost to a random select.
+func (s *codexAppServer) nextEvent(ctx context.Context) (codexAppEvent, bool, error) {
+	select {
+	case ev := <-s.events:
+		return ev, true, nil
+	default:
 	}
-	_ = json.Unmarshal(raw, &p)
-	if p.TurnID != "" {
-		return p.TurnID
+	select {
+	case ev := <-s.events:
+		return ev, true, nil
+	case <-s.done:
+		return codexAppEvent{}, false, s.err()
+	case <-ctx.Done():
+		return codexAppEvent{}, false, ctx.Err()
 	}
-	return p.Turn.ID
 }
 
-func (s *codexAppServer) subscribe(turnID string) *codexAppRun {
-	run := &codexAppRun{events: make(chan codexAppEvent, 256)}
+func (s *codexAppServer) err() error {
 	s.mu.Lock()
-	s.turns[turnID] = run
-	queued := s.buffered[turnID]
-	delete(s.buffered, turnID)
-	for _, ev := range queued {
-		run.events <- ev
-		if ev.method == "turn/completed" {
-			delete(s.turns, turnID)
-			close(run.events)
-			break
-		}
-	}
-	s.mu.Unlock()
-	return run
+	defer s.mu.Unlock()
+	return s.failErr
 }
 
 func (s *codexAppServer) threadUsageTotal(threadID string) map[string]any {
@@ -353,15 +347,13 @@ func (s *codexAppServer) fail(err error) {
 		s.mu.Lock()
 		s.failErr = err
 		for id, ch := range s.pending {
+			// Cap-1 channels, one send per id, so this never blocks under s.mu.
 			ch <- appServerResponse{err: err}
 			delete(s.pending, id)
 		}
-		for id, run := range s.turns {
-			run.events <- codexAppEvent{method: "argus/app-server-error", params: mustJSON(map[string]any{"message": err.Error()})}
-			close(run.events)
-			delete(s.turns, id)
-		}
 		s.mu.Unlock()
+		// The single termination signal. Consumers select on it via
+		// nextEvent; nothing else closes a channel on the event path.
 		close(s.done)
 	})
 }

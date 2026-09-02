@@ -471,16 +471,36 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     (the slug already encodes everything).
   - **Codex uses an app-server transport**, not one `codex exec` child per
     turn. `codex_app_server.go` owns the JSONL stdio connection for the
-    turn, performs the initialize/initialized handshake, correlates request
-    ids, and routes notifications by `turnId`. Each concurrent turn has an
-    isolated app-server connection. It closes cleanly BEFORE its terminal
+    turn, performs the initialize/initialized handshake, and correlates
+    request ids. Each concurrent turn has an isolated app-server connection,
+    so **the connection IS the turn** — notifications are delivered on the
+    connection they arrive on and are never filtered by `turnId`. The
+    notifications the adapter maps today do all carry one (`turn/completed`
+    carries `turn.id` instead), so filtering was not losing events — but 54
+    of app-server's 81 server notifications carry no `turnId` at all
+    (`configWarning`, `guardianWarning`, `account/rateLimits/updated`,
+    `thread/status/changed`, `process/*`), so anything surfaced later would
+    vanish silently. Dropping that layer also removes the reason
+    `deliverEvent` held a lock across a channel send: `request()` takes
+    `s.mu` *before* it selects on its context, so a lock held across a
+    blocking send made `Cancel` ignore its own deadline and, since the
+    runner dispatches cancels inline on the run loop, stalled command
+    delivery machine-wide. It closes cleanly BEFORE its terminal
     chunk is published because app-server otherwise retains a loaded thread's
     writer for a 30-minute unsubscribe grace period (blocking terminal
     `codex resume`). Fresh sessions call `thread/start`, persisted sessions
-    call `thread/resume`, turns call `turn/start`, cancellation calls
-    `turn/interrupt`, and cloning uses `thread/read` + `thread/fork` rather
-    than copying rollout files. The runner also invokes the optional `Closer`
-    capability during shutdown. Because app-server's
+    call `thread/resume`, turns call `turn/start`, and cloning uses
+    `thread/read` + `thread/fork` rather
+    than copying rollout files. **Cancellation is graceful-then-forced**:
+    `turn/interrupt` first, so app-server finalizes the interrupted turn on
+    disk and a later resume sees a coherent thread — but the turn's event
+    loop also selects on the command context, and `Cancel` closes the
+    connection after a 3s grace period. Without that escalation an
+    app-server that acks the interrupt and never emits `turn/completed`
+    leaves the chunk stream open forever: the command is never acked and the
+    session shows "running" indefinitely. The process is not bound to the
+    command context, so nothing else would kill it. The runner also invokes
+    the optional `Closer` capability during shutdown. Because app-server's
     `tokenUsage.total` is cumulative for the whole thread, the adapter
     snapshots it before each turn and folds only the delta into the final
     chunk as `meta.usage`; `meta.lastUsage` retains the last API call for the

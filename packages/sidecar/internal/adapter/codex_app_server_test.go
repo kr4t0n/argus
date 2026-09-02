@@ -24,6 +24,10 @@ func TestCodexAppServerHelperProcess(t *testing.T) {
 	}
 	logPath := os.Getenv("ARGUS_CODEX_APP_SERVER_LOG")
 	turn := 0
+	// Set by the "wait-hang" prompt: acknowledge turn/interrupt but never
+	// emit turn/completed, the uncooperative case a cooperative fake cannot
+	// express.
+	hangOnInterrupt := false
 	appendLog := func(line string) {
 		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
 			_, _ = fmt.Fprintln(f, line)
@@ -65,11 +69,18 @@ func TestCodexAppServerHelperProcess(t *testing.T) {
 				} `json:"input"`
 			}
 			_ = json.Unmarshal(req.Params, &p)
-			if len(p.Input) > 0 && p.Input[0].Text == "slow-start" {
+			prompt := ""
+			if len(p.Input) > 0 {
+				prompt = p.Input[0].Text
+			}
+			if prompt == "slow-start" {
 				time.Sleep(100 * time.Millisecond)
 			}
+			if prompt == "wait-hang" {
+				hangOnInterrupt = true
+			}
 			write(map[string]any{"id": *req.ID, "result": map[string]any{"turn": map[string]any{"id": turnID, "status": "inProgress"}}})
-			if len(p.Input) == 0 || (p.Input[0].Text != "wait" && p.Input[0].Text != "slow-start") {
+			if prompt != "wait" && prompt != "slow-start" && prompt != "wait-hang" {
 				write(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": p.ThreadID, "turnId": turnID, "itemId": "answer", "delta": "hello"}})
 				write(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{"threadId": p.ThreadID, "turnId": turnID, "tokenUsage": map[string]any{
 					"total": map[string]any{"inputTokens": 100, "cachedInputTokens": 40, "outputTokens": 20, "reasoningOutputTokens": 5, "totalTokens": 120},
@@ -84,7 +95,9 @@ func TestCodexAppServerHelperProcess(t *testing.T) {
 			}
 			_ = json.Unmarshal(req.Params, &p)
 			write(map[string]any{"id": *req.ID, "result": map[string]any{}})
-			write(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": p.ThreadID, "turn": map[string]any{"id": p.TurnID, "status": "interrupted"}}})
+			if !hangOnInterrupt {
+				write(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": p.ThreadID, "turn": map[string]any{"id": p.TurnID, "status": "interrupted"}}})
+			}
 		case "thread/read":
 			write(map[string]any{"id": *req.ID, "result": map[string]any{"thread": map[string]any{"id": "thr-source", "turns": []any{map[string]any{"id": "old-1"}, map[string]any{"id": "old-2"}, map[string]any{"id": "old-3"}}}}})
 		case "thread/fork":
@@ -209,6 +222,47 @@ func TestCodexCancelWaitsForTurnStart(t *testing.T) {
 	}
 }
 
+// An app-server that acks turn/interrupt but never emits turn/completed must
+// not strand the turn: without a forced-termination fallback the chunk stream
+// stays open, handleCommand never returns, the command is never acked, and
+// the session shows "running" forever.
+func TestCodexCancelTerminatesUncooperativeInterrupt(t *testing.T) {
+	a, logPath := newFakeCodexAdapter(t)
+	t.Cleanup(func() { _ = a.Close() })
+	chunks, err := a.Execute(context.Background(), protocol.Command{ID: "cmd-hang", Prompt: "wait-hang"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if err := a.Cancel(context.Background(), "cmd-hang"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	got := drainChunkChannelWithin(t, chunks, 15*time.Second)
+	if terminals := terminalChunks(got); len(terminals) != 1 {
+		t.Fatalf("chunks = %+v, want exactly one terminal chunk", got)
+	}
+	if countString(requestMethods(t, logPath), "turn/interrupt") != 1 {
+		t.Fatalf("turn/interrupt was not sent before escalating")
+	}
+}
+
+// The runner cancels the command context right after adapter.Cancel returns
+// (machine/runner.go). The app-server process is not bound to that context,
+// so the event loop has to honour it explicitly or the stream never closes.
+func TestCodexExecuteTerminatesOnContextCancel(t *testing.T) {
+	a, _ := newFakeCodexAdapter(t)
+	t.Cleanup(func() { _ = a.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	chunks, err := a.Execute(ctx, protocol.Command{ID: "cmd-ctx", Prompt: "wait"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	cancel()
+	got := drainChunkChannelWithin(t, chunks, 15*time.Second)
+	if terminals := terminalChunks(got); len(terminals) != 1 {
+		t.Fatalf("chunks = %+v, want exactly one terminal chunk", got)
+	}
+}
+
 func TestCodexCloneUsesNativeForkBoundary(t *testing.T) {
 	a, logPath := newFakeCodexAdapter(t)
 	t.Cleanup(func() { _ = a.Close() })
@@ -305,8 +359,16 @@ func drainAdapterChunks(t *testing.T, a Adapter, cmd protocol.Command) []Chunk {
 
 func drainChunkChannel(t *testing.T, ch <-chan Chunk) []Chunk {
 	t.Helper()
+	return drainChunkChannelWithin(t, ch, 5*time.Second)
+}
+
+// drainChunkChannelWithin gives cancellation tests room for the interrupt
+// grace period plus process teardown, which the default bound is too tight
+// for.
+func drainChunkChannelWithin(t *testing.T, ch <-chan Chunk, within time.Duration) []Chunk {
+	t.Helper()
 	var chunks []Chunk
-	timer := time.NewTimer(5 * time.Second)
+	timer := time.NewTimer(within)
 	defer timer.Stop()
 	for {
 		select {

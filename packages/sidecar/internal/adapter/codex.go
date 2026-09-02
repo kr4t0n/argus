@@ -42,7 +42,16 @@ type codexActiveTurn struct {
 	cancelled bool
 	ready     chan struct{}
 	readyOnce sync.Once
+	// terminated closes when the turn's stream has gone terminal and its
+	// connection has been released. Cancel waits on it to decide whether a
+	// graceful interrupt worked or the connection has to be forced shut.
+	terminated chan struct{}
 }
+
+// codexInterruptGrace bounds how long a cancelled turn may keep its
+// connection open waiting for app-server to finalize the interrupted turn on
+// disk. Matches the SIGTERM->SIGKILL window the exec-based adapter used.
+const codexInterruptGrace = 3 * time.Second
 
 const codexDefaultBinary = "codex"
 
@@ -105,7 +114,7 @@ func (a *CodexAdapter) Version(ctx context.Context) (string, error) {
 func (a *CodexAdapter) Execute(
 	ctx context.Context, cmd protocol.Command,
 ) (<-chan Chunk, error) {
-	active := &codexActiveTurn{ready: make(chan struct{})}
+	active := &codexActiveTurn{ready: make(chan struct{}), terminated: make(chan struct{})}
 	a.activeMu.Lock()
 	a.active[cmd.ID] = active
 	a.activeMu.Unlock()
@@ -120,6 +129,7 @@ func (a *CodexAdapter) Execute(
 			if client != nil {
 				_ = client.Close()
 			}
+			close(active.terminated)
 		})
 	}
 	var err error
@@ -160,7 +170,6 @@ func (a *CodexAdapter) Execute(
 		cleanup()
 		return nil, fmt.Errorf("codex turn/start response: %w", err)
 	}
-	run := client.subscribe(turnID)
 	a.activeMu.Lock()
 	active.turnID = turnID
 	a.activeMu.Unlock()
@@ -184,9 +193,20 @@ func (a *CodexAdapter) Execute(
 			externalID = threadID
 		}
 		out <- Chunk{Kind: protocol.KindProgress, Content: "turn started", Meta: meta, ExternalID: externalID}
-		for ev := range run.events {
+		for {
+			ev, ok, endErr := client.nextEvent(ctx)
+			if !ok {
+				// The connection died or the command context was cancelled
+				// without a cooperative turn/completed. cleanup() closes the
+				// connection, so the stream always reaches a terminal chunk
+				// instead of waiting on app-server forever.
+				cleanup()
+				out <- codexTerminalChunk(endErr)
+				return
+			}
 			chunks := mapCodexAppEvent(ev, state)
-			if ev.method == "turn/completed" || ev.method == "argus/app-server-error" {
+			terminal := ev.method == "turn/completed"
+			if terminal {
 				// Release the writer before Argus can observe a terminal chunk
 				// and advertise this session as idle.
 				cleanup()
@@ -194,9 +214,23 @@ func (a *CodexAdapter) Execute(
 			for _, chunk := range chunks {
 				out <- chunk
 			}
+			if terminal {
+				return
+			}
 		}
 	}()
 	return out, nil
+}
+
+// codexTerminalChunk closes out a turn that ended without a turn/completed.
+// A cancelled command is a normal outcome and reports a plain final chunk,
+// matching the cooperative interrupt path; anything else surfaces the reason
+// the connection died.
+func codexTerminalChunk(err error) Chunk {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return Chunk{Kind: protocol.KindFinal, IsFinal: true}
+	}
+	return Chunk{Kind: protocol.KindError, Content: err.Error(), IsFinal: true}
 }
 
 func closedChunkStream(chunk Chunk) <-chan Chunk {
@@ -233,6 +267,19 @@ func (a *CodexAdapter) Cancel(ctx context.Context, commandID string) error {
 		"threadId": threadID,
 		"turnId":   turnID,
 	})
+	// Graceful first: app-server finalizes the interrupted turn on disk, so a
+	// later resume sees a coherent thread. But never wait on cooperation
+	// forever. An app-server that acks the interrupt without emitting
+	// turn/completed would otherwise leave the chunk stream open, the command
+	// unacked, and the session stuck "running" — so escalate to closing the
+	// connection, which shuts stdin and then kills.
+	go func() {
+		select {
+		case <-active.terminated:
+		case <-time.After(codexInterruptGrace):
+			_ = client.Close()
+		}
+	}()
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("codex turn/interrupt: %w", err)
 	}
@@ -544,8 +591,6 @@ func mapCodexAppEvent(ev codexAppEvent, state *codexAppEventState) []Chunk {
 			message = "Codex app-server error"
 		}
 		return []Chunk{{Kind: protocol.KindStderr, Content: message, Meta: raw}}
-	case "argus/app-server-error":
-		return []Chunk{{Kind: protocol.KindError, Content: firstString(params, "message"), Meta: raw, IsFinal: true}}
 	case "turn/plan/updated":
 		return []Chunk{{Kind: protocol.KindProgress, Content: "plan updated", Meta: raw}}
 	}
