@@ -42,7 +42,16 @@ type codexActiveTurn struct {
 	cancelled bool
 	ready     chan struct{}
 	readyOnce sync.Once
+	// terminated closes when the turn's stream has gone terminal and its
+	// connection has been released. Cancel waits on it to decide whether a
+	// graceful interrupt worked or the connection has to be forced shut.
+	terminated chan struct{}
 }
+
+// codexInterruptGrace bounds how long a cancelled turn may keep its
+// connection open waiting for app-server to finalize the interrupted turn on
+// disk. Matches the SIGTERM->SIGKILL window the exec-based adapter used.
+const codexInterruptGrace = 3 * time.Second
 
 const codexDefaultBinary = "codex"
 
@@ -105,7 +114,7 @@ func (a *CodexAdapter) Version(ctx context.Context) (string, error) {
 func (a *CodexAdapter) Execute(
 	ctx context.Context, cmd protocol.Command,
 ) (<-chan Chunk, error) {
-	active := &codexActiveTurn{ready: make(chan struct{})}
+	active := &codexActiveTurn{ready: make(chan struct{}), terminated: make(chan struct{})}
 	a.activeMu.Lock()
 	a.active[cmd.ID] = active
 	a.activeMu.Unlock()
@@ -120,6 +129,7 @@ func (a *CodexAdapter) Execute(
 			if client != nil {
 				_ = client.Close()
 			}
+			close(active.terminated)
 		})
 	}
 	var err error
@@ -160,14 +170,17 @@ func (a *CodexAdapter) Execute(
 		cleanup()
 		return nil, fmt.Errorf("codex turn/start response: %w", err)
 	}
-	run := client.subscribe(turnID)
 	a.activeMu.Lock()
 	active.turnID = turnID
 	a.activeMu.Unlock()
 	active.readyOnce.Do(func() { close(active.ready) })
 
 	out := make(chan Chunk, 64)
-	state := &codexAppEventState{fileEdits: newFileEditState(), usageBaseline: usageBaseline}
+	state := &codexAppEventState{
+		turnID:        turnID,
+		fileEdits:     newFileEditState(),
+		usageBaseline: usageBaseline,
+	}
 	go func() {
 		defer close(out)
 		defer cleanup()
@@ -184,9 +197,20 @@ func (a *CodexAdapter) Execute(
 			externalID = threadID
 		}
 		out <- Chunk{Kind: protocol.KindProgress, Content: "turn started", Meta: meta, ExternalID: externalID}
-		for ev := range run.events {
+		for {
+			ev, ok, endErr := client.nextEvent(ctx)
+			if !ok {
+				// The connection died or the command context was cancelled
+				// without a cooperative turn/completed. cleanup() closes the
+				// connection, so the stream always reaches a terminal chunk
+				// instead of waiting on app-server forever.
+				cleanup()
+				out <- codexTerminalChunk(endErr)
+				return
+			}
 			chunks := mapCodexAppEvent(ev, state)
-			if ev.method == "turn/completed" || ev.method == "argus/app-server-error" {
+			terminal := ev.method == "turn/completed"
+			if terminal {
 				// Release the writer before Argus can observe a terminal chunk
 				// and advertise this session as idle.
 				cleanup()
@@ -194,9 +218,23 @@ func (a *CodexAdapter) Execute(
 			for _, chunk := range chunks {
 				out <- chunk
 			}
+			if terminal {
+				return
+			}
 		}
 	}()
 	return out, nil
+}
+
+// codexTerminalChunk closes out a turn that ended without a turn/completed.
+// A cancelled command is a normal outcome and reports a plain final chunk,
+// matching the cooperative interrupt path; anything else surfaces the reason
+// the connection died.
+func codexTerminalChunk(err error) Chunk {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return Chunk{Kind: protocol.KindFinal, IsFinal: true}
+	}
+	return Chunk{Kind: protocol.KindError, Content: err.Error(), IsFinal: true}
 }
 
 func closedChunkStream(chunk Chunk) <-chan Chunk {
@@ -233,6 +271,19 @@ func (a *CodexAdapter) Cancel(ctx context.Context, commandID string) error {
 		"threadId": threadID,
 		"turnId":   turnID,
 	})
+	// Graceful first: app-server finalizes the interrupted turn on disk, so a
+	// later resume sees a coherent thread. But never wait on cooperation
+	// forever. An app-server that acks the interrupt without emitting
+	// turn/completed would otherwise leave the chunk stream open, the command
+	// unacked, and the session stuck "running" — so escalate to closing the
+	// connection, which shuts stdin and then kills.
+	go func() {
+		select {
+		case <-active.terminated:
+		case <-time.After(codexInterruptGrace):
+			_ = client.Close()
+		}
+	}()
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("codex turn/interrupt: %w", err)
 	}
@@ -467,6 +518,15 @@ func responseString(raw json.RawMessage, key string) string {
 }
 
 type codexAppEventState struct {
+	// turnID scopes the event stream to THIS turn. The connection is
+	// turn-scoped, but it is not turn-clean: thread/resume replays a
+	// thread/tokenUsage/updated tagged with the PREVIOUS turn's id,
+	// carrying pre-turn cumulative totals. Consuming that as if it
+	// belonged to this turn derives a baseline of `total - last` when the
+	// real baseline is `total`, inflating the turn by one API call.
+	// Empty means "accept everything" (unit tests that map events
+	// directly).
+	turnID             string
 	fileEdits          *fileEditState
 	usageBaseline      map[string]any
 	usageTotal         map[string]any
@@ -480,6 +540,16 @@ func mapCodexAppEvent(ev codexAppEvent, state *codexAppEventState) []Chunk {
 	dec.UseNumber()
 	if err := dec.Decode(&params); err != nil {
 		return nil
+	}
+	// Drop events explicitly tagged for a DIFFERENT turn; keep untagged
+	// ones. Filtering on presence (as the old transport did) discarded
+	// every notification app-server does not tag — 54 of its 81 server
+	// notifications — while still letting a replayed one through under a
+	// stale id. Comparing ids instead is what actually scopes the stream.
+	if state.turnID != "" {
+		if evTurn := eventTurnID(ev.params); evTurn != "" && evTurn != state.turnID {
+			return nil
+		}
 	}
 	raw := map[string]any{"method": ev.method, "params": params}
 	switch ev.method {
@@ -544,10 +614,13 @@ func mapCodexAppEvent(ev codexAppEvent, state *codexAppEventState) []Chunk {
 			message = "Codex app-server error"
 		}
 		return []Chunk{{Kind: protocol.KindStderr, Content: message, Meta: raw}}
-	case "argus/app-server-error":
-		return []Chunk{{Kind: protocol.KindError, Content: firstString(params, "message"), Meta: raw, IsFinal: true}}
 	case "turn/plan/updated":
 		return []Chunk{{Kind: protocol.KindProgress, Content: "plan updated", Meta: raw}}
+	case codexStderrMethod:
+		// Codex diagnostics belong in the transcript, not only in a crash
+		// message: an expiring token or a sandbox warning is printed while
+		// the turn otherwise proceeds.
+		return []Chunk{{Kind: protocol.KindStderr, Content: firstString(params, "line")}}
 	}
 	return nil
 }
@@ -780,7 +853,7 @@ func mapCodexItem(phase string, item, raw map[string]any, state *fileEditState) 
 				continue
 			}
 			path := firstString(m, "path", "file_path")
-			kind, _ := m["kind"].(string)
+			kind := codexChangeKind(m["kind"])
 			toolName := codexFileChangeToolName(kind)
 			chunkID := fmt.Sprintf("%s_%d", itemID, i)
 
@@ -789,7 +862,16 @@ func mapCodexItem(phase string, item, raw map[string]any, state *fileEditState) 
 				// so item.completed can emit a unified diff. Snapshots that
 				// fail safety checks (binary, too big) are skipped, which
 				// cleanly falls back to "<verb> <path>" text.
-				state.RememberBefore(chunkID, path)
+				//
+				// app-server ships the patch itself in `changes[].diff` — at
+				// item.started as well as item.completed — so the snapshot is
+				// only needed when it does not. Taking one anyway is a wasted
+				// file read AND a leak for the turn: BuildDiff is the only
+				// thing that deletes fileEditState entries, and it never runs
+				// when a diff was supplied.
+				if firstString(m, "diff") == "" {
+					state.RememberBefore(chunkID, path)
+				}
 				out = append(out, Chunk{
 					Kind:    protocol.KindTool,
 					Content: fmt.Sprintf("%s %s", toolName, path),
@@ -828,6 +910,19 @@ func mapCodexItem(phase string, item, raw map[string]any, state *fileEditState) 
 
 	// Unknown item type — keep it visible as progress instead of dropping.
 	return []Chunk{{Kind: protocol.KindProgress, Content: itemType, Meta: raw}}
+}
+
+// codexChangeKind reads a FileUpdateChange's kind. app-server models it as
+// a TAGGED OBJECT — {"type":"add"} — not a bare string, so a plain string
+// assertion yields "" and every change falls through to the "Edit"/
+// "updated" default: an added, deleted or renamed file all render as an
+// edit. A bare string is still accepted in case the shape is ever
+// flattened.
+func codexChangeKind(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return firstString(toMap(v), "type")
 }
 
 func codexFileChangeToolName(kind string) string {

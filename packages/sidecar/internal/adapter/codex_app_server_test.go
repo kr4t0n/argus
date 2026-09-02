@@ -24,6 +24,10 @@ func TestCodexAppServerHelperProcess(t *testing.T) {
 	}
 	logPath := os.Getenv("ARGUS_CODEX_APP_SERVER_LOG")
 	turn := 0
+	// Set by the "wait-hang" prompt: acknowledge turn/interrupt but never
+	// emit turn/completed, the uncooperative case a cooperative fake cannot
+	// express.
+	hangOnInterrupt := false
 	appendLog := func(line string) {
 		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
 			_, _ = fmt.Fprintln(f, line)
@@ -33,6 +37,14 @@ func TestCodexAppServerHelperProcess(t *testing.T) {
 	write := func(v any) {
 		b, _ := json.Marshal(v)
 		fmt.Println(string(b))
+	}
+	// Mirrors the real app-server, which logs colourised tracing diagnostics
+	// at startup (a missing-bubblewrap warning) and a broken-pipe line on
+	// every teardown. Emitting before `initialize` also keeps the assertion
+	// off a stdout/stderr pipe race.
+	if os.Getenv("ARGUS_CODEX_FAKE_STDERR") == "1" {
+		fmt.Fprintln(os.Stderr, "\x1b[2m2026-01-01T00:00:00Z\x1b[0m \x1b[31mERROR\x1b[0m \x1b[2mcodex_app_server\x1b[0m: bubblewrap not found")
+		fmt.Fprintln(os.Stderr, "Failed to write to stdout: Broken pipe (os error 32)")
 	}
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
@@ -65,11 +77,18 @@ func TestCodexAppServerHelperProcess(t *testing.T) {
 				} `json:"input"`
 			}
 			_ = json.Unmarshal(req.Params, &p)
-			if len(p.Input) > 0 && p.Input[0].Text == "slow-start" {
+			prompt := ""
+			if len(p.Input) > 0 {
+				prompt = p.Input[0].Text
+			}
+			if prompt == "slow-start" {
 				time.Sleep(100 * time.Millisecond)
 			}
+			if prompt == "wait-hang" {
+				hangOnInterrupt = true
+			}
 			write(map[string]any{"id": *req.ID, "result": map[string]any{"turn": map[string]any{"id": turnID, "status": "inProgress"}}})
-			if len(p.Input) == 0 || (p.Input[0].Text != "wait" && p.Input[0].Text != "slow-start") {
+			if prompt != "wait" && prompt != "slow-start" && prompt != "wait-hang" {
 				write(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": p.ThreadID, "turnId": turnID, "itemId": "answer", "delta": "hello"}})
 				write(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{"threadId": p.ThreadID, "turnId": turnID, "tokenUsage": map[string]any{
 					"total": map[string]any{"inputTokens": 100, "cachedInputTokens": 40, "outputTokens": 20, "reasoningOutputTokens": 5, "totalTokens": 120},
@@ -84,7 +103,9 @@ func TestCodexAppServerHelperProcess(t *testing.T) {
 			}
 			_ = json.Unmarshal(req.Params, &p)
 			write(map[string]any{"id": *req.ID, "result": map[string]any{}})
-			write(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": p.ThreadID, "turn": map[string]any{"id": p.TurnID, "status": "interrupted"}}})
+			if !hangOnInterrupt {
+				write(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": p.ThreadID, "turn": map[string]any{"id": p.TurnID, "status": "interrupted"}}})
+			}
 		case "thread/read":
 			write(map[string]any{"id": *req.ID, "result": map[string]any{"thread": map[string]any{"id": "thr-source", "turns": []any{map[string]any{"id": "old-1"}, map[string]any{"id": "old-2"}, map[string]any{"id": "old-3"}}}}})
 		case "thread/fork":
@@ -97,10 +118,15 @@ func TestCodexAppServerHelperProcess(t *testing.T) {
 
 func newFakeCodexAdapter(t *testing.T) (*CodexAdapter, string) {
 	t.Helper()
+	return newFakeCodexAdapterEnv(t, "")
+}
+
+func newFakeCodexAdapterEnv(t *testing.T, extraEnv string) (*CodexAdapter, string) {
+	t.Helper()
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "requests.jsonl")
 	shim := filepath.Join(dir, "codex")
-	script := fmt.Sprintf("#!/bin/sh\n%s=1 ARGUS_CODEX_APP_SERVER_LOG=%q exec %q -test.run=TestCodexAppServerHelperProcess\n", codexAppServerHelperEnv, logPath, os.Args[0])
+	script := fmt.Sprintf("#!/bin/sh\n%s %s=1 ARGUS_CODEX_APP_SERVER_LOG=%q exec %q -test.run=TestCodexAppServerHelperProcess\n", extraEnv, codexAppServerHelperEnv, logPath, os.Args[0])
 	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake codex: %v", err)
 	}
@@ -209,6 +235,70 @@ func TestCodexCancelWaitsForTurnStart(t *testing.T) {
 	}
 }
 
+// An app-server that acks turn/interrupt but never emits turn/completed must
+// not strand the turn: without a forced-termination fallback the chunk stream
+// stays open, handleCommand never returns, the command is never acked, and
+// the session shows "running" forever.
+func TestCodexCancelTerminatesUncooperativeInterrupt(t *testing.T) {
+	a, logPath := newFakeCodexAdapter(t)
+	t.Cleanup(func() { _ = a.Close() })
+	chunks, err := a.Execute(context.Background(), protocol.Command{ID: "cmd-hang", Prompt: "wait-hang"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if err := a.Cancel(context.Background(), "cmd-hang"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	got := drainChunkChannelWithin(t, chunks, 15*time.Second)
+	if terminals := terminalChunks(got); len(terminals) != 1 {
+		t.Fatalf("chunks = %+v, want exactly one terminal chunk", got)
+	}
+	if countString(requestMethods(t, logPath), "turn/interrupt") != 1 {
+		t.Fatalf("turn/interrupt was not sent before escalating")
+	}
+}
+
+// The runner cancels the command context right after adapter.Cancel returns
+// (machine/runner.go). The app-server process is not bound to that context,
+// so the event loop has to honour it explicitly or the stream never closes.
+func TestCodexExecuteTerminatesOnContextCancel(t *testing.T) {
+	a, _ := newFakeCodexAdapter(t)
+	t.Cleanup(func() { _ = a.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	chunks, err := a.Execute(ctx, protocol.Command{ID: "cmd-ctx", Prompt: "wait"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	cancel()
+	got := drainChunkChannelWithin(t, chunks, 15*time.Second)
+	if terminals := terminalChunks(got); len(terminals) != 1 {
+		t.Fatalf("chunks = %+v, want exactly one terminal chunk", got)
+	}
+}
+
+// Codex diagnostics have to reach the transcript, not just a crash message:
+// an expiring token or a sandbox warning is printed to stderr while the turn
+// otherwise proceeds, and the operator would see a turn producing nothing.
+func TestCodexSurfacesAppServerStderr(t *testing.T) {
+	a, _ := newFakeCodexAdapterEnv(t, "ARGUS_CODEX_FAKE_STDERR=1")
+	t.Cleanup(func() { _ = a.Close() })
+	chunks := drainAdapterChunks(t, a, protocol.Command{ID: "cmd-stderr", Prompt: "hello"})
+
+	var got []string
+	for _, c := range chunks {
+		if c.Kind == protocol.KindStderr {
+			got = append(got, c.Content)
+		}
+	}
+	want := "2026-01-01T00:00:00Z ERROR codex_app_server: bubblewrap not found"
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("stderr chunks = %#v, want exactly [%q] (ANSI stripped, teardown noise dropped)", got, want)
+	}
+	if joinedDeltas(chunks) != "hello" {
+		t.Fatalf("stderr must not disturb the answer stream: %+v", chunks)
+	}
+}
+
 func TestCodexCloneUsesNativeForkBoundary(t *testing.T) {
 	a, logPath := newFakeCodexAdapter(t)
 	t.Cleanup(func() { _ = a.Close() })
@@ -294,6 +384,119 @@ func TestCodexUsageSubtractsThreadBaseline(t *testing.T) {
 	}
 }
 
+// thread/resume replays a thread/tokenUsage/updated tagged with the
+// PREVIOUS turn's id and carrying pre-turn cumulative totals (verified
+// against the real app-server: resuming a used thread emits one right
+// after the resume response). Consuming it as this turn's would derive a
+// baseline of `total - last` where the real baseline is `total`, inflating
+// the turn by one API call and reporting usage before it even starts.
+func TestCodexIgnoresPreviousTurnUsageReplay(t *testing.T) {
+	state := &codexAppEventState{turnID: "turn-2", fileEdits: newFileEditState()}
+	replay := mapCodexAppEvent(codexAppEvent{
+		method: "thread/tokenUsage/updated",
+		params: mustJSON(map[string]any{
+			"threadId": "thr-1",
+			"turnId":   "turn-1", // the turn BEFORE this one
+			"tokenUsage": map[string]any{
+				"total": map[string]any{"inputTokens": 1000, "outputTokens": 100},
+				"last":  map[string]any{"inputTokens": 200, "outputTokens": 20},
+			},
+		}),
+	}, state)
+	if len(replay) != 0 {
+		t.Fatalf("stale usage emitted chunks: %+v", replay)
+	}
+	if state.usageBaseline != nil || state.usageTotal != nil {
+		t.Fatalf("stale usage polluted state: baseline=%v total=%v", state.usageBaseline, state.usageTotal)
+	}
+
+	// This turn's own usage still lands.
+	mapCodexAppEvent(codexAppEvent{
+		method: "thread/tokenUsage/updated",
+		params: mustJSON(map[string]any{
+			"threadId": "thr-1",
+			"turnId":   "turn-2",
+			"tokenUsage": map[string]any{
+				"total": map[string]any{"inputTokens": 1200, "outputTokens": 130},
+				"last":  map[string]any{"inputTokens": 200, "outputTokens": 30},
+			},
+		}),
+	}, state)
+	final := mapCodexAppEvent(codexAppEvent{
+		method: "turn/completed",
+		params: mustJSON(map[string]any{"turn": map[string]any{"id": "turn-2", "status": "completed"}}),
+	}, state)
+	usage := toMap(final[0].Meta["usage"])
+	if numericInt64(usage["input_tokens"]) != 200 || numericInt64(usage["output_tokens"]) != 30 {
+		t.Fatalf("per-turn usage = %#v, want the in-turn delta", usage)
+	}
+}
+
+// An untagged notification must still reach the mapper: 54 of app-server's
+// 81 server notifications carry no turnId, so filtering on presence rather
+// than on a mismatch would silently drop them.
+func TestCodexKeepsUntaggedNotifications(t *testing.T) {
+	state := &codexAppEventState{turnID: "turn-2", fileEdits: newFileEditState()}
+	got := mapCodexAppEvent(codexAppEvent{
+		method: codexStderrMethod,
+		params: mustJSON(map[string]any{"line": "sandbox warning"}),
+	}, state)
+	if len(got) != 1 || got[0].Kind != protocol.KindStderr {
+		t.Fatalf("untagged notification dropped: %+v", got)
+	}
+}
+
+// The fileChange wire shape, captured from a real `codex app-server` turn:
+// `kind` is a TAGGED OBJECT, and `changes[].diff` is populated at BOTH
+// item.started and item.completed.
+//
+//	item/started:   keys=[changes id status type]  (no top-level diff)
+//	  change: kind={"type":"add"}  diff="hello\n"
+func TestCodexFileChangeUsesTaggedKindAndSuppliedDiff(t *testing.T) {
+	state := &codexAppEventState{turnID: "t", fileEdits: newFileEditState()}
+	item := map[string]any{
+		"type": "fileChange", "id": "item-1", "status": "inProgress",
+		"changes": []any{map[string]any{
+			"path": "/tmp/a.txt", "kind": map[string]any{"type": "add"}, "diff": "hello\n",
+		}},
+	}
+	started := mapCodexAppEvent(codexAppEvent{
+		method: "item/started",
+		params: mustJSON(map[string]any{"turnId": "t", "item": item}),
+	}, state)
+	if len(started) != 1 {
+		t.Fatalf("started chunks = %+v", started)
+	}
+	// A tagged-object kind must resolve to Write, not the "Edit" default.
+	if got := toMap(started[0].Meta)["tool"]; got != "Write" {
+		t.Fatalf("tool = %#v, want Write for kind {type:add}", got)
+	}
+	if got := toMap(toMap(started[0].Meta)["input"])["change_kind"]; got != "add" {
+		t.Fatalf("change_kind = %#v, want add", got)
+	}
+	// app-server supplied the diff, so no snapshot should have been taken —
+	// BuildDiff is the only thing that frees them, and it never runs here.
+	if n := len(state.fileEdits.entries); n != 0 {
+		t.Fatalf("retained %d unused file snapshot(s)", n)
+	}
+
+	item["status"] = "completed"
+	completed := mapCodexAppEvent(codexAppEvent{
+		method: "item/completed",
+		params: mustJSON(map[string]any{"turnId": "t", "item": item}),
+	}, state)
+	if len(completed) != 1 {
+		t.Fatalf("completed chunks = %+v", completed)
+	}
+	meta := toMap(completed[0].Meta)
+	if meta["isDiff"] != true || meta["changeKind"] != "add" {
+		t.Fatalf("result meta = %#v, want the supplied diff tagged add", meta)
+	}
+	if completed[0].Content != "hello\n" {
+		t.Fatalf("content = %q, want the app-server diff", completed[0].Content)
+	}
+}
+
 func drainAdapterChunks(t *testing.T, a Adapter, cmd protocol.Command) []Chunk {
 	t.Helper()
 	ch, err := a.Execute(context.Background(), cmd)
@@ -305,8 +508,16 @@ func drainAdapterChunks(t *testing.T, a Adapter, cmd protocol.Command) []Chunk {
 
 func drainChunkChannel(t *testing.T, ch <-chan Chunk) []Chunk {
 	t.Helper()
+	return drainChunkChannelWithin(t, ch, 5*time.Second)
+}
+
+// drainChunkChannelWithin gives cancellation tests room for the interrupt
+// grace period plus process teardown, which the default bound is too tight
+// for.
+func drainChunkChannelWithin(t *testing.T, ch <-chan Chunk, within time.Duration) []Chunk {
+	t.Helper()
 	var chunks []Chunk
-	timer := time.NewTimer(5 * time.Second)
+	timer := time.NewTimer(within)
 	defer timer.Stop()
 	for {
 		select {
