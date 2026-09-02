@@ -229,6 +229,37 @@ export function SessionPanel() {
 
   useGlobalHotkey('d', () => void toggleArchive());
 
+  // ⌘. stops the turn that's running, from anywhere in the session — the
+  // transcript, a file tab, the context pane. The composer already cancels
+  // on Escape, but only while its textarea has focus, so the moment you
+  // click away to read the output there is no keyboard way to stop a
+  // runaway turn. Kept alongside that Escape rather than replacing it.
+  //
+  // ⌘. is the macOS-canonical "stop" and the iOS client already binds it
+  // to the same action, so this closes a cross-client asymmetry rather
+  // than inventing a convention. Nothing in readline claims Ctrl+. either.
+  //
+  // Declared here rather than below the early returns because the hotkey
+  // has to be registered before them; the Composer is handed the same
+  // callback so the keyboard and click paths can't drift.
+  const onCancel = useCallback(async () => {
+    if (!entry) return;
+    const active = entry.commands.find((c) =>
+      ['pending', 'sent', 'running'].includes(c.status),
+    );
+    if (active) await api.cancelCommand(active.id);
+  }, [entry]);
+
+  useGlobalHotkey('.', () => {
+    // No-op rather than an error when nothing is running — a stop key
+    // that reports failure for "nothing to stop" is just noise.
+    if (!running) return;
+    // Same reasoning as ⌘D: the palette is modal and can be showing a
+    // different session than the one this panel holds.
+    if (usePaletteStore.getState().mode !== null) return;
+    void onCancel();
+  });
+
   if (!sessionId) {
     return (
       <div className="relative flex h-full items-center justify-center text-fg-tertiary text-sm">
@@ -272,14 +303,6 @@ export function SessionPanel() {
       prompt,
       attachmentIds: attachmentIds.length ? attachmentIds : undefined,
     });
-  }
-
-  async function onCancel() {
-    if (!entry) return;
-    const active = entry.commands.find((c) =>
-      ['pending', 'sent', 'running'].includes(c.status),
-    );
-    if (active) await api.cancelCommand(active.id);
   }
 
   const elapsed = running ? relativeTime(entry.session.updatedAt) : null;

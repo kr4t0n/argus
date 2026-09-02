@@ -256,7 +256,7 @@ export function Composer({
                 size="icon"
                 variant="subtle"
                 onClick={onCancel}
-                title="Cancel (esc)"
+                title="Cancel (esc, or ⌘. from anywhere in the session)"
                 aria-label="Cancel running command"
                 className="rounded-full"
               >

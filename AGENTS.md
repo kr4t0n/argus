@@ -824,7 +824,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   **The binding registry** (grep `useGlobalHotkey(` to keep this honest):
   `⌘P` / `⌘K` open the palette's two modes (`CommandPalette.tsx`, mounted
   once in `Dashboard` so they fire from any pane); `⌘D` toggles archive on
-  the open session (`SessionPanel.tsx`). Scope follows the mount point —
+  the open session and `⌘.` cancels its running turn (both
+  `SessionPanel.tsx`). `⌘.` deliberately does not replace the composer's
+  `Escape` cancel — that one is scoped to the textarea's focus, which is
+  the case the hotkey exists to cover, not a duplicate of it. Scope follows
+  the mount point —
   a binding registered in `SessionPanel` is inert on `/machines/:id` and
   `/user` because the panel isn't mounted there, which is cheaper than
   a route check inside the handler. A binding that must work everywhere
