@@ -89,7 +89,12 @@ func TestCodexAppServerHelperProcess(t *testing.T) {
 			}
 			write(map[string]any{"id": *req.ID, "result": map[string]any{"turn": map[string]any{"id": turnID, "status": "inProgress"}}})
 			if prompt != "wait" && prompt != "slow-start" && prompt != "wait-hang" {
-				write(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": p.ThreadID, "turnId": turnID, "itemId": "answer", "delta": "hello"}})
+				// Real app-server streams the answer token-by-token AND
+				// closes with the authoritative item. Argus takes the item
+				// and drops the deltas, so the fake must send both.
+				write(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": p.ThreadID, "turnId": turnID, "itemId": "answer", "delta": "hel"}})
+				write(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": p.ThreadID, "turnId": turnID, "itemId": "answer", "delta": "lo"}})
+				write(map[string]any{"method": "item/completed", "params": map[string]any{"threadId": p.ThreadID, "turnId": turnID, "item": map[string]any{"type": "agentMessage", "id": "answer", "text": "hello"}}})
 				write(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{"threadId": p.ThreadID, "turnId": turnID, "tokenUsage": map[string]any{
 					"total": map[string]any{"inputTokens": 100, "cachedInputTokens": 40, "outputTokens": 20, "reasoningOutputTokens": 5, "totalTokens": 120},
 					"last":  map[string]any{"inputTokens": 80, "cachedInputTokens": 30, "outputTokens": 10, "reasoningOutputTokens": 2, "totalTokens": 90},
@@ -323,9 +328,21 @@ func TestCodexCloneUsesNativeForkBoundary(t *testing.T) {
 
 func TestMapCodexAppServerEvents(t *testing.T) {
 	state := &codexAppEventState{fileEdits: newFileEditState(), usageBaseline: zeroCodexUsage()}
+	// Token deltas are dropped; the answer comes from item/completed. See
+	// TestCodexEmitsWholeAgentMessageNotTokenDeltas.
 	delta := mapCodexAppEvent(codexAppEvent{method: "item/agentMessage/delta", params: mustJSON(map[string]any{"turnId": "t", "delta": "hi"})}, state)
-	if len(delta) != 1 || delta[0].Delta != "hi" {
-		t.Fatalf("delta mapping = %+v", delta)
+	if len(delta) != 0 {
+		t.Fatalf("token delta emitted a chunk: %+v", delta)
+	}
+	answer := mapCodexAppEvent(codexAppEvent{
+		method: "item/completed",
+		params: mustJSON(map[string]any{
+			"turnId": "t",
+			"item":   map[string]any{"type": "agentMessage", "id": "m1", "text": "hi"},
+		}),
+	}, state)
+	if len(answer) != 1 || answer[0].Delta != "hi" {
+		t.Fatalf("completed message mapping = %+v", answer)
 	}
 	usage := mapCodexAppEvent(codexAppEvent{
 		method: "thread/tokenUsage/updated",
@@ -494,6 +511,89 @@ func TestCodexFileChangeUsesTaggedKindAndSuppliedDiff(t *testing.T) {
 	}
 	if completed[0].Content != "hello\n" {
 		t.Fatalf("content = %q, want the app-server diff", completed[0].Content)
+	}
+}
+
+// The answer must arrive as ONE chunk per message, from item/completed —
+// exactly what `codex exec --json` did. app-server also streams the same
+// text token-by-token via item/agentMessage/delta (69 deltas for 368 chars
+// in a measured turn, ~40/s in a burst); consuming those turned every
+// message into ~35x the chunks, each a Redis XADD + Postgres row + WS
+// frame + React render.
+func TestCodexEmitsWholeAgentMessageNotTokenDeltas(t *testing.T) {
+	state := &codexAppEventState{turnID: "t", fileEdits: newFileEditState()}
+
+	for _, d := range []string{"Hel", "lo ", "world"} {
+		if got := mapCodexAppEvent(codexAppEvent{
+			method: "item/agentMessage/delta",
+			params: mustJSON(map[string]any{"turnId": "t", "itemId": "m1", "delta": d}),
+		}, state); len(got) != 0 {
+			t.Fatalf("token delta emitted a chunk: %+v", got)
+		}
+	}
+
+	item := map[string]any{"type": "agentMessage", "id": "m1", "text": "Hello world"}
+	if got := mapCodexAppEvent(codexAppEvent{
+		method: "item/started",
+		params: mustJSON(map[string]any{"turnId": "t", "item": item}),
+	}, state); len(got) != 0 {
+		t.Fatalf("agentMessage item.started emitted a chunk: %+v", got)
+	}
+	got := mapCodexAppEvent(codexAppEvent{
+		method: "item/completed",
+		params: mustJSON(map[string]any{"turnId": "t", "item": item}),
+	}, state)
+	if len(got) != 1 || got[0].Kind != protocol.KindDelta || got[0].Delta != "Hello world" {
+		t.Fatalf("completed message = %+v, want one delta chunk with the whole text", got)
+	}
+}
+
+// userMessage is app-server echoing back the prompt Argus sent; reasoning
+// belongs in the thinking row, not the generic type-name fallback; and an
+// genuinely unknown type stays a breadcrumb but only once.
+func TestCodexItemNoiseIsFiltered(t *testing.T) {
+	state := &codexAppEventState{turnID: "t", fileEdits: newFileEditState()}
+	emit := func(method string, item map[string]any) []Chunk {
+		return mapCodexAppEvent(codexAppEvent{
+			method: method,
+			params: mustJSON(map[string]any{"turnId": "t", "item": item}),
+		}, state)
+	}
+
+	user := map[string]any{"type": "userMessage", "id": "u1", "content": []any{"hi"}}
+	if got := append(emit("item/started", user), emit("item/completed", user)...); len(got) != 0 {
+		t.Fatalf("userMessage surfaced: %+v", got)
+	}
+
+	// summary/content are ARRAYS of strings — a plain string read yields "".
+	reasoning := map[string]any{
+		"type": "reasoning", "id": "r1",
+		"summary": []any{"Weighing options", "Picking one"},
+	}
+	if got := emit("item/started", reasoning); len(got) != 0 {
+		t.Fatalf("reasoning item.started surfaced: %+v", got)
+	}
+	got := emit("item/completed", reasoning)
+	if len(got) != 1 || got[0].Kind != protocol.KindProgress {
+		t.Fatalf("reasoning = %+v, want one progress chunk", got)
+	}
+	if toMap(got[0].Meta)["contentType"] != "thinking" {
+		t.Fatalf("reasoning meta = %#v, want contentType thinking", got[0].Meta)
+	}
+	if got[0].Content != "Weighing options\n\nPicking one" {
+		t.Fatalf("reasoning content = %q, want the joined summary", got[0].Content)
+	}
+	if empty := emit("item/completed", map[string]any{"type": "reasoning", "id": "r2"}); len(empty) != 0 {
+		t.Fatalf("empty reasoning surfaced: %+v", empty)
+	}
+
+	// Unknown types stay visible, but once — not on both phases.
+	odd := map[string]any{"type": "somethingNew", "id": "x1"}
+	if got := emit("item/started", odd); len(got) != 0 {
+		t.Fatalf("unknown item.started surfaced: %+v", got)
+	}
+	if got := emit("item/completed", odd); len(got) != 1 || got[0].Content != "somethingNew" {
+		t.Fatalf("unknown item.completed = %+v, want one breadcrumb", got)
 	}
 }
 
