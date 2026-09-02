@@ -384,6 +384,68 @@ func TestCodexUsageSubtractsThreadBaseline(t *testing.T) {
 	}
 }
 
+// thread/resume replays a thread/tokenUsage/updated tagged with the
+// PREVIOUS turn's id and carrying pre-turn cumulative totals (verified
+// against the real app-server: resuming a used thread emits one right
+// after the resume response). Consuming it as this turn's would derive a
+// baseline of `total - last` where the real baseline is `total`, inflating
+// the turn by one API call and reporting usage before it even starts.
+func TestCodexIgnoresPreviousTurnUsageReplay(t *testing.T) {
+	state := &codexAppEventState{turnID: "turn-2", fileEdits: newFileEditState()}
+	replay := mapCodexAppEvent(codexAppEvent{
+		method: "thread/tokenUsage/updated",
+		params: mustJSON(map[string]any{
+			"threadId": "thr-1",
+			"turnId":   "turn-1", // the turn BEFORE this one
+			"tokenUsage": map[string]any{
+				"total": map[string]any{"inputTokens": 1000, "outputTokens": 100},
+				"last":  map[string]any{"inputTokens": 200, "outputTokens": 20},
+			},
+		}),
+	}, state)
+	if len(replay) != 0 {
+		t.Fatalf("stale usage emitted chunks: %+v", replay)
+	}
+	if state.usageBaseline != nil || state.usageTotal != nil {
+		t.Fatalf("stale usage polluted state: baseline=%v total=%v", state.usageBaseline, state.usageTotal)
+	}
+
+	// This turn's own usage still lands.
+	mapCodexAppEvent(codexAppEvent{
+		method: "thread/tokenUsage/updated",
+		params: mustJSON(map[string]any{
+			"threadId": "thr-1",
+			"turnId":   "turn-2",
+			"tokenUsage": map[string]any{
+				"total": map[string]any{"inputTokens": 1200, "outputTokens": 130},
+				"last":  map[string]any{"inputTokens": 200, "outputTokens": 30},
+			},
+		}),
+	}, state)
+	final := mapCodexAppEvent(codexAppEvent{
+		method: "turn/completed",
+		params: mustJSON(map[string]any{"turn": map[string]any{"id": "turn-2", "status": "completed"}}),
+	}, state)
+	usage := toMap(final[0].Meta["usage"])
+	if numericInt64(usage["input_tokens"]) != 200 || numericInt64(usage["output_tokens"]) != 30 {
+		t.Fatalf("per-turn usage = %#v, want the in-turn delta", usage)
+	}
+}
+
+// An untagged notification must still reach the mapper: 54 of app-server's
+// 81 server notifications carry no turnId, so filtering on presence rather
+// than on a mismatch would silently drop them.
+func TestCodexKeepsUntaggedNotifications(t *testing.T) {
+	state := &codexAppEventState{turnID: "turn-2", fileEdits: newFileEditState()}
+	got := mapCodexAppEvent(codexAppEvent{
+		method: codexStderrMethod,
+		params: mustJSON(map[string]any{"line": "sandbox warning"}),
+	}, state)
+	if len(got) != 1 || got[0].Kind != protocol.KindStderr {
+		t.Fatalf("untagged notification dropped: %+v", got)
+	}
+}
+
 func drainAdapterChunks(t *testing.T, a Adapter, cmd protocol.Command) []Chunk {
 	t.Helper()
 	ch, err := a.Execute(context.Background(), cmd)

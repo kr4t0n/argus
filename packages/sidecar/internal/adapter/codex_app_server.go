@@ -319,6 +319,23 @@ func (s *codexAppServer) deliverEvent(ev codexAppEvent) {
 	}
 }
 
+// eventTurnID reports the turn a notification is tagged with, or "" when
+// it carries no turn id. Most turn-bearing notifications use `turnId`;
+// turn/started and turn/completed carry it as `turn.id` instead.
+func eventTurnID(raw json.RawMessage) string {
+	var p struct {
+		TurnID string `json:"turnId"`
+		Turn   struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	_ = json.Unmarshal(raw, &p)
+	if p.TurnID != "" {
+		return p.TurnID
+	}
+	return p.Turn.ID
+}
+
 func eventThreadUsage(raw json.RawMessage) (string, map[string]any) {
 	var p struct {
 		ThreadID   string `json:"threadId"`

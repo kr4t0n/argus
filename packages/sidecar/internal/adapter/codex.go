@@ -176,7 +176,11 @@ func (a *CodexAdapter) Execute(
 	active.readyOnce.Do(func() { close(active.ready) })
 
 	out := make(chan Chunk, 64)
-	state := &codexAppEventState{fileEdits: newFileEditState(), usageBaseline: usageBaseline}
+	state := &codexAppEventState{
+		turnID:        turnID,
+		fileEdits:     newFileEditState(),
+		usageBaseline: usageBaseline,
+	}
 	go func() {
 		defer close(out)
 		defer cleanup()
@@ -514,6 +518,15 @@ func responseString(raw json.RawMessage, key string) string {
 }
 
 type codexAppEventState struct {
+	// turnID scopes the event stream to THIS turn. The connection is
+	// turn-scoped, but it is not turn-clean: thread/resume replays a
+	// thread/tokenUsage/updated tagged with the PREVIOUS turn's id,
+	// carrying pre-turn cumulative totals. Consuming that as if it
+	// belonged to this turn derives a baseline of `total - last` when the
+	// real baseline is `total`, inflating the turn by one API call.
+	// Empty means "accept everything" (unit tests that map events
+	// directly).
+	turnID             string
 	fileEdits          *fileEditState
 	usageBaseline      map[string]any
 	usageTotal         map[string]any
@@ -527,6 +540,16 @@ func mapCodexAppEvent(ev codexAppEvent, state *codexAppEventState) []Chunk {
 	dec.UseNumber()
 	if err := dec.Decode(&params); err != nil {
 		return nil
+	}
+	// Drop events explicitly tagged for a DIFFERENT turn; keep untagged
+	// ones. Filtering on presence (as the old transport did) discarded
+	// every notification app-server does not tag — 54 of its 81 server
+	// notifications — while still letting a replayed one through under a
+	// stale id. Comparing ids instead is what actually scopes the stream.
+	if state.turnID != "" {
+		if evTurn := eventTurnID(ev.params); evTurn != "" && evTurn != state.turnID {
+			return nil
+		}
 	}
 	raw := map[string]any{"method": ev.method, "params": params}
 	switch ev.method {
