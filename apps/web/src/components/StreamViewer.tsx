@@ -340,6 +340,15 @@ function isLast<T>(x: T, arr: T[]) {
   return arr[arr.length - 1] === x;
 }
 
+/** Last chunk of a kind. Hand-rolled rather than `findLast` so the build
+ *  doesn't depend on the ES2023 lib. */
+function lastOfKind(chunks: ResultChunkDTO[], kind: ResultChunkDTO['kind']) {
+  for (let i = chunks.length - 1; i >= 0; i--) {
+    if (chunks[i]!.kind === kind) return chunks[i];
+  }
+  return undefined;
+}
+
 function groupByCommand(commands: CommandDTO[], chunks: ResultChunkDTO[]): Group[] {
   const map = new Map<string, Group>();
   for (const c of commands) map.set(c.id, { command: c, chunks: [] });
@@ -405,7 +414,15 @@ const CommandBlock = memo(function CommandBlock({
     const { finalDeltas } = splitDeltas(chunks);
     return finalDeltas.map((c) => c.delta ?? '').join('');
   }, [chunks]);
-  const finalChunk = chunks.find((c) => c.kind === 'final');
+  // LAST final, not first. A turn can carry SEVERAL `final` chunks: a CLI
+  // that restarts mid-turn emits a `result` for the abandoned inner run
+  // before the real one, and that inner result is typically EMPTY. Taking
+  // the first would render the abandoned run as the answer — which for a
+  // turn whose text lives in `final.content` rather than in post-boundary
+  // deltas means a permanently blank body, refresh or not.
+  // `errorChunk` deliberately keeps first-match: the earliest error is
+  // what characterises the failure.
+  const finalChunk = lastOfKind(chunks, 'final');
   const errorChunk = chunks.find((c) => c.kind === 'error');
   const files = useMemo(() => extractFiles(chunks), [chunks]);
 

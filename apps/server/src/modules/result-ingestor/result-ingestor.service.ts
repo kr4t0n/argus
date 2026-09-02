@@ -20,6 +20,23 @@ import { SearchService } from '../search/search.service';
 const CONSUMER = 'server-1';
 const REFRESH_RUNNER_STREAMS_MS = 5_000;
 
+/**
+ * Chunk kinds that prove the model is still WORKING, as opposed to status
+ * noise. Only these re-open a command that already finalized — see
+ * `reopenIfStillWorking`.
+ *
+ * `stderr` is deliberately absent: a CLI can write a warning line as it
+ * exits, and re-opening on that would strand the command `running` with
+ * nothing left to finalize it — the exact failure the finalize guard
+ * exists to prevent.
+ */
+const WORK_CHUNK_KINDS = ['delta', 'tool', 'stdout'] as const;
+
+/** Terminal statuses a command may be re-opened FROM. `cancelled` is
+ *  excluded on purpose: the user ended that turn, and trailing output
+ *  must not resurrect it. */
+const REOPENABLE_STATUSES = ['completed', 'failed'] as const;
+
 type ResultEnvelope = ResultChunk | SessionExternalIdEvent | SessionCloneFailedEvent;
 
 /**
@@ -174,6 +191,50 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
     return parsed as unknown as Prisma.InputJsonValue;
   }
 
+  /**
+   * A chunk arrived for a command that has already finalized. Decide
+   * whether the turn is in fact STILL RUNNING, and if so re-open it.
+   *
+   * Two very different producers land here:
+   *
+   *   - A TRAILING announce. Claude Code's bridge re-announces
+   *     `system/init` from a fire-and-forget async path that can land
+   *     after the turn's `result`. Nothing follows it — the turn really
+   *     is over — so re-opening would leave the command `running`
+   *     forever.
+   *
+   *   - An INNER result. A CLI that restarts mid-turn emits a `result`
+   *     for the abandoned run and then keeps working for minutes.
+   *     Observed in production: a command finalized at 08:50:28 while 42
+   *     more chunks streamed in until 08:52:10. The client faithfully
+   *     honours the server's "completed" and renders the turn as
+   *     done-and-empty until a hard refresh. `splitDeltas` has always
+   *     known a `final` may be an inner boundary; the ingestor did not.
+   *
+   * They are indistinguishable at the moment the chunk arrives, so the
+   * discriminator is the chunk KIND: a trailing announce is only ever
+   * `progress`, while real model work is `delta` / `tool` / `stdout`.
+   * That costs a little latency — recovery happens at the turn's next
+   * delta rather than instantly — but it cannot strand a command.
+   */
+  private async reopenIfStillWorking(chunk: ResultChunk): Promise<void> {
+    if (!(WORK_CHUNK_KINDS as readonly string[]).includes(chunk.kind)) return;
+    const reopened = await this.prisma.command.updateMany({
+      where: { id: chunk.commandId, status: { in: [...REOPENABLE_STATUSES] } },
+      data: { status: 'running', completedAt: null },
+    });
+    if (reopened.count === 0) return; // cancelled, or someone beat us to it
+    this.logger.warn(
+      `command ${chunk.commandId} re-opened: ${chunk.kind} arrived after it finalized`,
+    );
+    const cmd = await this.prisma.command.findUnique({ where: { id: chunk.commandId } });
+    if (cmd) this.gateway.emitCommandUpdated(CommandService.toDto(cmd));
+    // The session followed the command down to idle at finalize; bring it
+    // back so the sidebar shows the turn as live again.
+    const dto = await this.sessions.setStatus(chunk.sessionId, 'active', { unread: false });
+    void this.push.clearSessionNotification(dto);
+  }
+
   private async handle(ev: ResultEnvelope) {
     const kind = (ev as { kind?: string }).kind;
     if (kind === 'session-external-id') {
@@ -322,13 +383,18 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
       // The finalize branch above has always been idempotent; this one
       // was not, and that asymmetry was the whole bug.
       const dto = await this.sessions.setActiveForCommand(chunk.sessionId, chunk.commandId);
-      if (!dto) return; // late chunk for a finished turn — nothing to announce
-      // Same supersedence for the phone banner: a "completed" alert
-      // about a session that's running again is stale. Runs per chunk
-      // but costs a Set lookup unless an alert is actually outstanding
-      // (queued follow-ups / remote submits — an interactive read
-      // already cleared it via markSeen).
-      void this.push.clearSessionNotification(dto);
+      if (dto) {
+        // Same supersedence for the phone banner: a "completed" alert
+        // about a session that's running again is stale. Runs per chunk
+        // but costs a Set lookup unless an alert is actually outstanding
+        // (queued follow-ups / remote submits — an interactive read
+        // already cleared it via markSeen).
+        void this.push.clearSessionNotification(dto);
+        return;
+      }
+      // Null means the command is already terminal. That is usually a
+      // trailing announce and correctly ignored — but not always.
+      await this.reopenIfStillWorking(chunk);
     }
   }
 }

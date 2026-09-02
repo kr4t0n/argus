@@ -1151,6 +1151,34 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   used by both branches — they were written independently with duplicate
   inline literals, and that divergence was the bug.
 
+- **…and the mirror image: a command can finalize while the turn is still
+  running.** `splitDeltas` has always known a `final` may be an INNER
+  boundary ("a command can contain several inner CLI turns"), but the
+  ingestor's "first terminal chunk wins" guard did not. A CLI that
+  restarts mid-turn emits a `result` for the abandoned run and keeps
+  working: observed in production with a command finalized at 08:50:28
+  while 42 more chunks streamed until 08:52:10. The client honours the
+  server's "completed", so the turn renders **done-and-empty** until a
+  hard refresh.
+  `reopenIfStillWorking` handles it, and note it is in direct tension
+  with the guard above — both are "a non-terminal chunk after finalize",
+  wanting opposite actions. The discriminator is the chunk KIND:
+  `WORK_CHUNK_KINDS` (`delta` / `tool` / `stdout`) is evidence the model
+  is still working and re-opens the command; a trailing announce is only
+  ever `progress` and stays ignored. **`stderr` is excluded on purpose** —
+  a CLI can write a warning as it exits, and re-opening on that would
+  strand the command `running` with nothing left to finalize it.
+  `cancelled` is never re-opened: the user ended that turn.
+  Client side, `StreamViewer` takes the **last** `final`, not the first —
+  the abandoned inner result is typically empty, and for a turn whose
+  text lives in `final.content` rather than post-boundary deltas, picking
+  the first renders a permanently blank body.
+  Known gap: `clistream.go` sets `sawTerminal` on the first terminal
+  chunk, so the process-exit safety net will NOT fire again. If a
+  restarted CLI ever exits without emitting its own second `result`,
+  nothing finalizes the re-opened command. Re-arming that latch is the
+  proper sidecar-side follow-up.
+
 - **The transcript window invariant.** A viewer holds a CONTIGUOUS window
   of a session's turns, and `SessionEntry.hasMoreNewer` says whether that
   window reaches the present:
