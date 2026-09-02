@@ -6,6 +6,7 @@ import { SessionPanel } from '../components/SessionPanel';
 import { MachinePanel } from '../components/MachinePanel';
 import { UserPanel } from './UserPanel';
 import { CommandPalette } from '../components/CommandPalette';
+import { ShortcutsHelp } from '../components/ShortcutsHelp';
 import { ResizeHandle } from '../components/ui/ResizeHandle';
 import { useGlobalHotkey } from '../lib/useGlobalHotkey';
 import { HOTKEYS } from '../lib/hotkeys';
@@ -80,9 +81,13 @@ export function Dashboard() {
         {isUserPane ? <UserPanel /> : machineId ? <MachinePanel /> : <SessionPanel />}
       </main>
 
-      {/* Mounted once at the shell so ⌘P / ⌘K work from any pane. Renders
-          null until opened; the hotkey listeners are all that stay live. */}
+      {/* Mounted once at the shell so ⌘P / ⌘K / ⌘/ work from any pane.
+          Both render null until opened; the hotkey listeners are all that
+          stay live. They share `paletteStore.mode`, so opening either one
+          closes the other without the two components knowing about each
+          other. */}
       <CommandPalette />
+      <ShortcutsHelp />
     </div>
   );
 }

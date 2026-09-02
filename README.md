@@ -84,7 +84,8 @@ you type, plus a substring fallback so code strings like `MAXLEN` or
 from the index on purpose — searching `pool` finds the answer that explained
 the pool, not the `npm WARN` that mentioned one. Picking a result jumps to the
 **turn** that matched, not just the session.
-- **Keyboard shortcuts** — `⌘D` archives the session you're reading, and
+- **Keyboard shortcuts** — `⌘/` lists every binding, which is the short
+version of this bullet. `⌘D` archives the session you're reading, and
 restores it on a second press. It's a toggle because ⌘D is the browser's
 own "add bookmark", so a misfire is expected and the undo has to be the
 same keystroke; an `archived` badge appears in the header and doubles as a
@@ -92,7 +93,7 @@ click-to-restore button. `⌘.` stops a running turn from anywhere in the
 session — the composer's `esc` cancel only fires while the input itself has
 focus, which is exactly not where you are once you've clicked away to read
 the output. `⌘B` collapses and expands the sidebar from any pane. Inside
-the terminal the `Ctrl` form of every binding defers to the shell, so
+the terminal pane the `Ctrl` form of every binding defers to the shell, so
 `Ctrl+D` still sends EOF, `Ctrl+K` still kills the line, and `Ctrl+B`
 still reaches tmux as its prefix.
 - **Windowed transcripts** — a session viewer holds a bounded window of turns

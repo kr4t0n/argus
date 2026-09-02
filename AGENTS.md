@@ -841,8 +841,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the sidebar (`Dashboard.tsx`, since the sidebar outlives every pane).
   The readline deferral is load-bearing for more than readline: `Ctrl+B`
   is **tmux's default prefix**, so a user running tmux in the PTY would
-  lose every tmux command to the sidebar toggle without it. Scope follows
-  the mount point —
+  lose every tmux command to the sidebar toggle without it. `⌘/` opens
+  `ShortcutsHelp.tsx`, which RENDERS the registry rather than restating it
+  — so a binding cannot ship undocumented, which is the point of forcing
+  the hook to take a `HotkeyBinding`. Note that the help overlay is a third
+  consumer of `paletteStore.mode` (`'session' | 'content' | 'help'`): it
+  has no open-state of its own, so ⌘/ while the palette is open is a
+  switch, not two overlays stacking. `CommandPalette`'s `open` is therefore
+  `mode === 'session' || mode === 'content'`, NOT `mode !== null` — if you
+  add a fourth overlay to this field, that check is what you have to
+  revisit. Scope follows the mount point —
   a binding registered in `SessionPanel` is inert on `/machines/:id` and
   `/user` because the panel isn't mounted there, which is cheaper than
   a route check inside the handler. A binding that must work everywhere
