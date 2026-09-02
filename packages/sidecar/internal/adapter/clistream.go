@@ -66,10 +66,10 @@ func Start(ctx context.Context, spec StreamSpec) (*CLIRunner, error) {
 	if spec.Dir != "" {
 		cmd.Dir = spec.Dir
 	}
-	// Only attach a stdin pipe if we actually have input to feed. CLIs like
-	// `codex exec` sniff `!isatty(stdin)` and switch into "read piped prompt"
-	// mode when a pipe is present, even if we close it immediately. Leaving
-	// cmd.Stdin nil makes the child read from os.DevNull instead.
+	// Only attach a stdin pipe if we actually have input to feed. Some CLIs
+	// sniff `!isatty(stdin)` and switch into a piped-input mode when a pipe is
+	// present, even if we close it immediately. Leaving cmd.Stdin nil makes the
+	// child read from os.DevNull instead.
 	var stdin io.WriteCloser
 	if spec.Stdin != "" {
 		var err error

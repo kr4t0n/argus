@@ -3,10 +3,9 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -14,28 +13,35 @@ import (
 	"github.com/kr4t0n/argus/sidecar/internal/protocol"
 )
 
-// CodexAdapter wraps the OpenAI `codex` CLI in non-interactive exec mode.
-// The CLI emits NDJSON lines with `msg.type` discriminators. We map them to
-// our ResultKind vocabulary; unknown events fall through as `progress`.
+// CodexAdapter runs each active turn through `codex app-server`, exposing
+// native thread, turn, fork, and interrupt operations over JSONL stdio. The
+// connection closes before the terminal chunk is emitted so external Codex
+// clients can immediately acquire the thread-store writer.
 //
-// Two defaults differ from interactive `codex`:
-//   - skipGitRepoCheck=true so working dirs that aren't git repos still run
-//   - fullAuto=true so tool calls execute without TTY approval prompts. This
-//     emits `--dangerously-bypass-approvals-and-sandbox`, which disables BOTH
-//     the approval gate and the OS sandbox (codex runs fully unsandboxed).
+// By default, fullAuto disables approval prompts and selects
+// danger-full-access sandboxing, matching the old non-interactive behavior.
 //
-// Both can be flipped from the sidecar YAML, and `sandbox` takes precedence:
-// set a `sandbox` mode to emit an explicit `--sandbox <mode>` (a real
-// sandbox) instead of the bypass flag.
+// An explicit sandbox setting takes precedence over fullAuto.
 type CodexAdapter struct {
-	binary           string
-	workingDir       string
-	skipGitRepoCheck bool
-	fullAuto         bool
-	sandbox          string // optional override; takes precedence over fullAuto
-	extraArgs        []string
-	runMu            sync.Mutex
-	runs             map[string]*CLIRunner
+	binary     string
+	workingDir string
+	fullAuto   bool
+	sandbox    string // optional override; takes precedence over fullAuto
+	extraArgs  []string
+
+	modelMu  sync.Mutex
+	models   map[string]string
+	activeMu sync.Mutex
+	active   map[string]*codexActiveTurn
+}
+
+type codexActiveTurn struct {
+	client    *codexAppServer
+	threadID  string
+	turnID    string
+	cancelled bool
+	ready     chan struct{}
+	readyOnce sync.Once
 }
 
 const codexDefaultBinary = "codex"
@@ -52,11 +58,11 @@ func init() {
 				return nil, fmt.Errorf("codex CLI %q not found: %w", bin, err)
 			}
 			a := &CodexAdapter{
-				binary:           bin,
-				workingDir:       WorkingDirFromCfg(cfg),
-				skipGitRepoCheck: boolFromCfg(cfg, "skipGitRepoCheck", true),
-				fullAuto:         boolFromCfg(cfg, "fullAuto", true),
-				runs:             map[string]*CLIRunner{},
+				binary:     bin,
+				workingDir: WorkingDirFromCfg(cfg),
+				fullAuto:   boolFromCfg(cfg, "fullAuto", true),
+				active:     make(map[string]*codexActiveTurn),
+				models:     make(map[string]string),
 			}
 			if s, ok := cfg["sandbox"].(string); ok {
 				a.sandbox = s
@@ -85,7 +91,11 @@ func boolFromCfg(cfg map[string]any, key string, def bool) bool {
 }
 
 func (a *CodexAdapter) Ping(ctx context.Context) error {
-	return exec.CommandContext(ctx, a.binary, "--version").Run()
+	client, err := startCodexAppServer(ctx, a.binary, a.workingDir, a.extraArgs)
+	if client != nil {
+		_ = client.Close()
+	}
+	return err
 }
 
 func (a *CodexAdapter) Version(ctx context.Context) (string, error) {
@@ -95,315 +105,547 @@ func (a *CodexAdapter) Version(ctx context.Context) (string, error) {
 func (a *CodexAdapter) Execute(
 	ctx context.Context, cmd protocol.Command,
 ) (<-chan Chunk, error) {
-	// Flag layout (codex exec [...flags...] [resume <id>] <prompt>):
-	//   --json                           NDJSON stream on stdout
-	//   --skip-git-repo-check            allow non-git working dirs
-	//   --dangerously-bypass-approvals-and-sandbox | --sandbox <mode>
-	//                                    no TTY approval prompts (the former
-	//                                    also runs codex fully unsandboxed)
-	//   -m / --model                     per-command model override
-	//   -c model_reasoning_effort=<l>    thinking strength (minimal…xhigh)
-	//   -c service_tier=fast             priority/fast service tier
-	flags := []string{"exec", "--json"}
-	if a.skipGitRepoCheck {
-		flags = append(flags, "--skip-git-repo-check")
+	active := &codexActiveTurn{ready: make(chan struct{})}
+	a.activeMu.Lock()
+	a.active[cmd.ID] = active
+	a.activeMu.Unlock()
+	var client *codexAppServer
+	var cleanupOnce sync.Once
+	cleanup := func() {
+		cleanupOnce.Do(func() {
+			active.readyOnce.Do(func() { close(active.ready) })
+			a.activeMu.Lock()
+			delete(a.active, cmd.ID)
+			a.activeMu.Unlock()
+			if client != nil {
+				_ = client.Close()
+			}
+		})
 	}
-	switch {
-	case a.sandbox != "":
-		flags = append(flags, "--sandbox", a.sandbox)
-	case a.fullAuto:
-		// Disables both the approval gate and the OS sandbox. `--full-auto`
-		// (sandboxed auto-approve) is the gentler alternative; set a
-		// `sandbox` mode above if you need the sandbox back.
-		flags = append(flags, "--dangerously-bypass-approvals-and-sandbox")
-	}
-	if model, ok := cmd.Options[protocol.OptionModel].(string); ok && model != "" {
-		flags = append(flags, "--model", model)
-	}
-	if effort, ok := cmd.Options[protocol.OptionEffort].(string); ok && effort != "" {
-		// `-c key=value` is one argv element; exec.Command passes it
-		// unescaped so no shell-quoting concerns. The value parses as a
-		// bare TOML string on the codex side.
-		flags = append(flags, "-c", "model_reasoning_effort="+effort)
-	}
-	if speed, _ := cmd.Options[protocol.OptionSpeed].(string); speed == "fast" {
-		flags = append(flags, "-c", "service_tier=fast")
-	}
-	// Attach image files via codex's native image-input flag so the model
-	// sees them as vision. Non-image attachments are left to the prompt-
-	// path preamble the runner already appended. `--image` is repeatable
-	// per the CLI reference; LocalPath is filled in by the runner after
-	// it pulls the file to disk (always an absolute path, so it needs no
-	// workingDir resolution here).
-	for _, att := range cmd.Attachments {
-		if att.LocalPath != "" && strings.HasPrefix(att.Mime, "image/") {
-			flags = append(flags, "--image", att.LocalPath)
-		}
-	}
-	flags = append(flags, a.extraArgs...)
-
-	// "--" is the POSIX end-of-options marker: without it, a prompt that
-	// starts with "-" or "--" (e.g. user types "--help" or a CLI-style
-	// snippet) would be parsed as a flag by codex's arg parser and either
-	// error out or invoke a side-effect like printing help.
-	var args []string
-	if cmd.ExternalID != "" {
-		args = append(flags, "resume", cmd.ExternalID, "--", cmd.Prompt)
-	} else {
-		args = append(flags, "--", cmd.Prompt)
-	}
-
-	// Per-run state so mapCodexLine can snapshot file contents at item.started
-	// and emit a unified diff on item.completed.
-	state := newFileEditState()
-
-	spec := StreamSpec{
-		Binary:     a.binary,
-		Args:       args,
-		Dir:        runDir(cmd.WorkingDir, a.workingDir),
-		StderrKind: protocol.KindStderr,
-		Mapper: func(line string) []Chunk {
-			return mapCodexLine(line, state)
-		},
-	}
-	runner, err := Start(ctx, spec)
+	var err error
+	client, err = startCodexAppServer(ctx, a.binary, a.workingDir, a.extraArgs)
 	if err != nil {
+		cleanup()
 		return nil, err
 	}
-	a.runMu.Lock()
-	a.runs[cmd.ID] = runner
-	a.runMu.Unlock()
-	out := make(chan Chunk, 32)
+	a.activeMu.Lock()
+	active.client = client
+	a.activeMu.Unlock()
+
+	threadID, resolvedModel, err := a.ensureThread(ctx, client, cmd)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	a.activeMu.Lock()
+	active.threadID = threadID
+	cancelled := active.cancelled
+	a.activeMu.Unlock()
+	if cancelled {
+		cleanup()
+		return closedChunkStream(Chunk{Kind: protocol.KindFinal, IsFinal: true}), nil
+	}
+
+	usageBaseline := client.threadUsageTotal(threadID)
+	if cmd.ExternalID == "" {
+		usageBaseline = zeroCodexUsage()
+	}
+	result, err := client.request(ctx, "turn/start", a.turnStartParams(threadID, cmd))
+	if err != nil {
+		cleanup()
+		return nil, fmt.Errorf("codex turn/start: %w", err)
+	}
+	turnID, err := responseObjectID(result, "turn")
+	if err != nil {
+		cleanup()
+		return nil, fmt.Errorf("codex turn/start response: %w", err)
+	}
+	run := client.subscribe(turnID)
+	a.activeMu.Lock()
+	active.turnID = turnID
+	a.activeMu.Unlock()
+	active.readyOnce.Do(func() { close(active.ready) })
+
+	out := make(chan Chunk, 64)
+	state := &codexAppEventState{fileEdits: newFileEditState(), usageBaseline: usageBaseline}
 	go func() {
 		defer close(out)
-		for c := range runner.Chunks {
-			if isCodexStderrNoise(c) {
-				continue
-			}
-			out <- c
+		defer cleanup()
+		meta := map[string]any{}
+		if selected, _ := cmd.Options[protocol.OptionModel].(string); selected != "" {
+			resolvedModel = selected
+			a.rememberModel(threadID, selected)
 		}
-		a.runMu.Lock()
-		delete(a.runs, cmd.ID)
-		a.runMu.Unlock()
+		if resolvedModel != "" {
+			meta["model"] = resolvedModel
+		}
+		externalID := ""
+		if cmd.ExternalID == "" {
+			externalID = threadID
+		}
+		out <- Chunk{Kind: protocol.KindProgress, Content: "turn started", Meta: meta, ExternalID: externalID}
+		for ev := range run.events {
+			chunks := mapCodexAppEvent(ev, state)
+			if ev.method == "turn/completed" || ev.method == "argus/app-server-error" {
+				// Release the writer before Argus can observe a terminal chunk
+				// and advertise this session as idle.
+				cleanup()
+			}
+			for _, chunk := range chunks {
+				out <- chunk
+			}
+		}
 	}()
 	return out, nil
 }
 
-// codex prints a few cosmetic lines to stderr in --json mode that don't carry
-// real signal. Filter them so the UI doesn't show a phantom red error block.
-func isCodexStderrNoise(c Chunk) bool {
-	if c.Kind != protocol.KindStderr {
-		return false
-	}
-	t := strings.TrimSpace(c.Content)
-	switch t {
-	case "Reading additional input from stdin...",
-		"Reading additional input from stdin…":
-		return true
-	}
-	return false
+func closedChunkStream(chunk Chunk) <-chan Chunk {
+	out := make(chan Chunk, 1)
+	out <- chunk
+	close(out)
+	return out
 }
 
-func (a *CodexAdapter) Cancel(_ context.Context, commandID string) error {
-	a.runMu.Lock()
-	r := a.runs[commandID]
-	a.runMu.Unlock()
-	if r != nil {
-		r.Cancel()
+func (a *CodexAdapter) Cancel(ctx context.Context, commandID string) error {
+	cancelCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	a.activeMu.Lock()
+	active := a.active[commandID]
+	if active == nil {
+		a.activeMu.Unlock()
+		return nil
+	}
+	active.cancelled = true
+	ready := active.ready
+	a.activeMu.Unlock()
+	select {
+	case <-ready:
+	case <-cancelCtx.Done():
+		return cancelCtx.Err()
+	}
+	a.activeMu.Lock()
+	client, threadID, turnID := active.client, active.threadID, active.turnID
+	a.activeMu.Unlock()
+	if client == nil || threadID == "" || turnID == "" {
+		return nil
+	}
+	_, err := client.request(cancelCtx, "turn/interrupt", map[string]any{
+		"threadId": threadID,
+		"turnId":   turnID,
+	})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("codex turn/interrupt: %w", err)
 	}
 	return nil
 }
 
-// CloneSession forks Codex's on-disk rollout for srcExternalID into a
-// new rollout file under today's date directory. Codex stores each
-// session at ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<sessionId>.jsonl
-// and embeds the session id only on line 1 (`session_meta.payload.id`),
-// so the file body is otherwise verbatim-copyable. Turn boundaries are
-// `event_msg` lines whose `payload.type == "task_started"` (each
-// `codex resume` invocation emits a fresh one).
-//
-// turnIndex is 1-based; we stop emitting at the (turnIndex+1)th
-// task_started event. line 1 (`session_meta`) is always kept and gets
-// `payload.id` rewritten to the new UUID.
-//
-// The workingDir param is ignored: codex buckets sessions by date at
-// the filesystem root, workdir-independently (see cloner.go).
+// CloneSession uses app-server's native persisted-history fork. To preserve
+// Argus's 1-based turn boundary, read the source turns and pass lastTurnId
+// only when the requested boundary excludes later turns.
 func (a *CodexAdapter) CloneSession(
-	_ context.Context, _ /* workingDir */, srcExternalID string, turnIndex int,
+	ctx context.Context, _ /* workingDir */, srcExternalID string, turnIndex int,
 ) (string, error) {
-	home, err := homeDir()
+	client, err := startCodexAppServer(ctx, a.binary, a.workingDir, a.extraArgs)
 	if err != nil {
 		return "", fmtCloneError("codex", srcExternalID, err)
 	}
-	sessionsRoot := filepath.Join(home, ".codex", "sessions")
-	// Codex buckets by YYYY/MM/DD; we don't know the source's date
-	// upfront so glob across all date dirs.
-	srcFile, err := findFirstFile(sessionsRoot, filepath.Join("*", "*", "*", "rollout-*-"+srcExternalID+".jsonl"))
-	if err != nil {
-		return "", fmtCloneError("codex", srcExternalID, err)
-	}
-	if srcFile == "" {
-		return "", fmtCloneError("codex", srcExternalID, errCloneSrcNotFound)
-	}
-
-	newID := newSessionUUID()
-	now := time.Now().UTC()
-	dstDir := filepath.Join(sessionsRoot, fmt.Sprintf("%04d", now.Year()),
-		fmt.Sprintf("%02d", int(now.Month())), fmt.Sprintf("%02d", now.Day()))
-	if err := os.MkdirAll(dstDir, 0o755); err != nil {
-		return "", fmtCloneError("codex", srcExternalID, err)
-	}
-	// Codex's filename timestamp is ISO with `:` replaced by `-`.
-	ts := now.Format("2006-01-02T15-04-05")
-	dstFile := filepath.Join(dstDir, fmt.Sprintf("rollout-%s-%s.jsonl", ts, newID))
-	out, err := os.OpenFile(dstFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return "", fmtCloneError("codex", srcExternalID, err)
-	}
-
-	taskStartedSeen := 0
-	stopped := false
-	lineNum := 0
-	werr := readJSONLines(srcFile, func(raw []byte, parsed map[string]any) error {
-		if stopped {
-			return nil
-		}
-		lineNum++
-		if parsed == nil {
-			// Unparseable line — copy verbatim if we're not yet past the
-			// header but otherwise drop. The header lines are always JSON
-			// in observed files, so this branch only catches drift.
-			return writeJSONLine(out, raw)
-		}
-		recType, _ := parsed["type"].(string)
-		// Line 1 should be session_meta; rewrite payload.id either way
-		// in case Codex ever moves the meta record.
-		if recType == "session_meta" {
-			if pl, ok := parsed["payload"].(map[string]any); ok {
-				pl["id"] = newID
-			}
-			b, err := json.Marshal(parsed)
-			if err != nil {
-				return err
-			}
-			return writeJSONLine(out, b)
-		}
-		if recType == "event_msg" {
-			if pl, ok := parsed["payload"].(map[string]any); ok {
-				if t, _ := pl["type"].(string); t == "task_started" {
-					if taskStartedSeen >= turnIndex {
-						stopped = true
-						return nil
-					}
-					taskStartedSeen++
-				}
-			}
-		}
-		return writeJSONLine(out, raw)
+	defer client.Close()
+	read, err := client.request(ctx, "thread/read", map[string]any{
+		"threadId": srcExternalID, "includeTurns": true,
 	})
-	if cerr := out.Close(); werr == nil {
-		werr = cerr
+	if err != nil {
+		return "", fmtCloneError("codex", srcExternalID, err)
 	}
-	if werr != nil {
-		_ = os.Remove(dstFile)
-		return "", fmtCloneError("codex", srcExternalID, werr)
+	var history struct {
+		Thread struct {
+			Turns []struct {
+				ID string `json:"id"`
+			} `json:"turns"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(read, &history); err != nil {
+		return "", fmtCloneError("codex", srcExternalID, err)
+	}
+	params := map[string]any{"threadId": srcExternalID}
+	if turnIndex > 0 && turnIndex < len(history.Thread.Turns) {
+		params["lastTurnId"] = history.Thread.Turns[turnIndex-1].ID
+	}
+	fork, err := client.request(ctx, "thread/fork", params)
+	if err != nil {
+		return "", fmtCloneError("codex", srcExternalID, err)
+	}
+	newID, err := responseObjectID(fork, "thread")
+	if err != nil {
+		return "", fmtCloneError("codex", srcExternalID, err)
+	}
+	if model := responseString(fork, "model"); model != "" {
+		a.rememberModel(newID, model)
 	}
 	return newID, nil
 }
 
-// mapCodexLine handles the codex 0.121+ NDJSON schema:
-//
-//	{type: "thread.started", thread_id: "..."}
-//	{type: "turn.started"}
-//	{type: "item.started"|"item.completed", item: {type, ...}}
-//	{type: "turn.completed", usage: {...}}
-//	{type: "error", message: "..."}
-//
-// We also keep the older `session_configured` / `agent_message_delta` /
-// `task_complete` shapes as a fallback for older codex builds.
-func mapCodexLine(line string, state *fileEditState) []Chunk {
-	ev := TryParseJSON(line)
-	if ev == nil {
-		return []Chunk{{Kind: protocol.KindDelta, Delta: line}}
+func (a *CodexAdapter) Close() error {
+	a.activeMu.Lock()
+	clients := make(map[*codexAppServer]struct{}, len(a.active))
+	for _, active := range a.active {
+		if active.client != nil {
+			clients[active.client] = struct{}{}
+		}
 	}
-	inner := ev
-	if m, ok := ev["msg"].(map[string]any); ok {
-		inner = m
+	a.activeMu.Unlock()
+	for client := range clients {
+		_ = client.Close()
 	}
-	t, _ := inner["type"].(string)
+	return nil
+}
 
-	switch t {
-	// ── 0.121+ thread/turn lifecycle ────────────────────────────────────
-	case "thread.started":
-		sid := firstString(inner, "thread_id", "id", "session_id", "conversation_id")
-		return []Chunk{{
-			Kind:       protocol.KindProgress,
-			Content:    "thread started",
-			Meta:       ev,
-			ExternalID: sid,
-		}}
-	case "turn.started":
+func (a *CodexAdapter) ensureThread(ctx context.Context, client *codexAppServer, cmd protocol.Command) (string, string, error) {
+	if cmd.ExternalID != "" {
+		params := a.threadResumeParams(cmd.ExternalID, cmd)
+		result, err := client.request(ctx, "thread/resume", params)
+		if err != nil {
+			return "", "", fmt.Errorf("codex thread/resume %s: %w", cmd.ExternalID, err)
+		}
+		if model := responseString(result, "model"); model != "" {
+			a.rememberModel(cmd.ExternalID, model)
+		}
+		return cmd.ExternalID, a.rememberedModel(cmd.ExternalID), nil
+	}
+	result, err := client.request(ctx, "thread/start", a.threadParams(cmd))
+	if err != nil {
+		return "", "", fmt.Errorf("codex thread/start: %w", err)
+	}
+	threadID, err := responseObjectID(result, "thread")
+	if err != nil {
+		return "", "", fmt.Errorf("codex thread/start response: %w", err)
+	}
+	model := responseString(result, "model")
+	if model != "" {
+		a.rememberModel(threadID, model)
+	}
+	return threadID, model, nil
+}
+
+func (a *CodexAdapter) rememberModel(threadID, model string) {
+	if threadID == "" || model == "" {
+		return
+	}
+	a.modelMu.Lock()
+	if a.models == nil {
+		a.models = make(map[string]string)
+	}
+	a.models[threadID] = model
+	a.modelMu.Unlock()
+}
+
+func (a *CodexAdapter) rememberedModel(threadID string) string {
+	a.modelMu.Lock()
+	defer a.modelMu.Unlock()
+	return a.models[threadID]
+}
+
+func (a *CodexAdapter) threadResumeParams(threadID string, cmd protocol.Command) map[string]any {
+	params := a.threadParams(cmd)
+	delete(params, "serviceName")
+	params["threadId"] = threadID
+	return params
+}
+
+func (a *CodexAdapter) threadParams(cmd protocol.Command) map[string]any {
+	params := map[string]any{
+		"serviceName": "argus",
+	}
+	if cwd := runDir(cmd.WorkingDir, a.workingDir); cwd != "" {
+		params["cwd"] = cwd
+	}
+	if model, _ := cmd.Options[protocol.OptionModel].(string); model != "" {
+		params["model"] = model
+	}
+	if speed, _ := cmd.Options[protocol.OptionSpeed].(string); speed == "fast" {
+		params["serviceTier"] = "fast"
+	}
+	if a.fullAuto {
+		params["approvalPolicy"] = "never"
+	}
+	if sandbox := a.threadSandbox(); sandbox != "" {
+		params["sandbox"] = sandbox
+	}
+	return params
+}
+
+func (a *CodexAdapter) turnStartParams(threadID string, cmd protocol.Command) map[string]any {
+	input := []any{map[string]any{"type": "text", "text": cmd.Prompt}}
+	for _, att := range cmd.Attachments {
+		if att.LocalPath != "" && strings.HasPrefix(att.Mime, "image/") {
+			input = append(input, map[string]any{"type": "localImage", "path": att.LocalPath})
+		}
+	}
+	params := map[string]any{
+		"threadId":            threadID,
+		"input":               input,
+		"clientUserMessageId": cmd.ID,
+	}
+	if cwd := runDir(cmd.WorkingDir, a.workingDir); cwd != "" {
+		params["cwd"] = cwd
+	}
+	if model, _ := cmd.Options[protocol.OptionModel].(string); model != "" {
+		params["model"] = model
+	}
+	if effort, _ := cmd.Options[protocol.OptionEffort].(string); effort != "" {
+		params["effort"] = effort
+	}
+	if speed, _ := cmd.Options[protocol.OptionSpeed].(string); speed == "fast" {
+		params["serviceTier"] = "fast"
+	}
+	if a.fullAuto {
+		params["approvalPolicy"] = "never"
+	}
+	if sandbox := a.turnSandbox(); sandbox != nil {
+		params["sandboxPolicy"] = sandbox
+	}
+	return params
+}
+
+func (a *CodexAdapter) threadSandbox() string {
+	if a.sandbox != "" {
+		switch a.sandbox {
+		case "readOnly":
+			return "read-only"
+		case "workspaceWrite":
+			return "workspace-write"
+		case "dangerFullAccess":
+			return "danger-full-access"
+		default:
+			return a.sandbox
+		}
+	}
+	if a.fullAuto {
+		return "danger-full-access"
+	}
+	return ""
+}
+
+func (a *CodexAdapter) turnSandbox() map[string]any {
+	sandbox := a.threadSandbox()
+	switch sandbox {
+	case "read-only":
+		return map[string]any{"type": "readOnly"}
+	case "workspace-write":
+		return map[string]any{"type": "workspaceWrite"}
+	case "danger-full-access":
+		return map[string]any{"type": "dangerFullAccess"}
+	default:
 		return nil
-	case "turn.completed":
-		return []Chunk{{Kind: protocol.KindFinal, Meta: ev, IsFinal: true}}
+	}
+}
 
-	// ── 0.121+ item.* events ────────────────────────────────────────────
-	case "item.started", "item.completed":
-		item := toMap(inner["item"])
+func responseObjectID(raw json.RawMessage, key string) (string, error) {
+	var response map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return "", err
+	}
+	var object struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(response[key], &object); err != nil {
+		return "", err
+	}
+	if object.ID == "" {
+		return "", fmt.Errorf("missing %s.id", key)
+	}
+	return object.ID, nil
+}
+
+func responseString(raw json.RawMessage, key string) string {
+	var response map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return ""
+	}
+	var value string
+	_ = json.Unmarshal(response[key], &value)
+	return value
+}
+
+type codexAppEventState struct {
+	fileEdits          *fileEditState
+	usageBaseline      map[string]any
+	usageTotal         map[string]any
+	usageLast          map[string]any
+	modelContextWindow any
+}
+
+func mapCodexAppEvent(ev codexAppEvent, state *codexAppEventState) []Chunk {
+	var params map[string]any
+	dec := json.NewDecoder(strings.NewReader(string(ev.params)))
+	dec.UseNumber()
+	if err := dec.Decode(&params); err != nil {
+		return nil
+	}
+	raw := map[string]any{"method": ev.method, "params": params}
+	switch ev.method {
+	case "item/agentMessage/delta":
+		delta := firstString(params, "delta")
+		if delta == "" {
+			return nil
+		}
+		return []Chunk{{Kind: protocol.KindDelta, Delta: delta}}
+	case "item/started", "item/completed":
+		item := toMap(params["item"])
 		if item == nil {
 			return nil
 		}
-		return mapCodexItem(t, item, ev, state)
-
-	// ── legacy event names (older codex builds) ─────────────────────────
-	case "session_configured":
-		sid := firstString(inner, "session_id", "id", "conversation_id")
-		return []Chunk{{
-			Kind:       protocol.KindProgress,
-			Content:    "session configured",
-			Meta:       ev,
-			ExternalID: sid,
-		}}
-	case "agent_message_delta", "delta":
-		d := firstString(inner, "delta", "text", "content")
-		if d == "" {
+		item = normalizeCodexAppItem(item)
+		if item["type"] == "agent_message" {
+			// The authoritative completed item contains the whole accumulated
+			// answer; deltas above already streamed it to Argus.
 			return nil
 		}
-		return []Chunk{{Kind: protocol.KindDelta, Delta: d}}
-	case "agent_message":
-		txt := firstString(inner, "message", "text", "content")
-		if txt == "" {
-			return []Chunk{{Kind: protocol.KindProgress, Meta: ev}}
+		phase := "item.started"
+		if ev.method == "item/completed" {
+			phase = "item.completed"
 		}
-		return []Chunk{{Kind: protocol.KindDelta, Delta: txt}}
-	case "tool_call", "exec_command_begin", "tool_use":
-		name := firstString(inner, "name", "tool", "command")
-		args := toMap(inner["arguments"])
-		if args == nil {
-			args = toMap(inner["input"])
+		return mapCodexItem(phase, item, raw, state.fileEdits)
+	case "thread/tokenUsage/updated":
+		tokenUsage := toMap(params["tokenUsage"])
+		if tokenUsage != nil {
+			total := toMap(tokenUsage["total"])
+			last := toMap(tokenUsage["last"])
+			if state.usageBaseline == nil {
+				state.usageBaseline = subtractCodexUsage(total, last)
+			}
+			state.usageTotal = normalizeCodexUsage(subtractCodexUsage(total, state.usageBaseline))
+			state.usageLast = normalizeCodexUsage(last)
+			state.modelContextWindow = tokenUsage["modelContextWindow"]
 		}
-		return []Chunk{{
-			Kind:    protocol.KindTool,
-			Content: fmt.Sprintf("%s %s", name, FormatToolArgs(args)),
-			Meta:    ev,
-		}}
-	case "exec_command_output", "tool_result":
-		return []Chunk{{
-			Kind:    protocol.KindStdout,
-			Content: firstString(inner, "output", "stdout", "content"),
-			Meta:    ev,
-		}}
-	case "task_complete", "turn_complete":
-		return []Chunk{{Kind: protocol.KindFinal, Meta: ev, IsFinal: true}}
+		return nil
+	case "turn/completed":
+		if state.usageTotal != nil {
+			raw["usage"] = state.usageTotal
+		}
+		if state.usageLast != nil {
+			raw["lastUsage"] = state.usageLast
+		}
+		if state.modelContextWindow != nil {
+			raw["modelContextWindow"] = state.modelContextWindow
+		}
+		turn := toMap(params["turn"])
+		status := firstString(turn, "status")
+		if status == "failed" {
+			message := nestedErrorMessage(turn["error"])
+			if message == "" {
+				message = "Codex turn failed"
+			}
+			return []Chunk{{Kind: protocol.KindError, Content: message, Meta: raw, IsFinal: true}}
+		}
+		return []Chunk{{Kind: protocol.KindFinal, Meta: raw, IsFinal: true}}
 	case "error":
-		return []Chunk{{
-			Kind:    protocol.KindError,
-			Content: firstString(inner, "message", "error"),
-			Meta:    ev,
-			IsFinal: true,
-		}}
+		message := nestedErrorMessage(params["error"])
+		if message == "" {
+			message = "Codex app-server error"
+		}
+		return []Chunk{{Kind: protocol.KindStderr, Content: message, Meta: raw}}
+	case "argus/app-server-error":
+		return []Chunk{{Kind: protocol.KindError, Content: firstString(params, "message"), Meta: raw, IsFinal: true}}
+	case "turn/plan/updated":
+		return []Chunk{{Kind: protocol.KindProgress, Content: "plan updated", Meta: raw}}
 	}
-	return nil // drop unknown events instead of emitting empty progress
+	return nil
+}
+
+func zeroCodexUsage() map[string]any {
+	return map[string]any{
+		"inputTokens": 0, "cachedInputTokens": 0, "outputTokens": 0,
+		"reasoningOutputTokens": 0, "totalTokens": 0,
+	}
+}
+
+func subtractCodexUsage(total, baseline map[string]any) map[string]any {
+	if total == nil {
+		return nil
+	}
+	out := make(map[string]any, len(total))
+	for _, key := range []string{"inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens"} {
+		value := numericInt64(total[key]) - numericInt64(baseline[key])
+		if value < 0 {
+			value = 0
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func numericInt64(v any) int64 {
+	switch n := v.(type) {
+	case json.Number:
+		value, _ := n.Int64()
+		return value
+	case float64:
+		return int64(n)
+	case int:
+		return int64(n)
+	case int64:
+		return n
+	}
+	return 0
+}
+
+func normalizeCodexUsage(usage map[string]any) map[string]any {
+	if usage == nil {
+		return nil
+	}
+	return map[string]any{
+		"input_tokens":            usage["inputTokens"],
+		"cached_input_tokens":     usage["cachedInputTokens"],
+		"output_tokens":           usage["outputTokens"],
+		"reasoning_output_tokens": usage["reasoningOutputTokens"],
+	}
+}
+
+func normalizeCodexAppItem(item map[string]any) map[string]any {
+	t, _ := item["type"].(string)
+	switch t {
+	case "agentMessage":
+		item["type"] = "agent_message"
+	case "commandExecution":
+		item["type"] = "command_execution"
+		item["aggregated_output"] = item["aggregatedOutput"]
+		item["exit_code"] = item["exitCode"]
+	case "fileChange":
+		item["type"] = "file_change"
+	case "webSearch":
+		item["type"] = "web_search"
+	case "mcpToolCall":
+		item["type"] = "tool_call"
+		item["name"] = strings.Trim(firstString(item, "server")+"/"+firstString(item, "tool"), "/")
+		item["output"] = compactJSON(item["result"])
+	case "dynamicToolCall":
+		item["type"] = "tool_call"
+		item["name"] = firstString(item, "tool")
+		item["output"] = compactJSON(item["contentItems"])
+	}
+	return item
+}
+
+func compactJSON(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func nestedErrorMessage(v any) string {
+	m := toMap(v)
+	if m == nil {
+		return ""
+	}
+	return firstString(m, "message")
 }
 
 // mapCodexItem turns an item.* event into chunks. For tool-like items we emit
@@ -564,7 +806,11 @@ func mapCodexItem(phase string, item, raw map[string]any, state *fileEditState) 
 				verb := codexFileChangePastVerb(kind)
 				resultContent := fmt.Sprintf("%s %s", verb, path)
 				resultMeta := map[string]any{"toolResultFor": chunkID}
-				if diff, _, ok := state.BuildDiff(chunkID, kind); ok {
+				diff := firstString(m, "diff")
+				if diff == "" {
+					diff, _, _ = state.BuildDiff(chunkID, kind)
+				}
+				if diff != "" {
 					resultContent = diff
 					resultMeta["isDiff"] = true
 					resultMeta["filePath"] = path
