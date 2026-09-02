@@ -827,7 +827,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the open session and `⌘.` cancels its running turn (both
   `SessionPanel.tsx`). `⌘.` deliberately does not replace the composer's
   `Escape` cancel — that one is scoped to the textarea's focus, which is
-  the case the hotkey exists to cover, not a duplicate of it. Scope follows
+  the case the hotkey exists to cover, not a duplicate of it. `⌘B` toggles
+  the sidebar (`Dashboard.tsx`, since the sidebar outlives every pane).
+  The readline deferral is load-bearing for more than readline: `Ctrl+B`
+  is **tmux's default prefix**, so a user running tmux in the PTY would
+  lose every tmux command to the sidebar toggle without it. Scope follows
   the mount point —
   a binding registered in `SessionPanel` is inert on `/machines/:id` and
   `/user` because the panel isn't mounted there, which is cheaper than

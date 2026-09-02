@@ -7,6 +7,7 @@ import { MachinePanel } from '../components/MachinePanel';
 import { UserPanel } from './UserPanel';
 import { CommandPalette } from '../components/CommandPalette';
 import { ResizeHandle } from '../components/ui/ResizeHandle';
+import { useGlobalHotkey } from '../lib/useGlobalHotkey';
 import { useUIStore } from '../stores/uiStore';
 
 const RAIL_WIDTH = 48;
@@ -32,6 +33,18 @@ export function Dashboard() {
     prevPath.current = location.pathname;
     if (window.innerWidth < 768 && sidebarOpen) toggleSidebar();
   }, [location.pathname, sidebarOpen, toggleSidebar]);
+
+  // ⌘B toggles the sidebar. Registered here rather than in a panel
+  // because the sidebar is shell furniture — it has to work from the
+  // session view, a machine pane and /user alike, and this component is
+  // the only thing mounted across all three.
+  //
+  // Two things in the terminal want Ctrl+B and both keep it: it is tmux's
+  // default prefix, and readline's backward-char. `useGlobalHotkey` defers
+  // the Ctrl form whenever `.xterm` holds focus, so only the ⌘ form gets
+  // here — which is also why this binding needs no guard of its own.
+  useGlobalHotkey('b', toggleSidebar);
+
   return (
     <div className="h-screen w-screen flex overflow-x-hidden">
       {/* Desktop sidebar (in flow). Full panel when open, rail when

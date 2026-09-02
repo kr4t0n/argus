@@ -92,7 +92,7 @@ export function SidebarRail() {
       <div className="flex h-12 shrink-0 items-center justify-center border-b border-default">
         <button
           onClick={toggleSidebar}
-          title="show sidebar"
+          title="show sidebar (⌘B)"
           className="rounded-md p-1.5 text-fg-tertiary hover:bg-surface-1 hover:text-fg-primary transition-colors"
         >
           <PanelLeftOpen className="h-3.5 w-3.5" />

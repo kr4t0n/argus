@@ -76,7 +76,7 @@ export function Sidebar() {
           <button
             onClick={toggleSidebar}
             className="text-fg-tertiary hover:text-fg-primary transition-colors"
-            title="hide sidebar"
+            title="hide sidebar (⌘B)"
           >
             <PanelLeftClose className="h-3.5 w-3.5" />
           </button>
