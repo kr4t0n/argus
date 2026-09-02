@@ -853,7 +853,7 @@ func mapCodexItem(phase string, item, raw map[string]any, state *fileEditState) 
 				continue
 			}
 			path := firstString(m, "path", "file_path")
-			kind, _ := m["kind"].(string)
+			kind := codexChangeKind(m["kind"])
 			toolName := codexFileChangeToolName(kind)
 			chunkID := fmt.Sprintf("%s_%d", itemID, i)
 
@@ -862,7 +862,16 @@ func mapCodexItem(phase string, item, raw map[string]any, state *fileEditState) 
 				// so item.completed can emit a unified diff. Snapshots that
 				// fail safety checks (binary, too big) are skipped, which
 				// cleanly falls back to "<verb> <path>" text.
-				state.RememberBefore(chunkID, path)
+				//
+				// app-server ships the patch itself in `changes[].diff` — at
+				// item.started as well as item.completed — so the snapshot is
+				// only needed when it does not. Taking one anyway is a wasted
+				// file read AND a leak for the turn: BuildDiff is the only
+				// thing that deletes fileEditState entries, and it never runs
+				// when a diff was supplied.
+				if firstString(m, "diff") == "" {
+					state.RememberBefore(chunkID, path)
+				}
 				out = append(out, Chunk{
 					Kind:    protocol.KindTool,
 					Content: fmt.Sprintf("%s %s", toolName, path),
@@ -901,6 +910,19 @@ func mapCodexItem(phase string, item, raw map[string]any, state *fileEditState) 
 
 	// Unknown item type — keep it visible as progress instead of dropping.
 	return []Chunk{{Kind: protocol.KindProgress, Content: itemType, Meta: raw}}
+}
+
+// codexChangeKind reads a FileUpdateChange's kind. app-server models it as
+// a TAGGED OBJECT — {"type":"add"} — not a bare string, so a plain string
+// assertion yields "" and every change falls through to the "Edit"/
+// "updated" default: an added, deleted or renamed file all render as an
+// edit. A bare string is still accepted in case the shape is ever
+// flattened.
+func codexChangeKind(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return firstString(toMap(v), "type")
 }
 
 func codexFileChangeToolName(kind string) string {

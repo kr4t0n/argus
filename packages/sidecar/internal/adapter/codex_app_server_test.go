@@ -446,6 +446,57 @@ func TestCodexKeepsUntaggedNotifications(t *testing.T) {
 	}
 }
 
+// The fileChange wire shape, captured from a real `codex app-server` turn:
+// `kind` is a TAGGED OBJECT, and `changes[].diff` is populated at BOTH
+// item.started and item.completed.
+//
+//	item/started:   keys=[changes id status type]  (no top-level diff)
+//	  change: kind={"type":"add"}  diff="hello\n"
+func TestCodexFileChangeUsesTaggedKindAndSuppliedDiff(t *testing.T) {
+	state := &codexAppEventState{turnID: "t", fileEdits: newFileEditState()}
+	item := map[string]any{
+		"type": "fileChange", "id": "item-1", "status": "inProgress",
+		"changes": []any{map[string]any{
+			"path": "/tmp/a.txt", "kind": map[string]any{"type": "add"}, "diff": "hello\n",
+		}},
+	}
+	started := mapCodexAppEvent(codexAppEvent{
+		method: "item/started",
+		params: mustJSON(map[string]any{"turnId": "t", "item": item}),
+	}, state)
+	if len(started) != 1 {
+		t.Fatalf("started chunks = %+v", started)
+	}
+	// A tagged-object kind must resolve to Write, not the "Edit" default.
+	if got := toMap(started[0].Meta)["tool"]; got != "Write" {
+		t.Fatalf("tool = %#v, want Write for kind {type:add}", got)
+	}
+	if got := toMap(toMap(started[0].Meta)["input"])["change_kind"]; got != "add" {
+		t.Fatalf("change_kind = %#v, want add", got)
+	}
+	// app-server supplied the diff, so no snapshot should have been taken —
+	// BuildDiff is the only thing that frees them, and it never runs here.
+	if n := len(state.fileEdits.entries); n != 0 {
+		t.Fatalf("retained %d unused file snapshot(s)", n)
+	}
+
+	item["status"] = "completed"
+	completed := mapCodexAppEvent(codexAppEvent{
+		method: "item/completed",
+		params: mustJSON(map[string]any{"turnId": "t", "item": item}),
+	}, state)
+	if len(completed) != 1 {
+		t.Fatalf("completed chunks = %+v", completed)
+	}
+	meta := toMap(completed[0].Meta)
+	if meta["isDiff"] != true || meta["changeKind"] != "add" {
+		t.Fatalf("result meta = %#v, want the supplied diff tagged add", meta)
+	}
+	if completed[0].Content != "hello\n" {
+		t.Fatalf("content = %q, want the app-server diff", completed[0].Content)
+	}
+}
+
 func drainAdapterChunks(t *testing.T, a Adapter, cmd protocol.Command) []Chunk {
 	t.Helper()
 	ch, err := a.Execute(context.Background(), cmd)
