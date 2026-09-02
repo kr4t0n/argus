@@ -499,7 +499,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     app-server that acks the interrupt and never emits `turn/completed`
     leaves the chunk stream open forever: the command is never acked and the
     session shows "running" indefinitely. The process is not bound to the
-    command context, so nothing else would kill it. The runner also invokes
+    command context, so nothing else would kill it. **app-server stderr is
+    published as `stderr` chunks**, via an `argus/stderr` synthetic event on
+    the same connection channel, so diagnostics printed while a turn
+    otherwise proceeds (expiring auth, sandbox warnings) stay visible instead
+    of surfacing only inside a crash message. Lines are ANSI-stripped
+    (tracing output is colourised), the every-teardown
+    `Failed to write to stdout: Broken pipe` line is filtered as noise, and
+    output is capped at 100 lines per turn because each chunk is a Redis
+    stream entry. The last 8 lines are still retained separately to decorate
+    a process-failure error. The runner also invokes
     the optional `Closer` capability during shutdown. Because app-server's
     `tokenUsage.total` is cumulative for the whole thread, the adapter
     snapshots it before each turn and folds only the delta into the final

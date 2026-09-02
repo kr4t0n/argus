@@ -593,6 +593,11 @@ func mapCodexAppEvent(ev codexAppEvent, state *codexAppEventState) []Chunk {
 		return []Chunk{{Kind: protocol.KindStderr, Content: message, Meta: raw}}
 	case "turn/plan/updated":
 		return []Chunk{{Kind: protocol.KindProgress, Content: "plan updated", Meta: raw}}
+	case codexStderrMethod:
+		// Codex diagnostics belong in the transcript, not only in a crash
+		// message: an expiring token or a sandbox warning is printed while
+		// the turn otherwise proceeds.
+		return []Chunk{{Kind: protocol.KindStderr, Content: firstString(params, "line")}}
 	}
 	return nil
 }

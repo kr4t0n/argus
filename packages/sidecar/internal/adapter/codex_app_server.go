@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -224,10 +225,34 @@ func (s *codexAppServer) readLoop(stdout io.Reader) {
 	}
 }
 
+// codexStderrMethod is a synthetic notification carrying one app-server
+// stderr line, so diagnostics interleave with the turn's real events on the
+// single connection channel instead of being visible only after a crash.
+const codexStderrMethod = "argus/stderr"
+
+// codexStderrCap bounds how many stderr lines one turn publishes as chunks.
+// app-server logs through tracing and gets chatty under RUST_LOG, and every
+// chunk becomes a Redis stream entry — an unbounded flood would evict live
+// transcript data. The failure-decoration ring keeps updating past the cap.
+const codexStderrCap = 100
+
+// ansiRe matches CSI sequences; app-server's tracing output is colourised,
+// and raw escapes would render as garbage in the transcript.
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]`)
+
+// isCodexAppServerNoise drops stderr lines that say nothing about the turn.
+// The broken-pipe write failure is emitted on essentially every normal
+// teardown: releasing the thread-store writer means closing the pipes while
+// app-server may still be writing to them.
+func isCodexAppServerNoise(line string) bool {
+	return strings.Contains(line, "Failed to write to stdout: Broken pipe")
+}
+
 func (s *codexAppServer) readStderr(stderr io.Reader) {
 	sc := bufio.NewScanner(stderr)
+	published := 0
 	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
+		line := strings.TrimSpace(ansiRe.ReplaceAllString(sc.Text(), ""))
 		if line == "" {
 			continue
 		}
@@ -237,6 +262,26 @@ func (s *codexAppServer) readStderr(stderr io.Reader) {
 			s.stderr = s.stderr[len(s.stderr)-8:]
 		}
 		s.stderrMu.Unlock()
+
+		if isCodexAppServerNoise(line) {
+			continue
+		}
+		switch {
+		case published < codexStderrCap:
+			published++
+			s.deliverEvent(codexAppEvent{
+				method: codexStderrMethod,
+				params: mustJSON(map[string]any{"line": line}),
+			})
+		case published == codexStderrCap:
+			published++
+			s.deliverEvent(codexAppEvent{
+				method: codexStderrMethod,
+				params: mustJSON(map[string]any{
+					"line": fmt.Sprintf("[argus] further codex stderr suppressed after %d lines", codexStderrCap),
+				}),
+			})
+		}
 	}
 }
 

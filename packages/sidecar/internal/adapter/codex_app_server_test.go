@@ -38,6 +38,14 @@ func TestCodexAppServerHelperProcess(t *testing.T) {
 		b, _ := json.Marshal(v)
 		fmt.Println(string(b))
 	}
+	// Mirrors the real app-server, which logs colourised tracing diagnostics
+	// at startup (a missing-bubblewrap warning) and a broken-pipe line on
+	// every teardown. Emitting before `initialize` also keeps the assertion
+	// off a stdout/stderr pipe race.
+	if os.Getenv("ARGUS_CODEX_FAKE_STDERR") == "1" {
+		fmt.Fprintln(os.Stderr, "\x1b[2m2026-01-01T00:00:00Z\x1b[0m \x1b[31mERROR\x1b[0m \x1b[2mcodex_app_server\x1b[0m: bubblewrap not found")
+		fmt.Fprintln(os.Stderr, "Failed to write to stdout: Broken pipe (os error 32)")
+	}
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -110,10 +118,15 @@ func TestCodexAppServerHelperProcess(t *testing.T) {
 
 func newFakeCodexAdapter(t *testing.T) (*CodexAdapter, string) {
 	t.Helper()
+	return newFakeCodexAdapterEnv(t, "")
+}
+
+func newFakeCodexAdapterEnv(t *testing.T, extraEnv string) (*CodexAdapter, string) {
+	t.Helper()
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "requests.jsonl")
 	shim := filepath.Join(dir, "codex")
-	script := fmt.Sprintf("#!/bin/sh\n%s=1 ARGUS_CODEX_APP_SERVER_LOG=%q exec %q -test.run=TestCodexAppServerHelperProcess\n", codexAppServerHelperEnv, logPath, os.Args[0])
+	script := fmt.Sprintf("#!/bin/sh\n%s %s=1 ARGUS_CODEX_APP_SERVER_LOG=%q exec %q -test.run=TestCodexAppServerHelperProcess\n", extraEnv, codexAppServerHelperEnv, logPath, os.Args[0])
 	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake codex: %v", err)
 	}
@@ -260,6 +273,29 @@ func TestCodexExecuteTerminatesOnContextCancel(t *testing.T) {
 	got := drainChunkChannelWithin(t, chunks, 15*time.Second)
 	if terminals := terminalChunks(got); len(terminals) != 1 {
 		t.Fatalf("chunks = %+v, want exactly one terminal chunk", got)
+	}
+}
+
+// Codex diagnostics have to reach the transcript, not just a crash message:
+// an expiring token or a sandbox warning is printed to stderr while the turn
+// otherwise proceeds, and the operator would see a turn producing nothing.
+func TestCodexSurfacesAppServerStderr(t *testing.T) {
+	a, _ := newFakeCodexAdapterEnv(t, "ARGUS_CODEX_FAKE_STDERR=1")
+	t.Cleanup(func() { _ = a.Close() })
+	chunks := drainAdapterChunks(t, a, protocol.Command{ID: "cmd-stderr", Prompt: "hello"})
+
+	var got []string
+	for _, c := range chunks {
+		if c.Kind == protocol.KindStderr {
+			got = append(got, c.Content)
+		}
+	}
+	want := "2026-01-01T00:00:00Z ERROR codex_app_server: bubblewrap not found"
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("stderr chunks = %#v, want exactly [%q] (ANSI stripped, teardown noise dropped)", got, want)
+	}
+	if joinedDeltas(chunks) != "hello" {
+		t.Fatalf("stderr must not disturb the answer stream: %+v", chunks)
 	}
 }
 
