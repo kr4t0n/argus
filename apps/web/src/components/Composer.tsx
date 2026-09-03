@@ -182,9 +182,24 @@ export function Composer({
       e.preventDefault();
       handleSend();
     }
-    if (e.key === 'Escape' && running && onCancel) {
+    // Escape leaves the field — it no longer cancels the turn. ⌘. does
+    // that now, from anywhere INCLUDING with this textarea focused
+    // (`useGlobalHotkey` has no is-the-user-typing guard, by design), so
+    // keeping both would only have meant the one moment you most want to
+    // step out — a turn is running and you want to read it — is the moment
+    // Escape kills the turn instead. A reflex key whose meaning depends on
+    // whether something is running is how accidental cancels happen.
+    //
+    // Blur lands focus back on <body>, which is exactly the state
+    // `useTypeToFocus` requires, so the two close a loop: esc out, any
+    // letter back in, Space pages the transcript in between.
+    //
+    // `isComposing` is load-bearing for the same reason it is on Enter
+    // above: mid-composition, Escape belongs to the IME, which uses it to
+    // dismiss the candidate window.
+    if (e.key === 'Escape' && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      onCancel();
+      e.currentTarget.blur();
     }
   }
 
@@ -264,7 +279,7 @@ export function Composer({
                 size="icon"
                 variant="subtle"
                 onClick={onCancel}
-                title="Cancel (esc, or ⌘. from anywhere in the session)"
+                title="Cancel (⌘. from anywhere in the session)"
                 aria-label="Cancel running command"
                 className="rounded-full"
               >

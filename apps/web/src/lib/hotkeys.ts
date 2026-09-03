@@ -87,7 +87,7 @@ export const LOCAL_KEYS: readonly LocalKeyGroup[] = [
       { chord: 'any key', label: 'Start typing anywhere to jump into the composer' },
       { chord: '⏎', label: 'Send — or queue, while a turn is running' },
       { chord: '⇧⏎', label: 'New line' },
-      { chord: 'esc', label: 'Stop the running turn' },
+      { chord: 'esc', label: 'Leave the composer' },
     ],
   },
   {

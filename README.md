@@ -92,14 +92,16 @@ restores it on a second press. It's a toggle because ⌘D is the browser's
 own "add bookmark", so a misfire is expected and the undo has to be the
 same keystroke; an `archived` badge appears in the header and doubles as a
 click-to-restore button. `⌘.` stops a running turn from anywhere in the
-session — the composer's `esc` cancel only fires while the input itself has
-focus, which is exactly not where you are once you've clicked away to read
-the output. `⌘B` collapses and expands the sidebar from any pane. You can
+session, composer included, and is the only cancel binding — a key that
+cancels only while something happens to be running fires destructively at
+exactly the wrong moment. `⌘B` collapses and expands the sidebar from any
+pane. You can
 also **just start typing** anywhere in a session and the keystroke lands in
 the composer — no chord to remember. It stays out of the way when anything
 is focused, and `Space` is deliberately left alone so it still pages the
-transcript. Reading a file? `esc` closes the tab and puts the cursor back
-in the composer. Inside
+transcript. `esc` leaves the composer again, putting you back in the state
+where typing works. Reading a file? `esc` closes the tab and puts the
+cursor back in the composer. Inside
 the terminal pane the `Ctrl` form of every binding defers to the shell, so
 `Ctrl+D` still sends EOF, `Ctrl+K` still kills the line, and `Ctrl+B`
 still reaches tmux as its prefix.

@@ -880,9 +880,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `⌘P` / `⌘K` open the palette's two modes (`CommandPalette.tsx`, mounted
   once in `Dashboard` so they fire from any pane); `⌘D` toggles archive on
   the open session and `⌘.` cancels its running turn (both
-  `SessionPanel.tsx`). `⌘.` deliberately does not replace the composer's
-  `Escape` cancel — that one is scoped to the textarea's focus, which is
-  the case the hotkey exists to cover, not a duplicate of it. `⌘B` toggles
+  `SessionPanel.tsx`). **`⌘.` is the only cancel binding.** The composer's
+  `Escape` used to cancel as well, and now blurs instead: ⌘. fires with the
+  textarea focused (the hook has no is-the-user-typing guard, by design),
+  so keeping both meant the one moment you most want to step out of the
+  input — a turn is running and you want to read it — was the moment
+  Escape killed the turn. A reflex key whose meaning depends on whether
+  something is running is how accidental cancels happen. The blur also
+  restores `document.activeElement` to `<body>`, which is precisely what
+  `useTypeToFocus` requires, so esc-out / type-back-in is a closed loop
+  rather than two one-way doors. `⌘B` toggles
   the sidebar (`Dashboard.tsx`, since the sidebar outlives every pane).
   The readline deferral is load-bearing for more than readline: `Ctrl+B`
   is **tmux's default prefix**, so a user running tmux in the PTY would
