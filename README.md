@@ -41,8 +41,10 @@ self-registers as a *Machine* and starts one runner per installed CLI. Create
 `(machine, workingDir)` project and CLI type, and the server routes its turns
 to that machine's runner over a per-CLI Redis stream — no YAML to ship to
 remote boxes.
-- **Sessions = conversations** — long-lived threads tied to the CLI's native
-`--resume` ids, so you pick up where you left off.
+- **Sessions = conversations** — long-lived threads tied to each CLI's native
+conversation id, so you pick up where you left off. Codex turns use native
+app-server interrupt/resume operations and release their thread writer before
+the dashboard reports them idle.
 - **Auto-discovered adapters** — `claude-code`, `codex`, and `cursor-cli` ship
 in the box; the sidecar probes `PATH` at boot and the new-session picker only
 offers what's installed on that host. New adapters are ~30 lines + an `init()`
@@ -111,7 +113,7 @@ scroll position instead of flashing a spinner.
 composer. Images render inline and pass to the agent as vision; other files
 land on the sidecar host. Bytes live in any S3-compatible store (bundled
 MinIO) that only the *server* needs to reach; files land under
-`<workingDir>/.argus/uploads/` and persist for `--resume` turns.
+`<workingDir>/.argus/uploads/` and persist for resumed turns.
 - **Prompt queue** — keep typing while a turn runs; messages queue (editable,
 reorderable), dispatch one at a time as the session goes idle, and survive a
 reload.

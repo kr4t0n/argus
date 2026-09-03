@@ -12,7 +12,7 @@
 //     meta.total_cost_usd            (root, USD)
 //     meta.duration_api_ms           (root, ms)
 //
-//   codex (≥ 0.121, turn.completed event):
+//   codex (app-server token usage folded onto the final chunk):
 //     meta.usage.input_tokens
 //     meta.usage.output_tokens
 //     meta.usage.cached_input_tokens
@@ -194,11 +194,7 @@ export function parseUsage(
           'cached_input_tokens',
           'cacheReadTokens',
         ),
-        cacheWriteTokens: pickNumber(
-          usage,
-          'cache_creation_input_tokens',
-          'cacheWriteTokens',
-        ),
+        cacheWriteTokens: pickNumber(usage, 'cache_creation_input_tokens', 'cacheWriteTokens'),
       };
       break;
   }
@@ -210,7 +206,7 @@ export function parseUsage(
  * Parse the *live context size* from a `final`-kind chunk's `meta` — the
  * prompt the model saw on its MOST RECENT single API call.
  *
- * Differs from `parseUsage` for **claude-code only**. Claude Code's
+ * Differs from `parseUsage` for Claude Code and app-server Codex. Claude Code's
  * stream-json `result` event reports `meta.usage` as the CUMULATIVE
  * aggregate across every API round-trip the turn made — and a tool-use
  * turn makes many, each re-reading the conversation from cache. Summing
@@ -222,8 +218,12 @@ export function parseUsage(
  * (Verified empirically: a 6-call turn reported top-level used ≈ 157k vs
  * iterations[-1] used ≈ 26.6k — a 5.9× overcount.)
  *
- * For every other adapter — and for claude-code when `iterations` is
- * absent (older CLI builds, or an error/cancelled turn) — this is exactly
+ * Codex app-server similarly attaches `meta.lastUsage` from
+ * `thread/tokenUsage/updated.tokenUsage.last`, while `meta.usage` retains the
+ * whole-turn total used for accounting.
+ *
+ * For every other adapter — and when the per-call payload is absent (older
+ * CLI builds, or an error/cancelled turn) — this is exactly
  * `parseUsage`. NOTE: `useSessionUsage` and the server-side aggregation
  * deliberately keep using `parseUsage` (the aggregate): that IS the
  * correct per-turn total for cost/usage. Only the context ring wants the
@@ -249,6 +249,15 @@ export function parseContextUsage(
       }
     }
   }
+  if (adapterType === 'codex' && meta) {
+    const lastUsage = meta.lastUsage;
+    if (lastUsage && typeof lastUsage === 'object') {
+      const perCall = parseUsage('codex', {
+        usage: lastUsage as Record<string, unknown>,
+      });
+      if (perCall) return perCall;
+    }
+  }
   return parseUsage(adapterType, meta);
 }
 
@@ -261,10 +270,8 @@ export function parseContextUsage(
  *   claude-code system init:   meta.model            ("claude-3-5-sonnet-...")
  *   claude-code assistant:     meta.message.model    (wraps the API response)
  *   cursor-cli system init:    meta.model            ("Opus 4.7 1M Extra High Thinking")
- *   codex session_configured:  meta.model OR meta.msg.model (codex wraps events
- *                                                            in a `msg` envelope
- *                                                            for some streams)
- *   codex thread.started:      meta.session.model    (newer 0.121+ shape)
+ *   codex app-server:          meta.model            (resolved thread model)
+ *   legacy codex events:       meta.msg.model OR meta.session.model
  *
  * Probes them all in priority order and returns the first non-empty
  * string. Adapter-agnostic on purpose so custom adapters that mirror
@@ -287,9 +294,11 @@ export function parseModel(meta: Record<string, unknown> | null | undefined): st
     (meta.message as Record<string, unknown> | undefined)?.model,
     (meta.msg as Record<string, unknown> | undefined)?.model,
     (meta.session as Record<string, unknown> | undefined)?.model,
-    ((meta.msg as Record<string, unknown> | undefined)?.session as
-      | Record<string, unknown>
-      | undefined)?.model,
+    (
+      (meta.msg as Record<string, unknown> | undefined)?.session as
+        | Record<string, unknown>
+        | undefined
+    )?.model,
   ];
 
   for (const v of candidates) {

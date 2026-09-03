@@ -8,7 +8,9 @@ name: argus-sidecar-release
 #     — the tag name is used verbatim as the release name.
 #   - manual `workflow_dispatch` with a required `version` input
 #     (e.g. `0.2.0` → release named `argus-sidecar-v0.2.0`). Useful for
-#     cutting a release without first pushing a tag.
+#     cutting a release without first pushing a tag — note this path
+#     creates the tag, so the publish step pins `target_commitish` to the
+#     built commit (see below).
 
 on:
   push:
@@ -149,6 +151,14 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.name }}
+          # On the workflow_dispatch path the tag does not exist yet, and
+          # GitHub creates it at the repository's DEFAULT BRANCH unless told
+          # otherwise — not at the ref that was just built. That silently
+          # produces a release whose binaries and whose tag are different
+          # code: dispatching from a feature branch built the branch but
+          # tagged main. Pin it to the commit this run checked out. On the
+          # tag-push path the tag already exists and this is ignored.
+          target_commitish: ${{ github.sha }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
           generate_release_notes: true
           fail_on_unmatched_files: true

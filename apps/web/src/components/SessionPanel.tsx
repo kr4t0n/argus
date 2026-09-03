@@ -344,6 +344,11 @@ export function SessionPanel() {
             <UsageBadge
               chunks={entry.chunks}
               agentType={entry.session.cliType ?? undefined}
+              catalogTarget={
+                projectRef && entry.session.cliType
+                  ? { machineId: projectRef.machineId, cliType: entry.session.cliType }
+                  : null
+              }
               // /compact is a REAL client-side command only on claude-code
               // (codex/cursor print modes role-play a fake "Compacted."
               // reply — verified against both binaries), and compaction

@@ -7,6 +7,7 @@ import {
   type SessionContext,
 } from '../lib/usage';
 import { Tooltip } from './ui/Tooltip';
+import { useModelCatalog, type CatalogTarget } from './ModelPicker';
 
 /**
  * Compact per-session token-usage badge that lives in the SessionPanel
@@ -25,17 +26,25 @@ import { Tooltip } from './ui/Tooltip';
 export function UsageBadge({
   chunks,
   agentType,
+  catalogTarget,
   onCompact,
 }: {
   chunks: ResultChunkDTO[];
   agentType: AgentType | undefined;
+  /** Machine + CLI whose model catalog supplies the ring's denominator.
+   *  Absent (workdir-less session, unresolved project) just falls the
+   *  lookup back to the static table. */
+  catalogTarget?: CatalogTarget | null;
   /** Ring-popover "Compact session" action — the caller gates it
    *  (claude-code only, idle only) and wires the /compact dispatch;
    *  undefined hides the button. */
   onCompact?: () => void;
 }) {
   const total = useSessionUsage(chunks, agentType);
-  const ctx = useSessionContext(chunks, agentType);
+  // Shares ModelPicker's module-level cache and the server's per-agent
+  // cache, so this is a cheap read even with several sessions open.
+  const { catalog } = useModelCatalog(catalogTarget ?? null);
+  const ctx = useSessionContext(chunks, agentType, catalog?.models);
   if (!total) return null;
 
   // The two visible numbers — kept terse so the badge fits on the same
