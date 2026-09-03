@@ -292,10 +292,17 @@ public struct TranscriptState: Equatable, Sendable {
             }
             guard let used, used > 0 else { continue }
             let model = latestModel()
+            // The window the turn itself reported, when the transport
+            // supplies one (Codex app-server). Authoritative over any
+            // name-keyed lookup: per-thread, and the usable ceiling rather
+            // than the nominal one.
+            let reported = chunks.last {
+                $0.kind == .final && $0.meta?["modelContextWindow"]?.int != nil
+            }?.meta?["modelContextWindow"]?.int
             return ContextSnapshot(
                 model: model,
                 usedTokens: used,
-                windowInfo: ContextWindows.lookup(model: model)
+                windowInfo: ContextWindows.resolve(model: model, reportedWindow: reported)
             )
         }
         return nil

@@ -1,12 +1,18 @@
-// Hand-maintained model → context-window lookup.
+// Hand-maintained model → context-window lookup, and the FALLBACK half of
+// `resolveContextWindow`.
 //
-// "What's a model's max context?" is a value that changes ~quarterly when
-// new families ship. We keep it as a hardcoded constant rather than a
-// remote registry because:
-//   - the alternative (Anthropic/OpenAI model APIs, JSON CDN) adds a network
-//     dependency + cache-invalidation logic for a value that's rarely wrong;
-//   - adapter-emitted context-window metadata isn't uniformly available
-//     across the three CLIs we support.
+// Prefer the agent's model catalog: the sidecar already parses each CLI's
+// own answer into `ModelCatalogEntry.contextWindow` (codex from
+// `codex debug models`), which tracks new releases without a code change.
+// This table is what answers for models the catalog can't — an offline
+// machine, a catalog not yet pushed, a transcript whose agent is gone.
+//
+// "What's a model's max context?" changes ~quarterly when new families
+// ship. Keeping a hardcoded constant avoids a network dependency and
+// cache-invalidation logic — but note it does go wrong, silently and in
+// the unsafe direction: the GPT-5 entry read 400k against a real 272k,
+// making the ring look ~32% emptier than it was. Treat an edit here as a
+// stopgap and check whether the catalog can answer instead.
 //
 // Match by family prefix / substring, not by exact id, so new point
 // releases inside an existing family ("claude-opus-4-8-2026MMDD",
@@ -25,6 +31,10 @@
 // hash move together. (The enforcement exists because the Fable 1M
 // entry landed here on 2026-07-16 and the Swift mirror missed it — the
 // iOS ring read 5x too full.)
+
+// Type-only: erased at build time, so this cannot create a runtime cycle
+// with protocol.ts (which re-exports through index.ts alongside this file).
+import type { ModelCatalogEntry } from './protocol';
 
 /** Anthropic family detector. Covers the API id form ("claude-opus-…")
  *  AND cursor-cli's bare display names ("Opus 4.7 1M Extra High
@@ -108,10 +118,19 @@ const CONTEXT_WINDOWS: Array<{
     family: 'Claude',
   },
 
-  // OpenAI GPT-5 family (incl. gpt-5-codex) — 400k.
+  // OpenAI GPT-5 family (incl. gpt-5-codex) — 272k. Verified against
+  // `codex debug models`, which reports context_window=272000 for every
+  // listed gpt-5.x slug (5.4, 5.5, 5.6-sol/terra/luna). This entry was
+  // 400_000, which made the ring read ~32% emptier than reality — the
+  // unsafe direction, since the ring exists to warn before overflow.
+  //
+  // Prefer the agent's own catalog over this entry: `resolveContextWindow`
+  // reads ModelCatalogEntry.contextWindow, which comes from the CLI itself
+  // and tracks new releases without a code change. This stays the fallback
+  // for transcripts whose machine/catalog is no longer reachable.
   {
     match: (m) => m.includes('gpt-5'),
-    window: 400_000,
+    window: 272_000,
     family: 'GPT-5',
   },
 
@@ -164,4 +183,55 @@ export function lookupContextWindow(
     }
   }
   return null;
+}
+
+/**
+ * Resolve a model's context window. Three sources, most authoritative
+ * first.
+ *
+ * 1. `reportedWindow` — what the turn itself said, read off the final
+ *    chunk's `meta.modelContextWindow`. This is the only source that knows
+ *    the window ACTUALLY in effect: it is per-thread, and it accounts for
+ *    the usable ceiling rather than the nominal one. Codex reports 258400
+ *    where its catalog says 272000, the difference being the model's
+ *    `effective_context_window_percent` (95) — the 5% it holds back. A
+ *    name-keyed source cannot express either, since the same model id can
+ *    run with different windows (`gpt-5.6-sol` lists context_window 272000
+ *    but max_context_window 872000).
+ * 2. The agent's model catalog — the CLI's own answer per slug
+ *    (`codex debug models` → `ModelCatalogEntry.contextWindow`). Tracks
+ *    new releases with no code change.
+ * 3. `CONTEXT_WINDOWS` — the static table, for transcripts whose machine
+ *    is offline or whose agent is gone. It needs a matcher edit per family
+ *    and fails silently when it drifts (it read 400k for gpt-5.x against a
+ *    real 272k until this was wired up).
+ *
+ * Catalog matching is exact-then-case-insensitive on the entry id, NOT the
+ * substring matching the table uses: a catalog id is the CLI's own slug,
+ * so a loose match risks pairing a model with a sibling's window.
+ *
+ * A reported window is trusted even when neither name-keyed source
+ * recognises the model — the number is authoritative on its own, and the
+ * family label is only cosmetic.
+ */
+export function resolveContextWindow(
+  model: string | null | undefined,
+  catalog: ModelCatalogEntry[] | null | undefined,
+  reportedWindow?: number | null,
+): ContextWindowInfo | null {
+  let named: ContextWindowInfo | null = null;
+  if (model && catalog?.length) {
+    const lc = model.toLowerCase();
+    const hit =
+      catalog.find((e) => e.id === model) ?? catalog.find((e) => e.id.toLowerCase() === lc);
+    if (hit?.contextWindow && hit.contextWindow > 0) {
+      named = { window: hit.contextWindow, family: hit.displayName || hit.id };
+    }
+  }
+  named ??= lookupContextWindow(model);
+
+  if (typeof reportedWindow === 'number' && reportedWindow > 0) {
+    return { window: reportedWindow, family: named?.family ?? model ?? 'model' };
+  }
+  return named;
 }
