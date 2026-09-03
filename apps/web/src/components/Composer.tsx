@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { ArrowUp, ListPlus, Square, Paperclip, X, FileText, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from './ui/Button';
 import { ImageLightbox } from './ImageLightbox';
@@ -35,6 +35,10 @@ type Props = {
   onCancel?: () => void;
   initial?: string;
   onChange?: (v: string) => void;
+  /** Lets the parent focus the input — type-to-focus and the file tab's
+   *  Escape both need to, and the parent is the only place that knows
+   *  whether the composer is even mounted (a file tab replaces it). */
+  textareaRef?: RefObject<HTMLTextAreaElement>;
 };
 
 export function Composer({
@@ -46,11 +50,15 @@ export function Composer({
   onCancel,
   initial = '',
   onChange,
+  textareaRef,
 }: Props) {
   const [value, setValue] = useState(initial);
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
-  const taRef = useRef<HTMLTextAreaElement>(null);
+  // The parent's ref wins when supplied, so auto-resize below and the
+  // parent's focus() are looking at the same element.
+  const ownTaRef = useRef<HTMLTextAreaElement>(null);
+  const taRef = textareaRef ?? ownTaRef;
   const fileRef = useRef<HTMLInputElement>(null);
   const enqueue = useQueueStore((s) => s.enqueue);
   const queuedCount = useQueueStore((s) => (sessionId ? s.queues[sessionId]?.length ?? 0 : 0));

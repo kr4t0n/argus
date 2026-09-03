@@ -18,6 +18,7 @@ import { FileTabStrip } from './FileTabStrip';
 import { useProjectRef } from '../lib/projects';
 import { useFileTabAutoRefresh } from '../lib/useFileTabAutoRefresh';
 import { useGlobalHotkey } from '../lib/useGlobalHotkey';
+import { useTypeToFocus } from '../lib/useTypeToFocus';
 import { HOTKEYS } from '../lib/hotkeys';
 import { UsageBadge } from './UsageBadge';
 import { relativeTime } from '../lib/utils';
@@ -261,6 +262,53 @@ export function SessionPanel() {
     void onCancel();
   });
 
+  // ── getting the cursor back into the composer ─────────────────────
+  // Two paths, because they answer different questions. Typing is the
+  // implicit one (you already started writing); Escape is the explicit
+  // one (you want the input without leaving a character in it, and you
+  // may be reading a file, which unmounts the composer entirely).
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const setActiveFile = useFileTabsStore((s) => s.setActive);
+  const [pendingComposerFocus, setPendingComposerFocus] = useState(false);
+
+  const focusComposer = useCallback(() => {
+    composerRef.current?.focus();
+  }, []);
+
+  // Disabled while a file tab is showing: the composer is not mounted
+  // then, so there is nothing to focus. Typing does NOT pull you out of a
+  // file — a stray keystroke would cost you your scroll position in it,
+  // which is a worse misfire than the feature is worth. Escape below is
+  // the deliberate way out.
+  useTypeToFocus(!!sessionId && !activeFile, focusComposer);
+
+  // Escape closes the file tab and returns the cursor to the composer.
+  // The viewer had no keyboard exit at all before this. No conflict with
+  // the composer's own Escape-to-cancel: that one fires from inside the
+  // textarea, and while a file tab is open the composer isn't mounted.
+  useEffect(() => {
+    if (!activeFile) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (usePaletteStore.getState().mode !== null) return;
+      const el = document.activeElement;
+      if (el instanceof Element && el.closest('.xterm')) return;
+      setActiveFile(null);
+      setPendingComposerFocus(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [activeFile, setActiveFile]);
+
+  // The focus has to wait for the composer to mount, which only happens
+  // on the render after `activeFile` clears — hence a pending flag rather
+  // than focusing inline above, where the ref is still null.
+  useEffect(() => {
+    if (!pendingComposerFocus || activeFile) return;
+    composerRef.current?.focus();
+    setPendingComposerFocus(false);
+  }, [pendingComposerFocus, activeFile]);
+
   if (!sessionId) {
     return (
       <div className="relative flex h-full items-center justify-center text-fg-tertiary text-sm">
@@ -413,6 +461,7 @@ export function SessionPanel() {
         {!activeFile && (
           <Composer
             key={sessionId}
+            textareaRef={composerRef}
             sessionId={sessionId}
             onSend={onSend}
             onCancel={onCancel}

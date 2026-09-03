@@ -84,10 +84,15 @@ export const LOCAL_KEYS: readonly LocalKeyGroup[] = [
   {
     title: 'Composer',
     keys: [
+      { chord: 'any key', label: 'Start typing anywhere to jump into the composer' },
       { chord: '⏎', label: 'Send — or queue, while a turn is running' },
       { chord: '⇧⏎', label: 'New line' },
       { chord: 'esc', label: 'Stop the running turn' },
     ],
+  },
+  {
+    title: 'File tabs',
+    keys: [{ chord: 'esc', label: 'Close the file and return to the composer' }],
   },
   {
     title: 'Command palette',

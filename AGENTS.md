@@ -902,6 +902,38 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   belongs in `Dashboard`. Every *other* keydown listener in the web app is
   component-scoped (popover Escape, composer Enter, `ui/Select`); this hook
   is the only global one, so a new app-level shortcut is a one-liner.
+- `lib/useTypeToFocus.ts` — bare-key "start typing anywhere and it lands in
+  the composer" (`SessionPanel`). Deliberately a SEPARATE hook, not a
+  `useGlobalHotkey` option: that hook is simple precisely because a
+  Cmd/Ctrl combo can't fire mid-sentence, and a bare key gives that up.
+  Opposite posture too — bubble phase, never `preventDefault`, because it
+  must LOSE to anything that wants the key and the keystroke has to
+  survive to reach the newly-focused textarea. **It never inserts the
+  character**: it focuses on `keydown` and lets the same keystroke land by
+  itself, since inserting `e.key` by hand breaks IME composition and dead
+  keys (the composer already guards `isComposing` on Enter for that
+  reason). Two guards carry the whole design and both were found by asking
+  "how does this misfire?":
+  1. **Space is excluded.** It's a printable single character, so the
+     obvious `e.key.length === 1` test lets it through — and Space both
+     pages the transcript while reading and activates whatever control has
+     focus. Letting it through breaks scrolling AND silently swallows
+     button activation. Nobody opens a message with a space.
+  2. **Only fires when `document.activeElement` is body.** Stronger and
+     less brittle than a blocklist of element types: if the user clicked or
+     tabbed onto any control they're driving it, so stay out of the way.
+     This is what keeps Space-to-activate and `ui/Select` typeahead working
+     for keyboard-only users, and `.xterm` plus every input fall out of it
+     for free since all of them take focus. It matters more here than in a
+     pure chat app — a session view also holds a file tree, file tabs, a
+     terminal and the diff/git panes, so focus sits on a control far more
+     often than in a UI where the transcript is the only surface.
+  Typing deliberately does NOT pull you out of a file tab (which unmounts
+  the composer): a stray keystroke would cost the reader their scroll
+  position in that file, a worse misfire than the feature is worth.
+  `Escape` is the explicit way out, and because the composer only mounts on
+  the render AFTER `activeFile` clears, that path sets a pending flag and
+  focuses in a follow-up effect — focusing inline finds a null ref.
 - `stores/paletteStore.ts` — `mode: 'session' | 'content' | null`, where
   null is closed; collapsing open-ness and mode into one field is what
   makes each hotkey a toggle and the other hotkey a mode switch.
