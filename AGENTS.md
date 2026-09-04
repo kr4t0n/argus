@@ -896,7 +896,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   lose every tmux command to the sidebar toggle without it. `⌘/` opens
   `ShortcutsHelp.tsx`, which RENDERS the registry rather than restating it
   — so a binding cannot ship undocumented, which is the point of forcing
-  the hook to take a `HotkeyBinding`. Note that the help overlay is a third
+  the hook to take a `HotkeyBinding`. The keyboard glyph in `UserRow.tsx`
+  is the only affordance in the app that does not require already knowing a
+  binding, and it exists to break that circle — so keep it **always
+  visible**, unlike the hover-revealed sign-out button beside it. It sits
+  only in the expanded sidebar, not `SidebarRail`: the bootstrap problem is
+  a new-user problem, and the sidebar defaults open. Note that the help
+  overlay is a third
   consumer of `paletteStore.mode` (`'session' | 'content' | 'help'`): it
   has no open-state of its own, so ⌘/ while the palette is open is a
   switch, not two overlays stacking. `CommandPalette`'s `open` is therefore

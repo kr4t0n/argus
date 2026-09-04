@@ -87,7 +87,8 @@ from the index on purpose — searching `pool` finds the answer that explained
 the pool, not the `npm WARN` that mentioned one. Picking a result jumps to the
 **turn** that matched, not just the session.
 - **Keyboard shortcuts** — `⌘/` lists every binding, which is the short
-version of this bullet. `⌘D` archives the session you're reading, and
+version of this bullet; the keyboard glyph in the sidebar footer opens the
+same list, so you don't need a shortcut to find the shortcuts. `⌘D` archives the session you're reading, and
 restores it on a second press. It's a toggle because ⌘D is the browser's
 own "add bookmark", so a misfire is expected and the undo has to be the
 same keystroke; an `archived` badge appears in the header and doubles as a
