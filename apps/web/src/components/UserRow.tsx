@@ -21,7 +21,13 @@ export function UserRow() {
   const active = location.pathname.startsWith('/user');
   const initial = (user?.email ?? '?').trim().charAt(0).toUpperCase();
   return (
-    <div className="shrink-0 flex items-center gap-1 px-2 py-2">
+    // `pr-2.5` rather than `pr-2`: the button carries its own `p-1.5`, so
+    // matching the row padding would put the GLYPH 2px right of everything
+    // above it. The sidebar aligns icons and meta text to a 16px right
+    // rail — the header's collapse chevron (`pr-4`, no inner padding) and
+    // every session row's timestamp (`px-2` scroller + `px-2` row) both
+    // land there — and 10px + the button's 6px is what puts this on it.
+    <div className="shrink-0 flex items-center gap-1 pl-2 pr-2.5 py-2">
       <Link
         to="/user"
         className={cn(
