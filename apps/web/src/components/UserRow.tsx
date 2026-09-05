@@ -21,16 +21,23 @@ export function UserRow() {
   const active = location.pathname.startsWith('/user');
   const initial = (user?.email ?? '?').trim().charAt(0).toUpperCase();
   return (
-    // Padding is asymmetric so the GLYPH lines up, not the button box: the
-    // button carries its own `p-1.5`, so `pr-4` (16px) + that 6px puts the
-    // icon's right edge at 22px — where MachineRow's status dots sit
-    // (`px-1` list + `px-2.5` row + the dot wrapper's `pr-2`). The dots are
-    // this row's nearest neighbours and the pair reads as one column, so
-    // they win over the 16px rail the session timestamps and the header
-    // chevron use. Moving the dots in to 16px instead would make the whole
-    // right edge consistent, but that is a machine-row change, not a
-    // footer one.
-    <div className="shrink-0 flex items-center gap-1 pl-2 pr-4 py-2">
+    // The odd `pr-[13px]` is centre-alignment with the machine dots above,
+    // and it has to be centres rather than right edges because the two
+    // marks are different widths — a `w-2` dot under a `w-3.5` icon reads
+    // as misaligned whenever their edges match. Measuring leftward from
+    // the sidebar's inner right edge:
+    //
+    //   dot   `px-1` list + `px-2.5` row + wrapper `pr-2` = 22px to its
+    //         right edge, 8px wide  → centre 26px
+    //   glyph  pr + the button's own `p-1.5` (6px), 14px wide
+    //                                → centre pr + 13
+    //
+    // so pr = 13px. The dots win over the 16px rail the session timestamps
+    // and header chevron use because the machine list is this row's
+    // immediate neighbour and the two read as one column. Making the whole
+    // right edge consistent instead would mean dropping the stray `pr-2`
+    // from the dot wrapper — a machine-row change, not a footer one.
+    <div className="shrink-0 flex items-center gap-1 pl-2 pr-[13px] py-2">
       <Link
         to="/user"
         className={cn(
