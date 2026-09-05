@@ -899,7 +899,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the hook to take a `HotkeyBinding`. The keyboard glyph in `UserRow.tsx`
   is the only affordance in the app that does not require already knowing a
   binding, and it exists to break that circle — so keep it **always
-  visible**, unlike the hover-revealed sign-out button beside it. It sits
+  visible** and don't let another control crowd it (sign-out used to sit
+  beside it and was moved to `/user` partly for that reason). It sits
   only in the expanded sidebar, not `SidebarRail`: the bootstrap problem is
   a new-user problem, and the sidebar defaults open. Note that the help
   overlay is a third
@@ -974,8 +975,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   flyout header replaces the tile's old native `title` tooltip (they'd
   race each other on hover). Archived projects and the synthetic
   `no project` bucket are hidden — the rail is for active-state
-  navigation, not history. Machine strip + logout at the bottom
-  unchanged.
+  navigation, not history. Machine strip at the bottom, then an account
+  avatar linking to `/user` — the rail had no account link at all, so when
+  sign-out moved off the sidebar the footer became the way to the page
+  that owns it rather than being deleted outright.
 - `components/ContextPane.tsx` — right-pane companion to a session. Header
   shows the session's cliType + working dir + model + machine status. A
   collapsible `Details` block surfaces session + machine metadata
@@ -1005,7 +1008,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   workingDir — the same unit sessions pin to). Soft-delete lives in the
   header overflow.
 - `pages/UserPanel.tsx` — `/user` route, settings-page layout. Sticky
-  account band at the top (email + role); below it a left section nav
+  account band at the top (email + role, plus the red `SignOutAction` —
+  the account's counterpart to the machine panel's delete, in the same
+  header slot and the same `variant="danger"`, but deliberately with NO
+  confirm since a re-login is the entire cost of a misclick); below it a
+  left section nav
   (Stats / Preferences) and a scroll column with Activity (a `Grid` /
   `Curve` segmented toggle over one `/me/activity` payload — `Grid` is
   the GitHub-style `ActivityHeatmap`, `Curve` is `ActivityLineChart`, a
