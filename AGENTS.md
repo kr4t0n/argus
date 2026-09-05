@@ -333,8 +333,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     a "total tokens" figure is ~99% cache-read and mostly measures how
     long sessions ran. `costUsd` is claude-code-only AND notional.
   - `GET /me/pixels` (`pixels.{service,controller}.ts`) — a time-sliced
-    wall: one cell per slot, coloured by the project with the most busy
-    seconds in it. Three load-bearing decisions:
+    wall: one cell per slot, attributed to the project with the most busy
+    seconds in it. **It returns no colours and no palette size**, on
+    purpose: a ranking is Argus data, a hue is a rendering decision, and
+    the endpoint had drifted into serving both. Clients colour by array
+    index (`projects` is ranked by `wonSeconds` desc) and collapse their
+    own tail. Four load-bearing decisions:
     **Busy-duration, not turn count.** A turn is one row stamped at its
     START, and turns routinely run tens of minutes, so counting rows
     leaves the busiest stretches dark.
@@ -350,6 +354,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     repair migration `20260827120000_repair_stuck_active_sessions`, whose
     own ground truth was this predicate), and the live set is clamp-
     bounded so an abandoned turn can't blink forever.
+    **A live project is always listed, even with `wonSeconds: 0`.** `live`
+    is indices into `projects`, and a project can be running while LOSING
+    the current slot to another one — without the zero-entry it would be
+    filtered out and the wall would sit still while something was
+    demonstrably running.
     Slot indices are generated arithmetically over ints rather than as a
     timestamp series, so cost scales with commands × slots-each-spans and
     is independent of grid size — widening the window to a year costs the

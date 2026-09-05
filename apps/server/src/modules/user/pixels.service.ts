@@ -39,9 +39,6 @@ export interface PixelGridOptions {
    * smear its colour across every slot since it started.
    */
   clampMinutes: number;
-  /** How many projects get their own palette entry before the tail is
-   *  collapsed into a single "other" bucket. */
-  paletteSize: number;
   /** Include the sparse per-slot split for contested slots. */
   breakdown: boolean;
 }
@@ -68,7 +65,6 @@ export class PixelsService {
       slotCount,
       slotMinutes: opts.slotMinutes,
       tz: opts.tz,
-      paletteSize: opts.paletteSize,
       breakdown: opts.breakdown,
     });
   }
@@ -207,29 +203,21 @@ function projectKey(projectId: string): string {
   return createHash('sha256').update(projectId).digest('hex').slice(0, 8);
 }
 
-/** Deterministic hue so a project keeps its colour across reloads and
- *  window changes. Collisions are possible and accepted — see the note on
- *  `PixelProject.hue`; clients that care colour by palette index. */
-function projectHue(projectId: string): number {
-  const h = createHash('sha256').update(projectId).digest();
-  return ((h[0] << 8) | h[1]) % 360;
-}
-
 interface AssembleOptions {
   startUtc: Date;
   slotCount: number;
   slotMinutes: number;
   tz: string;
-  paletteSize: number;
   breakdown: boolean;
 }
 
 /**
  * Turn (slot, project) seconds into the columnar wire shape.
  *
- * Winner selection runs over ALL projects before the tail is collapsed,
- * so a small project that genuinely owned a quiet hour keeps that hour —
- * it just renders in the shared "other" colour rather than vanishing.
+ * Emits EVERY project that took a slot, ranked by seconds won. Collapsing
+ * a tail into an "other" swatch is a rendering decision and is left to
+ * the client — which can just take the first N, since the ranking is the
+ * part that is actually data.
  */
 function assemble(
   rows: SlotRow[],
@@ -266,29 +254,25 @@ function assemble(
     wonSeconds.set(bestId, (wonSeconds.get(bestId) ?? 0) + bestSecs);
   }
 
+  // A project can be live without having won a slot — its turn may be
+  // losing the current hour to another project. Listing it with zero
+  // ensures every `live` index resolves; otherwise it would be filtered
+  // out below and the wall would sit still while something is
+  // demonstrably running.
+  for (const pid of liveIds) {
+    if (!wonSeconds.has(pid)) wonSeconds.set(pid, 0);
+  }
+
+  // Ties break on project id so the ranking is stable across requests
+  // rather than following Map insertion order.
   const ranked = [...wonSeconds.entries()].sort(
     (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
   );
-  const head = ranked.slice(0, opts.paletteSize);
-  const tail = ranked.slice(opts.paletteSize);
-
-  const projects: PixelProject[] = head.map(([pid, secs]) => ({
+  const projects: PixelProject[] = ranked.map(([pid, secs]) => ({
     key: projectKey(pid),
-    hue: projectHue(pid),
     wonSeconds: Math.round(secs),
   }));
-  const indexOf = new Map<string, number>(head.map(([pid], i) => [pid, i]));
-  let otherIndex = -1;
-  if (tail.length > 0) {
-    otherIndex = projects.length;
-    projects.push({
-      key: 'other',
-      hue: 0,
-      wonSeconds: Math.round(tail.reduce((s, [, v]) => s + v, 0)),
-      other: true,
-    });
-    for (const [pid] of tail) indexOf.set(pid, otherIndex);
-  }
+  const indexOf = new Map<string, number>(ranked.map(([pid], i) => [pid, i]));
 
   const maxTotal = Math.max(0, ...totalOf.values());
   const winners: (number | null)[] = new Array(opts.slotCount).fill(null);
@@ -301,7 +285,7 @@ function assemble(
     winners[i] = indexOf.get(w) ?? null;
     const total = totalOf.get(i) ?? 0;
     // Brightness tracks the slot's TOTAL busy time, not the winner's
-    // share: hue answers "who owned this hour", brightness answers "how
+    // share: the winner answers "who owned this hour", brightness "how
     // busy was it". Measured on a real corpus, ~30% of lit slots have no
     // dominant project, so folding the two into one channel would render
     // a packed contested hour dimmer than a quiet uncontested one.

@@ -53,13 +53,6 @@ class PixelsQueryDto {
   clampMinutes?: number;
 
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(12)
-  paletteSize?: number;
-
-  @IsOptional()
   @Transform(({ value }) => value === true || value === 'true' || value === '1')
   @IsBoolean()
   breakdown?: boolean;
@@ -102,7 +95,6 @@ export class PixelsController {
       days,
       slotMinutes,
       clampMinutes: q.clampMinutes ?? 60,
-      paletteSize: q.paletteSize ?? 6,
       breakdown: q.breakdown ?? false,
     });
   }

@@ -477,25 +477,27 @@ export interface UserUsageByProjectResponse {
 }
 
 /**
- * One entry in the pixel wall's palette (`GET /me/pixels`).
+ * One project that appears in the grid (`GET /me/pixels`).
  *
- * `hue` is derived deterministically from `projectId`, so a project keeps
- * its colour across reloads and window changes. It is a CONVENIENCE
- * default, not a contract: two projects can hash to nearby hues. Clients
- * that care should ignore it and colour by array index instead — the
- * palette is sorted by `wonSeconds` descending, so index 0 is always the
- * dominant project.
+ * Deliberately carries NO colour. Which hue a project gets, and how many
+ * projects are worth distinct colours before the tail becomes a single
+ * "other" swatch, are both rendering decisions — this endpoint returns
+ * Argus data only. Clients colour by array index, or hash `key`
+ * themselves if they want an assignment stable across window changes.
+ *
+ * Ordered by `wonSeconds` descending, which IS data (a ranking), so a
+ * client wanting only N colours takes the first N and collapses the rest
+ * itself.
  */
 export interface PixelProject {
+  /** Stable opaque id. Matches `ProjectUsageRow.key`, so the two
+   *  endpoints join without either payload carrying a `workingDir`. */
   key: string;
-  /** 0-359. See the caveat above before relying on it. */
-  hue: number;
-  /** Seconds this project WON across the grid (its own slots only, not
-   *  the total time it was active — see `PixelsResponse.intensity`). */
+  /** Seconds this project WON across the grid — its own slots only, not
+   *  the total time it was active (see `PixelsResponse.intensity`).
+   *  Zero is possible: a project with a turn in flight is always listed
+   *  so `live` indices resolve, even if it hasn't taken a slot yet. */
   wonSeconds: number;
-  /** True for the synthetic bucket collapsing every project outside the
-   *  top N. Never has a meaningful `hue`; render it neutral. */
-  other?: boolean;
 }
 
 /**
@@ -524,13 +526,16 @@ export interface PixelsResponse {
    *  packed 55/45 hour reads brighter than a quiet single-project one. */
   intensity: number[];
   /** Sparse per-slot split, present only for slots where the winner held
-   *  less than `contestedThreshold` of the time. Keyed by slot index then
-   *  palette index; values are seconds. Omitted entirely unless the
-   *  caller asks for it. */
+   *  less than the contested threshold of the time. Keyed by slot index
+   *  then project index; values are seconds, and the winner is included
+   *  so shares are computable without cross-referencing `winners`.
+   *  Omitted entirely unless the caller asks for it. */
   breakdown?: Record<string, Record<string, number>>;
+  /** Every project with a slot in this grid (or a turn in flight),
+   *  ranked by `wonSeconds` descending. */
   projects: PixelProject[];
-  /** Palette indices with a turn in flight RIGHT NOW — the blink set.
-   *  Derived from non-terminal `Command` rows, never from
+  /** Indices into `projects` with a turn in flight RIGHT NOW — the blink
+   *  set. Derived from non-terminal `Command` rows, never from
    *  `Session.status` (which is a projection with a known drift mode).
    *  Bounded by the same clamp as the grid, so an abandoned turn cannot
    *  blink forever. */
