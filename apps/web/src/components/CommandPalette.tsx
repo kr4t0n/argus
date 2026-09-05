@@ -16,7 +16,9 @@ import { usePaletteStore, type PaletteMode } from '../stores/paletteStore';
 import { basename, resolveProjectRef } from '../lib/projects';
 import { rankSessions, type SessionCandidate } from '../lib/sessionMatch';
 import { useGlobalHotkey } from '../lib/useGlobalHotkey';
+import { HOTKEYS } from '../lib/hotkeys';
 import { AgentTypeIcon } from './ui/AgentTypeIcon';
+import { Kbd } from './ui/Kbd';
 import { cn } from '../lib/utils';
 
 /** Debounce before firing a content query. Long enough that typing a word
@@ -60,10 +62,18 @@ export function CommandPalette() {
   const listRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
-  useGlobalHotkey('p', useCallback(() => toggle('session'), [toggle]));
-  useGlobalHotkey('k', useCallback(() => toggle('content'), [toggle]));
+  useGlobalHotkey(
+    HOTKEYS.paletteSession,
+    useCallback(() => toggle('session'), [toggle]),
+  );
+  useGlobalHotkey(
+    HOTKEYS.paletteContent,
+    useCallback(() => toggle('content'), [toggle]),
+  );
 
-  const open = mode !== null;
+  // NOT `mode !== null` — `help` is a sibling overlay on the same field,
+  // and the palette must stay unmounted while it's the one showing.
+  const open = mode === 'session' || mode === 'content';
 
   // ── session mode: rank the hydrated list, no network ──────────────
   const sessions = useSessionStore((s) => s.sessions);
@@ -441,10 +451,3 @@ function renderSnippet(snippet: string) {
   return out;
 }
 
-function Kbd({ children }: { children: React.ReactNode }) {
-  return (
-    <kbd className="rounded border border-default px-1 py-px font-sans text-[10px] text-fg-secondary">
-      {children}
-    </kbd>
-  );
-}

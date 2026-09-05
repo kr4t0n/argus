@@ -1,11 +1,16 @@
 import { create } from 'zustand';
 
-/** Which list the command palette is showing.
+/** Which overlay is showing.
  *  - `session` (⌘P) — switch to a session by NAME. Client-side over the
  *    already-hydrated list, instant, live sessions first.
  *  - `content` (⌘K) — search what was SAID. Server-side full text,
- *    archived included. */
-export type PaletteMode = 'session' | 'content';
+ *    archived included.
+ *  - `help` (⌘/) — the shortcuts list. It rides this field rather than
+ *    owning its own open-state for exactly the reason the two palette
+ *    modes do: it is a third full-screen overlay, and three of them
+ *    holding independent booleans would have to negotiate who hides when
+ *    another's hotkey fires. One field makes every such press a switch. */
+export type PaletteMode = 'session' | 'content' | 'help';
 
 interface PaletteState {
   /** null = closed. Collapsing open-ness and mode into one field is what

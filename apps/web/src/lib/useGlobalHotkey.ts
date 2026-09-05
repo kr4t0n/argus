@@ -1,19 +1,26 @@
 import { useEffect, useRef } from 'react';
+import type { HotkeyBinding } from './hotkeys';
 
 /**
- * Cmd/Ctrl + `key`, bound globally.
+ * Cmd/Ctrl + a binding's key, bound globally.
+ *
+ * Takes a `HotkeyBinding` from `lib/hotkeys.ts` rather than a bare string
+ * so that every binding also carries the chord and label the shortcuts
+ * overlay renders — a raw-string call site is a binding the overlay can
+ * never know about.
  *
  * One home for every app-level shortcut, so the guards below are written
  * once instead of copied per binding. Registered in the CAPTURE phase and
  * `preventDefault`ed: the xterm terminal pane would otherwise forward the
  * keystroke to the PTY, and browsers claim several of these themselves
- * (Ctrl+K is Firefox's search bar, ⌘P/Ctrl+P is Print everywhere).
+ * (Ctrl+K is Firefox's search bar, ⌘P/Ctrl+P is Print everywhere, ⌘D/Ctrl+D
+ * is add-bookmark).
  *
  * A modifier combo is why this needs no "is the user typing?" guard —
  * unlike a bare key it can't fire by accident mid-sentence, so it works
  * from inside the composer too.
  */
-export function useGlobalHotkey(key: string, handler: () => void): void {
+export function useGlobalHotkey(binding: HotkeyBinding, handler: () => void): void {
   // Held in a ref so the listener is registered once per key rather than
   // re-bound on every parent render, and callers don't need useCallback.
   const handlerRef = useRef(handler);
@@ -22,7 +29,7 @@ export function useGlobalHotkey(key: string, handler: () => void): void {
   }, [handler]);
 
   useEffect(() => {
-    const target = key.toLowerCase();
+    const target = binding.key.toLowerCase();
     const onKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== target) return;
       if (!(e.metaKey || e.ctrlKey)) return;
@@ -30,7 +37,8 @@ export function useGlobalHotkey(key: string, handler: () => void): void {
       // shortcut in every editor, and swallowing it here would make it
       // impossible to bind later.
       if (e.shiftKey || e.altKey) return;
-      // Readline owns Ctrl+K (kill-line) and Ctrl+P (previous-command).
+      // Readline owns Ctrl+K (kill-line) and Ctrl+P (previous-command),
+      // and Ctrl+D is EOF — stealing that one would break exiting a shell.
       // While the terminal has focus those belong to the shell, so only
       // the Ctrl form defers — ⌘ is never forwarded to a PTY, so the Cmd
       // binding keeps working everywhere including inside the terminal.
@@ -41,7 +49,7 @@ export function useGlobalHotkey(key: string, handler: () => void): void {
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [key]);
+  }, [binding.key]);
 }
 
 /** xterm takes keystrokes through a hidden textarea inside the `.xterm`

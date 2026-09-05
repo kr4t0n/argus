@@ -86,6 +86,26 @@ you type, plus a substring fallback so code strings like `MAXLEN` or
 from the index on purpose — searching `pool` finds the answer that explained
 the pool, not the `npm WARN` that mentioned one. Picking a result jumps to the
 **turn** that matched, not just the session.
+- **Keyboard shortcuts** — `⌘/` lists every binding, which is the short
+version of this bullet; the keyboard glyph in the sidebar footer opens the
+same list, so you don't need a shortcut to find the shortcuts. `⌘D` archives the session you're reading, and
+restores it on a second press. It's a toggle because ⌘D is the browser's
+own "add bookmark", so a misfire is expected and the undo has to be the
+same keystroke; an `archived` badge appears in the header and doubles as a
+click-to-restore button. `⌘.` stops a running turn from anywhere in the
+session, composer included, and is the only cancel binding — a key that
+cancels only while something happens to be running fires destructively at
+exactly the wrong moment. `⌘B` collapses and expands the sidebar from any
+pane. You can
+also **just start typing** anywhere in a session and the keystroke lands in
+the composer — no chord to remember. It stays out of the way when anything
+is focused, and `Space` is deliberately left alone so it still pages the
+transcript. `esc` leaves the composer again, putting you back in the state
+where typing works. Reading a file? `esc` closes the tab and puts the
+cursor back in the composer. Inside
+the terminal pane the `Ctrl` form of every binding defers to the shell, so
+`Ctrl+D` still sends EOF, `Ctrl+K` still kills the line, and `Ctrl+B`
+still reaches tmux as its prefix.
 - **Windowed transcripts** — a session viewer holds a bounded window of turns
 rather than the whole thread, and pages in either direction as you scroll.
 Opening a session loads the newest few turns; a deep link (`?turn=<id>`) loads

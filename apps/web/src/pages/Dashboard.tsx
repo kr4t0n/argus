@@ -6,7 +6,10 @@ import { SessionPanel } from '../components/SessionPanel';
 import { MachinePanel } from '../components/MachinePanel';
 import { UserPanel } from './UserPanel';
 import { CommandPalette } from '../components/CommandPalette';
+import { ShortcutsHelp } from '../components/ShortcutsHelp';
 import { ResizeHandle } from '../components/ui/ResizeHandle';
+import { useGlobalHotkey } from '../lib/useGlobalHotkey';
+import { HOTKEYS } from '../lib/hotkeys';
 import { useUIStore } from '../stores/uiStore';
 
 const RAIL_WIDTH = 48;
@@ -32,6 +35,18 @@ export function Dashboard() {
     prevPath.current = location.pathname;
     if (window.innerWidth < 768 && sidebarOpen) toggleSidebar();
   }, [location.pathname, sidebarOpen, toggleSidebar]);
+
+  // ⌘B toggles the sidebar. Registered here rather than in a panel
+  // because the sidebar is shell furniture — it has to work from the
+  // session view, a machine pane and /user alike, and this component is
+  // the only thing mounted across all three.
+  //
+  // Two things in the terminal want Ctrl+B and both keep it: it is tmux's
+  // default prefix, and readline's backward-char. `useGlobalHotkey` defers
+  // the Ctrl form whenever `.xterm` holds focus, so only the ⌘ form gets
+  // here — which is also why this binding needs no guard of its own.
+  useGlobalHotkey(HOTKEYS.toggleSidebar, toggleSidebar);
+
   return (
     <div className="h-screen w-screen flex overflow-x-hidden">
       {/* Desktop sidebar (in flow). Full panel when open, rail when
@@ -66,9 +81,13 @@ export function Dashboard() {
         {isUserPane ? <UserPanel /> : machineId ? <MachinePanel /> : <SessionPanel />}
       </main>
 
-      {/* Mounted once at the shell so ⌘P / ⌘K work from any pane. Renders
-          null until opened; the hotkey listeners are all that stay live. */}
+      {/* Mounted once at the shell so ⌘P / ⌘K / ⌘/ work from any pane.
+          Both render null until opened; the hotkey listeners are all that
+          stay live. They share `paletteStore.mode`, so opening either one
+          closes the other without the two components knowing about each
+          other. */}
       <CommandPalette />
+      <ShortcutsHelp />
     </div>
   );
 }

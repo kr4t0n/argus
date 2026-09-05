@@ -858,13 +858,96 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `lib/useGlobalHotkey.ts` — the one home for app-level shortcuts, so the
   guards are written once. Capture phase + `preventDefault` (the terminal
   would forward the key to the PTY; browsers claim Ctrl+K for Firefox's
-  search bar and ⌘P for Print). Shifted/alted variants pass through so
-  ⌘⇧P stays bindable. **Readline exception:** Ctrl+K is kill-line and
-  Ctrl+P is previous-command, so when focus is inside `.xterm` the CTRL
+  search bar, ⌘P for Print, ⌘D for add-bookmark). Shifted/alted variants
+  pass through so ⌘⇧P stays bindable. **Readline exception:** Ctrl+K is
+  kill-line, Ctrl+P is previous-command and Ctrl+D is EOF, so when focus is
+  inside `.xterm` the CTRL
   form defers to the shell — ⌘ is never forwarded to a PTY, so the Cmd
   binding still works everywhere including in the terminal. Before this
   hook existed, ⌘K's raw listener swallowed Ctrl+K unconditionally and
   broke kill-line in the terminal pane for Ctrl-modifier users.
+  **The binding registry is `lib/hotkeys.ts`**, and the hook takes a
+  `HotkeyBinding` from it rather than a bare key string — a raw-string call
+  site would be a binding the shortcuts overlay could never render, so the
+  type makes that unrepresentable. The same table is what the overlay reads
+  and what a dev-only module-load check scans for two bindings claiming one
+  key (a silent failure otherwise: both handlers fire, in mount order).
+  `LOCAL_KEYS` in the same file documents the context-local keys the hook
+  does NOT own (composer Enter/Escape, palette arrows/Tab, and the terminal
+  Ctrl keys that deliberately reach the shell) — deliberately separate,
+  since putting them in `HOTKEYS` would imply something registers them.
+  Current bindings:
+  `⌘P` / `⌘K` open the palette's two modes (`CommandPalette.tsx`, mounted
+  once in `Dashboard` so they fire from any pane); `⌘D` toggles archive on
+  the open session and `⌘.` cancels its running turn (both
+  `SessionPanel.tsx`). **`⌘.` is the only cancel binding.** The composer's
+  `Escape` used to cancel as well, and now blurs instead: ⌘. fires with the
+  textarea focused (the hook has no is-the-user-typing guard, by design),
+  so keeping both meant the one moment you most want to step out of the
+  input — a turn is running and you want to read it — was the moment
+  Escape killed the turn. A reflex key whose meaning depends on whether
+  something is running is how accidental cancels happen. The blur also
+  restores `document.activeElement` to `<body>`, which is precisely what
+  `useTypeToFocus` requires, so esc-out / type-back-in is a closed loop
+  rather than two one-way doors. `⌘B` toggles
+  the sidebar (`Dashboard.tsx`, since the sidebar outlives every pane).
+  The readline deferral is load-bearing for more than readline: `Ctrl+B`
+  is **tmux's default prefix**, so a user running tmux in the PTY would
+  lose every tmux command to the sidebar toggle without it. `⌘/` opens
+  `ShortcutsHelp.tsx`, which RENDERS the registry rather than restating it
+  — so a binding cannot ship undocumented, which is the point of forcing
+  the hook to take a `HotkeyBinding`. The keyboard glyph in `UserRow.tsx`
+  is the only affordance in the app that does not require already knowing a
+  binding, and it exists to break that circle — so keep it **always
+  visible** and don't let another control crowd it (sign-out used to sit
+  beside it and was moved to `/user` partly for that reason). It sits
+  only in the expanded sidebar, not `SidebarRail`: the bootstrap problem is
+  a new-user problem, and the sidebar defaults open. Note that the help
+  overlay is a third
+  consumer of `paletteStore.mode` (`'session' | 'content' | 'help'`): it
+  has no open-state of its own, so ⌘/ while the palette is open is a
+  switch, not two overlays stacking. `CommandPalette`'s `open` is therefore
+  `mode === 'session' || mode === 'content'`, NOT `mode !== null` — if you
+  add a fourth overlay to this field, that check is what you have to
+  revisit. Scope follows the mount point —
+  a binding registered in `SessionPanel` is inert on `/machines/:id` and
+  `/user` because the panel isn't mounted there, which is cheaper than
+  a route check inside the handler. A binding that must work everywhere
+  belongs in `Dashboard`. Every *other* keydown listener in the web app is
+  component-scoped (popover Escape, composer Enter, `ui/Select`); this hook
+  is the only global one, so a new app-level shortcut is a one-liner.
+- `lib/useTypeToFocus.ts` — bare-key "start typing anywhere and it lands in
+  the composer" (`SessionPanel`). Deliberately a SEPARATE hook, not a
+  `useGlobalHotkey` option: that hook is simple precisely because a
+  Cmd/Ctrl combo can't fire mid-sentence, and a bare key gives that up.
+  Opposite posture too — bubble phase, never `preventDefault`, because it
+  must LOSE to anything that wants the key and the keystroke has to
+  survive to reach the newly-focused textarea. **It never inserts the
+  character**: it focuses on `keydown` and lets the same keystroke land by
+  itself, since inserting `e.key` by hand breaks IME composition and dead
+  keys (the composer already guards `isComposing` on Enter for that
+  reason). Two guards carry the whole design and both were found by asking
+  "how does this misfire?":
+  1. **Space is excluded.** It's a printable single character, so the
+     obvious `e.key.length === 1` test lets it through — and Space both
+     pages the transcript while reading and activates whatever control has
+     focus. Letting it through breaks scrolling AND silently swallows
+     button activation. Nobody opens a message with a space.
+  2. **Only fires when `document.activeElement` is body.** Stronger and
+     less brittle than a blocklist of element types: if the user clicked or
+     tabbed onto any control they're driving it, so stay out of the way.
+     This is what keeps Space-to-activate and `ui/Select` typeahead working
+     for keyboard-only users, and `.xterm` plus every input fall out of it
+     for free since all of them take focus. It matters more here than in a
+     pure chat app — a session view also holds a file tree, file tabs, a
+     terminal and the diff/git panes, so focus sits on a control far more
+     often than in a UI where the transcript is the only surface.
+  Typing deliberately does NOT pull you out of a file tab (which unmounts
+  the composer): a stray keystroke would cost the reader their scroll
+  position in that file, a worse misfire than the feature is worth.
+  `Escape` is the explicit way out, and because the composer only mounts on
+  the render AFTER `activeFile` clears, that path sets a pending flag and
+  focuses in a follow-up effect — focusing inline finds a null ref.
 - `stores/paletteStore.ts` — `mode: 'session' | 'content' | null`, where
   null is closed; collapsing open-ness and mode into one field is what
   makes each hotkey a toggle and the other hotkey a mode switch.
@@ -892,8 +975,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   flyout header replaces the tile's old native `title` tooltip (they'd
   race each other on hover). Archived projects and the synthetic
   `no project` bucket are hidden — the rail is for active-state
-  navigation, not history. Machine strip + logout at the bottom
-  unchanged.
+  navigation, not history. Machine strip at the bottom, then an account
+  avatar linking to `/user` — the rail had no account link at all, so when
+  sign-out moved off the sidebar the footer became the way to the page
+  that owns it rather than being deleted outright.
 - `components/ContextPane.tsx` — right-pane companion to a session. Header
   shows the session's cliType + working dir + model + machine status. A
   collapsible `Details` block surfaces session + machine metadata
@@ -923,7 +1008,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   workingDir — the same unit sessions pin to). Soft-delete lives in the
   header overflow.
 - `pages/UserPanel.tsx` — `/user` route, settings-page layout. Sticky
-  account band at the top (email + role); below it a left section nav
+  account band at the top (email + role, plus the red `SignOutAction` —
+  the account's counterpart to the machine panel's delete, in the same
+  header slot and the same `variant="danger"`, but deliberately with NO
+  confirm since a re-login is the entire cost of a misclick); below it a
+  left section nav
   (Stats / Preferences) and a scroll column with Activity (a `Grid` /
   `Curve` segmented toggle over one `/me/activity` payload — `Grid` is
   the GitHub-style `ActivityHeatmap`, `Curve` is `ActivityLineChart`, a

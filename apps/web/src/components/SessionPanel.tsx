@@ -5,6 +5,7 @@ import { useMachineStore } from '../stores/machineStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useUIStore } from '../stores/uiStore';
 import { useFileTabsStore } from '../stores/fileTabsStore';
+import { usePaletteStore } from '../stores/paletteStore';
 import { api } from '../lib/api';
 import { joinSession, leaveSession } from '../lib/ws';
 import { AgentTypeIcon } from './ui/AgentTypeIcon';
@@ -16,6 +17,9 @@ import { ContextPane } from './ContextPane';
 import { FileTabStrip } from './FileTabStrip';
 import { useProjectRef } from '../lib/projects';
 import { useFileTabAutoRefresh } from '../lib/useFileTabAutoRefresh';
+import { useGlobalHotkey } from '../lib/useGlobalHotkey';
+import { useTypeToFocus } from '../lib/useTypeToFocus';
+import { HOTKEYS } from '../lib/hotkeys';
 import { UsageBadge } from './UsageBadge';
 import { relativeTime } from '../lib/utils';
 
@@ -187,6 +191,124 @@ export function SessionPanel() {
   // background tab stale. Must sit above the `!sessionId` early return.
   useFileTabAutoRefresh(projectRef);
 
+  // ⌘D archives the session you're reading — and, pressed again, restores
+  // it. Making it a TOGGLE rather than a one-way archive is what makes the
+  // binding safe to put on this key at all: the browser's own ⌘D is "add
+  // bookmark", so a misfire is expected, and the undo then has to be the
+  // same keystroke rather than a hunt through the sidebar's archived
+  // reveal. For the same reason it deliberately does NOT navigate away the
+  // way the sidebar's archive action does (that one bounces to `/` because
+  // the row you clicked is about to vanish from under the cursor) — you
+  // keep reading the session, and the header badge both reports the new
+  // state and doubles as a click-to-restore affordance.
+  //
+  // Ctrl+D needs no special-casing here: `useGlobalHotkey` already defers
+  // the Ctrl form while the terminal has focus, so EOF still reaches the
+  // shell. Must sit above the early returns below, like the hook above it.
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const upsertSession = useSessionStore((s) => s.upsertSession);
+  const archived = !!entry?.session.archivedAt;
+
+  const toggleArchive = useCallback(async () => {
+    if (!sessionId || archiveBusy) return;
+    // The palette is a modal that owns the keyboard while it's open, and
+    // it can be showing a different session entirely — archiving the one
+    // behind it would be both invisible and the wrong target.
+    if (usePaletteStore.getState().mode !== null) return;
+    setArchiveBusy(true);
+    try {
+      const updated = archived
+        ? await api.unarchiveSession(sessionId)
+        : await api.archiveSession(sessionId);
+      upsertSession(updated);
+    } catch {
+      /* swallow — same posture as the sidebar's archive action; there is
+         no toast surface wired for this yet */
+    } finally {
+      setArchiveBusy(false);
+    }
+  }, [sessionId, archived, archiveBusy, upsertSession]);
+
+  useGlobalHotkey(HOTKEYS.archiveSession, () => void toggleArchive());
+
+  // ⌘. stops the turn that's running, from anywhere in the session — the
+  // transcript, a file tab, the context pane. The composer already cancels
+  // on Escape, but only while its textarea has focus, so the moment you
+  // click away to read the output there is no keyboard way to stop a
+  // runaway turn. Kept alongside that Escape rather than replacing it.
+  //
+  // ⌘. is the macOS-canonical "stop" and the iOS client already binds it
+  // to the same action, so this closes a cross-client asymmetry rather
+  // than inventing a convention. Nothing in readline claims Ctrl+. either.
+  //
+  // Declared here rather than below the early returns because the hotkey
+  // has to be registered before them; the Composer is handed the same
+  // callback so the keyboard and click paths can't drift.
+  const onCancel = useCallback(async () => {
+    if (!entry) return;
+    const active = entry.commands.find((c) =>
+      ['pending', 'sent', 'running'].includes(c.status),
+    );
+    if (active) await api.cancelCommand(active.id);
+  }, [entry]);
+
+  useGlobalHotkey(HOTKEYS.cancelTurn, () => {
+    // No-op rather than an error when nothing is running — a stop key
+    // that reports failure for "nothing to stop" is just noise.
+    if (!running) return;
+    // Same reasoning as ⌘D: the palette is modal and can be showing a
+    // different session than the one this panel holds.
+    if (usePaletteStore.getState().mode !== null) return;
+    void onCancel();
+  });
+
+  // ── getting the cursor back into the composer ─────────────────────
+  // Two paths, because they answer different questions. Typing is the
+  // implicit one (you already started writing); Escape is the explicit
+  // one (you want the input without leaving a character in it, and you
+  // may be reading a file, which unmounts the composer entirely).
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const setActiveFile = useFileTabsStore((s) => s.setActive);
+  const [pendingComposerFocus, setPendingComposerFocus] = useState(false);
+
+  const focusComposer = useCallback(() => {
+    composerRef.current?.focus();
+  }, []);
+
+  // Disabled while a file tab is showing: the composer is not mounted
+  // then, so there is nothing to focus. Typing does NOT pull you out of a
+  // file — a stray keystroke would cost you your scroll position in it,
+  // which is a worse misfire than the feature is worth. Escape below is
+  // the deliberate way out.
+  useTypeToFocus(!!sessionId && !activeFile, focusComposer);
+
+  // Escape closes the file tab and returns the cursor to the composer.
+  // The viewer had no keyboard exit at all before this. No conflict with
+  // the composer's own Escape-to-cancel: that one fires from inside the
+  // textarea, and while a file tab is open the composer isn't mounted.
+  useEffect(() => {
+    if (!activeFile) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (usePaletteStore.getState().mode !== null) return;
+      const el = document.activeElement;
+      if (el instanceof Element && el.closest('.xterm')) return;
+      setActiveFile(null);
+      setPendingComposerFocus(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [activeFile, setActiveFile]);
+
+  // The focus has to wait for the composer to mount, which only happens
+  // on the render after `activeFile` clears — hence a pending flag rather
+  // than focusing inline above, where the ref is still null.
+  useEffect(() => {
+    if (!pendingComposerFocus || activeFile) return;
+    composerRef.current?.focus();
+    setPendingComposerFocus(false);
+  }, [pendingComposerFocus, activeFile]);
+
   if (!sessionId) {
     return (
       <div className="relative flex h-full items-center justify-center text-fg-tertiary text-sm">
@@ -232,14 +354,6 @@ export function SessionPanel() {
     });
   }
 
-  async function onCancel() {
-    if (!entry) return;
-    const active = entry.commands.find((c) =>
-      ['pending', 'sent', 'running'].includes(c.status),
-    );
-    if (active) await api.cancelCommand(active.id);
-  }
-
   const elapsed = running ? relativeTime(entry.session.updatedAt) : null;
 
   return (
@@ -258,6 +372,20 @@ export function SessionPanel() {
             <div className="font-display text-base font-semibold tracking-tight text-fg-primary truncate">
               {entry.session.title}
             </div>
+            {/* Both the confirmation that ⌘D landed and the one-click undo
+                for a ⌘D the user meant as "bookmark". Styled to match the
+                archived badge the command palette's rows already use. */}
+            {archived && (
+              <button
+                type="button"
+                onClick={() => void toggleArchive()}
+                disabled={archiveBusy}
+                title="archived — click or press ⌘D to restore"
+                className="shrink-0 rounded bg-surface-2 px-1 py-px text-[10px] uppercase tracking-wide text-fg-muted transition-colors hover:text-fg-primary disabled:opacity-40"
+              >
+                archived
+              </button>
+            )}
             {elapsed && <span className="text-xs text-fg-tertiary">· {elapsed}</span>}
           </div>
           <div className="ml-auto flex items-center gap-2">
@@ -333,6 +461,7 @@ export function SessionPanel() {
         {!activeFile && (
           <Composer
             key={sessionId}
+            textareaRef={composerRef}
             sessionId={sessionId}
             onSend={onSend}
             onCancel={onCancel}
