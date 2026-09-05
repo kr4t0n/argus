@@ -1,7 +1,9 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import type {
   AgentType,
   ProjectNotesResponse,
+  ProjectUsageRow,
   QuotaWindow,
   TokenUsage,
   UserActivityResponse,
@@ -9,6 +11,7 @@ import type {
   UserQuotaResponse,
   UserQuotaRow,
   UserRulesResponse,
+  UserUsageByProjectResponse,
   UserUsageResponse,
 } from '@argus/shared-types';
 import { PROJECT_NOTES_MAX_BYTES, USER_RULES_MAX_BYTES } from '@argus/shared-types';
@@ -421,6 +424,119 @@ export class UserService {
       });
     return coerceExtensions(updated.extensions);
   }
+
+  /**
+   * Token totals grouped by project over a rolling window.
+   *
+   * `/me/usage` answers "how much have I spent"; this answers "on what",
+   * which the dashboard could not previously ask — nothing joined
+   * `Command.usage` to `Project`.
+   *
+   * Reads the same denormalized JSONB the ingestor writes at finalize
+   * time, so the numbers agree with the per-session badge by
+   * construction. Sums are `(usage->>'field')::numeric` casts, which skip
+   * NULL rows silently — which is exactly why `turnsMissingUsage` is
+   * returned alongside and is not optional. Coverage is wildly uneven in
+   * practice (measured: 5% of turns missing usage on one project, 69% on
+   * another), and without the denominator the sparse project simply looks
+   * cheap.
+   *
+   * `costUsd` follows the same undefined-vs-zero contract as `usage()`:
+   * attached only if at least one turn in the window carried it, so a
+   * codex-only project reports no cost rather than a false "$0.00". Note
+   * it is claude-code-only AND notional — what the turn would have cost
+   * at API rates, not money actually billed.
+   */
+  async usageByProject(
+    userId: string,
+    windowDays = 42,
+  ): Promise<UserUsageByProjectResponse> {
+    type Row = {
+      project_id: string;
+      machine_id: string;
+      working_dir: string;
+      name: string | null;
+      cli_types: (string | null)[];
+      turns: number;
+      missing: number;
+      input: number;
+      output: number;
+      cache_read: number;
+      cache_write: number;
+      cost: string | null;
+      cost_rows: number;
+      api_ms: string | null;
+      api_ms_rows: number;
+    };
+
+    const rows = await this.prisma.$queryRaw<Row[]>`
+      SELECT s."projectId"                                        AS project_id,
+             pr."machineId"                                       AS machine_id,
+             pr."workingDir"                                      AS working_dir,
+             pr."name"                                            AS name,
+             array_agg(DISTINCT s."cliType")                      AS cli_types,
+             count(*)::int                                        AS turns,
+             count(*) FILTER (WHERE c.usage IS NULL)::int         AS missing,
+             COALESCE(sum((c.usage->>'inputTokens')::numeric), 0)::float8      AS input,
+             COALESCE(sum((c.usage->>'outputTokens')::numeric), 0)::float8     AS output,
+             COALESCE(sum((c.usage->>'cacheReadTokens')::numeric), 0)::float8  AS cache_read,
+             COALESCE(sum((c.usage->>'cacheWriteTokens')::numeric), 0)::float8 AS cache_write,
+             sum((c.usage->>'costUsd')::numeric)                  AS cost,
+             count(*) FILTER (WHERE (c.usage->>'costUsd') IS NOT NULL)::int    AS cost_rows,
+             sum((c.usage->>'durationApiMs')::numeric)            AS api_ms,
+             count(*) FILTER (WHERE (c.usage->>'durationApiMs') IS NOT NULL)::int
+                                                                  AS api_ms_rows
+      FROM "Command" c
+      JOIN "Session" s  ON s.id = c."sessionId"
+      JOIN "Project" pr ON pr.id = s."projectId"
+      WHERE s."userId" = ${userId}
+        AND c."createdAt" >= (now() AT TIME ZONE 'UTC')
+                             - make_interval(days => ${windowDays}::int)
+      GROUP BY 1, 2, 3, 4
+    `;
+
+    const projects: ProjectUsageRow[] = rows
+      .map((r) => {
+        const usage: TokenUsage = {
+          inputTokens: Math.round(r.input),
+          outputTokens: Math.round(r.output),
+          cacheReadTokens: Math.round(r.cache_read),
+          cacheWriteTokens: Math.round(r.cache_write),
+        };
+        if (r.cost_rows > 0 && r.cost !== null) usage.costUsd = Number(r.cost);
+        if (r.api_ms_rows > 0 && r.api_ms !== null) usage.durationApiMs = Number(r.api_ms);
+        return {
+          projectId: r.project_id,
+          key: projectUsageKey(r.project_id),
+          machineId: r.machine_id,
+          workingDir: r.working_dir,
+          name: r.name,
+          // `array_agg(DISTINCT …)` yields a NULL element for sessions
+          // predating the pinned cliType, not an empty array.
+          cliTypes: (r.cli_types ?? []).filter((t): t is AgentType => !!t),
+          turns: r.turns,
+          turnsMissingUsage: r.missing,
+          usage,
+        };
+      })
+      .sort((a, b) => totalTokens(b.usage) - totalTokens(a.usage));
+
+    return { windowDays, projects };
+  }
+}
+
+/** Every token field summed. Used only for ordering — see the note on
+ *  `ProjectUsageRow` before showing this to a user: it is dominated by
+ *  `cacheReadTokens`, which tracks how long sessions ran more than how
+ *  much work happened. */
+function totalTokens(u: TokenUsage): number {
+  return u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheWriteTokens;
+}
+
+/** Mirrors `projectKey` in pixels.service.ts so the two endpoints agree
+ *  on a project's opaque identity and a client can join them. */
+function projectUsageKey(projectId: string): string {
+  return createHash('sha256').update(projectId).digest('hex').slice(0, 8);
 }
 
 /** Normalize the stored `User.extensions` JSON (which may be null, a

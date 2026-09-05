@@ -8,7 +8,8 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { IsBoolean, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { Type } from 'class-transformer';
 import type { Request } from 'express';
 import type {
   ProjectNotesResponse,
@@ -16,6 +17,7 @@ import type {
   UserExtensionsResponse,
   UserQuotaResponse,
   UserRulesResponse,
+  UserUsageByProjectResponse,
   UserUsageResponse,
 } from '@argus/shared-types';
 import { PROJECT_NOTES_MAX_BYTES, USER_RULES_MAX_BYTES } from '@argus/shared-types';
@@ -41,6 +43,17 @@ class UpdateProjectNotesDto {
   @IsString()
   @MaxLength(PROJECT_NOTES_MAX_BYTES)
   notes!: string;
+}
+
+/** GET /me/usage/by-project query. Rolling window, now-anchored — the
+ *  same convention as `/me/usage`'s 7-/30-day buckets. */
+class UsageByProjectQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(366)
+  days?: number;
 }
 
 /** PUT /me/extensions body — the full set of known extension flags. */
@@ -75,6 +88,16 @@ export class UserController {
   @Get('usage')
   usage(@Req() req: AuthedRequest): Promise<UserUsageResponse> {
     return this.users.usage(req.user.id);
+  }
+
+  /** Per-project breakdown of the same denormalized usage `/me/usage`
+   *  totals. Static path, so it can't be shadowed by a `:param` route. */
+  @Get('usage/by-project')
+  usageByProject(
+    @Req() req: AuthedRequest,
+    @Query() q: UsageByProjectQueryDto,
+  ): Promise<UserUsageByProjectResponse> {
+    return this.users.usageByProject(req.user.id, q.days ?? 42);
   }
 
   @Get('quota')

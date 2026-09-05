@@ -430,6 +430,114 @@ export interface UserUsageResponse {
 }
 
 /**
+ * One project's token totals over a window (`GET /me/usage/by-project`).
+ *
+ * `turnsMissingUsage` is not diagnostics — it is load-bearing context for
+ * the totals. `Command.usage` is written by the result ingestor when a
+ * turn finalizes, and coverage varies enormously per project (measured:
+ * 5% missing on one project, 69% on another). A project with poor
+ * coverage looks dramatically cheaper than it was, so any UI showing
+ * `usage` must show this next to it.
+ *
+ * Note on comparing fields ACROSS CLIs: `parseUsage` normalizes every
+ * adapter to the same disjoint convention (`inputTokens` excludes cached
+ * input), but that does not make the fields equally meaningful. Anthropic
+ * caches far more aggressively than OpenAI, so claude-code rows carry
+ * near-zero `inputTokens` and enormous `cacheReadTokens`, while codex rows
+ * split much more evenly. `outputTokens` is the field that compares
+ * cleanly; totals dominated by `cacheReadTokens` mostly measure how long
+ * sessions ran, not how much work was done. `costUsd` is claude-code only
+ * AND notional (what the turn would have cost at API rates), so it is
+ * absent for codex/cursor projects entirely.
+ */
+export interface ProjectUsageRow {
+  projectId: string;
+  /** Stable opaque key derived from `projectId`. Safe to expose where
+   *  the absolute `workingDir` must not appear (e.g. a public page). */
+  key: string;
+  machineId: string;
+  /** Absolute path on the machine. NEVER put this in a public payload. */
+  workingDir: string;
+  /** User-picked label; null means "derive basename(workingDir)". */
+  name: string | null;
+  /** Every CLI type that ran a turn here in the window. */
+  cliTypes: AgentType[];
+  turns: number;
+  /** Turns whose `Command.usage` is NULL — excluded from `usage`. */
+  turnsMissingUsage: number;
+  usage: TokenUsage;
+}
+
+/** REST response for `GET /me/usage/by-project`. Rows are ordered by
+ *  total tokens descending. `windowDays` echoes the requested window so
+ *  a cached payload is self-describing. */
+export interface UserUsageByProjectResponse {
+  windowDays: number;
+  projects: ProjectUsageRow[];
+}
+
+/**
+ * One entry in the pixel wall's palette (`GET /me/pixels`).
+ *
+ * `hue` is derived deterministically from `projectId`, so a project keeps
+ * its colour across reloads and window changes. It is a CONVENIENCE
+ * default, not a contract: two projects can hash to nearby hues. Clients
+ * that care should ignore it and colour by array index instead — the
+ * palette is sorted by `wonSeconds` descending, so index 0 is always the
+ * dominant project.
+ */
+export interface PixelProject {
+  key: string;
+  /** 0-359. See the caveat above before relying on it. */
+  hue: number;
+  /** Seconds this project WON across the grid (its own slots only, not
+   *  the total time it was active — see `PixelsResponse.intensity`). */
+  wonSeconds: number;
+  /** True for the synthetic bucket collapsing every project outside the
+   *  top N. Never has a meaningful `hue`; render it neutral. */
+  other?: boolean;
+}
+
+/**
+ * REST response for `GET /me/pixels` — a time-sliced wall where each
+ * cell is one slot, coloured by the project that was busiest in it.
+ *
+ * Encoded columnar rather than as an array of objects: at 1,008 slots the
+ * object form is ~10x the bytes for identical information.
+ *
+ * `winners` and `intensity` are both exactly `slotCount` long and index
+ * positionally from `start`. Slot i covers
+ * `[start + i*slotMinutes, start + (i+1)*slotMinutes)` in `tz`.
+ */
+export interface PixelsResponse {
+  /** ISO 8601 UTC instant the first slot begins. */
+  start: string;
+  slotMinutes: number;
+  slotCount: number;
+  /** IANA zone the slots were bucketed in. Load-bearing: with hour-of-day
+   *  as an axis, bucketing in the wrong zone silently rotates the grid. */
+  tz: string;
+  /** Index into `projects` per slot; null = nothing ran. */
+  winners: (number | null)[];
+  /** 0-100 per slot, scaled against the busiest slot in THIS grid. Driven
+   *  by the slot's TOTAL busy seconds, not the winner's share — so a
+   *  packed 55/45 hour reads brighter than a quiet single-project one. */
+  intensity: number[];
+  /** Sparse per-slot split, present only for slots where the winner held
+   *  less than `contestedThreshold` of the time. Keyed by slot index then
+   *  palette index; values are seconds. Omitted entirely unless the
+   *  caller asks for it. */
+  breakdown?: Record<string, Record<string, number>>;
+  projects: PixelProject[];
+  /** Palette indices with a turn in flight RIGHT NOW — the blink set.
+   *  Derived from non-terminal `Command` rows, never from
+   *  `Session.status` (which is a projection with a known drift mode).
+   *  Bounded by the same clamp as the grid, so an abandoned turn cannot
+   *  blink forever. */
+  live: number[];
+}
+
+/**
  * One row in `UserQuotaResponse`. Carries the freshest per-CLI plan
  * quota the server has across the user's fleet of sidecars, plus the
  * machine that reported it so the dashboard can attribute the data

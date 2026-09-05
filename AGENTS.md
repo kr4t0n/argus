@@ -317,6 +317,48 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   The endpoint returns archived sessions too — scope is a client
   decision, and in practice ~93% of sessions are archived, so a
   server-side "visible only" default would hide most of the corpus.
+- `user/` — the `/me` surface: activity grid, usage ledger, quota, rules,
+  project notes, extensions. Two aggregation reads worth knowing about:
+  - `GET /me/usage/by-project` (`usageByProject`) groups the denormalized
+    `Command.usage` JSONB by `Project`. It returns `turnsMissingUsage`
+    next to every total and that is **not** diagnostics — the sums are
+    `(usage->>'field')::numeric` casts that skip NULL rows silently, and
+    coverage is wildly uneven per project (measured on the live corpus:
+    5% of turns missing on one project, 69% on another), so a poorly
+    covered project simply looks cheap. Also: `inputTokens` is NOT
+    comparable across CLIs even though `parseUsage` normalizes both to
+    the disjoint convention — Anthropic caches far harder than OpenAI, so
+    claude-code rows are ~0 input + enormous `cacheReadTokens` while codex
+    rows split evenly. `outputTokens` is the field that compares cleanly;
+    a "total tokens" figure is ~99% cache-read and mostly measures how
+    long sessions ran. `costUsd` is claude-code-only AND notional.
+  - `GET /me/pixels` (`pixels.{service,controller}.ts`) — a time-sliced
+    wall: one cell per slot, coloured by the project with the most busy
+    seconds in it. Three load-bearing decisions:
+    **Busy-duration, not turn count.** A turn is one row stamped at its
+    START, and turns routinely run tens of minutes, so counting rows
+    leaves the busiest stretches dark.
+    **The per-turn clamp changes the picture, it is not hygiene.**
+    Durations are heavily skewed (p50 2.4 min, p90 14 min, p99 44 min,
+    max 19.2 *hours*) and the tail is idle time — a CLI left open
+    overnight finalizes normally hours later. Unclamped, one 19-hour turn
+    contributed ~8% of the grid's ink and promoted its project from a
+    clear #2 to a near-tie for #1. The 60-minute default touched exactly
+    17 of 3,160 turns (0.5%) on the corpus it was sized against.
+    **Liveness comes from `Command.status`, never `Session.status`** —
+    the session flag is a projection with a known drift mode (see the
+    repair migration `20260827120000_repair_stuck_active_sessions`, whose
+    own ground truth was this predicate), and the live set is clamp-
+    bounded so an abandoned turn can't blink forever.
+    Slot indices are generated arithmetically over ints rather than as a
+    timestamp series, so cost scales with commands × slots-each-spans and
+    is independent of grid size — widening the window to a year costs the
+    same query. Timestamps are `timestamp without time zone` holding UTC
+    (Prisma's default mapping), hence the `AT TIME ZONE 'UTC' AT TIME
+    ZONE tz` two-step; reversing it rotates the whole grid by the offset,
+    silently and plausibly. Both endpoints hash `projectId` into the same
+    opaque `key` so a caller can join them without either payload
+    carrying an absolute `workingDir`.
 - `push/` — APNs sender for native clients. `DeviceController`
   (`POST /me/devices` upsert-by-token — re-homing a token that moved
   accounts — and idempotent `DELETE /me/devices/:token`) plus

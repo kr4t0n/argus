@@ -60,6 +60,15 @@ API-time breakdown.
 - **Usage ledger** — the `/user` page tallies input / output / cache tokens,
 USD cost, and API time across your sessions, with a 7-day / 30-day / all-time
 toggle (all three windows returned in one response, so switching is instant).
+`GET /me/usage/by-project` breaks the same totals down per project, reporting
+how many turns are missing usage data alongside each row (coverage varies a
+lot per project, and without the denominator a sparse project just looks
+cheap).
+- **Activity wall** — `GET /me/pixels` returns a time-sliced grid: one cell per
+slot, coloured by whichever project was busiest in it, plus the set of
+projects with a turn running right now. Aggregates only (no titles, prompts,
+or paths), so it is safe to re-serve publicly — do that through your own
+backend holding an API key, not by shipping a credential to a browser.
 - **Per-CLI plan-quota panel** — shows how much of each subscription window
 you've burned (Claude Code Pro/Max 5-hour + weekly, ChatGPT Codex). Each
 sidecar reads the local CLI's OAuth file and refreshes every 5 min on its
