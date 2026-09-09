@@ -522,7 +522,48 @@ sidebar within ~1 second of startup. For production you want a
 service manager so the process survives reboots and restarts on
 crashes.
 
-#### macOS — launchd (recommended)
+#### Recommended — let the sidecar install its own unit
+
+```bash
+argus-sidecar service install
+```
+
+One command on both platforms: it renders the unit (systemd on Linux,
+launchd on macOS), writes it, reloads the manager, enables it and starts
+it. Verify with `argus-sidecar service status`; undo with
+`argus-sidecar service uninstall`.
+
+It renders from live state rather than from a template you have to edit,
+which removes the two failure modes the hand-written recipes below are
+prone to:
+
+- **`PATH`.** Adapter discovery is a `PATH` probe at boot. A service
+  manager's default `PATH` is a bare `/usr/bin:/bin` — no
+  `~/.local/bin`, no nvm shims, no Homebrew — so a unit that omits it
+  starts cleanly and then reports zero adapters. `install` bakes in the
+  `PATH` you invoked it with; `-path` overrides.
+- **The install target.** A systemd `--user` unit must be
+  `WantedBy=default.target`. `multi-user.target` is correct only for
+  system units, and a user unit carrying it never starts at login.
+
+Useful flags: `-dry-run` prints the unit without writing anything,
+`-system` installs system-wide (needs root; `-user-account` picks the
+account it runs as), `-cache` pins a cache path into `ExecStart`,
+`-no-start` writes and enables without starting.
+
+Scope defaults to per-user, which is almost always right: the sidecar
+spawns agent CLIs that read your credentials, config and `PATH`. The
+catch is that a user unit stops at logout unless lingering is enabled —
+`install` checks and prints the `loginctl enable-linger` command if it
+isn't.
+
+After an `argus-sidecar update`, restart the service so the new binary is
+picked up (`service install` prints the exact command for your platform).
+
+The rest of this step documents what that command writes, for anyone who
+wants to customise it or install the unit by hand.
+
+#### macOS — launchd, by hand
 
 Drop the following at `~/Library/LaunchAgents/com.argus.sidecar.plist`
 (per-user) or `/Library/LaunchDaemons/...` (system-wide):
@@ -561,9 +602,11 @@ To restart after an `argus-sidecar update`:
 launchctl kickstart -k gui/$UID/com.argus.sidecar
 ```
 
-#### Linux — systemd
+#### Linux — systemd, by hand
 
-`/etc/systemd/system/argus-sidecar.service`:
+`/etc/systemd/system/argus-sidecar.service` (system-wide; for a `--user`
+unit put it at `~/.config/systemd/user/argus-sidecar.service`, drop the
+`User=` line and change `WantedBy` to `default.target`):
 
 ```ini
 [Unit]
@@ -574,7 +617,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=argus
-ExecStart=/usr/local/bin/argus-sidecar
+ExecStart=/usr/local/bin/argus-sidecar run
+# Required, not optional: without it systemd hands the daemon a bare
+# /usr/bin:/bin and adapter discovery finds none of the agent CLIs
+# installed under $HOME. List the dirs your CLIs actually live in.
+Environment="PATH=/home/argus/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

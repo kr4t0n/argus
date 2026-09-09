@@ -18,6 +18,8 @@
 //	            path, machineId, and registered workdir count
 //	init        write the on-disk cache (bus URL, server URL, machine
 //	            name) — interactive at a TTY, flag-driven otherwise
+//	service     install/uninstall/inspect the systemd (Linux) or launchd
+//	            (macOS) unit that keeps the daemon running across reboots
 //	update      self-update by fetching the latest release for this OS/arch
 //	            (also refreshes the argus-bg companion so they stay in sync)
 //	download-bg (re)install just the argus-bg companion binary next to the
@@ -86,6 +88,9 @@ func main() {
 		case "init":
 			runInit(os.Args[2:])
 			return
+		case "service":
+			runService(os.Args[2:])
+			return
 		case "update":
 			runUpdate(os.Args[2:])
 			return
@@ -114,6 +119,7 @@ Usage:
   argus-sidecar restart [flags]    stop then start
   argus-sidecar status [flags]     report whether the daemon is running
   argus-sidecar init [flags]       write the on-disk cache (one-time setup)
+  argus-sidecar service <cmd>      install/uninstall/inspect the systemd or launchd unit
   argus-sidecar update [flags]     download the latest release for this OS/arch
   argus-sidecar download-bg [flags] (re)install the argus-bg companion binary
   argus-sidecar version            print the build version
@@ -153,6 +159,15 @@ Init flags:
   -name <string>     machine name shown in the dashboard (defaults to hostname)
   -cache <path>      override cache path
   -force             overwrite an existing cache (regenerates machineId)
+
+Service subcommands:
+  install            render + enable the unit (per-user by default; -system for
+                     system-wide). Bakes the current PATH into the unit so the
+                     service discovers the same agent CLIs your shell does.
+  uninstall          stop, disable and remove the unit
+  status             report unit path, enabled and active state
+
+  Run `+"`argus-sidecar service help`"+` for the full flag list.
 
 Update flags:
   -repo <owner/repo> override the GitHub repo (default: %[1]s)
