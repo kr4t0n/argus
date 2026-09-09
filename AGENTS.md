@@ -565,10 +565,20 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   ANSI-coloured, and HH:MM:SS-eta variants. Carries its own
   `main.Version` (baked by the same Makefile `-ldflags` as the
   sidecar) so `argus-bg version` makes companion drift observable.
-- `updater/` — self-update: reads the GitHub Releases API for
-  `argus-sidecar-v*` tags, picks the matching `OS-arch` asset,
-  verifies it against `SHASUMS256.txt`, and atomically `os.Rename`s
-  over the running binary. The download→verify→chmod→atomic-install
+- `updater/` — self-update: resolves the newest `argus-sidecar-v*`
+  release, picks the matching `OS-arch` asset, verifies it against
+  `SHASUMS256.txt`, and atomically `os.Rename`s over the running
+  binary. **Two resolvers.** The default (`pickLatestReleaseFeed`)
+  reads `github.com/<repo>/releases.atom` and builds asset URLs under
+  `/releases/download/<tag>/`, neither of which counts against the
+  REST API's 60-req/h-per-IP budget that a NAT'd fleet shares — that
+  budget is exhaustible mid-rollout and fails with a 403 that reads
+  like an auth error. `pickLatestReleaseAPI` (the original) is used
+  when `GITHUB_TOKEN` is set — private repos, where the feed is not
+  public and 5000 req/h makes the quota moot — and as the fallback
+  when the feed can't answer. The feed carries no asset listing, so a
+  feed-resolved `release` sets `assetBaseURL` and `findAsset`
+  synthesizes URLs under it. The download→verify→chmod→atomic-install
   step is factored into `installFromRelease`, parameterized by asset
   base name + destination, so it backs both `Update` (sidecar → the
   running executable) and `DownloadCompanion` (a sibling binary →
@@ -604,9 +614,20 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   corrupt `argus-bg` is *not* re-verified (the always-download path used to
   re-check its SHA every run); `--force` or `download-bg` is the escape
   hatch.
-- `cmd/sidecar/main.go` — subcommand dispatch (`init`, `update`,
-  `download-bg`, `version`, default = run daemon), flag parsing, signal
-  handling, runner glue.
+- `cmd/sidecar/main.go` — subcommand dispatch (`init`, `service`,
+  `update`, `download-bg`, `version`, default = run daemon), flag
+  parsing, signal handling, runner glue.
+- `cmd/sidecar/service.go` — `service install|uninstall|status`:
+  renders and enables a systemd unit (Linux) or launchd plist (macOS)
+  so backgrounding the sidecar is one command instead of a doc
+  copy-paste. Everything in the unit comes from live state — the
+  symlink-resolved `os.Executable()`, the invoking account, and the
+  ambient `PATH`. Rendering (`renderSystemdUnit` / `renderLaunchdPlist`)
+  is pure and unit-tested on both shapes regardless of host GOOS;
+  only the drivers (`enableService`, `disableService`) shell out.
+  Scope defaults to per-user because the daemon spawns agent CLIs
+  under the invoking user's credentials and `PATH`; `-system` is
+  opt-in and requires root.
 
 ### `apps/web/src/`
 
@@ -2458,6 +2479,35 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   effective hit-rate degrades, sweep with
   `gh api /repos/<o>/<r>/actions/caches?ref=refs/pull/<n>/merge` →
   `DELETE`.
+- **A service-managed sidecar discovers zero adapters unless the unit
+  sets `PATH`.** Discovery is `exec.LookPath` at boot
+  (`machine/discovery.go`), and systemd hands a unit a bare
+  `/usr/bin:/bin` — none of `~/.local/bin`, nvm shims, `~/.bun/bin` or
+  Homebrew, which is where `claude`/`codex`/`cursor-agent` actually
+  live. The symptom is not a crash: the daemon boots, registers the
+  machine, and reports an empty adapter list, so the dashboard shows a
+  healthy green machine you cannot create agents on. `argus-sidecar
+  service install` bakes the invoking shell's `PATH` into the unit for
+  exactly this reason. Watch out under `sudo`, which sanitizes `PATH`
+  to `secure_path` — for a `-system` install, pass `-path` explicitly.
+- **`releases.atom` lists bare tags, not just published releases, and
+  carries no prerelease flag.** Both shape the updater's feed resolver.
+  A tag is public the moment it's pushed but its assets only exist once
+  the release workflow finishes, so the newest tag is uninstallable for
+  a few minutes after every cut — the resolver probes `SHASUMS256.txt`
+  per candidate and falls through to the next (`maxFeedCandidates`, 3).
+  Prerelease-ness is derived from the SemVer suffix on the tag, which
+  is sound because `argus-sidecar-release.yml` sets GitHub's flag from
+  a regex on that same tag; the derivation is slightly broader
+  (`rc|alpha|beta|pre` there, any `-suffix` here) and errs toward
+  excluding. The feed also returns only the ten most recent entries
+  **repo-wide**, so a burst of `v*` server releases can hide every
+  sidecar tag — that is the case the REST fallback still covers.
+- **`scripts/install.sh` now installs the newest STABLE release.** It
+  used to take the first `argus-sidecar-v*` tag the API listed, which
+  included prereleases — so a fresh `curl | sh` during an rc cycle
+  silently installed the rc. Stable-only is now the default (matching
+  `argus-sidecar update`); `ARGUS_PRERELEASE=1` opts back in.
 
 ## Tech debt / planned
 

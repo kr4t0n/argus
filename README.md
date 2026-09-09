@@ -295,10 +295,10 @@ curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.s
 ```
 
 That detects your OS/arch (`darwin`/`linux`, `amd64`/`arm64`),
-resolves the latest `argus-sidecar-v*` release, downloads the matching
-binary, **verifies its SHA-256 against the release's `SHASUMS256.txt`**,
-and drops it in `/usr/local/bin` (or `$HOME/.local/bin` if that isn't
-writable). Knobs:
+resolves the latest stable `argus-sidecar-v*` release, downloads the
+matching binary, **verifies its SHA-256 against the release's
+`SHASUMS256.txt`**, and drops it in `/usr/local/bin` (or
+`$HOME/.local/bin` if that isn't writable). Knobs:
 
 ```bash
 # Pin a specific version
@@ -307,9 +307,21 @@ curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.s
 # Install somewhere else
 curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh | ARGUS_INSTALL_DIR=$HOME/bin sh
 
+# Take the newest -rc/-alpha/-beta instead of the newest stable
+curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh | ARGUS_PRERELEASE=1 sh
+
 # Private repo? Use a token (gh auth token works on dev machines)
 curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh | GITHUB_TOKEN=ghp_xxx sh
 ```
+
+The installer makes **no `api.github.com` requests** on the default path:
+it resolves the release from the repo's Atom feed and pulls assets from
+the `/releases/download/` redirect, both of which sit outside the REST
+API's 60-requests-per-hour-per-IP budget. That budget is shared by every
+machine behind one NAT egress, so rolling out across a fleet used to fail
+partway through with a 403 that reads like an auth error. Setting
+`GITHUB_TOKEN` switches resolution back to the API — which is what a
+private repo needs, and where 5000 req/h makes the quota moot.
 
 #### Option B — download a published binary
 
@@ -350,11 +362,38 @@ argus-sidecar init \
   --token "$SIDECAR_LINK_TOKEN"   # only needed if you set the server-side token
 ```
 
+##### Run it as a service
+
+For anything long-lived, let the OS supervise it. The sidecar writes and
+enables its own unit — you never hand-copy one out of the docs:
+
+```bash
+argus-sidecar service install       # per-user: systemd --user, or a launchd LaunchAgent
+argus-sidecar service status        # unit path + enabled/active state
+argus-sidecar service uninstall     # stop, disable, remove the unit
+```
+
+`install` renders the unit from live state: the resolved absolute path to
+the binary, and — importantly — **the `PATH` you invoked it with**.
+Adapter discovery is a `PATH` probe at boot, and a service manager's
+default `PATH` excludes `~/.local/bin`, nvm shims and Homebrew, so a
+hand-written unit typically starts fine and then finds zero agent CLIs.
+Override it with `-path` if you need something else. Other flags:
+`-system` (system-wide unit, needs root, `-user-account` picks the
+account it runs as), `-cache` (pin a cache path into `ExecStart`),
+`-dry-run` (print the unit, touch nothing), `-no-start`.
+
+On Linux the default is a `--user` unit, which matches how the sidecar is
+normally used — it spawns agent CLIs that read *your* credentials and
+config. Note that a user unit stops at logout unless lingering is on;
+`install` checks and tells you to run `sudo loginctl enable-linger <you>`
+if it isn't.
+
 ##### Daemon control
 
-For interactive use, the sidecar ships its own background-mode wrapper —
-no `systemd`/`launchd` unit required to keep it alive after you close the
-terminal:
+For interactive use, the sidecar also ships its own background-mode
+wrapper — no `systemd`/`launchd` unit required to keep it alive after you
+close the terminal:
 
 ```bash
 argus-sidecar start               # detach + log to ~/.local/state/argus/sidecar.log
@@ -422,9 +461,12 @@ argus-sidecar version               # print the baked-in version
 ```
 
 The update is atomic (`os.Rename` over the running executable). Restart
-your launchd/systemd unit afterwards to pick up the new binary. If the
-GitHub repo is private, set `GITHUB_TOKEN` in the environment so the
-update can read the release asset list.
+the service afterwards to pick up the new binary — `systemctl --user
+restart argus-sidecar`, or `launchctl kickstart -k gui/$UID/com.argus.sidecar`
+(both printed by `service install`). Like the installer, `update`
+resolves releases without touching `api.github.com` unless `GITHUB_TOKEN`
+is set — which is what a private repo needs, so that it can read the
+release asset list.
 
 `update` also keeps the **`argus-bg`** companion (the tqdm progress
 wrapper shipped in the same release that surfaces background-task

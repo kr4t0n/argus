@@ -5,19 +5,31 @@
 #
 # What this does:
 #   1. Detects your OS (darwin | linux) and architecture (amd64 | arm64).
-#   2. Resolves the latest `argus-sidecar-v*` release (or whatever you pin
-#      via $ARGUS_VERSION).
+#   2. Resolves the latest stable `argus-sidecar-v*` release (or whatever
+#      you pin via $ARGUS_VERSION).
 #   3. Downloads the matching binary and SHASUMS256.txt from the GitHub
 #      release, verifies the SHA-256, and installs to $ARGUS_INSTALL_DIR
 #      (defaults to /usr/local/bin if writable, else $HOME/.local/bin).
 #   4. Tells you whether you need to add the install dir to your PATH.
 #
+# Rate limits: api.github.com allows 60 unauthenticated requests per hour
+# per IP, which a fleet sharing one NAT egress can exhaust mid-rollout —
+# the failure looks like an auth error, not a quota one. So the default
+# path never touches the API: releases are resolved from the repo's Atom
+# feed and assets are pulled from the /releases/download/ redirect, both
+# on github.com and both outside that budget. Setting GITHUB_TOKEN opts
+# back into the API, which is what private repos need anyway.
+#
 # Environment variables:
 #   ARGUS_VERSION       Pin a specific release tag (e.g. argus-sidecar-v0.1.0).
-#                       Defaults to the newest published release.
+#                       Defaults to the newest published release. Pinning
+#                       skips resolution entirely — no listing request.
+#   ARGUS_PRERELEASE    Set to 1 to consider `-rc`/`-alpha`/`-beta` tags.
+#                       Off by default, matching `argus-sidecar update`.
 #   ARGUS_INSTALL_DIR   Override the install directory.
 #   GITHUB_TOKEN        Personal access token for private repo / higher
-#                       rate limit. Forwarded as `Authorization: Bearer …`.
+#                       rate limit. Forwarded as `Authorization: Bearer …`,
+#                       and switches resolution back to the REST API.
 #
 # Re-running is safe: the install is an atomic mv over any existing binary.
 #
@@ -30,6 +42,20 @@ REPO_DEFAULT="kr4t0n/argus"
 REPO="${ARGUS_REPO:-$REPO_DEFAULT}"
 TAG_PREFIX="argus-sidecar-v"
 BIN_NAME="argus-sidecar"
+
+# Origins, overridable so a mirror / enterprise instance can be pointed at.
+GH_WEB="${ARGUS_GITHUB_WEB:-https://github.com}"
+GH_API="${ARGUS_GITHUB_API:-https://api.github.com}"
+
+# A token means either a private repo (whose Atom feed is not public) or
+# 5000 req/h, so in both cases the REST API is the better resolver.
+if [ -n "${GITHUB_TOKEN:-}" ]; then USE_API=1; else USE_API=0; fi
+
+# How many candidate tags to try before giving up. A tag whose release
+# workflow is still running is published (and therefore in the feed)
+# minutes before its assets are, so the newest tag is not always
+# installable; more than a couple in a row means something else is wrong.
+MAX_CANDIDATES=3
 
 # ── Pretty output (only when stderr is a TTY) ─────────────────────────
 if [ -t 2 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; then
@@ -166,59 +192,88 @@ resolve_install_dir() {
 }
 INSTALL_DIR=$(resolve_install_dir)
 
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+RELEASE_JSON="$TMP_DIR/release.json"
+
 # ── Resolve version ───────────────────────────────────────────────────
-# Hits the releases API (page 1, 30 entries) and picks the newest
-# non-draft release whose tag matches argus-sidecar-v*. Mirrors the
-# logic baked into `argus-sidecar update` itself.
-resolve_latest_tag() {
-    _tmp="$(mktemp)"
-    if ! http_get "https://api.github.com/repos/${REPO}/releases?per_page=30" "$_tmp"; then
-        rm -f "$_tmp"
-        die "couldn't list releases — repo private without GITHUB_TOKEN, or network down"
-    fi
-    # Grep the tag_name lines; take the first one matching our prefix.
-    _tag=$(grep -E '"tag_name": *"' "$_tmp" \
-           | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/' \
-           | grep -E "^${TAG_PREFIX}" \
-           | head -n 1)
-    rm -f "$_tmp"
-    if [ -z "$_tag" ]; then
-        die "no release tagged ${TAG_PREFIX}* found in $REPO"
-    fi
-    echo "$_tag"
+# rank_tags reads candidate tags on stdin and prints the installable ones,
+# newest first. Ordering is by SemVer precedence rather than publish
+# order, because a late patch on an older line is published after a newer
+# release and would otherwise win. Prerelease-ness is derived from the tag
+# suffix — the Atom feed carries no prerelease flag, and the release
+# workflow sets GitHub's flag from that same suffix, so the tag is the
+# source of truth either way.
+rank_tags() {
+    awk -v prefix="$TAG_PREFIX" -v want_pre="${ARGUS_PRERELEASE:-0}" '
+        {
+            tag = $0
+            ver = substr(tag, length(prefix) + 1)
+            pre = ""
+            i = index(ver, "-")
+            if (i > 0) { pre = substr(ver, i + 1); ver = substr(ver, 1, i - 1) }
+            if (pre != "" && want_pre != "1") next
+            if (split(ver, p, ".") != 3) next
+            for (j = 1; j <= 3; j++) if (p[j] !~ /^[0-9]+$/) next
+            if (seen[tag]++) next
+            # First number in the prerelease id, so rc.10 outranks rc.2.
+            prenum = 0
+            if (pre != "") { m = pre; sub(/^[^0-9]*/, "", m); if (m ~ /^[0-9]/) prenum = m + 0 }
+            # Fixed-width key so a plain reverse sort orders correctly
+            # everywhere (BSD sort has no -V).
+            printf "%05d%05d%05d%d%05d %s\n", p[1], p[2], p[3], (pre == "" ? 1 : 0), prenum, tag
+        }
+    ' | sort -r | awk '{print $2}'
+}
+
+# The Atom feed is one unauthenticated GET on github.com and costs nothing
+# against the REST quota. It returns only the ten most recent entries
+# repo-wide, so a burst of another component's releases can hide every
+# sidecar tag — that is what the API resolver below is still here for.
+resolve_tags_feed() {
+    _feed="$TMP_DIR/releases.atom"
+    http_get "$GH_WEB/${REPO}/releases.atom" "$_feed" || return 1
+    grep -oE "/releases/tag/${TAG_PREFIX}[A-Za-z0-9._+-]+" "$_feed" \
+        | sed -e 's|.*/releases/tag/||' \
+        | rank_tags
+}
+
+resolve_tags_api() {
+    _list="$TMP_DIR/releases.json"
+    http_get "$GH_API/repos/${REPO}/releases?per_page=30" "$_list" || return 1
+    grep -E '"tag_name": *"' "$_list" \
+        | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/' \
+        | rank_tags
 }
 
 if [ -n "${ARGUS_VERSION:-}" ]; then
     # Allow callers to pass either `0.1.0` or `argus-sidecar-v0.1.0`.
+    # A pin needs no listing request at all.
     case "$ARGUS_VERSION" in
-        ${TAG_PREFIX}*) TAG="$ARGUS_VERSION" ;;
-        *)              TAG="${TAG_PREFIX}${ARGUS_VERSION}" ;;
+        ${TAG_PREFIX}*) CANDIDATES="$ARGUS_VERSION" ;;
+        *)              CANDIDATES="${TAG_PREFIX}${ARGUS_VERSION}" ;;
     esac
 else
     info "resolving latest release of $REPO …"
-    TAG=$(resolve_latest_tag)
+    CANDIDATES=""
+    if [ "$USE_API" = "0" ]; then
+        CANDIDATES=$(resolve_tags_feed || true)
+        [ -n "$CANDIDATES" ] || warn "no usable tag in the release feed — falling back to the releases API"
+    fi
+    if [ -z "$CANDIDATES" ]; then
+        CANDIDATES=$(resolve_tags_api) \
+            || die "couldn't list releases — repo private without GITHUB_TOKEN, or network down"
+    fi
+    [ -n "$CANDIDATES" ] || die "no release tagged ${TAG_PREFIX}* found in $REPO"
 fi
 
-info "installing $TAG ($OS/$ARCH) → $INSTALL_DIR/$BIN_NAME"
-
-# ── Fetch SHASUMS256.txt → expected hash for our asset ────────────────
-TMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
-
-# Find the release id + asset URLs via the API. We hit /releases/tags
-# rather than constructing browser_download_url so private repos work
-# the moment GITHUB_TOKEN is set.
-RELEASE_JSON="$TMP_DIR/release.json"
-if ! http_get "https://api.github.com/repos/${REPO}/releases/tags/${TAG}" "$RELEASE_JSON"; then
-    die "couldn't fetch release metadata for $TAG"
-fi
-
+# ── Locate the release's assets ───────────────────────────────────────
 # Pull the API URL of the asset whose `name` matches our binary or SHASUMS
 # file. We extract the asset `id` (the `name` field is several lines deeper
 # inside each asset object than `url`, so naive paired-line parsing latches
 # onto the wrong url — typically `uploader.url`). The id-then-construct
 # approach is jq-free and immune to property reordering.
-asset_url() {
+asset_api_url() {
     _name="$1"
     _id=$(awk -v want="$_name" '
         # Each asset starts with "id": <number>. Stash it; if the next
@@ -232,14 +287,52 @@ asset_url() {
             if (n == want && pending != "") { print pending; exit }
         }
     ' "$RELEASE_JSON")
-    [ -n "$_id" ] && printf 'https://api.github.com/repos/%s/releases/assets/%s\n' "$REPO" "$_id"
+    [ -n "$_id" ] && printf '%s/repos/%s/releases/assets/%s\n' "$GH_API" "$REPO" "$_id"
 }
 
-SUMS_URL=$(asset_url "SHASUMS256.txt")
-[ -n "$SUMS_URL" ] || die "release $TAG is missing SHASUMS256.txt — refusing to install without checksum"
+# In API mode assets are addressed by id, which is what makes private
+# repos work once GITHUB_TOKEN is set. Otherwise we construct the public
+# /releases/download/ URL, which 302s to the release-assets CDN — no
+# listing request, no API quota.
+asset_url() {
+    if [ "$USE_API" = "1" ]; then
+        asset_api_url "$1"
+    else
+        printf '%s/%s/releases/download/%s/%s\n' "$GH_WEB" "$REPO" "$TAG" "$1"
+    fi
+}
 
-info "downloading checksum manifest …"
-http_get_asset "$SUMS_URL" "$TMP_DIR/SHASUMS256.txt"
+# Fetch a candidate's checksum manifest. Doubles as the "are this
+# release's assets published yet?" probe: a tag is public the moment it's
+# pushed, but its binaries only exist once the release workflow finishes,
+# so the newest tag is briefly uninstallable after every cut.
+prepare_release() {
+    _tag="$1"
+    if [ "$USE_API" = "1" ]; then
+        http_get "$GH_API/repos/${REPO}/releases/tags/${_tag}" "$RELEASE_JSON" || return 1
+        _sums=$(asset_api_url "SHASUMS256.txt")
+    else
+        _sums="$GH_WEB/${REPO}/releases/download/${_tag}/SHASUMS256.txt"
+    fi
+    [ -n "$_sums" ] || return 1
+    http_get_asset "$_sums" "$TMP_DIR/SHASUMS256.txt" || return 1
+}
+
+TAG=""
+_tried=0
+for _cand in $CANDIDATES; do
+    _tried=$((_tried + 1))
+    [ "$_tried" -le "$MAX_CANDIDATES" ] || break
+    info "checking $_cand …"
+    if prepare_release "$_cand"; then
+        TAG="$_cand"
+        break
+    fi
+    warn "$_cand has no downloadable assets — its build may still be running"
+done
+[ -n "$TAG" ] || die "no installable release found (tried $_tried) — retry in a few minutes, or pin one with ARGUS_VERSION"
+
+info "installing $TAG ($OS/$ARCH) → $INSTALL_DIR/$BIN_NAME"
 
 # ── Install one asset: download → verify → atomic mv ─────────────────
 # Refactored from the original single-binary path so we can install
@@ -309,8 +402,8 @@ ${BOLD}Next steps${RESET}
   - One-time setup (interactive):  ${BIN_NAME} init
         scripted:                  ${BIN_NAME} init --bus REDIS_URL --server https://argus.your.tld --token \$SIDECAR_LINK_TOKEN
   - Run it:                        ${BIN_NAME}
-  - Background it (launchd/systemd) — see:
-        https://github.com/${REPO}/blob/main/INSTALLATION.md#step-6-initialize-the-sidecar
+  - Or supervise it (systemd/launchd, unit written for you):
+                                   ${BIN_NAME} service install
   - Self-update later with:        ${BIN_NAME} update
 
 EOF
