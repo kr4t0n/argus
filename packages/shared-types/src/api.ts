@@ -432,12 +432,23 @@ export interface UserUsageResponse {
 /**
  * One project's token totals over a window (`GET /me/usage/by-project`).
  *
- * `turnsMissingUsage` is not diagnostics — it is load-bearing context for
- * the totals. `Command.usage` is written by the result ingestor when a
- * turn finalizes, and coverage varies enormously per project (measured:
- * 5% missing on one project, 69% on another). A project with poor
- * coverage looks dramatically cheaper than it was, so any UI showing
- * `usage` must show this next to it.
+ * `turnsForked` and `turnsMissingUsage` split what looks like one problem
+ * into two with opposite meanings, and the split matters — conflated,
+ * they misreport badly.
+ *
+ * A FORKED turn is history replayed into a new session by `fork()`, which
+ * deliberately does not copy `usage`: the fork copied rows, it did not
+ * spend tokens, and attributing them again would double-count every fork
+ * in the ledger. Its NULL is correct and the project's totals are exactly
+ * right. Measured on the live corpus, forks were essentially the entire
+ * apparent coverage gap — the two worst-looking projects were 238-of-238
+ * and 167-of-167 forks.
+ *
+ * A MISSING turn is one that really ran and whose usage never landed
+ * (cancelled mid-turn, or a final chunk that carried no usage payload).
+ * That is a genuine undercount, so any UI showing `usage` should show
+ * this next to it — but do NOT show `turnsForked` the same way, or a
+ * project whose numbers are perfect will read as 69% incomplete.
  *
  * Note on comparing fields ACROSS CLIs: `parseUsage` normalizes every
  * adapter to the same disjoint convention (`inputTokens` excludes cached
@@ -462,8 +473,14 @@ export interface ProjectUsageRow {
   name: string | null;
   /** Every CLI type that ran a turn here in the window. */
   cliTypes: AgentType[];
+  /** Every turn on this project in the window, forks included. Subtract
+   *  `turnsForked` for "turns actually run here". */
   turns: number;
-  /** Turns whose `Command.usage` is NULL — excluded from `usage`. */
+  /** Turns replayed in by `fork()` — copied history, correctly carrying
+   *  no usage. Not a data gap. */
+  turnsForked: number;
+  /** Non-forked turns whose `Command.usage` is NULL, so their tokens are
+   *  absent from `usage`. This is the real gap. */
   turnsMissingUsage: number;
   usage: TokenUsage;
 }

@@ -2479,6 +2479,27 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   against the upstream announcement, not release-note rumors. Unknown
   models return `null` so the ring just hides instead of rendering a
   misleading percentage; the bare ↑/↓ arrows stay visible.
+- **A forked session replays its source's timestamps, so any aggregate
+  over `Command` double-counts unless it filters them out.**
+  `SessionService.fork` copies each prefix command's `createdAt` /
+  `completedAt` **verbatim** and keeps the source's `projectId`, while
+  deliberately NOT copying `usage` (a fork copied rows; it did not spend
+  tokens, and attributing them again would inflate the ledger on every
+  fork). Two consequences that bite different aggregates:
+  - Anything measuring TIME sees the same span twice in the same project.
+    This was live in `/me/pixels` — ~18% of in-window commands were forks,
+    concentrated in two projects, inflating their busy seconds and their
+    odds of winning those slots.
+  - Anything measuring COVERAGE reads a forked turn's NULL `usage` as a
+    data gap. It is not one; the totals are correct. On the live corpus
+    forks were essentially the ENTIRE apparent gap — the two
+    worst-looking projects were 238-of-238 and 167-of-167 forks — so
+    `/me/usage/by-project` reports `turnsForked` separately from
+    `turnsMissingUsage`.
+  The detector is `Command.createdAt < Session.createdAt`: a real turn
+  can never predate its own session, so it has no false positives and
+  needs no schema change. (`fork()` also skips `options`, so a forked
+  turn loses the record of which model ran it — smaller, still open.)
 - **`Command.usage` is denormalized at write time**: the result-ingestor
   calls `parseUsage` once when each turn finalizes and stores the
   normalized `TokenUsage` JSON on the Command row. `/me/usage` SUMs

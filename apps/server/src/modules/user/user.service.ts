@@ -458,6 +458,7 @@ export class UserService {
       name: string | null;
       cli_types: (string | null)[];
       turns: number;
+      forked: number;
       missing: number;
       input: number;
       output: number;
@@ -476,7 +477,16 @@ export class UserService {
              pr."name"                                            AS name,
              array_agg(DISTINCT s."cliType")                      AS cli_types,
              count(*)::int                                        AS turns,
-             count(*) FILTER (WHERE c.usage IS NULL)::int         AS missing,
+             -- SessionService.fork copies the source createdAt verbatim, so
+             -- a replayed turn predates its own session — which a real turn
+             -- can never do. Verified exact on the live corpus: the two
+             -- projects with the worst apparent coverage were 238/238 and
+             -- 167/167 forks.
+             count(*) FILTER (WHERE c."createdAt" < s."createdAt")::int
+                                                                  AS forked,
+             count(*) FILTER (WHERE c.usage IS NULL
+                                AND c."createdAt" >= s."createdAt")::int
+                                                                  AS missing,
              COALESCE(sum((c.usage->>'inputTokens')::numeric), 0)::float8      AS input,
              COALESCE(sum((c.usage->>'outputTokens')::numeric), 0)::float8     AS output,
              COALESCE(sum((c.usage->>'cacheReadTokens')::numeric), 0)::float8  AS cache_read,
@@ -515,6 +525,7 @@ export class UserService {
           // predating the pinned cliType, not an empty array.
           cliTypes: (r.cli_types ?? []).filter((t): t is AgentType => !!t),
           turns: r.turns,
+          turnsForked: r.forked,
           turnsMissingUsage: r.missing,
           usage,
         };

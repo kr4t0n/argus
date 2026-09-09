@@ -125,6 +125,17 @@ export class PixelsService {
         CROSS JOIN bb
         WHERE s."userId" = ${userId}
           AND s."projectId" IS NOT NULL
+          -- Drop turns replayed into a forked session. SessionService.fork
+          -- copies the source command's createdAt/completedAt and keeps the
+          -- same projectId, so a forked turn reproduces a span the
+          -- ORIGINAL already occupies — double-counting busy seconds and
+          -- inflating that project's odds of winning those slots. A fork
+          -- is an instantaneous copy of history, not time spent. Measured
+          -- on the live corpus: ~18% of in-window commands were forks,
+          -- concentrated in two projects (one was 238 of its 247). A real
+          -- turn can never predate its own session, so this has no false
+          -- positives.
+          AND c."createdAt" >= s."createdAt"
           AND c."createdAt" <  bb.now_utc
           AND c."createdAt" >= bb.t0_utc - make_interval(mins => ${opts.clampMinutes}::int)
       ),
