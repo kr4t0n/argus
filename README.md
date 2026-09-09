@@ -457,16 +457,25 @@ for its OS/arch, run:
 argus-sidecar update                # downloads, sha256-verifies, swaps
 argus-sidecar update --prerelease   # also consider pre-release tags
 argus-sidecar update --force        # reinstall even if already current
+argus-sidecar update --restart      # restart without asking
+argus-sidecar update --no-restart   # never restart; just print the command
 argus-sidecar version               # print the baked-in version
 ```
 
-The update is atomic (`os.Rename` over the running executable). Restart
-the service afterwards to pick up the new binary — `systemctl --user
-restart argus-sidecar`, or `launchctl kickstart -k gui/$UID/com.argus.sidecar`
-(both printed by `service install`). Like the installer, `update`
-resolves releases without touching `api.github.com` unless `GITHUB_TOKEN`
-is set — which is what a private repo needs, so that it can read the
-release asset list.
+The update is atomic (`os.Rename` over the running executable), which
+means anything already running keeps the old inode — and the old code —
+until it is replaced. So once the swap lands, `update` offers to restart
+whatever is running it: the systemd/launchd service if one is installed,
+otherwise a daemon backgrounded by `argus-sidecar start`. At a TTY it
+asks (default yes, and it tells you in-flight agent turns will be
+interrupted); with no TTY — cron, CI, a piped installer — it never
+blocks, and prints the command instead. `--restart` / `--no-restart`
+decide up front. Nothing running means nothing to do: the next start
+picks up the new binary by itself.
+
+Like the installer, `update` resolves releases without touching
+`api.github.com` unless `GITHUB_TOKEN` is set — which is what a private
+repo needs, so that it can read the release asset list.
 
 `update` also keeps the **`argus-bg`** companion (the tqdm progress
 wrapper shipped in the same release that surfaces background-task

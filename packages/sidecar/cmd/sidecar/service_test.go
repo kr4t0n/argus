@@ -1,7 +1,9 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -135,6 +137,67 @@ func TestPlistEscape(t *testing.T) {
 	}
 	if strings.Contains(plist, "bin & tools") {
 		t.Errorf("plist leaked a raw &\n%s", plist)
+	}
+}
+
+// skipIfSystemUnitInstalled keeps the restart-plan tests honest on a
+// host that actually runs the sidecar: the system unit path is hardcoded
+// (/etc/systemd/system), so unlike the user scope it cannot be redirected
+// into a temp dir.
+func skipIfSystemUnitInstalled(t *testing.T) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join("/etc/systemd/system", systemdUnitName)); err == nil {
+		t.Skip("a system-wide unit is installed here; detection is not hermetic")
+	}
+}
+
+func TestDetectRestartPlanNothingRunning(t *testing.T) {
+	skipIfSystemUnitInstalled(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // no user unit
+	t.Setenv("ARGUS_STATE_DIR", t.TempDir()) // no pidfile
+
+	if plan := detectRestartPlan(); plan.Kind != "" {
+		t.Errorf("Kind = %q, want empty when nothing is running", plan.Kind)
+	}
+}
+
+// TestDetectRestartPlanDaemon covers the fallback branch: no service
+// unit, but a live process named by the pidfile. Our own PID stands in
+// for the daemon, since it is guaranteed alive.
+func TestDetectRestartPlanDaemon(t *testing.T) {
+	skipIfSystemUnitInstalled(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	state := t.TempDir()
+	t.Setenv("ARGUS_STATE_DIR", state)
+	if err := os.WriteFile(filepath.Join(state, "sidecar.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		t.Fatalf("write pidfile: %v", err)
+	}
+
+	plan := detectRestartPlan()
+	if plan.Kind != restartViaDaemon {
+		t.Fatalf("Kind = %q, want %q", plan.Kind, restartViaDaemon)
+	}
+	if plan.Command != "argus-sidecar restart" {
+		t.Errorf("Command = %q, want `argus-sidecar restart`", plan.Command)
+	}
+}
+
+// TestDetectRestartPlanStalePidfile guards the case that would otherwise
+// prompt for a restart of nothing: a pidfile left behind by a daemon
+// that died without cleaning up.
+func TestDetectRestartPlanStalePidfile(t *testing.T) {
+	skipIfSystemUnitInstalled(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	state := t.TempDir()
+	t.Setenv("ARGUS_STATE_DIR", state)
+	// PID 0 is never a live user process, and ProcessAlive must reject
+	// it rather than treating the pidfile's mere existence as proof.
+	if err := os.WriteFile(filepath.Join(state, "sidecar.pid"), []byte("0"), 0o644); err != nil {
+		t.Fatalf("write pidfile: %v", err)
+	}
+
+	if plan := detectRestartPlan(); plan.Kind != "" {
+		t.Errorf("Kind = %q, want empty for a stale pidfile", plan.Kind)
 	}
 }
 

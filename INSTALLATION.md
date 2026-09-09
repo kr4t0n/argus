@@ -557,8 +557,9 @@ catch is that a user unit stops at logout unless lingering is enabled —
 `install` checks and prints the `loginctl enable-linger` command if it
 isn't.
 
-After an `argus-sidecar update`, restart the service so the new binary is
-picked up (`service install` prints the exact command for your platform).
+You do not have to remember to restart it after an upgrade:
+`argus-sidecar update` detects this service once it swaps the binary and
+offers to restart it (`--restart` / `--no-restart` to decide up front).
 
 The rest of this step documents what that command writes, for anyone who
 wants to customise it or install the unit by hand.
@@ -716,7 +717,7 @@ These can be overridden with environment variables on the sidecar
 | --------------- | ----------------------------------------------------------------------------------------- |
 | `argus-server`  | `docker compose pull server && docker compose up -d server`. Migrations apply on boot.    |
 | `argus-web`     | `docker compose pull web && docker compose up -d web`.                                    |
-| `argus-sidecar` | `argus-sidecar update` (downloads, verifies, atomic swap), then restart the service unit. |
+| `argus-sidecar` | `argus-sidecar update` (downloads, verifies, atomic swap, then offers to restart the running service). |
 | `argus-bg`      | Refreshed automatically by `argus-sidecar update`; or `argus-sidecar download-bg` to (re)install it on its own. |
 
 

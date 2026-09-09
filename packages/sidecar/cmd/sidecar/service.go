@@ -316,7 +316,7 @@ func printPostInstall(cfg serviceConfig, unitPath string, system, noStart bool) 
 	if noStart {
 		fmt.Println("\nnot started (-no-start). Start it when ready.")
 	}
-	fmt.Println("\nAfter `argus-sidecar update`, restart the service to pick up the new binary.")
+	fmt.Println("\n`argus-sidecar update` will offer to restart this service once it swaps the binary.")
 }
 
 func scopeLabel(system bool) string {
@@ -714,6 +714,94 @@ func serviceActive(system bool) string {
 	default:
 		return "unknown"
 	}
+}
+
+// ── restart-after-update ─────────────────────────────────────────────
+
+const (
+	restartViaService = "service" // systemd unit or launchd job
+	restartViaDaemon  = "daemon"  // backgrounded by `argus-sidecar start`
+)
+
+// restartPlan describes how a sidecar already running on this host would
+// be restarted. A swapped binary changes nothing until the running
+// process is replaced — os.Rename leaves the live process on the old
+// inode — so `update` uses this to offer the restart instead of printing
+// a command and hoping.
+type restartPlan struct {
+	Kind    string // restartViaService, restartViaDaemon, or "" when nothing is running
+	System  bool   // service scope, when Kind is restartViaService
+	Label   string // human description for the prompt
+	Command string // equivalent shell command, for the non-interactive hint
+}
+
+// detectRestartPlan reports how the local sidecar is being supervised.
+//
+// A managed service is checked first and wins outright. Under systemd
+// the daemon still holds the usual pidfile, so the daemon branch would
+// also match — but SIGTERMing it exits 0, which Restart=on-failure does
+// NOT respawn, and the subsequent `start` would spawn a detached process
+// outside the unit. Getting this order wrong silently orphans the
+// service.
+func detectRestartPlan() restartPlan {
+	for _, system := range []bool{false, true} {
+		unitPath, err := serviceUnitPath(system)
+		if err != nil {
+			return restartPlan{} // GOOS with no service-manager support
+		}
+		if _, err := os.Stat(unitPath); err != nil {
+			continue
+		}
+		if serviceActive(system) != "active" {
+			continue
+		}
+		plan := restartPlan{Kind: restartViaService, System: system}
+		switch runtime.GOOS {
+		case "darwin":
+			plan.Label = fmt.Sprintf("the launchd job (%s)", scopeLabel(system))
+			plan.Command = fmt.Sprintf("launchctl kickstart -k %s/%s", launchdDomain(system), launchdLabel)
+		default:
+			plan.Label = fmt.Sprintf("the %s systemd unit", scopeLabel(system))
+			plan.Command = systemctlCmd(system, "restart", systemdUnitName)
+		}
+		return plan
+	}
+
+	pidPath, err := resolvePIDPath("")
+	if err != nil {
+		return restartPlan{}
+	}
+	if pid, _ := ReadPIDFile(pidPath); pid > 0 && ProcessAlive(pid) {
+		return restartPlan{
+			Kind:    restartViaDaemon,
+			Label:   fmt.Sprintf("the background daemon (pid=%d)", pid),
+			Command: "argus-sidecar restart",
+		}
+	}
+	return restartPlan{}
+}
+
+func performRestart(plan restartPlan) error {
+	switch plan.Kind {
+	case restartViaService:
+		switch runtime.GOOS {
+		case "darwin":
+			target := launchdDomain(plan.System) + "/" + launchdLabel
+			if out, err := exec.Command("launchctl", "kickstart", "-k", target).CombinedOutput(); err != nil {
+				return fmt.Errorf("launchctl kickstart: %w: %s", err, strings.TrimSpace(string(out)))
+			}
+			return nil
+		default:
+			return runSystemctl(plan.System, "restart", systemdUnitName)
+		}
+	case restartViaDaemon:
+		// Reuse the `restart` subcommand wholesale: it stops the old
+		// process and re-spawns from os.Executable(), which is the
+		// path the swap just landed on.
+		runRestart(nil)
+		return nil
+	}
+	return nil
 }
 
 // warnIfNoLinger flags the one thing that makes a --user unit look

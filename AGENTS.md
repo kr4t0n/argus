@@ -628,6 +628,17 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   Scope defaults to per-user because the daemon spawns agent CLIs
   under the invoking user's credentials and `PATH`; `-system` is
   opt-in and requires root.
+  Also home to `detectRestartPlan` / `performRestart`, which back the
+  restart offer at the end of `argus-sidecar update` (the CLI
+  counterpart to the remote path's `RestartMode` handling — the swap is
+  an `os.Rename`, so a live process keeps the old inode until it is
+  replaced). Detection order is load-bearing: a managed service wins
+  over the pidfile, because under systemd the daemon holds the pidfile
+  too, `SIGTERM` exits 0, `Restart=on-failure` does not respawn on a
+  clean exit, and the follow-up `start` would spawn a detached process
+  outside the unit — silently orphaning the service. The prompt only
+  appears at a TTY (default yes); non-interactive callers get the
+  command printed, and `--restart` / `--no-restart` skip the question.
 
 ### `apps/web/src/`
 
