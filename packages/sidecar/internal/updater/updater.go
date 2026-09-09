@@ -2,9 +2,9 @@
 //
 // At a high level we:
 //
-//  1. Hit the GitHub Releases API and pick the newest release whose tag
-//     starts with `argus-sidecar-v` (so other components can have their
-//     own release cadence in the same repo without confusing us).
+//  1. Resolve the newest release whose tag starts with `argus-sidecar-v`
+//     (so other components can have their own release cadence in the same
+//     repo without confusing us). Two resolvers, see "Rate limits" below.
 //  2. Find the asset matching `argus-sidecar-<goos>-<goarch>` and the
 //     companion `SHASUMS256.txt`. Bail with a clear error if either is
 //     missing — that means the release wasn't built by our workflow.
@@ -20,6 +20,23 @@
 // same release — currently argus-bg — next to the sidecar executable so the
 // two stay in version lockstep.
 //
+// # Rate limits
+//
+// api.github.com allows 60 unauthenticated requests per hour keyed on the
+// client IP. A fleet of sidecars behind one NAT egress shares that budget,
+// so a rollout across a dozen machines could exhaust it and fail with a
+// 403 that reads like an auth problem. Every request we make on the
+// default path therefore avoids the REST API entirely:
+//
+//   - resolution reads github.com/<repo>/releases.atom, a plain web
+//     endpoint outside the REST quota, and
+//   - assets are fetched from github.com/<repo>/releases/download/<tag>/…,
+//     which 302s to the release-assets CDN.
+//
+// The REST path is retained and used whenever GITHUB_TOKEN is set (private
+// repos, and 5000 req/h makes the quota a non-issue) or when the feed
+// cannot answer — see pickLatestRelease.
+//
 // Windows is intentionally not supported — the sidecar only ships
 // linux/darwin binaries.
 package updater
@@ -29,6 +46,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +56,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +69,12 @@ const DefaultRepo = "kr4t0n/argus"
 // tagPrefix scopes which releases we consider. Lets future component
 // releases (e.g. `argus-web-v1.0.0`) coexist without mass-confusion.
 const tagPrefix = "argus-sidecar-v"
+
+// githubWebBase is the origin serving releases.atom and the
+// /releases/download/ redirects — deliberately NOT api.github.com, since
+// avoiding the REST quota is the whole point of the feed resolver. A
+// variable so tests can point it at an httptest server.
+var githubWebBase = "https://github.com"
 
 // Options controls a single update run. Zero values pick safe defaults
 // (kr4t0n/argus, stable releases only, std logger).
@@ -69,6 +94,12 @@ type release struct {
 	Prerelease bool    `json:"prerelease"`
 	HTMLURL    string  `json:"html_url"`
 	Assets     []asset `json:"assets"`
+
+	// assetBaseURL is set only by the feed-based resolver, which never
+	// sees an asset listing. When present, asset lookups synthesize a
+	// direct download URL under it instead of consulting Assets. See
+	// (*release).findAsset.
+	assetBaseURL string
 }
 
 type asset struct {
@@ -122,7 +153,7 @@ func (o Options) resolve() (repo string, logger *log.Logger, client *http.Client
 func Update(ctx context.Context, opts Options) (string, error) {
 	repo, logger, client := opts.resolve()
 
-	rel, err := pickLatestRelease(ctx, client, repo, opts.IncludePrerelease)
+	rel, err := pickLatestRelease(ctx, client, logger, repo, opts.IncludePrerelease)
 	if err != nil {
 		return "", err
 	}
@@ -160,7 +191,7 @@ func Update(ctx context.Context, opts Options) (string, error) {
 func DownloadCompanion(ctx context.Context, opts Options, name string) (string, error) {
 	repo, logger, client := opts.resolve()
 
-	rel, err := pickLatestRelease(ctx, client, repo, opts.IncludePrerelease)
+	rel, err := pickLatestRelease(ctx, client, logger, repo, opts.IncludePrerelease)
 	if err != nil {
 		return "", err
 	}
@@ -273,11 +304,11 @@ func resolveExe() (string, error) {
 // not already exist — only its parent directory must.
 func installFromRelease(ctx context.Context, client *http.Client, logger *log.Logger, rel *release, assetBase, destPath string) error {
 	binAssetName := fmt.Sprintf("%s-%s-%s", assetBase, runtime.GOOS, runtime.GOARCH)
-	binAsset := findAsset(rel.Assets, binAssetName)
+	binAsset := rel.findAsset(binAssetName)
 	if binAsset == nil {
 		return fmt.Errorf("release %s has no asset named %q (built for an unsupported platform?)", rel.TagName, binAssetName)
 	}
-	sumsAsset := findAsset(rel.Assets, "SHASUMS256.txt")
+	sumsAsset := rel.findAsset("SHASUMS256.txt")
 	if sumsAsset == nil {
 		return fmt.Errorf("release %s has no SHASUMS256.txt — refusing to install without checksum", rel.TagName)
 	}
@@ -287,7 +318,13 @@ func installFromRelease(ctx context.Context, client *http.Client, logger *log.Lo
 		return fmt.Errorf("fetch checksum: %w", err)
 	}
 
-	logger.Printf("downloading %s (%.1f MB)…", binAsset.Name, float64(binAsset.Size)/1024/1024)
+	// Size is only known on the REST path; the feed resolver has no
+	// listing to read it from, so omit it rather than print "0.0 MB".
+	if binAsset.Size > 0 {
+		logger.Printf("downloading %s (%.1f MB)…", binAsset.Name, float64(binAsset.Size)/1024/1024)
+	} else {
+		logger.Printf("downloading %s…", binAsset.Name)
+	}
 	tmpPath, gotSum, err := downloadToTemp(ctx, client, binAsset.downloadURL(), destPath)
 	if err != nil {
 		return fmt.Errorf("download binary: %w", err)
@@ -317,7 +354,171 @@ func installFromRelease(ctx context.Context, client *http.Client, logger *log.Lo
 	return nil
 }
 
-// pickLatestRelease lists recent releases and returns the highest-versioned
+// pickLatestRelease resolves the newest `argus-sidecar-v*` release,
+// preferring the quota-free feed resolver and falling back to the REST API.
+//
+// The fallback is not just for errors: a token means the caller either has
+// a private repo (whose feed is not public) or 5000 req/h, and in both
+// cases the API is the better answer. A feed miss also legitimately happens
+// on a public repo — releases.atom returns only the ten most recent entries
+// repo-wide, so a burst of non-sidecar releases can push every sidecar tag
+// out of the window.
+func pickLatestRelease(ctx context.Context, client *http.Client, logger *log.Logger, repo string, includePrerelease bool) (*release, error) {
+	if os.Getenv("GITHUB_TOKEN") == "" {
+		rel, err := pickLatestReleaseFeed(ctx, client, logger, repo, includePrerelease)
+		if err == nil {
+			return rel, nil
+		}
+		logger.Printf("release feed unusable (%v) — falling back to the releases API", err)
+	}
+	return pickLatestReleaseAPI(ctx, client, repo, includePrerelease)
+}
+
+// maxFeedCandidates bounds how many tags the feed resolver will probe
+// before giving up and letting the API fallback answer. More than a
+// couple of consecutive asset-less tags means something is wrong that a
+// longer scan will not fix.
+const maxFeedCandidates = 3
+
+// pickLatestReleaseFeed resolves the newest matching tag from
+// github.com/<repo>/releases.atom — a plain web endpoint, so it costs
+// nothing against the REST quota that a NAT'd fleet shares.
+//
+// Two properties of the feed shape this:
+//
+//   - It carries no prerelease flag. We derive it from the tag instead,
+//     which is sound because the release workflow does the same thing in
+//     reverse: it sets GitHub's prerelease flag from a regex on the tag.
+//     A tag with any SemVer prerelease part is treated as a prerelease,
+//     which is marginally broader than the workflow's rc|alpha|beta|pre
+//     and errs toward excluding rather than shipping something unexpected.
+//   - It lists bare tags as well as published releases. A tag pushed
+//     minutes ago whose build has not finished has no assets yet, so we
+//     probe SHASUMS256.txt and fall through to the next candidate rather
+//     than resolving to a release nobody can download.
+func pickLatestReleaseFeed(ctx context.Context, client *http.Client, logger *log.Logger, repo string, includePrerelease bool) (*release, error) {
+	tags, err := fetchReleaseTags(ctx, client, repo)
+	if err != nil {
+		return nil, err
+	}
+	candidates := rankSidecarTags(tags, includePrerelease)
+	if len(candidates) == 0 {
+		return nil, errors.New("no matching sidecar release in the release feed")
+	}
+	for i, tag := range candidates {
+		if i >= maxFeedCandidates {
+			break
+		}
+		base := fmt.Sprintf("%s/%s/releases/download/%s", githubWebBase, repo, tag)
+		if err := assetReachable(ctx, client, base+"/SHASUMS256.txt"); err != nil {
+			logger.Printf("skipping %s: assets not published yet (%v)", tag, err)
+			continue
+		}
+		return &release{
+			TagName:      tag,
+			HTMLURL:      fmt.Sprintf("%s/%s/releases/tag/%s", githubWebBase, repo, tag),
+			assetBaseURL: base,
+		}, nil
+	}
+	return nil, errors.New("no candidate release had downloadable assets")
+}
+
+// atomFeed is the subset of the Atom document we care about: each entry's
+// alternate link, whose path ends in the tag name.
+type atomFeed struct {
+	XMLName xml.Name `xml:"feed"`
+	Entries []struct {
+		Link struct {
+			Href string `xml:"href,attr"`
+		} `xml:"link"`
+	} `xml:"entry"`
+}
+
+func fetchReleaseTags(ctx context.Context, client *http.Client, repo string) ([]string, error) {
+	url := fmt.Sprintf("%s/%s/releases.atom", githubWebBase, repo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/atom+xml")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch release feed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("release feed: %s", resp.Status)
+	}
+
+	var feed atomFeed
+	// 1 MB ceiling: the feed is ~16 KB for ten entries, so anything
+	// approaching this is a proxy or captive portal serving us HTML.
+	if err := xml.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&feed); err != nil {
+		return nil, fmt.Errorf("decode release feed: %w", err)
+	}
+
+	const marker = "/releases/tag/"
+	tags := make([]string, 0, len(feed.Entries))
+	for _, e := range feed.Entries {
+		if idx := strings.Index(e.Link.Href, marker); idx >= 0 {
+			tags = append(tags, e.Link.Href[idx+len(marker):])
+		}
+	}
+	return tags, nil
+}
+
+// rankSidecarTags filters raw tags down to well-formed `argus-sidecar-v*`
+// ones the caller is willing to install, newest first. Ordering is by
+// SemVer precedence rather than feed order, which is by publish time and
+// therefore wrong whenever a patch for an older line lands late.
+func rankSidecarTags(tags []string, includePrerelease bool) []string {
+	type candidate struct{ tag, ver string }
+	var out []candidate
+	seen := make(map[string]bool, len(tags))
+	for _, tag := range tags {
+		if seen[tag] || !strings.HasPrefix(tag, tagPrefix) {
+			continue
+		}
+		ver := strings.TrimPrefix(tag, tagPrefix)
+		if !isValidVersion(ver) {
+			continue
+		}
+		if strings.Contains(ver, "-") && !includePrerelease {
+			continue
+		}
+		seen[tag] = true
+		out = append(out, candidate{tag: tag, ver: ver})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return compareVersion(out[i].ver, out[j].ver) > 0
+	})
+	ranked := make([]string, len(out))
+	for i, c := range out {
+		ranked[i] = c.tag
+	}
+	return ranked
+}
+
+// assetReachable confirms a release asset exists before we commit to its
+// tag. HEAD follows the 302 to the CDN and transfers no body, so this is
+// cheap enough to run per candidate.
+func assetReachable(ctx context.Context, client *http.Client, url string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HEAD %s: %s", url, resp.Status)
+	}
+	return nil
+}
+
+// pickLatestReleaseAPI lists recent releases and returns the highest-versioned
 // one whose tag starts with `argus-sidecar-v`. We deliberately do NOT use
 // `/releases/latest` because that endpoint always returns the single newest
 // release across the whole repository, which could be a different component
@@ -329,7 +530,7 @@ func installFromRelease(ctx context.Context, client *http.Client, logger *log.Lo
 // "the first matching release" returned a stale version when --prerelease was
 // set. Instead we filter all returned releases by prefix + draft/prerelease
 // flags, then pick the max by semver-compliant version comparison.
-func pickLatestRelease(ctx context.Context, client *http.Client, repo string, includePrerelease bool) (*release, error) {
+func pickLatestReleaseAPI(ctx context.Context, client *http.Client, repo string, includePrerelease bool) (*release, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=30", repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -520,11 +721,23 @@ func isValidVersion(v string) bool {
 	return true
 }
 
-func findAsset(assets []asset, name string) *asset {
-	for i := range assets {
-		if assets[i].Name == name {
-			return &assets[i]
+// findAsset locates a named asset in the release.
+//
+// On the REST path we have the real listing, so a miss is authoritative:
+// the release genuinely lacks that asset and the caller reports it. On the
+// feed path there is no listing at all — only a tag — so we synthesize the
+// well-known download URL and let the transfer decide. A synthesized URL
+// for an asset that does not exist yields a 404 at download time, which
+// pickLatestReleaseFeed has already ruled out for the release it returns
+// (it probes SHASUMS256.txt before accepting a tag).
+func (r *release) findAsset(name string) *asset {
+	for i := range r.Assets {
+		if r.Assets[i].Name == name {
+			return &r.Assets[i]
 		}
+	}
+	if r.assetBaseURL != "" {
+		return &asset{Name: name, BrowserDownloadURL: r.assetBaseURL + "/" + name}
 	}
 	return nil
 }
