@@ -320,7 +320,8 @@ agents on whichever fleet member you want.
 
 ### Step 5: Install the binary
 
-Three ways to get the binary onto the agent machine. Pick whichever fits.
+Three ways to get the binary onto the agent machine — pick whichever
+fits — plus how it upgrades itself once it's there (Option D).
 
 #### Option A — One-line installer (recommended)
 
@@ -331,7 +332,7 @@ curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.s
 This script:
 
 1. Detects your OS (`darwin`/`linux`) and arch (`amd64`/`arm64`).
-2. Resolves the latest `argus-sidecar-v*` release via the GitHub API.
+2. Resolves the newest **stable** `argus-sidecar-v*` release.
 3. Downloads the matching binary **and** the release's
   `SHASUMS256.txt`, verifies the SHA-256 before installing.
 4. Drops the binary in `/usr/local/bin` (or `$HOME/.local/bin` if that
@@ -350,10 +351,24 @@ curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.s
 curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh \
   | ARGUS_INSTALL_DIR=/opt/argus/bin sh
 
+# Take the newest -rc/-alpha/-beta instead of the newest stable
+curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh \
+  | ARGUS_PRERELEASE=1 sh
+
 # Private repo — pass a GitHub token (PAT or `gh auth token`)
 curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh \
   | GITHUB_TOKEN=ghp_xxx sh
 ```
+
+**Fleet installs and rate limits.** By default the installer makes no
+`api.github.com` requests at all: it resolves the release from the
+repo's Atom feed and pulls assets from the `/releases/download/`
+redirect, neither of which counts against the REST API's 60
+requests-per-hour-per-IP budget. That budget is shared by every machine
+behind one NAT egress, so rolling out across a fleet used to fail
+partway through with a `403` that reads like an auth error. Setting
+`GITHUB_TOKEN` switches resolution back to the API, which is what a
+private repo needs and where 5000 req/h makes the quota moot.
 
 The installer is POSIX `sh` (no bashisms) and works on Alpine, Debian,
 RHEL, macOS — anywhere `curl` (or `wget`) and `sha256sum` (or
@@ -388,7 +403,8 @@ argus-sidecar version
 
 #### Option C — Build from source
 
-Useful if you want to bake in custom adapters. Requires Go 1.23+.
+Useful if you want to bake in custom adapters. Requires Go 1.25+ (see
+`packages/sidecar/go.mod`; CI builds on 1.25).
 
 ```bash
 git clone https://github.com/kr4t0n/argus.git
@@ -417,12 +433,23 @@ Once installed, the sidecar updates itself:
 argus-sidecar update              # downloads, sha256-verifies, atomic swap
 argus-sidecar update --prerelease # also consider pre-release tags
 argus-sidecar update --force      # reinstall even if already current
+argus-sidecar update --restart    # restart the running sidecar without asking
+argus-sidecar update --no-restart # never restart; just print the command
 argus-sidecar version             # print the baked-in tag
 ```
 
-The swap is atomic (`os.Rename` over the running executable). After
-updating, restart the running sidecar process so it picks up the new
-binary (see Step 7 for service-manager recipes).
+The swap is atomic (`os.Rename` over the running executable), which
+means anything already running keeps the old inode — and the old code —
+until it is replaced. So once the swap lands, `update` offers to restart
+whatever is running it: the service installed in Step 7 if there is one,
+otherwise a daemon backgrounded by `argus-sidecar start`. At a TTY it
+asks (default yes, warning that in-flight agent turns will be
+interrupted); with no TTY — cron, CI, a config-management run — it never
+blocks and prints the command instead. `--restart` / `--no-restart`
+decide up front. Nothing running means nothing to do.
+
+Like the installer, `update` resolves releases without touching
+`api.github.com` unless `GITHUB_TOKEN` is set.
 
 `update` also refreshes the `argus-bg` companion (the background-task
 progress wrapper) from the same release, so the two stay in lockstep. To
@@ -772,10 +799,37 @@ You're hitting the API at the phone's own `localhost`. The bundled
 reaching the dashboard via a hostname or LAN IP that's also reachable
 on `:4000`, not via `localhost:5173` from a different device.
 
-`**argus-sidecar update` says `404 Not Found` against a private repo.**
-The default Releases API rejects unauthenticated reads on private repos.
-Set `GITHUB_TOKEN=<a-PAT-with-repo-read>` in the sidecar's environment
-and re-run.
+**`argus-sidecar update` or the installer says `404 Not Found` against a
+private repo.**
+Neither the release feed nor the `/releases/download/` redirect is
+readable without credentials on a private repo. Set
+`GITHUB_TOKEN=<a-PAT-with-repo-read>` in the environment and re-run —
+that also switches resolution to the authenticated Releases API, which
+is the supported path for private repos.
+
+**Installing or updating fails with `403` and "API rate limit
+exceeded".**
+`api.github.com` allows 60 unauthenticated requests per hour **per IP**,
+and every machine behind the same NAT egress shares it — so a fleet
+rollout can exhaust it partway through. Current versions do not touch
+the API at all by default, so the fix is to upgrade the installer (the
+`main` copy of `scripts/install.sh`) and the sidecar. If you need the
+API path — private repo — set `GITHUB_TOKEN` for 5000 req/h. Note that
+having `GITHUB_TOKEN` set in your environment *selects* the API path, so
+an expired token turns a working install into this error.
+
+**The machine goes green but the "create agent" popover lists no
+adapters.**
+The sidecar is running without your shell's `PATH`. Adapter discovery is
+a `PATH` probe at boot, and a service manager's default is a bare
+`/usr/bin:/bin` — no `~/.local/bin`, no nvm shims, no Homebrew — so the
+daemon starts cleanly, registers the machine, and finds none of the
+CLIs. `argus-sidecar service install` bakes the invoking shell's `PATH`
+into the unit; re-run it from a shell where `which claude` works, or
+pass `-path`. If you wrote the unit by hand, add an explicit
+`Environment="PATH=..."` (systemd) or an `EnvironmentVariables` → `PATH`
+entry (launchd). The daemon logs what it found at boot — grep the journal or
+`sidecar.log` for `discovery: found N adapter(s) on PATH`.
 
 ---
 
