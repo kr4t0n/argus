@@ -355,6 +355,17 @@ export class SessionService {
           cliType: src.cliType,
           title: forkTitle,
           status: 'idle',
+          // Carry the session-default model choice across. Without this a
+          // fork silently reverts to "CLI default" — not just a cosmetic
+          // gap, since `dispatch` merges this into every FUTURE turn: you
+          // fork a conversation running Opus at high effort, send the next
+          // prompt, and it runs on whatever the CLI picks. The fork exists
+          // to continue the same conversation, so it has to continue with
+          // the same model. NULL stays NULL (`undefined` omits the column).
+          modelSelection:
+            src.modelSelection === null
+              ? undefined
+              : (src.modelSelection as Prisma.InputJsonValue),
         },
       });
       for (const c of prefix) {
@@ -372,6 +383,18 @@ export class SessionService {
                 : c.status,
             createdAt: c.createdAt,
             completedAt: c.completedAt ?? c.createdAt,
+            // The merged ModelSelection this turn actually ran with.
+            // `Command.options` exists precisely so history can answer
+            // "which model ran this turn?", and a fork that drops it
+            // leaves every replayed turn unattributable.
+            options:
+              c.options === null ? undefined : (c.options as Prisma.InputJsonValue),
+            // `usage` is deliberately NOT copied, and the asymmetry with
+            // `options` directly above is the point: a fork duplicated
+            // rows, it did not spend tokens. Copying usage would
+            // double-count every fork in /me/usage and
+            // /me/usage/by-project. See the fork gotcha in AGENTS.md
+            // before "fixing" this to match.
           },
         });
         const cmdChunks = chunksByCommand.get(c.id) ?? [];
