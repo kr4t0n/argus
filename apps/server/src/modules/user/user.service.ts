@@ -100,9 +100,13 @@ export class UserService {
    * undefined-vs-zero semantics so a recent codex-only stretch doesn't
    * show a spurious "$0.00" even when the lifetime total has a cost.
    *
-   * If commands predating the denormalization haven't been backfilled
-   * yet (`Command.usage IS NULL` on completed rows), they're silently
-   * excluded. Run `pnpm -F @argus/server backfill:usage` to populate.
+   * Commands with `usage IS NULL` are silently excluded. That is not
+   * only "predates the denormalization": it also covers turns whose
+   * usage envelope parsed to all-zeros and was discarded by `hasUsage`
+   * — see the `Command.usage IS NULL` gotcha in AGENTS.md, which has
+   * the measured breakdown. Historical rows were populated by migration
+   * `8_backfill_command_usage_skip_terminal_chunk` (rounds 6 and 7
+   * updated nothing); there is no `backfill:usage` npm script.
    */
   async usage(userId: string): Promise<UserUsageResponse> {
     type Row = {

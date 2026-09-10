@@ -2550,13 +2550,52 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   filter), so a recent codex-only stretch never shows a spurious
   "$0.00" even when the lifetime total has a real cost.
   Pre-denormalization rows are populated by SQL migration
-  `6_backfill_command_usage`, which mirrors `parseUsage`'s adapter
-  switch one-for-one — if you change `parseUsage`'s output shape,
-  history won't be retroactively recomputed; ship a follow-up data
-  migration. NULL on a completed Command row means "no usage payload"
-  (cancellation, error, custom adapter that doesn't emit one), not
-  "in flight" — the `/me/usage` query filters to `usage IS NOT NULL`
-  so NULLs cost nothing.
+  `8_backfill_command_usage_skip_terminal_chunk`, which mirrors
+  `parseUsage`'s adapter switch one-for-one — if you change
+  `parseUsage`'s output shape, history won't be retroactively
+  recomputed; ship a follow-up data migration. Rounds `6_` and `7_` are
+  retained but updated **zero** rows: their `latest_final` CTE took the
+  highest-seq terminal chunk, which is always `clistream`'s empty
+  process-exit `final`, so `meta->'usage'` was NULL every time. Round 8
+  filters to chunks whose meta actually carries a usage object first.
+  NULL on a completed Command row does NOT mean "in flight" — the
+  `/me/usage` query filters to `usage IS NOT NULL` so NULLs cost
+  nothing — but see the next entry before reading it as "no usage".
+- **`Command.usage IS NULL` conflates "never reported" with "reported as
+  zero" — measured, and deliberately NOT fixed (Sep 2026).**
+  `parseUsage` ends with `return hasUsage(parsed) ? parsed : null`, and
+  `hasUsage` is a **display** predicate: it answers "would the badge read
+  ↑0 ↓0?", which is not the same question as "did we receive usage?". So
+  a turn reporting a complete, correctly-shaped, all-zero usage envelope
+  is discarded and stored as NULL — indistinguishable from a turn that
+  reported nothing at all.
+  **Grounding** (42-day window on the live corpus, forks excluded): 172
+  Commands had `usage IS NULL`, of which **79 carried a usage object in
+  a terminal chunk**. Every one was `claude-code`, with key names
+  matching the parser exactly (`input_tokens`, `output_tokens`,
+  `cache_read_input_tokens`, `cache_creation_input_tokens`) — not a
+  shape mismatch — all values zero and `iterations: []`. That empty
+  per-API-call array is the tell: these turns never reached the API
+  (failed to start, or returned without calling the model); 47 were
+  `error` kind. The other ~93 carried no envelope at all — genuinely
+  unrecorded, mostly turns cancelled mid-flight, which IS real
+  unmeasured spend and is not fixable server-side.
+  **Why it was left:** token TOTALS are unaffected — discarded rows sum
+  to zero either way, so `/me/usage` and `/me/usage/by-project` are
+  correct. Only COVERAGE is wrong: `ProjectUsageRow.turnsMissingUsage`
+  counts zero-token turns as lost data, overstating the gap by ~2.7x.
+  The debt doesn't compound (totals stay right, the fix stays the same
+  size), so it was deferred. Until then, don't render that field as a
+  loss/percentage.
+  **The fix, if you come back to it:** do NOT change `parseUsage`'s
+  contract. It is shared by the session badge, the context ring,
+  `/me/usage` and the iOS client, and call sites treat non-null as
+  "there is something to render" — returning zeroed objects would sprout
+  ↑0 ↓0 badges across both clients. Instead fall back to `ZERO_USAGE`
+  inside `computeCommandUsage` (result-ingestor) when `meta.usage` is an
+  object but `parseUsage` returned null: ~6 lines, one file, no
+  shared-contract change, sums unmoved. Then a backfill migration on the
+  same predicate to zero the existing rows.
 - **GHA cache budget cap**: GitHub enforces ~10 GB of cache per repo.
   Buildx with `mode=max` writes every intermediate stage; tag pushes
   (`refs/heads/refs/tags/v*`) write under their own ref scope and are
@@ -2603,6 +2642,28 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - Pool routing ("run this on any machine that has CLI type X") — would
   need a type-scoped consumer group across machines; not exposed yet.
 - Pre-commit hooks (ruff/eslint).
+- **The aggregate read endpoints have no tests.** There is no server
+  test harness at all, so CI proves only that `/me/pixels` and
+  `/me/usage/by-project` typecheck. Both were validated once (Sep 2026)
+  by reconciling their output against hand-written SQL on the live
+  corpus — identical winner ranking, identical contested-slot count —
+  which is a point-in-time check, not a regression guard. Two parts of
+  the pixels query are silent-failure shaped and would not throw if
+  broken: the `AT TIME ZONE 'UTC' AT TIME ZONE tz` two-step (reverse it
+  and the whole grid rotates by the UTC offset, looking entirely
+  plausible), and the fork-exclusion predicate (drop it and busy time
+  silently double-counts again — see the fork gotcha).
+- **Fork lineage is inferred, not recorded.** The detector for a
+  replayed turn is `Command.createdAt < Session.createdAt`, which cannot
+  false-positive and was exact on the live corpus, but it stands in for
+  a fact nothing stores. A `Command.forkedFromId` column would make it
+  explicit and would also let the UI show lineage. Only becomes a
+  problem if fork semantics change.
+- **`Command(createdAt)` index has no re-check trigger.** Deliberately
+  not added: at 37% window selectivity Postgres correctly prefers a seq
+  scan, and the grid query measured 13.4 ms with zero disk reads. It
+  becomes worth revisiting when the in-window share drops below ~10%
+  (roughly 30k+ commands), which nothing currently watches for.
 - **Attachments — known debt** (the file/image feature is complete and
   verified end-to-end for claude `-p`/stdin and codex `--image`; these are
   the deferred edges):
