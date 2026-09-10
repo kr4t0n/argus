@@ -2530,8 +2530,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     `turnsMissingUsage`.
   The detector is `Command.createdAt < Session.createdAt`: a real turn
   can never predate its own session, so it has no false positives and
-  needs no schema change. (`fork()` also skips `options`, so a forked
-  turn loses the record of which model ran it — smaller, still open.)
+  needs no schema change. What a fork DOES carry: `Session.
+  modelSelection` (so the next turn continues on the same model rather
+  than reverting to CLI default) and `Command.options` (so replayed
+  history stays attributable). `usage` is the sole deliberate omission —
+  if you find yourself "fixing" that asymmetry, re-read this entry.
 - **`Command.usage` is denormalized at write time**: the result-ingestor
   calls `parseUsage` once when each turn finalizes and stores the
   normalized `TokenUsage` JSON on the Command row. `/me/usage` SUMs
