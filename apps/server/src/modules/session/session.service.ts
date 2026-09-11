@@ -197,10 +197,17 @@ export class SessionService {
   /**
    * Resolve where a session's turns run: (machine, workingDir, cliType)
    * plus the machine's current status for the dispatch gate. `projectId`
-   * is authoritative; the agent row is a fallback only for old
-   * workdir-less sessions created before Phase 1 whose projectId is
-   * NULL but whose agent row still exists. Returns null when the session
-   * can't be routed (no cliType, or neither anchor resolves).
+   * is the only anchor since Phase 4 (the Agent fallback retired with
+   * the entity). Returns null when the session can't be routed — no
+   * cliType, no project row, or a soft-deleted machine.
+   *
+   * The `deletedAt` check is deliberately explicit rather than leaning
+   * on the tombstone's forced `status: 'offline'` (MachineService.
+   * removeMachine). Both facts are true today, but only the status one
+   * is visible from here, so a future change that preserved last-known
+   * status on delete — or any status write that skipped the `deletedAt`
+   * filter — would silently reopen turn dispatch to deleted machines.
+   * Returning null closes dispatch, fork and cancel in one place.
    */
   async resolveRouting(
     session: Pick<PSession, 'projectId' | 'cliType'>,
@@ -215,9 +222,13 @@ export class SessionService {
     if (session.projectId) {
       const p = await this.prisma.project.findUnique({
         where: { id: session.projectId },
-        select: { machineId: true, workingDir: true, machine: { select: { status: true } } },
+        select: {
+          machineId: true,
+          workingDir: true,
+          machine: { select: { status: true, deletedAt: true } },
+        },
       });
-      if (p) {
+      if (p && !p.machine.deletedAt) {
         return {
           machineId: p.machineId,
           workingDir: p.workingDir,

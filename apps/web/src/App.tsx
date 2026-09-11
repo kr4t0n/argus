@@ -56,6 +56,7 @@ export default function App() {
   const upsertMachine = useMachineStore((s) => s.upsert);
   const setMachineStatus = useMachineStore((s) => s.setStatus);
   const removeMachine = useMachineStore((s) => s.remove);
+  const removeProjectsForMachine = useProjectStore((s) => s.removeForMachine);
   const loadSessions = useSessionStore((s) => s.loadList);
   const upsertSession = useSessionStore((s) => s.upsertSession);
   const upsertCommand = useSessionStore((s) => s.upsertCommand);
@@ -117,7 +118,16 @@ export default function App() {
     const unsub = subscribeHandler({
       onMachineUpsert: upsertMachine,
       onMachineStatus: (p) => setMachineStatus(p.id, p.status),
-      onMachineRemoved: (p) => removeMachine(p.id),
+      // Projects go with the machine: the sidebar builds its rows from
+      // projectStore alone (groupProjects doesn't check that the machine
+      // still exists), so dropping only the machine would leave orphaned
+      // rows on screen until the next reload. Sessions are deliberately
+      // left in place — they stay reachable through search/⌘K, which is
+      // what "history stays viewable" after a delete rests on.
+      onMachineRemoved: (p) => {
+        removeMachine(p.id);
+        removeProjectsForMachine(p.id);
+      },
       onProjectUpsert: (p) => {
         const store = useProjectStore.getState();
         store.upsertFromDto(p);

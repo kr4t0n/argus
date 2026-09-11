@@ -109,6 +109,14 @@ interface ProjectState {
   ): Promise<LocalProject>;
   setArchived(key: string, archived: boolean, snapshot?: ArchiveSnapshot): Promise<void>;
   remove(key: string): void;
+  /** Drop every row anchored to a machine, archived or not, plus its
+   *  icon entries. Called on `machine:removed` so the sidebar stops
+   *  rendering orphaned project rows the moment the machine goes —
+   *  `GET /projects` already filters soft-deleted machines out, so
+   *  this just brings the live store in line with what the next
+   *  hydrate would produce. Local-only (no REST): the server rows
+   *  survive under the tombstone by design. */
+  removeForMachine(machineId: string): void;
   /** Replace the whole icon map from a GET /projects response —
    *  replacement (not merge) is what propagates remote resets. */
   setServerIcons(rows: ProjectDTO[]): void;
@@ -230,6 +238,30 @@ export const useProjectStore = create<ProjectState>()(
         set({
           projects: next,
           order: get().order.filter((k) => k !== key),
+        });
+      },
+      removeForMachine(machineId) {
+        const { projects, order, serverIcons } = get();
+        const doomed = new Set(
+          Object.entries(projects)
+            .filter(([, p]) => p.machineId === machineId)
+            .map(([key]) => key),
+        );
+        // Icons hydrate from every server row, so the map can hold keys
+        // with no project entry — sweep it by key prefix rather than
+        // from `doomed`, or stale glyphs outlive the machine.
+        const prefix = projectKey(machineId, '');
+        const iconKeys = Object.keys(serverIcons).filter((k) => k.startsWith(prefix));
+        if (doomed.size === 0 && iconKeys.length === 0) return;
+
+        const nextProjects = { ...projects };
+        for (const key of doomed) delete nextProjects[key];
+        const nextIcons = { ...serverIcons };
+        for (const key of iconKeys) delete nextIcons[key];
+        set({
+          projects: nextProjects,
+          order: order.filter((k) => !doomed.has(k)),
+          serverIcons: nextIcons,
         });
       },
       setServerIcons(rows) {
