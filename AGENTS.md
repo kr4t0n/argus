@@ -850,8 +850,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   failures don't poison the snapshot; restore uses per-item `.catch` so a
   since-destroyed row 404s without blocking the rest. Legacy placeholders
   archived before the snapshot existed fall back to a broad restore.
-  The `showArchivedAgents` toggle (historical name) reveals archived
-  placeholders. Per-project show-archived state lives in
+  The global `uiStore.showArchivedProjects` toggle reveals archived
+  placeholders; per-project show-archived state is a separate map,
   `uiStore.showArchived` keyed by the project-group key. Expansion state
   lives in `uiStore.expanded` keyed by `proj:<machineId>::<workingDir>`
   (default open). The synthetic `no project` bucket hides the project-row
@@ -1803,9 +1803,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   (~300 KB) until the server upgrade creates the group. Nothing
   breaks, but deploy the server before triggering sidecar updates.
 - **stream-json drift**: each CLI's NDJSON event shape changes between
-  versions. The mappers (`mapClaudeLine`, `mapCodexLine`) are
+  versions. The line mappers (`mapClaudeLine` in `claude_code.go`,
+  `mapCursorLine` in `cursor_cli_mapper.go`) are
   defensive — unknown events fall through as `progress` chunks rather than
-  crashing. For `system` events, the unknown-subtype fallback is
+  crashing. Codex has NO line mapper: it speaks the app-server JSONL
+  protocol, so drift there surfaces as unhandled *notifications*
+  instead — see the codex app-server note under `adapter/`. For `system` events, the unknown-subtype fallback is
   **deliberately visible** (Content `"system"` → italic row in the
   activity timeline): that junk row is the observability breadcrumb that
   tells us a new subtype appeared and needs explicit handling. Don't
@@ -2387,10 +2390,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   dot-resurrection race**: the dot used to get stuck because the
   status lived only on the server and arrived over two unordered
   channels — the `session:status` WS event and REST `loadSession`
-  responses. A background prefetch (`App.tsx` `onAgentStatus`, fired
-  the instant a turn completes) could issue a `loadSession` whose DB
-  read captured the pre-`markSeen` state and then land AFTER the
-  `markSeen` clear, resurrecting the dot until a hard refresh. Fix:
+  responses. A background prefetch (then `App.tsx`'s per-agent status
+  handler, fired the instant a turn completed) could issue a
+  `loadSession` whose DB read captured the pre-`markSeen` state and then
+  land AFTER the `markSeen` clear, resurrecting the dot until a hard
+  refresh. That prefetch went away with the per-agent WS events in
+  Phase 4, but the guard below is NOT redundant — REST and WS are still
+  two unordered channels carrying the same state. Fix:
   the `session:status` payload carries `unread` + `updatedAt`, and
   `sessionStore`'s `applySessionStatus`/`loadSession`/`upsertSession`
   reject any write whose `updatedAt` is older than what's already
