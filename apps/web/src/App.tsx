@@ -14,6 +14,7 @@ import { migrateLocalMachineIconsToServer } from './lib/migrateMachineIcons';
 import { migrateLocalProjectIconsToServer } from './lib/migrateProjectIcons';
 import { migrateLocalProjectsToServer } from './lib/migrateLocalProjects';
 import { useProjectStore } from './stores/projectStore';
+import { ensureRemovedContext, useRemovedContextStore } from './stores/removedContextStore';
 import {
   activeSessionIdFromPath,
   playDoneSound,
@@ -96,7 +97,14 @@ export default function App() {
     Promise.all([machinesReady, projectsReady])
       .then(() => Promise.all([migrateLocalProjectIconsToServer(), migrateLocalProjectsToServer()]))
       .catch(() => {});
-    loadSessions();
+    const sessionsReady = loadSessions();
+    // Tombstone context for sessions whose machine was deleted. Gated on
+    // both lists having landed: mid-boot every session looks unresolved,
+    // so checking early would fetch for fleets that have never deleted
+    // anything. Fleets that have deleted nothing never issue the request.
+    Promise.all([projectsReady, sessionsReady])
+      .then(() => ensureRemovedContext())
+      .catch(() => {});
     // Extension flags are account-level (server source of truth) but
     // cached in uiStore/localStorage so the UI reads them synchronously
     // with no flash on reload. Reconcile the cache with the server on
@@ -127,6 +135,10 @@ export default function App() {
       onMachineRemoved: (p) => {
         removeMachine(p.id);
         removeProjectsForMachine(p.id);
+        // Those sessions just lost their project rows; refetch so they
+        // can still name where they ran. Unconditional (not `ensure`) —
+        // we know the tombstone set changed.
+        void useRemovedContextStore.getState().refresh();
       },
       onProjectUpsert: (p) => {
         const store = useProjectStore.getState();
@@ -221,6 +233,8 @@ export default function App() {
             store.setServerIcons(rows);
           }),
         ]).catch(() => {});
+        // A machine may have been deleted while we were disconnected.
+        ensureRemovedContext();
         const entriesSnap = useSessionStore.getState().entries;
         for (const [id, e] of Object.entries(entriesSnap)) {
           try {

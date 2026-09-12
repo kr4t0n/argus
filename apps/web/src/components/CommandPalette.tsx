@@ -12,13 +12,15 @@ import { api } from '../lib/api';
 import { useSessionStore } from '../stores/sessionStore';
 import { useProjectStore } from '../stores/projectStore';
 import { useMachineStore } from '../stores/machineStore';
+import { useRemovedContextStore } from '../stores/removedContextStore';
 import { usePaletteStore, type PaletteMode } from '../stores/paletteStore';
-import { basename, resolveProjectRef } from '../lib/projects';
+import { originLabel, resolveSessionOrigin } from '../lib/projects';
 import { rankSessions, type SessionCandidate } from '../lib/sessionMatch';
 import { useGlobalHotkey } from '../lib/useGlobalHotkey';
 import { HOTKEYS } from '../lib/hotkeys';
 import { AgentTypeIcon } from './ui/AgentTypeIcon';
 import { Kbd } from './ui/Kbd';
+import { RemovedTag } from './ui/RemovedTag';
 import { cn } from '../lib/utils';
 
 /** Debounce before firing a content query. Long enough that typing a word
@@ -79,18 +81,23 @@ export function CommandPalette() {
   const sessions = useSessionStore((s) => s.sessions);
   const projects = useProjectStore((s) => s.projects);
   const machines = useMachineStore((s) => s.machines);
+  const removedContext = useRemovedContextStore((s) => s.byProjectId);
 
   const candidates = useMemo<SessionCandidate[]>(() => {
     if (mode !== 'session') return [];
     return Object.values(sessions).map((session) => {
-      const ref = resolveProjectRef(session, projects);
+      // Origin, not ProjectRef: a session whose machine was deleted has
+      // no project row left, and naming where it ran is the only way
+      // search stays a usable route back into that history.
+      const origin = resolveSessionOrigin(session, projects, machines, removedContext);
       return {
         session,
-        projectLabel: ref ? basename(ref.workingDir) : null,
-        machineName: ref ? (machines[ref.machineId]?.name ?? null) : null,
+        projectLabel: origin ? originLabel(origin) : null,
+        machineName: origin?.machineName ?? null,
+        removed: origin?.removed ?? false,
       };
     });
-  }, [mode, sessions, projects, machines]);
+  }, [mode, sessions, projects, machines, removedContext]);
 
   const ranked = useMemo(
     () => (mode === 'session' ? rankSessions(query, candidates, SESSION_LIMIT) : []),
@@ -262,6 +269,7 @@ export function CommandPalette() {
                   session={r.session}
                   projectLabel={r.projectLabel}
                   machineName={r.machineName}
+                  removed={r.removed}
                   idx={i}
                   active={i === cursor}
                   onSelect={() => openRow(i)}
@@ -313,6 +321,7 @@ function SessionRow({
   session,
   projectLabel,
   machineName,
+  removed,
   idx,
   active,
   onSelect,
@@ -321,6 +330,7 @@ function SessionRow({
   session: SessionDTO;
   projectLabel: string | null;
   machineName: string | null;
+  removed: boolean;
   idx: number;
   active: boolean;
   onSelect: () => void;
@@ -344,6 +354,7 @@ function SessionRow({
           archived
         </span>
       )}
+      {removed && <RemovedTag />}
       {(projectLabel || machineName) && (
         <span className="ml-auto shrink-0 truncate pl-3 text-[11px] text-fg-muted">
           {[projectLabel, machineName].filter(Boolean).join(' · ')}
@@ -373,10 +384,14 @@ function ContentRow({
   const session = useSessionStore((s) => s.sessions[hit.sessionId]);
   const projects = useProjectStore((s) => s.projects);
   const machines = useMachineStore((s) => s.machines);
+  const removedContext = useRemovedContextStore((s) => s.byProjectId);
 
-  const ref = useMemo(() => resolveProjectRef(session, projects), [session, projects]);
-  const projectLabel = ref ? basename(ref.workingDir) : null;
-  const machineName = ref ? machines[ref.machineId]?.name : null;
+  const origin = useMemo(
+    () => resolveSessionOrigin(session, projects, machines, removedContext),
+    [session, projects, machines, removedContext],
+  );
+  const projectLabel = origin ? originLabel(origin) : null;
+  const machineName = origin?.machineName ?? null;
 
   // A hit whose session hasn't hydrated yet (or was deleted under us)
   // still gets a row — the snippet is the useful part and dropping it
@@ -402,6 +417,7 @@ function ContentRow({
             archived
           </span>
         )}
+        {origin?.removed && <RemovedTag />}
         {hit.matchCount > 1 && (
           <span className="ml-auto shrink-0 text-[11px] text-fg-muted">
             {hit.matchCount} turns

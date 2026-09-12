@@ -1340,6 +1340,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Gotchas
 
+- **`ProjectRef` addresses, `SessionOrigin` describes — don't cross the
+  streams.** Both answer "where does this session live", and conflating
+  them is how a deleted machine's session grows controls that cannot
+  work. `useProjectRef` resolves a LIVE project and is what fs, git,
+  terminal, the model chip and dispatch route through; it returns null
+  for a soft-deleted machine and every pane gated on it correctly stays
+  shut. `useSessionOrigin` is display-only and additionally resolves
+  from `removedContextStore`, so a tombstoned machine can still be
+  *named* in a search row or a pane header. Never feed an origin to a
+  routing path. The symptom this fixed: `machineOffline` was
+  `machine?.status === 'offline'`, which is `false` when the machine row
+  is missing entirely, so the composer rendered enabled on a deleted
+  machine and invited a turn the server then refused.
 - **Tombstone guard: check `deletedAt`, never infer it from
   `status: 'offline'`.** Turn dispatch on a soft-deleted machine was
   blocked only *transitively*: `removeMachine` forces the tombstone
@@ -2251,8 +2264,17 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   row — the sidebar builds project rows from that store alone, so dropping
   only the machine would leave orphans on screen until the next reload.
   Sessions are deliberately NOT pruned: `GET /sessions` doesn't filter on
-  the machine tombstone, and ⌘K / search rendering them with no project
-  is what "history stays viewable" after a delete actually rests on.
+  the machine tombstone, and ⌘K / search rendering them is what "history
+  stays viewable" after a delete actually rests on.
+  Those sessions are named by `GET /projects/removed` — the one endpoint
+  that surfaces tombstoned machines, feeding `removedContextStore` and
+  nothing else. It is a separate route rather than an `includeDeleted`
+  flag on `GET /projects` on purpose: tombstoned rows must never reach
+  `projectStore`, which drives the sidebar and every action, so the
+  dangerous direction is opt-in rather than opt-out. The fetch is
+  conditional (`ensureRemovedContext`) — it fires only when a listed
+  session's `projectId` resolves to no known project, so a fleet that
+  has never deleted a machine never issues it.
 - **Terminal == remote shell access**: ticking "attach interactive
   terminal" when creating a project/session lets *any* dashboard user
   spawn shells on that host as the sidecar daemon's UID. Treat this as

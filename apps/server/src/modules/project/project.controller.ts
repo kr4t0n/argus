@@ -85,6 +85,14 @@ export class ProjectController {
     return this.service.list();
   }
 
+  // Static segment, so it must precede any dynamic `:id` GET added
+  // later. Label-only context for soft-deleted machines — see
+  // ProjectService.listRemoved for why this is its own route.
+  @Get('removed')
+  listRemoved() {
+    return this.service.listRemoved();
+  }
+
   @Post()
   create(@Body() body: CreateProjectDto) {
     return this.service.create(body);

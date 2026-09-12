@@ -87,6 +87,32 @@ export interface ProjectDTO {
   iconKey: string | null;
 }
 
+/**
+ * Display context for a project whose machine has been soft-deleted —
+ * served by `GET /projects/removed`, which is the ONLY endpoint that
+ * surfaces tombstoned machines at all.
+ *
+ * Deliberately not a `ProjectDTO`: these rows must never reach the
+ * stores that drive the sidebar or any action (fs/git/terminal 404 on
+ * a deleted machine's project). They exist so a session whose machine
+ * is gone can still say *where it ran* — its history is fully readable,
+ * since every transcript read is user-scoped and joins no machine.
+ *
+ * `machineName` is the pre-delete display name: `removeMachine`
+ * suffixes the `@unique` `Machine.name` with a tombstone marker, and
+ * the server strips it back off here rather than leaking the internal
+ * form to the UI.
+ */
+export interface RemovedProjectDTO {
+  /** Project row id — the join key against `SessionDTO.projectId`. */
+  id: string;
+  machineId: string;
+  workingDir: string;
+  /** User-picked project label; null = derive basename(workingDir). */
+  name: string | null;
+  machineName: string;
+}
+
 
 export interface SessionDTO {
   id: string;

@@ -3,6 +3,7 @@ import type { CommandDTO, MachineDTO, ResultChunkDTO, SessionDTO } from '@argus/
 import { ChevronDown, Cpu, Folder, Info } from 'lucide-react';
 import { AgentTypeIcon } from './ui/AgentTypeIcon';
 import { StatusDot } from './ui/StatusDot';
+import { RemovedTag } from './ui/RemovedTag';
 import { FileTree } from './FileTree';
 import { GitLogPanel } from './GitLogPanel';
 import { SessionModelChip } from './SessionModelChip';
@@ -11,7 +12,7 @@ import { ProgressPane } from './ProgressPane';
 import { DiffPane } from './DiffPane';
 import { TerminalPane } from './TerminalPane';
 import { cn, relativeTime } from '../lib/utils';
-import { basename, useProjectRef } from '../lib/projects';
+import { originLabel, useProjectRef, useSessionOrigin } from '../lib/projects';
 import { useProjectStore, projectKey } from '../stores/projectStore';
 import { useMachineStore } from '../stores/machineStore';
 import { useSessionModel } from '../lib/usage';
@@ -37,9 +38,15 @@ export function ContextPane({ session, commands, chunks }: Props) {
   // retired (Phase 4). The session's pinned projectId resolves to a
   // (machineId, workingDir) pair via the hydrated project rows; the
   // machine row supplies reachability + version metadata that used to
-  // live on the agent. Null projectRef (panes hidden) only for
-  // workdir-less sessions or during the boot race before rows hydrate.
+  // live on the agent. Null projectRef (panes hidden) for workdir-less
+  // sessions, during the boot race before rows hydrate, and for a
+  // soft-deleted machine — fs/git/terminal all 404 there, so the panes
+  // MUST stay shut.
   const projectRef = useProjectRef(session);
+  // …but the header still names where the session ran, which is the one
+  // thing a deleted machine's history could not say before. Display
+  // only: never let this reach a pane or an action.
+  const origin = useSessionOrigin(session);
   const projectRows = useProjectStore((st) => st.projects);
   const machine = useMachineStore((st) =>
     projectRef ? st.machines[projectRef.machineId] : undefined,
@@ -47,7 +54,7 @@ export function ContextPane({ session, commands, chunks }: Props) {
   const projectRow = projectRef
     ? projectRows[projectKey(projectRef.machineId, projectRef.workingDir)]
     : undefined;
-  const workingDir = projectRef?.workingDir ?? null;
+  const workingDir = origin?.workingDir ?? null;
   const cliType = session?.cliType ?? null;
   // Terminal capability lives on the Project row (the terminal
   // switchover migrated it off terminal-capable agents), so the
@@ -100,9 +107,11 @@ export function ContextPane({ session, commands, chunks }: Props) {
 
   // Pane identity line: the project (its user label, else the cwd
   // basename), falling back to the machine or the session title for
-  // workdir-less sessions. The status dot + subtitle track the machine.
-  const title =
-    projectRow?.name || (workingDir ? basename(workingDir) : machine?.name || session.title);
+  // workdir-less sessions. The status dot + subtitle track the machine —
+  // except on a removed one, where there's no live row and the tag
+  // stands in for a status that no longer exists.
+  const title = origin ? originLabel(origin) : machine?.name || session.title;
+  const machineLine = origin?.machineName ?? machine?.name ?? null;
 
   return (
     <aside className="flex h-full w-full flex-col border-l border-default bg-surface-0">
@@ -118,9 +127,13 @@ export function ContextPane({ session, commands, chunks }: Props) {
               <span className="truncate text-sm font-semibold tracking-tight text-fg-primary">
                 {title}
               </span>
-              <StatusDot status={machine?.status ?? 'offline'} className="shrink-0" />
+              {origin?.removed ? (
+                <RemovedTag />
+              ) : (
+                <StatusDot status={machine?.status ?? 'offline'} className="shrink-0" />
+              )}
             </div>
-            <div className="truncate text-[11px] text-fg-tertiary">{machine?.name ?? '—'}</div>
+            <div className="truncate text-[11px] text-fg-tertiary">{machineLine ?? '—'}</div>
           </div>
           {/* Session-default model picker — sets what the NEXT turn will
               use; the `model` line below shows what the last turn ran on. */}
