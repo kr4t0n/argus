@@ -15,7 +15,7 @@ import { StreamViewer } from './StreamViewer';
 import { Composer } from './Composer';
 import { ContextPane } from './ContextPane';
 import { FileTabStrip } from './FileTabStrip';
-import { useProjectRef } from '../lib/projects';
+import { useProjectRef, useSessionOrigin } from '../lib/projects';
 import { useFileTabAutoRefresh } from '../lib/useFileTabAutoRefresh';
 import { useGlobalHotkey } from '../lib/useGlobalHotkey';
 import { useTypeToFocus } from '../lib/useTypeToFocus';
@@ -52,10 +52,20 @@ export function SessionPanel() {
   // workdir-less session) degrades to "enabled" since the server routes
   // by projectId regardless of what the client knows.
   const projectRef = useProjectRef(entry?.session);
+  const origin = useSessionOrigin(entry?.session);
   const machine = useMachineStore((s) =>
     projectRef ? s.machines[projectRef.machineId] : undefined,
   );
   const machineOffline = machine?.status === 'offline';
+  // A soft-deleted machine has NO machine row, so `machineOffline` reads
+  // false and the composer used to render enabled — you could type a
+  // turn and send it at a host that no longer exists, for the server to
+  // refuse (`resolveRouting` returns null for a tombstone). The origin
+  // is the only thing that still knows, so the gate asks it too. This
+  // deliberately does not widen to "no origin": a workdir-less session
+  // has none either, and its composer behaviour is unrelated.
+  const machineRemoved = origin?.removed === true;
+  const composerBlocked = machineOffline || machineRemoved;
   // The queued follow-ups for this session are drained app-wide by
   // `useQueueDrainer` (see App.tsx), so they keep sending even when this
   // panel isn't open — no per-panel flush here anymore.
@@ -466,13 +476,15 @@ export function SessionPanel() {
             onSend={onSend}
             onCancel={onCancel}
             running={running}
-            disabled={machineOffline}
+            disabled={composerBlocked}
             initial={draft}
             onChange={(v) => sessionId && setDraft(sessionId, v)}
             placeholder={
-              machineOffline
-                ? `${machine?.name ?? 'machine'} is offline`
-                : 'Request changes or ask a question…'
+              machineRemoved
+                ? `${origin?.machineName ?? 'this machine'} was removed — history is read-only`
+                : machineOffline
+                  ? `${machine?.name ?? 'machine'} is offline`
+                  : 'Request changes or ask a question…'
             }
           />
         )}

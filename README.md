@@ -451,14 +451,23 @@ restart without waiting for the server's reconcile broadcast.
 
 To remove a machine from the dashboard, open its panel and use the
 **delete** button (works at any status). This is a **soft delete**: the
-machine disappears from the dashboard, but nothing is destroyed — every
-session, command, and result stays in the database and remains viewable
-in your session
-history. The removal is sticky: even if that machine's sidecar keeps
-running or restarts, the server ignores it and the machine will not
-reappear. There is no un-delete from the UI, so the confirmation is
-final; the sidecar process itself is left untouched (stop it with
-`argus-sidecar stop` on the host if you also want to retire it).
+machine disappears from the dashboard along with its projects, but
+nothing is destroyed — every session, command, and result stays in the
+database.
+
+Reach that history through **search** (`⌘K` for content, `⌘P` to switch
+sessions): those sessions still list, still name the project and host
+they ran on, and open with their full transcript. They're marked
+**removed** and are read-only — the composer is disabled, and the file,
+git and terminal panes stay shut, because the host is gone.
+
+The removal is sticky: even if that machine's sidecar keeps running or
+restarts, the server ignores it and the machine will not reappear. There
+is no un-delete from the UI, so the confirmation is final; the sidecar
+process itself is left untouched (stop it with `argus-sidecar stop` on
+the host if you also want to retire it). Re-running `argus-sidecar init
+--force` on that host mints a **new** machine identity, so it rejoins as
+a fresh machine — the old sessions stay attached to the removed one.
 
 To upgrade an installed sidecar in place to the latest published release
 for its OS/arch, run:

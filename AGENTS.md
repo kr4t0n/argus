@@ -145,7 +145,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   projects. Exposes REST (`GET /machines`, `DELETE /machines/:id`,
   `GET /machines/:id/models`) and emits `machine:upsert` /
   `machine:status` / `machine:removed` over WS. Command dispatch gates on
-  machine status (`command.service.ts`). The machine-heartbeat is the
+  machine status (`command.service.ts`) and on the soft-delete tombstone
+  (`resolveRouting` returns null for it). The machine-heartbeat is the
   only presence signal — runner sidecars have no per-agent heartbeats.
 - `project/` — server-side metadata for "projects" (the
   `(machineId, workingDir)` pair the sidebar groups sessions
@@ -1339,6 +1340,36 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Gotchas
 
+- **`ProjectRef` addresses, `SessionOrigin` describes — don't cross the
+  streams.** Both answer "where does this session live", and conflating
+  them is how a deleted machine's session grows controls that cannot
+  work. `useProjectRef` resolves a LIVE project and is what fs, git,
+  terminal, the model chip and dispatch route through; it returns null
+  for a soft-deleted machine and every pane gated on it correctly stays
+  shut. `useSessionOrigin` is display-only and additionally resolves
+  from `removedContextStore`, so a tombstoned machine can still be
+  *named* in a search row or a pane header. Never feed an origin to a
+  routing path. The symptom this fixed: `machineOffline` was
+  `machine?.status === 'offline'`, which is `false` when the machine row
+  is missing entirely, so the composer rendered enabled on a deleted
+  machine and invited a turn the server then refused.
+- **Tombstone guard: check `deletedAt`, never infer it from
+  `status: 'offline'`.** Turn dispatch on a soft-deleted machine was
+  blocked only *transitively*: `removeMachine` forces the tombstone
+  `status` to `offline`, nothing can flip it back (the heartbeat
+  `updateMany` and the `machine-register` early-`break` both filter on
+  `deletedAt`), and `dispatch` rejects offline machines. Correct in
+  practice, but `resolveRouting` selected `machine: { status: true }` and
+  never saw `deletedAt`, so the safety property rested on two facts with
+  nothing local stating the dependency — preserving last-known status on
+  the tombstone, or adding any status write that skipped the `deletedAt`
+  filter, would have silently reopened dispatch to deleted machines.
+  `resolveRouting` now selects `deletedAt` and returns null. Prefer the
+  same shape anywhere else that reasons about machine liveness: the
+  tombstone is the invariant, `offline` is a consequence of it.
+  Returning null (rather than a routing with a "deleted" flag) is what
+  makes `fork` and `cancel` inherit the guard for free — both already
+  treat null as "nothing to route".
 - **A chunk can arrive AFTER its own turn finalized — the live branch must
   be idempotent too.** The result ingestor's finalize branch has always
   been guarded (`updateMany ... status notIn TERMINAL_COMMAND_STATUSES`,
@@ -2224,6 +2255,26 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   can no longer resurrect it. The delete is terminal — there is no
   un-delete endpoint or UI. The periodic sweeper only flips stale machines
   to `offline` — it never reaps rows.
+  Two consumers close the loop on a delete. Server-side,
+  `SessionService.resolveRouting` returns null for a tombstoned machine,
+  which shuts dispatch, fork and cancel in one place (see the
+  "tombstone guard" gotcha for why this is checked directly instead of
+  inferred from the forced-offline status). Client-side, `machine:removed`
+  prunes `useProjectStore` via `removeForMachine` alongside the machine
+  row — the sidebar builds project rows from that store alone, so dropping
+  only the machine would leave orphans on screen until the next reload.
+  Sessions are deliberately NOT pruned: `GET /sessions` doesn't filter on
+  the machine tombstone, and ⌘K / search rendering them is what "history
+  stays viewable" after a delete actually rests on.
+  Those sessions are named by `GET /projects/removed` — the one endpoint
+  that surfaces tombstoned machines, feeding `removedContextStore` and
+  nothing else. It is a separate route rather than an `includeDeleted`
+  flag on `GET /projects` on purpose: tombstoned rows must never reach
+  `projectStore`, which drives the sidebar and every action, so the
+  dangerous direction is opt-in rather than opt-out. The fetch is
+  conditional (`ensureRemovedContext`) — it fires only when a listed
+  session's `projectId` resolves to no known project, so a fleet that
+  has never deleted a machine never issues it.
 - **Terminal == remote shell access**: ticking "attach interactive
   terminal" when creating a project/session lets *any* dashboard user
   spawn shells on that host as the sidecar daemon's UID. Treat this as

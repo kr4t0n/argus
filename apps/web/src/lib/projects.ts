@@ -1,5 +1,7 @@
-import type { MachineDTO, SessionDTO } from '@argus/shared-types';
-import { useProjectStore, type LocalProject } from '../stores/projectStore';
+import type { MachineDTO, RemovedProjectDTO, SessionDTO } from '@argus/shared-types';
+import { useMachineStore } from '../stores/machineStore';
+import { useProjectStore, projectKey, type LocalProject } from '../stores/projectStore';
+import { useRemovedContextStore } from '../stores/removedContextStore';
 
 /**
  * Everything the project-addressed read paths need (Phase 4 prep of
@@ -41,6 +43,85 @@ export function useProjectRef(
 ): ProjectRef | null {
   const projects = useProjectStore((s) => s.projects);
   return resolveProjectRef(session, projects);
+}
+
+/**
+ * Where a session ran, for DISPLAY only.
+ *
+ * The counterpart to `ProjectRef`, and the distinction is the whole
+ * point: a `ProjectRef` addresses a live project (fs, git, terminal,
+ * dispatch all route through it), while a `SessionOrigin` is just
+ * text. Only an origin can describe a session whose machine has been
+ * soft-deleted — those projects are gone from `projectStore`, and
+ * every action against them is refused server-side, so handing one to
+ * a routing path would surface controls that cannot work.
+ *
+ * `removed: true` means the machine is a tombstone. Render the names,
+ * never an action.
+ */
+export interface SessionOrigin {
+  machineId: string;
+  workingDir: string;
+  /** User-picked project label; null = derive basename(workingDir). */
+  projectName: string | null;
+  machineName: string | null;
+  removed: boolean;
+}
+
+/**
+ * Resolve a session's origin: live project rows first, then the
+ * tombstone context. Null only for workdir-less sessions, for the boot
+ * race before either source hydrates, and for a deleted machine whose
+ * context hasn't been fetched yet (see `ensureRemovedContext`) — so
+ * callers still need a fallback for "somewhere we can't name".
+ */
+export function resolveSessionOrigin(
+  session: Pick<SessionDTO, 'projectId'> | null | undefined,
+  projects: Record<string, LocalProject>,
+  machines: Record<string, MachineDTO>,
+  removed: Record<string, RemovedProjectDTO>,
+): SessionOrigin | null {
+  if (!session?.projectId) return null;
+
+  const ref = resolveProjectRef(session, projects);
+  if (ref) {
+    const row = projects[projectKey(ref.machineId, ref.workingDir)];
+    return {
+      machineId: ref.machineId,
+      workingDir: ref.workingDir,
+      projectName: row?.name || null,
+      machineName: machines[ref.machineId]?.name ?? null,
+      removed: false,
+    };
+  }
+
+  const tomb = removed[session.projectId];
+  if (tomb) {
+    return {
+      machineId: tomb.machineId,
+      workingDir: tomb.workingDir,
+      projectName: tomb.name,
+      machineName: tomb.machineName,
+      removed: true,
+    };
+  }
+  return null;
+}
+
+/** Hook flavor of resolveSessionOrigin, subscribed to all three sources. */
+export function useSessionOrigin(
+  session: Pick<SessionDTO, 'projectId'> | null | undefined,
+): SessionOrigin | null {
+  const projects = useProjectStore((s) => s.projects);
+  const machines = useMachineStore((s) => s.machines);
+  const removed = useRemovedContextStore((s) => s.byProjectId);
+  return resolveSessionOrigin(session, projects, machines, removed);
+}
+
+/** The label a project row shows: its user-picked name, else the cwd
+ *  basename. Shared so search rows and the context pane agree. */
+export function originLabel(origin: SessionOrigin): string {
+  return origin.projectName || basename(origin.workingDir);
 }
 
 export function basename(path: string): string {

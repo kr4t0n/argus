@@ -1,10 +1,10 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { Project } from '@prisma/client';
-import type { ProjectDTO } from '@argus/shared-types';
+import type { ProjectDTO, RemovedProjectDTO } from '@argus/shared-types';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { StreamGateway } from '../gateway/stream.gateway';
-import { MachineService } from '../machine/machine.service';
+import { MachineService, stripDeletedNameSuffix } from '../machine/machine.service';
 
 /**
  * First-class "project" rows — the (machineId, workingDir) pair the
@@ -38,6 +38,43 @@ export class ProjectService {
       orderBy: [{ machineId: 'asc' }, { workingDir: 'asc' }],
     });
     return rows.map(ProjectService.toDto);
+  }
+
+  /**
+   * Display context for projects whose machine has been soft-deleted —
+   * the inverse of `list()`'s filter, and the only place the API
+   * surfaces a tombstoned machine at all.
+   *
+   * Exists so a session can still say where it ran after its host is
+   * deleted. The transcript reads (`GET /sessions/:id`, its chunks and
+   * history) are user-scoped and join no machine, so that history stays
+   * fully readable; without this the UI could show it but not name it.
+   *
+   * Deliberately a separate route rather than an `includeDeleted` flag
+   * on `list()`: tombstoned rows must never reach the stores that drive
+   * the sidebar or any action (fs/git/terminal all 404 on a deleted
+   * machine). Keeping the default endpoints unconditionally clean makes
+   * that an opt-in mistake rather than an opt-out one.
+   */
+  async listRemoved(): Promise<RemovedProjectDTO[]> {
+    const rows = await this.prisma.project.findMany({
+      where: { machine: { deletedAt: { not: null } } },
+      select: {
+        id: true,
+        machineId: true,
+        workingDir: true,
+        name: true,
+        machine: { select: { name: true } },
+      },
+      orderBy: [{ machineId: 'asc' }, { workingDir: 'asc' }],
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      machineId: r.machineId,
+      workingDir: r.workingDir,
+      name: r.name ?? null,
+      machineName: stripDeletedNameSuffix(r.machine.name),
+    }));
   }
 
   /**
