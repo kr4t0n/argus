@@ -82,7 +82,7 @@ argus/
 
 ## Prerequisites
 
-- **Node.js** ≥ 20 and **pnpm** ≥ 10
+- **Node.js** ≥ 20 and **pnpm** ≥ 10 (only to build server/web from source)
 - **Go** ≥ 1.23 (only to build the sidecar locally)
 - **Docker** + Docker Compose (only for the bundled local stack)
 - **Postgres** 16+ and **Redis** 7+ if not using Compose
@@ -135,40 +135,6 @@ start a **session**.
 For long-lived installs, `argus-sidecar service install` writes and enables a
 systemd/launchd unit. See [INSTALLATION.md](INSTALLATION.md) for that, for
 pinning versions, and for updating a fleet.
-
-### 3. Local development without Docker
-
-```bash
-pnpm install
-
-# Data plane only
-docker compose -f deploy/docker-compose.yml up postgres redis -d
-
-# Server (NestJS, watch mode)
-pnpm --filter @argus/server exec prisma migrate dev
-pnpm --filter @argus/server dev
-
-# Web (Vite)
-pnpm --filter @argus/web dev
-
-# Sidecar
-cd packages/sidecar
-go run ./cmd/sidecar init --bus redis://localhost:6379 --server http://localhost:4000
-go run ./cmd/sidecar
-```
-
-## Common tasks
-
-| What you want                        | Command                                                |
-| ------------------------------------ | ------------------------------------------------------ |
-| Typecheck everything                 | `pnpm typecheck`                                       |
-| Build everything                     | `pnpm build`                                           |
-| Apply a Prisma migration             | `pnpm --filter @argus/server exec prisma migrate dev`  |
-| Re-seed the admin user               | `pnpm --filter @argus/server seed`                     |
-| List adapters compiled into sidecar  | `argus-sidecar --list-adapters`                        |
-| Re-init sidecar config               | `argus-sidecar init --force`                           |
-| Print the sidecar's version          | `argus-sidecar version`                                |
-| Open Prisma Studio                   | `pnpm --filter @argus/server exec prisma studio`       |
 
 ## Environment variables
 
