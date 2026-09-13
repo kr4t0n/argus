@@ -4,6 +4,57 @@ This file is the high-level map for AI agents (and humans) contributing to
 **Argus**. Read it before making non-trivial changes; keep it in sync with the
 actual code.
 
+## Local development
+
+The README covers deploying Argus; this is how to *work on* it. Run the
+data plane in Docker and everything else natively, so server and web keep
+their watch modes:
+
+```bash
+pnpm install
+
+# Data plane only — Postgres + Redis
+docker compose -f deploy/docker-compose.yml up postgres redis -d
+
+# Server (NestJS, watch mode)
+pnpm --filter @argus/server exec prisma migrate dev
+pnpm --filter @argus/server dev
+
+# Web (Vite)
+pnpm --filter @argus/web dev
+
+# Sidecar
+cd packages/sidecar
+go run ./cmd/sidecar init --bus redis://localhost:6379 --server http://localhost:4000
+go run ./cmd/sidecar
+```
+
+| What you want                       | Command                                               |
+| ----------------------------------- | ----------------------------------------------------- |
+| Typecheck everything                | `pnpm typecheck`                                      |
+| Build everything                    | `pnpm build`                                          |
+| Sidecar tests                       | `cd packages/sidecar && go test ./...`                |
+| Apply a Prisma migration            | `pnpm --filter @argus/server exec prisma migrate dev` |
+| Re-seed the admin user              | `pnpm --filter @argus/server seed`                    |
+| List adapters compiled into sidecar | `argus-sidecar --list-adapters`                       |
+| Re-init sidecar config              | `argus-sidecar init --force`                          |
+| Open Prisma Studio                  | `pnpm --filter @argus/server exec prisma studio`      |
+
+**Verify with `pnpm typecheck` and `pnpm build`** — those two, plus
+`go test ./...` and `go test -race ./...` in the sidecar, are exactly what
+CI runs. There is no TypeScript test suite; the only automated tests in
+the repo are the sidecar's Go tests. So for anything on the web or server
+side, typecheck plus a manual pass in the UI *is* the verification, and
+saying so beats implying coverage that doesn't exist.
+
+**Do not run `pnpm lint`.** The `lint` scripts in `apps/web` and
+`apps/server` invoke `eslint`, which is declared in no `package.json` and
+installed nowhere — the command dies with `spawn ENOENT`, which reads like
+a broken environment rather than a missing tool. Nothing enforces
+formatting either: Prettier is a root devDependency but no hook or CI step
+runs it, so `prettier --write` across the repo produces a large unrelated
+diff. Match the surrounding file's style by hand instead.
+
 ## Mental model
 
 > **Status: the agent→runner refactor is complete** (docs/plan-agent-to-runners.md).
