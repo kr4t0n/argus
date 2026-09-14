@@ -811,6 +811,26 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   tables (`MTMathAtomFactory` + `MTMathListBuilder` string literals)
   rather than assuming KaTeX parity — `\atop` is supported, `\array`
   and `\substack` are not.
+- `lib/mermaid.ts` — lazy mermaid renderer for ```` ```mermaid ````
+  fences, built in the same shape as `lib/shiki.ts`: a module singleton
+  behind a dynamic `import()`, so the library stays out of the main
+  bundle until a response actually contains a diagram. Verified: the
+  entry chunk grows 1.92 kB raw / 0.65 kB gzip, and mermaid lands in its
+  own lazily-imported chunks (`mermaid.core` ~147 kB gzip plus one per
+  diagram type — a flowchart never pulls cytoscape). We render to an SVG
+  string and inject it rather than routing through `HtmlPreview`: the
+  iframe path would need mermaid off a CDN (breaking the air-gapped
+  installs the Helm chart targets) or the whole library inlined into
+  every `srcDoc`, re-parsed on each token while the answer streams.
+  `securityLevel: 'strict'` is what makes injecting model-generated
+  markup acceptable — mermaid DOMPurify-sanitizes its output and
+  disables HTML labels and `click` bindings. **Never relax it to
+  'loose'** for transcript content. GOTCHA: mermaid's config is a
+  module-level global, not a per-render argument, so renders are
+  serialized through one promise chain; two diagrams under different
+  themes would otherwise race on it. GOTCHA: mermaid measures text to
+  size nodes, so `fontFamily` has to match tailwind's `font-sans` or
+  boxes come out visibly mis-fitted to their labels.
 - `stores/` — Zustand slices: `authStore`, `machineStore`, `sessionStore`,
   `projectStore`, `uiStore` (no `agentStore` — it was deleted with the
   Agent entity). Sessions are stored by id with their full `chunks`
@@ -820,10 +840,26 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   command, concatenates `delta`s, renders tool pills, stdout, errors, and a
   cursor while running. Final-answer markdown is rendered with the shared
   plugin sets from `lib/markdown.ts` (GFM + KaTeX math) and with
-  `MarkdownCodeBlock` as the custom `<pre>` renderer; that component
-  detects ```` ```html ```` fenced blocks and renders them through the
-  shared `HtmlPreview` component, defaulting to the rendered view with
-  a Source toggle. `HtmlPreview` has two sandbox postures keyed off its
+  `MarkdownCodeBlock` as the custom `<pre>` renderer. That component
+  gives two fence languages a rendered view with a Source toggle,
+  defaulting to rendered: ```` ```html ```` goes through the shared
+  `HtmlPreview` component, and ```` ```mermaid ```` through
+  `MermaidBlock` (see `lib/mermaid.ts`). Anything else is a plain
+  `<pre>` with the copy button. NOTE: `sourceText` is extracted for
+  *every* renderable language, not just HTML — the copy button falls
+  back to it whenever the rendered view has unmounted the `<pre>`, so
+  adding a third language means widening that memo too.
+  `MermaidBlock` is built around the fact that a fence streams in token
+  by token: renders are debounced (~200 ms), a failed parse keeps the
+  last good diagram rather than clearing it, and before anything parses
+  it renders the ordinary `<pre>` instead. So a streaming block reads as
+  source and snaps into a diagram when it completes, and a malformed one
+  just stays source — there is deliberately no error state, matching how
+  invalid TeX renders as visible source instead of throwing. GOTCHA:
+  React's `useId()` emits ids like `:r3:` and mermaid feeds the id
+  straight to `querySelector`, where the leading `:` parses as a
+  pseudo-class and throws — `MermaidBlock` strips them.
+  `HtmlPreview` has two sandbox postures keyed off its
   `autoHeight` prop. `FileViewer` (`.html` files) uses the strict
   `sandbox=""`: opaque origin, no scripts, sized by its container —
   remote-tree file content stays fully inert. The chat code-block path

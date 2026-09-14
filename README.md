@@ -35,7 +35,8 @@ token-level streaming with reconnect-safe replay.
 
 - **Streaming-first UI** — typewriter deltas, tool-call pills, stdout/stderr
   blocks, sticky auto-scroll and replay-on-reconnect. GFM markdown plus LaTeX
-  math.
+  math, with `html` and `mermaid` code fences rendered live (HTML in a
+  sandboxed frame, Mermaid as an inline diagram) behind a Source toggle.
 - **Multi-machine by default** — each host runs one `argus-sidecar` daemon that
   self-registers as a *Machine* and starts one runner per installed CLI. No YAML
   to ship to remote boxes.
