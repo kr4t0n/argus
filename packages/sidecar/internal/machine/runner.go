@@ -147,6 +147,11 @@ func (r *runner) stop() {
 	if r.cmdCancel != nil {
 		r.cmdCancel()
 	}
+	if closer, ok := r.adapter.(adapter.Closer); ok {
+		if err := closer.Close(); err != nil {
+			r.log.Printf("runner %s: adapter close failed: %v", r.cliType, err)
+		}
+	}
 	<-r.doneCh
 }
 
@@ -208,10 +213,13 @@ func (r *runner) dispatchCommand(ctx context.Context, wg *sync.WaitGroup, cmdStr
 	}
 
 	if cmd.Kind == "cancel" {
+		// Native transports (notably Codex app-server) need the live turn
+		// context long enough to accept their interrupt request. Cancel the
+		// adapter first, then release any context-bound setup work.
+		_ = r.adapter.Cancel(ctx, cmd.ID)
 		if c, ok := r.cancels.Load(cmd.ID); ok {
 			c.(context.CancelFunc)()
 		}
-		_ = r.adapter.Cancel(ctx, cmd.ID)
 		_ = r.bus.Ack(ctx, cmdStream, group, m.msgID)
 		return
 	}

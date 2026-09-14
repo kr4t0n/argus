@@ -27,6 +27,29 @@ const CONSUMER = 'server-1';
 const STALE_AFTER_MS = 30_000;
 const SWEEP_INTERVAL_MS = 15_000;
 
+/**
+ * `Machine.name` is `@unique`, so a soft-delete has to free the human
+ * name for a future fresh install — `removeMachine` suffixes the
+ * tombstone with the delete timestamp.
+ *
+ * Construction and removal live together so the pair can't drift: the
+ * regex matches exactly what `deletedNameSuffix` writes (a `Date`
+ * ISO-8601 string is always `YYYY-MM-DDTHH:mm:ss.sssZ`), so it can
+ * never eat a legitimate operator-chosen name. Stripping matters
+ * because `GET /projects/removed` shows these names in the UI, and
+ * the suffix is an internal uniqueness device, not something a user
+ * should read.
+ */
+const DELETED_NAME_SUFFIX_RE = / \(deleted \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\)$/;
+
+export function deletedNameSuffix(at: Date): string {
+  return ` (deleted ${at.toISOString()})`;
+}
+
+export function stripDeletedNameSuffix(name: string): string {
+  return name.replace(DELETED_NAME_SUFFIX_RE, '');
+}
+
 /** Event kinds whose handlers do no DB work — RPC responses resolve a
  *  requestId-keyed pending promise, watcher nudges are pure WS emits.
  *  Handled before everything else in each batch: the FSService timers
@@ -279,7 +302,8 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         deletedAt: now,
         status: 'offline',
         // Free the unique display name for a future fresh install.
-        name: `${machine.name} (deleted ${now.toISOString()})`,
+        // `GET /projects/removed` strips this back off for display.
+        name: `${machine.name}${deletedNameSuffix(now)}`,
       },
     });
 

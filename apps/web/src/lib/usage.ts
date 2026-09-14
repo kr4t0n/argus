@@ -2,16 +2,17 @@ import { useMemo } from 'react';
 import type {
   AgentType,
   ContextWindowInfo,
+  ModelCatalogEntry,
   ResultChunkDTO,
   TokenUsage,
 } from '@argus/shared-types';
 import {
   ZERO_USAGE,
   hasUsage,
-  lookupContextWindow,
   parseContextUsage,
   parseModel,
   parseUsage,
+  resolveContextWindow,
   sumUsage,
 } from '@argus/shared-types';
 
@@ -100,30 +101,33 @@ export interface SessionContext {
  *
  * Returns the LATEST `final` chunk's prompt size — not the cumulative
  * sum across turns — because each CLI re-sends the full conversation
- * history on every turn (Claude Code `--resume`, Codex `resume`, Cursor
- * CLI `--resume`), so the most recent input-token count IS the live
+ * history on every turn (Claude Code `--resume`, Codex app-server
+ * `turn/start`, Cursor CLI `--resume`), so the most recent input-token count IS the live
  * context size from the model's perspective.
  *
  * Uses `parseContextUsage` (not `parseUsage`): for claude-code the final
  * chunk's top-level `usage` is the cumulative whole-turn aggregate, which
  * overcounts a tool-use turn by ~its number of API round-trips, so we read
- * the final single call from `usage.iterations[-1]` instead. codex and
- * cursor-cli still expose only a turn-level total in their final chunk —
- * their rings can likewise overcount on multi-call turns until those
- * adapters surface a per-call figure (tracked separately).
+ * the final single call from `usage.iterations[-1]` instead. Codex uses
+ * app-server's `tokenUsage.last`, preserved as `lastUsage`; cursor-cli still
+ * exposes only a turn-level total and can overcount multi-call turns.
  *
  * Returns `null` when:
  *   - the agent type is unknown (no parser to pick),
  *   - no `final` chunk has surfaced usage yet (mid-first-turn, all turns
  *     cancelled), or
- *   - the active model isn't in the context-window lookup table — better
- *     to hide the ring than show a misleading percentage against a
- *     guessed denominator.
+ *   - no window could be resolved for the active model — better to hide
+ *     the ring than show a misleading percentage against a guessed
+ *     denominator.
  *
- * Adapter-specific defaults: codex's `turn.completed` event currently
- * doesn't include a model name, so we assume `gpt-5.5` (400k window)
- * for the lookup when detection fails. Other adapters reliably carry
- * the model in `system`/`init` events and don't need a fallback.
+ * The denominator comes from `resolveContextWindow`: what the turn itself
+ * reported (`meta.modelContextWindow`) first, then the agent's model
+ * catalog, then the static table.
+ *
+ * Adapter-specific defaults: if a Codex transcript predates the app-server
+ * transport's resolved-model progress metadata, assume `gpt-5.5` (272k
+ * window per `codex debug models`). Other adapters reliably carry a model
+ * and need no fallback.
  *
  * Memoized on (chunks reference, agentType) — same dependency shape as
  * `useSessionUsage` so the recompute fires exactly when a chunk lands.
@@ -131,12 +135,31 @@ export interface SessionContext {
 export function useSessionContext(
   chunks: ResultChunkDTO[],
   agentType: AgentType | undefined,
+  catalog?: ModelCatalogEntry[] | null,
 ): SessionContext | null {
   const detected = useSessionModel(chunks);
   return useMemo(() => {
     if (!agentType) return null;
     const model = detected ?? (agentType === 'codex' ? 'gpt-5.5' : null);
-    const info: ContextWindowInfo | null = lookupContextWindow(model);
+    // What the turn itself reported, if anything. Scanned separately from
+    // the `used` walk below because the newest context signal may be a
+    // compact_boundary (a progress chunk, which carries no window), and we
+    // still want the window off the newest final.
+    let reportedWindow = 0;
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      const c = chunks[i];
+      if (c.kind !== 'final') continue;
+      const w = ((c.meta ?? {}) as Record<string, unknown>).modelContextWindow;
+      const n = typeof w === 'number' ? w : typeof w === 'string' ? Number(w) : NaN;
+      if (Number.isFinite(n) && n > 0) {
+        reportedWindow = n;
+        break;
+      }
+    }
+    // Reported window first (per-thread and usable-ceiling aware), then the
+    // agent's catalog, then the static table for transcripts whose machine
+    // is gone.
+    const info: ContextWindowInfo | null = resolveContextWindow(model, catalog, reportedWindow);
     if (!info) return null;
 
     // Walk backward for the newest context signal: a usage-bearing
@@ -172,7 +195,7 @@ export function useSessionContext(
 
     const percent = Math.min(100, Math.max(0, (used / info.window) * 100));
     return { used, window: info.window, percent, family: info.family };
-  }, [chunks, agentType, detected]);
+  }, [chunks, agentType, detected, catalog]);
 }
 
 /** k/M short form for token counts. Used by the compact header badge

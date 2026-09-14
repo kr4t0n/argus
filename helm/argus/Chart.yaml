@@ -12,14 +12,36 @@ type: application
 # field — see helm-publish.yml. Prerelease versions (-rc.N) are hidden
 # from plain `helm search`/`helm upgrade`; install them with
 # `--version 0.2.7-rc.3` (or `--devel`).
-version: 0.3.4
+version: 0.3.5
 # App version tracks the Docker image tags pulled by default. Bump in
 # lockstep with `version` whenever the chart starts requiring features
 # only present in newer images; otherwise it can lag.
 #
-# 0.3.4 is a control-plane PATCH with no schema change and no sidecar
-# change — a drop-in over 0.3.3, and the sidecar stays at v0.3.3.
-# appVersion pins the 0.3.4 server/web images.
+# 0.3.5 is a control-plane release with NO schema change and no
+# migration — `schema.prisma` and `prisma/migrations/` are byte-identical
+# to 0.3.4, so first boot is normal speed and rollback needs no snapshot.
+# appVersion pins the 0.3.5 server/web images. No chart templates changed;
+# `version` moves only to keep it in lockstep with the app.
+#
+# Unlike 0.3.4, THE SIDECAR MOVES TOO — cut and roll out
+# argus-sidecar v0.3.5. Codex turns migrate to the app-server transport,
+# the binary can install its own systemd/launchd unit, and the updater
+# resolves releases without the GitHub REST API. Wire compatibility is
+# intact (`internal/protocol/protocol.go` is unchanged), so an
+# un-updated sidecar still talks to a 0.3.5 server — it just won't have
+# the new Codex transport or the installer.
+#
+# Control-plane highlights: keyboard bindings consolidated into one
+# registry (⌘D archive, ⌘. cancel, ⌘B sidebar, ⌘/ overlay, type-anywhere
+# to focus the composer); per-project usage breakdown and a time-sliced
+# activity wall; the context-window ring resolves its denominator from
+# the model catalog, preferring the turn-reported window. Machine
+# soft-delete is hardened: turn routing now checks the tombstone directly
+# rather than inferring it from the forced-offline status (closing
+# dispatch, fork and cancel at once), deleting a machine prunes its
+# project rows from the sidebar instead of leaving orphans until reload,
+# and a deleted machine's sessions keep their project/host names in
+# search via `GET /projects/removed`, marked read-only.
 #
 # Fixes one bug that silently swallowed turns. A CLI that restarts
 # mid-turn emits a `result` for the abandoned inner run, and the result
@@ -190,7 +212,7 @@ version: 0.3.4
 # 0.2.0 shipped file/image attachments — the default images include the
 # attachment module, so `objectStore` works out of the box (set the
 # endpoint + bucket + creds to enable it).
-appVersion: "0.3.4"
+appVersion: "0.3.5"
 
 home: https://github.com/kr4t0n/argus
 sources:

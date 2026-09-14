@@ -1,7 +1,7 @@
 # Argus — Installation Guide
 
 This guide walks through a fresh, production-style install of Argus from
-zero to a working dashboard with one or more remote agents reporting in.
+zero to a working dashboard with one or more remote machines reporting in.
 
 The install splits into two halves:
 
@@ -58,7 +58,8 @@ if you'll enable the interactive terminal feature
 
 ### Step 1: Provision Postgres
 
-Argus stores users, agents, sessions, and command history in Postgres.
+Argus stores users, machines, projects, sessions, and command history in
+Postgres.
 You can either run a Postgres container on the same host as the server
 or point at a managed service. Pick one.
 
@@ -292,7 +293,7 @@ for the full values reference and ingress recipes.
 
 Open `http://<host>:5173` (or your proxied domain). Sign in with the
 `ADMIN_EMAIL` / `ADMIN_PASSWORD` you set. The sidebar will be empty —
-that's expected; agents only show up after at least one sidecar has
+that's expected; machines only show up after at least one sidecar has
 registered. On to Part 2.
 
 ---
@@ -303,24 +304,25 @@ A sidecar is one Go binary you run on each machine that may host one
 or more CLI agents. It does four things:
 
 1. Registers itself as a *Machine* with the server on boot and reports
-  which CLI adapters it found on `PATH` (so the dashboard's "create
-   agent" dropdown shows only what's actually installed).
-2. Subscribes to a per-machine Redis control stream and spawns /
-  destroys agent supervisors as the dashboard creates / removes them.
-3. Consumes per-agent commands from Redis Streams, executes them via
-  the local CLI, and streams results back.
-4. Optionally hosts a PTY per agent for the interactive terminal in
+  which CLI adapters it found on `PATH` (so the dashboard's new-session
+   picker shows only what's actually installed).
+2. Starts one **runner** per installed CLI type and keeps it subscribed
+  to that runner's Redis command stream.
+3. Executes each turn via the local CLI in the session's pinned working
+  directory, and streams results back.
+4. Optionally hosts a PTY per project for the interactive terminal in
   the dashboard.
 
-You install **one sidecar per machine**, regardless of how many agents
-you plan to run on it. A single Mac running both `claude` and `codex`
-runs one daemon and creates two agents on it from the dashboard. A
-fleet of five build boxes runs five daemons (one each), and you create
-agents on whichever fleet member you want.
+You install **one sidecar per machine**, regardless of how many CLIs or
+projects you plan to run on it. A single Mac with both `claude` and
+`codex` installed runs one daemon and starts two runners. A fleet of
+five build boxes runs five daemons (one each), and you create projects
+and sessions on whichever fleet member you want.
 
 ### Step 5: Install the binary
 
-Three ways to get the binary onto the agent machine. Pick whichever fits.
+Three ways to get the binary onto the agent machine — pick whichever
+fits — plus how it upgrades itself once it's there (Option D).
 
 #### Option A — One-line installer (recommended)
 
@@ -331,7 +333,7 @@ curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.s
 This script:
 
 1. Detects your OS (`darwin`/`linux`) and arch (`amd64`/`arm64`).
-2. Resolves the latest `argus-sidecar-v*` release via the GitHub API.
+2. Resolves the newest **stable** `argus-sidecar-v*` release.
 3. Downloads the matching binary **and** the release's
   `SHASUMS256.txt`, verifies the SHA-256 before installing.
 4. Drops the binary in `/usr/local/bin` (or `$HOME/.local/bin` if that
@@ -350,10 +352,24 @@ curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.s
 curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh \
   | ARGUS_INSTALL_DIR=/opt/argus/bin sh
 
+# Take the newest -rc/-alpha/-beta instead of the newest stable
+curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh \
+  | ARGUS_PRERELEASE=1 sh
+
 # Private repo — pass a GitHub token (PAT or `gh auth token`)
 curl -LsSf https://raw.githubusercontent.com/kr4t0n/argus/main/scripts/install.sh \
   | GITHUB_TOKEN=ghp_xxx sh
 ```
+
+**Fleet installs and rate limits.** By default the installer makes no
+`api.github.com` requests at all: it resolves the release from the
+repo's Atom feed and pulls assets from the `/releases/download/`
+redirect, neither of which counts against the REST API's 60
+requests-per-hour-per-IP budget. That budget is shared by every machine
+behind one NAT egress, so rolling out across a fleet used to fail
+partway through with a `403` that reads like an auth error. Setting
+`GITHUB_TOKEN` switches resolution back to the API, which is what a
+private repo needs and where 5000 req/h makes the quota moot.
 
 The installer is POSIX `sh` (no bashisms) and works on Alpine, Debian,
 RHEL, macOS — anywhere `curl` (or `wget`) and `sha256sum` (or
@@ -388,7 +404,8 @@ argus-sidecar version
 
 #### Option C — Build from source
 
-Useful if you want to bake in custom adapters. Requires Go 1.23+.
+Useful if you want to bake in custom adapters. Requires Go 1.25+ (see
+`packages/sidecar/go.mod`; CI builds on 1.25).
 
 ```bash
 git clone https://github.com/kr4t0n/argus.git
@@ -417,12 +434,23 @@ Once installed, the sidecar updates itself:
 argus-sidecar update              # downloads, sha256-verifies, atomic swap
 argus-sidecar update --prerelease # also consider pre-release tags
 argus-sidecar update --force      # reinstall even if already current
+argus-sidecar update --restart    # restart the running sidecar without asking
+argus-sidecar update --no-restart # never restart; just print the command
 argus-sidecar version             # print the baked-in tag
 ```
 
-The swap is atomic (`os.Rename` over the running executable). After
-updating, restart the running sidecar process so it picks up the new
-binary (see Step 7 for service-manager recipes).
+The swap is atomic (`os.Rename` over the running executable), which
+means anything already running keeps the old inode — and the old code —
+until it is replaced. So once the swap lands, `update` offers to restart
+whatever is running it: the service installed in Step 7 if there is one,
+otherwise a daemon backgrounded by `argus-sidecar start`. At a TTY it
+asks (default yes, warning that in-flight agent turns will be
+interrupted); with no TTY — cron, CI, a config-management run — it never
+blocks and prints the command instead. `--restart` / `--no-restart`
+decide up front. Nothing running means nothing to do.
+
+Like the installer, `update` resolves releases without touching
+`api.github.com` unless `GITHUB_TOKEN` is set.
 
 `update` also refreshes the `argus-bg` companion (the background-task
 progress wrapper) from the same release, so the two stay in lockstep. To
@@ -475,16 +503,17 @@ sudo argus-sidecar init \
 ```
 
 Re-running `init` over an existing config errors out by default. Pass
-`--force` to overwrite (you'll keep the same machine ID — agents
-created on this box stay attached).
+`--force` to overwrite. Note that `--force` mints a **new** machine ID:
+the host rejoins the dashboard as a fresh machine, and projects and
+sessions created under the old identity stay attached to it.
 
 #### What gets discovered
 
 On the next `argus-sidecar` boot the daemon probes `PATH` for every
 adapter it knows about (`claude`, `codex`, `cursor-agent`, …) and
 reports what it finds — adapter type, binary path, and `--version` —
-back to the server. The dashboard's "create agent" popover will then
-list only the adapters that actually exist on this host.
+back to the server. The dashboard's new-session picker will then list
+only the adapters that actually exist on this host.
 
 You don't pre-declare adapters or list them anywhere. Install the
 CLI you want exposed (`brew install claude`, `npm i -g @openai/codex`,
@@ -502,12 +531,13 @@ Or pass `-cache /full/path/sidecar.json` to either subcommand for an
 ad-hoc location (handy for system-wide installs at
 `/etc/argus/sidecar.json`).
 
-The file is small JSON — bus URL, server URL, machine name + ID, and
-the canonical agent list. It's safe to inspect and to back up. The
-agent list is rewritten every time the server pushes a `create-agent`
-or `destroy-agent` command, so a sidecar restart re-spawns every
-supervisor instantly without waiting for the server's reconcile
-broadcast.
+The file is small JSON — machine name + ID, bus URL, server link
+credentials, and the project workdir allowlist. It's safe to inspect and
+to back up. Everything else (host info, discovered adapters, sidecar
+version) is recomputed on every boot, so a binary upgrade or a system
+rename can't be driven from a stale snapshot. The allowlist is persisted
+so the file jail and the fs watchers come up on reboot without waiting
+for the server's reconcile broadcast.
 
 ### Step 7: Run the sidecar in the background
 
@@ -522,7 +552,49 @@ sidebar within ~1 second of startup. For production you want a
 service manager so the process survives reboots and restarts on
 crashes.
 
-#### macOS — launchd (recommended)
+#### Recommended — let the sidecar install its own unit
+
+```bash
+argus-sidecar service install
+```
+
+One command on both platforms: it renders the unit (systemd on Linux,
+launchd on macOS), writes it, reloads the manager, enables it and starts
+it. Verify with `argus-sidecar service status`; undo with
+`argus-sidecar service uninstall`.
+
+It renders from live state rather than from a template you have to edit,
+which removes the two failure modes the hand-written recipes below are
+prone to:
+
+- **`PATH`.** Adapter discovery is a `PATH` probe at boot. A service
+  manager's default `PATH` is a bare `/usr/bin:/bin` — no
+  `~/.local/bin`, no nvm shims, no Homebrew — so a unit that omits it
+  starts cleanly and then reports zero adapters. `install` bakes in the
+  `PATH` you invoked it with; `-path` overrides.
+- **The install target.** A systemd `--user` unit must be
+  `WantedBy=default.target`. `multi-user.target` is correct only for
+  system units, and a user unit carrying it never starts at login.
+
+Useful flags: `-dry-run` prints the unit without writing anything,
+`-system` installs system-wide (needs root; `-user-account` picks the
+account it runs as), `-cache` pins a cache path into `ExecStart`,
+`-no-start` writes and enables without starting.
+
+Scope defaults to per-user, which is almost always right: the sidecar
+spawns agent CLIs that read your credentials, config and `PATH`. The
+catch is that a user unit stops at logout unless lingering is enabled —
+`install` checks and prints the `loginctl enable-linger` command if it
+isn't.
+
+You do not have to remember to restart it after an upgrade:
+`argus-sidecar update` detects this service once it swaps the binary and
+offers to restart it (`--restart` / `--no-restart` to decide up front).
+
+The rest of this step documents what that command writes, for anyone who
+wants to customise it or install the unit by hand.
+
+#### macOS — launchd, by hand
 
 Drop the following at `~/Library/LaunchAgents/com.argus.sidecar.plist`
 (per-user) or `/Library/LaunchDaemons/...` (system-wide):
@@ -561,9 +633,11 @@ To restart after an `argus-sidecar update`:
 launchctl kickstart -k gui/$UID/com.argus.sidecar
 ```
 
-#### Linux — systemd
+#### Linux — systemd, by hand
 
-`/etc/systemd/system/argus-sidecar.service`:
+`/etc/systemd/system/argus-sidecar.service` (system-wide; for a `--user`
+unit put it at `~/.config/systemd/user/argus-sidecar.service`, drop the
+`User=` line and change `WantedBy` to `default.target`):
 
 ```ini
 [Unit]
@@ -574,7 +648,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=argus
-ExecStart=/usr/local/bin/argus-sidecar
+ExecStart=/usr/local/bin/argus-sidecar run
+# Required, not optional: without it systemd hands the daemon a bare
+# /usr/bin:/bin and adapter discovery finds none of the agent CLIs
+# installed under $HOME. List the dirs your CLIs actually live in.
+Environment="PATH=/home/argus/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -592,33 +670,47 @@ sudo journalctl -u argus-sidecar -f
 
 Restart after update: `sudo systemctl restart argus-sidecar`.
 
-#### Quick-and-dirty (non-production)
+#### Without a service manager
+
+The sidecar ships its own background mode, which is what you want for
+interactive use or a quick non-production install:
 
 ```bash
-nohup argus-sidecar >sidecar.log 2>&1 &
+argus-sidecar start      # detach; logs to ~/.local/state/argus/sidecar.log
+argus-sidecar status     # running pid, uptime, log + pidfile paths
+argus-sidecar restart    # graceful stop + start
+argus-sidecar stop       # SIGTERM, then SIGKILL after --timeout (default 10s)
 ```
 
-Survives the terminal but not a reboot. Useful for one-off testing only.
+State files live under `$XDG_STATE_HOME/argus/` (default
+`~/.local/state/argus/`); override with `--pid-file` / `--log-file`. Both
+this and the bare `argus-sidecar` take the same advisory `flock(2)` on
+the pidfile, so you can't accidentally run two daemons against one cache
+(which would share a `machineId` and confuse the server).
 
-### Step 8 — Verify and create your first agent
+This survives the terminal but not a reboot — use `service install` above
+for anything long-lived. The log is append-only; wire it into
+`logrotate` or `newsyslog` if you want rotation.
+
+### Step 8 — Verify and create your first session
 
 1. Refresh the dashboard. The bottom of the sidebar grows a
   **machines** section with your host listed (green dot when
    reachable).
-2. Hover the machine row and click the `+`. A popover appears with:
-  - **adapter** — pre-filtered to whatever the sidecar discovered on
-   `PATH`.
+2. Hover the machine row and click the `+` to create a **project**:
+  - **working dir** — the directory the CLI is launched in. It can't
+   change later, because the CLIs key their `--resume` state on the cwd.
   - **name** — what you'll see in the sidebar.
-  - **working dir** — optional `$CWD` for the wrapped CLI.
   - **attach interactive terminal** — opt-in PTY (see the next
   section).
-3. Click **create**. The agent appears in the sidebar within a
-  fraction of a second. Click it, then **+ new session**, and send a
-   prompt — the response streams back token-by-token, with tool-call
-   cards rendering inline.
+3. The project appears in the sidebar immediately. Hover it, click its
+   `+`, pick an **adapter** (pre-filtered to what the sidecar discovered
+   on `PATH`) and a name, then send a prompt — the response streams back
+   token-by-token, with tool-call cards rendering inline.
 
-Created agents are persisted on the sidecar in `sidecar.json`, so a
-daemon restart immediately re-spawns each agent's supervisor with no
+A session pins to its project and CLI type for life; the server routes
+each turn to that machine's runner for that CLI. Nothing is persisted on
+the sidecar except the workdir allowlist, so a daemon restart needs no
 operator action.
 
 If the machine never appears, jump to [Troubleshooting](#troubleshooting)
@@ -628,12 +720,12 @@ below.
 
 ## Optional: enable the interactive terminal
 
-The PTY is per-agent, ticked at agent-create time via the **attach
-interactive terminal** checkbox in the create-agent popover. When
-enabled, the dashboard grows a real PTY shell on that machine in the
-right-hand panel — full ANSI colors, resize, ctrl-C, usable for
-`vim` / `htop` / anything. Traffic flows over a direct sidecar↔server
-WebSocket (not Redis) so keystroke echo stays sub-10 ms.
+The PTY is per-project, ticked at project-create time via the **attach
+interactive terminal** checkbox. When enabled, the dashboard grows a
+real PTY shell on that machine in the right-hand panel — full ANSI
+colors, resize, ctrl-C, usable for `vim` / `htop` / anything. Traffic
+flows over a direct sidecar↔server WebSocket (not Redis) so keystroke
+echo stays sub-10 ms.
 
 > **This is remote shell access** under whichever user runs the sidecar
 > process. Only enable on hosts where every dashboard user is trusted
@@ -652,8 +744,8 @@ Defaults the sidecar enforces on the PTY:
 
 - Allowed shells: `$SHELL`, `/bin/bash`, `/bin/zsh`, `/bin/sh`.
 - Max concurrent open PTYs per sidecar: 16.
-- `cwd` defaults to the agent's `workingDir` (set when you created the
-agent), falling back to the daemon's own CWD.
+- `cwd` defaults to the project's `workingDir` (set when you created the
+project), falling back to the daemon's own CWD.
 
 These can be overridden with environment variables on the sidecar
 (`ARGUS_TERMINAL_SHELLS=/bin/zsh,/bin/bash` and
@@ -669,12 +761,96 @@ These can be overridden with environment variables on the sidecar
 | --------------- | ----------------------------------------------------------------------------------------- |
 | `argus-server`  | `docker compose pull server && docker compose up -d server`. Migrations apply on boot.    |
 | `argus-web`     | `docker compose pull web && docker compose up -d web`.                                    |
-| `argus-sidecar` | `argus-sidecar update` (downloads, verifies, atomic swap), then restart the service unit. |
+| `argus-sidecar` | `argus-sidecar update` (downloads, verifies, atomic swap, then offers to restart the running service). |
 | `argus-bg`      | Refreshed automatically by `argus-sidecar update`; or `argus-sidecar download-bg` to (re)install it on its own. |
 
 
 `:latest` follows `main`. For controlled upgrades, pin to `:X.Y.Z` in
 the compose file and bump explicitly.
+
+Server, web and sidecar ship as one release train — run the same minor
+version across all three. Breaking changes between minors are called out
+in the [GitHub release notes](https://github.com/kr4t0n/argus/releases);
+read them before jumping a minor.
+
+### Updating sidecars from the dashboard
+
+You don't have to SSH into every host. The same self-update runs
+remotely:
+
+- **Per-machine** — open a machine's pane (click its row in the sidebar's
+  machines list) and pick **Update sidecar** from the header kebab menu
+  (⋮). A green badge appears whenever a host is running a sidecar older
+  than the latest published release.
+- **Whole fleet** — hover the **machines** header in the sidebar and pick
+  **Update all sidecars…**. A modal previews which hosts will update,
+  which are current, and which are offline (and therefore skipped). The
+  run walks the fleet sequentially and stops on the first failure, so a
+  bad release can't cascade.
+
+The server publishes an `update-sidecar` command on the host's Redis
+control stream; the sidecar reuses its normal update flow, then brings up
+the new binary in whichever way fits how it was started — re-exec in
+place (preserving the pid and its pidfile lock), a clean exit for
+systemd/launchd to respawn, or a "restart needed" notice if it's attached
+to a TTY. Active sessions reconnect across the restart, terminals
+included. Set `GITHUB_TOKEN` in the server env so the release check
+doesn't hit the unauthenticated rate limit.
+
+### Removing a machine
+
+Open the machine's pane and use **delete** (works at any status). This is
+a **soft delete**: the machine and its projects disappear from the
+dashboard, but nothing is destroyed — every session, command and result
+stays in Postgres.
+
+Reach that history through search (`⌘K` for content, `⌘P` to switch
+sessions). Those sessions still list, still name the project and host
+they ran on, and open with their full transcript; they're marked
+**removed** and read-only.
+
+The removal is sticky — a sidecar that keeps running or restarts is
+ignored, so the machine will not reappear, and there is no un-delete in
+the UI. The sidecar process itself is untouched; stop it with
+`argus-sidecar stop` on the host if you're retiring it too. Running
+`argus-sidecar init --force` there mints a new machine identity, so it
+rejoins as a fresh machine and the old sessions stay with the removed one.
+
+---
+
+## API keys
+
+The REST API is normally reached with a JWT from `POST /auth/login`. For
+machine-to-machine callers, mint a **revocable API key** instead: it can
+be revoked without rotating `JWT_SECRET` (which would log out every
+user), and it can be restricted to read-only.
+
+Manage keys from the dashboard's user panel, or over REST:
+
+```bash
+TOKEN=$(curl -s -X POST "$API/auth/login" -H 'Content-Type: application/json' \
+  -d '{"email":"admin@argus.local","password":"…"}' | jq -r .token)
+
+# readonly defaults to true; pass "readonly": false for a read/write key
+curl -s -X POST "$API/auth/api-keys" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"name":"dashboard"}'
+# → {"id":"…","name":"dashboard","prefix":"argus_AbCd12","readonly":true,"key":"argus_…"}
+```
+
+The `key` is shown **once** — store it, it cannot be retrieved again.
+Then call the API with it in the `X-API-Key` header:
+
+```bash
+curl -s "$API/sessions" -H "X-API-Key: argus_…"           # 200 — reads work
+curl -s -X POST "$API/sessions" -H "X-API-Key: argus_…"   # 403 — read-only key
+```
+
+A read-only key is confined to `GET`/`HEAD`/`OPTIONS`. List keys with
+`GET /auth/api-keys` and revoke one with `DELETE /auth/api-keys/:id`
+(both JWT-only — an API key can't manage keys). A key acts as the user
+who created it, so per-user data stays scoped to that account; create a
+dedicated `viewer` user for an integration rather than tying it to your
+admin login.
 
 ---
 
@@ -702,15 +878,15 @@ Network/firewall. From the sidecar host: `redis-cli -u "$REDIS_URL" PING`.
 For Upstash / managed services, double-check you're using the `rediss://`
 scheme (TLS) and including the password.
 
-**Agent registers, but commands hang forever with no output.**
+**Machine registers, but turns hang forever with no output.**
 Almost always a TTY-prompt problem in the wrapped CLI. The built-in
 adapters set the right "skip approval prompts" flag by default
 (`--dangerously-skip-permissions` for claude,
 `--dangerously-bypass-approvals-and-sandbox` for codex, `--yolo` for
-cursor) so this should never bite a stock
-install — but if you create an agent with custom `adapter` overrides
-that disable those, the CLI will sit waiting for a TTY that doesn't
-exist. Drop the override or re-create the agent without it.
+cursor) so this should never bite a stock install — but a CLI
+configured to require approvals some other way (a global config file,
+a wrapper script on `PATH`) will sit waiting for a TTY that doesn't
+exist. Check the CLI runs non-interactively on that host by hand.
 
 **Terminal pane shows "disconnected" immediately.**
 `SIDECAR_LINK_TOKEN` mismatch between server and sidecar, or the sidecar
@@ -724,12 +900,38 @@ You're hitting the API at the phone's own `localhost`. The bundled
 reaching the dashboard via a hostname or LAN IP that's also reachable
 on `:4000`, not via `localhost:5173` from a different device.
 
-`**argus-sidecar update` says `404 Not Found` against a private repo.**
-The default Releases API rejects unauthenticated reads on private repos.
-Set `GITHUB_TOKEN=<a-PAT-with-repo-read>` in the sidecar's environment
-and re-run.
+**`argus-sidecar update` or the installer says `404 Not Found` against a
+private repo.**
+Neither the release feed nor the `/releases/download/` redirect is
+readable without credentials on a private repo. Set
+`GITHUB_TOKEN=<a-PAT-with-repo-read>` in the environment and re-run —
+that also switches resolution to the authenticated Releases API, which
+is the supported path for private repos.
+
+**Installing or updating fails with `403` and "API rate limit
+exceeded".**
+`api.github.com` allows 60 unauthenticated requests per hour **per IP**,
+and every machine behind the same NAT egress shares it — so a fleet
+rollout can exhaust it partway through. Current versions do not touch
+the API at all by default, so the fix is to upgrade the installer (the
+`main` copy of `scripts/install.sh`) and the sidecar. If you need the
+API path — private repo — set `GITHUB_TOKEN` for 5000 req/h. Note that
+having `GITHUB_TOKEN` set in your environment *selects* the API path, so
+an expired token turns a working install into this error.
+
+**The machine goes green but the new-session picker lists no adapters.**
+The sidecar is running without your shell's `PATH`. Adapter discovery is
+a `PATH` probe at boot, and a service manager's default is a bare
+`/usr/bin:/bin` — no `~/.local/bin`, no nvm shims, no Homebrew — so the
+daemon starts cleanly, registers the machine, and finds none of the
+CLIs. `argus-sidecar service install` bakes the invoking shell's `PATH`
+into the unit; re-run it from a shell where `which claude` works, or
+pass `-path`. If you wrote the unit by hand, add an explicit
+`Environment="PATH=..."` (systemd) or an `EnvironmentVariables` → `PATH`
+entry (launchd). The daemon logs what it found at boot — grep the journal or
+`sidecar.log` for `discovery: found N adapter(s) on PATH`.
 
 ---
 
-For deeper architectural background see `[AGENTS.md](AGENTS.md)`. For
-the full feature tour and dev-mode setup see `[README.md](README.md)`.
+For deeper architectural background see [AGENTS.md](AGENTS.md). For the
+feature overview and dev-mode setup see [README.md](README.md).

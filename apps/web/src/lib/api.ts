@@ -16,6 +16,7 @@ import type {
   ModelSelection,
   OpenTerminalRequest,
   ProjectDTO,
+  RemovedProjectDTO,
   ProjectNotesResponse,
   ResultChunkDTO,
   SessionDTO,
@@ -274,6 +275,10 @@ export const api = {
   // keyed by (machineId, workingDir). One fetch hydrates the icon map
   // for every project across the fleet.
   listProjects: () => http<ProjectDTO[]>(`/projects`),
+  /** Label-only context for projects on soft-deleted machines. Feeds
+   *  `removedContextStore` and nothing else — these rows must never
+   *  reach `projectStore`, which drives the sidebar and every action. */
+  listRemovedProjects: () => http<RemovedProjectDTO[]>(`/projects/removed`),
 
   // Per-project icon, same contract as setMachineIcon below: pass
   // `null` to reset, server emits project:upsert on success so every

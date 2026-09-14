@@ -18,13 +18,12 @@ import (
 // shifts are caught fast.
 //
 //	~/.claude/projects/<slug>/<sessionId>.jsonl
-//	~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<sessionId>.jsonl
 //	~/.cursor/chats/<md5(workspace)>/<sessionId>/store.db   (SQLite)
 //
 // Claude's slug is the abs path with `/` → `-` (leading slash becomes
 // a leading dash). Cursor uses md5(workspace) instead of a slug — see
-// cursor_cli_clone.go. Codex doesn't slug at all; sessions are
-// date-bucketed at the file-system root and discovered via glob.
+// cursor_cli_clone.go. Codex cloning uses app-server's thread/fork API and
+// deliberately does not depend on its rollout-file layout.
 
 // claudeProjectSlug encodes an absolute working directory the way Claude
 // Code does on disk: every `/` becomes `-`, including the leading slash

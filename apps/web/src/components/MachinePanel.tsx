@@ -396,7 +396,9 @@ function SidecarUpdateAction({
  * On success we navigate to the dashboard root: the row is gone, so
  * `/machines/:id` would otherwise render the "machine not found"
  * placeholder. The `machine:removed` WS event drops it from every
- * store; the local `remove()` just avoids a one-frame flash here.
+ * store; the local `remove()` pair just avoids a one-frame flash here
+ * — the machine and its project rows have to go together, or the
+ * sidebar paints orphaned projects under a machine that's already gone.
  */
 function DeleteMachineAction({
   machineId,
@@ -407,6 +409,7 @@ function DeleteMachineAction({
 }) {
   const navigate = useNavigate();
   const removeMachine = useMachineStore((s) => s.remove);
+  const removeProjectsForMachine = useProjectStore((s) => s.removeForMachine);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -423,6 +426,7 @@ function DeleteMachineAction({
     try {
       await api.deleteMachine(machineId);
       removeMachine(machineId);
+      removeProjectsForMachine(machineId);
       navigate('/');
     } catch (ex) {
       setErr(ex instanceof ApiError ? ex.message : 'failed to delete machine');

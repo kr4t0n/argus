@@ -4,6 +4,57 @@ This file is the high-level map for AI agents (and humans) contributing to
 **Argus**. Read it before making non-trivial changes; keep it in sync with the
 actual code.
 
+## Local development
+
+The README covers deploying Argus; this is how to *work on* it. Run the
+data plane in Docker and everything else natively, so server and web keep
+their watch modes:
+
+```bash
+pnpm install
+
+# Data plane only — Postgres + Redis
+docker compose -f deploy/docker-compose.yml up postgres redis -d
+
+# Server (NestJS, watch mode)
+pnpm --filter @argus/server exec prisma migrate dev
+pnpm --filter @argus/server dev
+
+# Web (Vite)
+pnpm --filter @argus/web dev
+
+# Sidecar
+cd packages/sidecar
+go run ./cmd/sidecar init --bus redis://localhost:6379 --server http://localhost:4000
+go run ./cmd/sidecar
+```
+
+| What you want                       | Command                                               |
+| ----------------------------------- | ----------------------------------------------------- |
+| Typecheck everything                | `pnpm typecheck`                                      |
+| Build everything                    | `pnpm build`                                          |
+| Sidecar tests                       | `cd packages/sidecar && go test ./...`                |
+| Apply a Prisma migration            | `pnpm --filter @argus/server exec prisma migrate dev` |
+| Re-seed the admin user              | `pnpm --filter @argus/server seed`                    |
+| List adapters compiled into sidecar | `argus-sidecar --list-adapters`                       |
+| Re-init sidecar config              | `argus-sidecar init --force`                          |
+| Open Prisma Studio                  | `pnpm --filter @argus/server exec prisma studio`      |
+
+**Verify with `pnpm typecheck` and `pnpm build`** — those two, plus
+`go test ./...` and `go test -race ./...` in the sidecar, are exactly what
+CI runs. There is no TypeScript test suite; the only automated tests in
+the repo are the sidecar's Go tests. So for anything on the web or server
+side, typecheck plus a manual pass in the UI *is* the verification, and
+saying so beats implying coverage that doesn't exist.
+
+**Do not run `pnpm lint`.** The `lint` scripts in `apps/web` and
+`apps/server` invoke `eslint`, which is declared in no `package.json` and
+installed nowhere — the command dies with `spawn ENOENT`, which reads like
+a broken environment rather than a missing tool. Nothing enforces
+formatting either: Prettier is a root devDependency but no hook or CI step
+runs it, so `prettier --write` across the repo produces a large unrelated
+diff. Match the surrounding file's style by hand instead.
+
 ## Mental model
 
 > **Status: the agent→runner refactor is complete** (docs/plan-agent-to-runners.md).
@@ -79,7 +130,7 @@ Command ── emits ──▶ many ResultChunks (streamed)
   is no "agent" between the session and the runner.
 - A **Session** is a conversation thread pinned to one project + cliType.
   It maps 1-1 to the underlying CLI's native conversation id (Claude Code
-  `--resume`, Codex `resume`, Cursor CLI `--resume`) via
+  `--resume`, Codex app-server `threadId`, Cursor CLI `--resume`) via
   `Session.externalId`. The server stores the `externalId` after the
   sidecar reports it on the first turn.
   `Session.modelSelection` (nullable JSON) holds the session-default
@@ -145,7 +196,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   projects. Exposes REST (`GET /machines`, `DELETE /machines/:id`,
   `GET /machines/:id/models`) and emits `machine:upsert` /
   `machine:status` / `machine:removed` over WS. Command dispatch gates on
-  machine status (`command.service.ts`). The machine-heartbeat is the
+  machine status (`command.service.ts`) and on the soft-delete tombstone
+  (`resolveRouting` returns null for it). The machine-heartbeat is the
   only presence signal — runner sidecars have no per-agent heartbeats.
 - `project/` — server-side metadata for "projects" (the
   `(machineId, workingDir)` pair the sidebar groups sessions
@@ -317,6 +369,57 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   The endpoint returns archived sessions too — scope is a client
   decision, and in practice ~93% of sessions are archived, so a
   server-side "visible only" default would hide most of the corpus.
+- `user/` — the `/me` surface: activity grid, usage ledger, quota, rules,
+  project notes, extensions. Two aggregation reads worth knowing about:
+  - `GET /me/usage/by-project` (`usageByProject`) groups the denormalized
+    `Command.usage` JSONB by `Project`. It returns `turnsMissingUsage`
+    next to every total and that is **not** diagnostics — the sums are
+    `(usage->>'field')::numeric` casts that skip NULL rows silently, and
+    coverage is wildly uneven per project (measured on the live corpus:
+    5% of turns missing on one project, 69% on another), so a poorly
+    covered project simply looks cheap. Also: `inputTokens` is NOT
+    comparable across CLIs even though `parseUsage` normalizes both to
+    the disjoint convention — Anthropic caches far harder than OpenAI, so
+    claude-code rows are ~0 input + enormous `cacheReadTokens` while codex
+    rows split evenly. `outputTokens` is the field that compares cleanly;
+    a "total tokens" figure is ~99% cache-read and mostly measures how
+    long sessions ran. `costUsd` is claude-code-only AND notional.
+  - `GET /me/pixels` (`pixels.{service,controller}.ts`) — a time-sliced
+    wall: one cell per slot, attributed to the project with the most busy
+    seconds in it. **It returns no colours and no palette size**, on
+    purpose: a ranking is Argus data, a hue is a rendering decision, and
+    the endpoint had drifted into serving both. Clients colour by array
+    index (`projects` is ranked by `wonSeconds` desc) and collapse their
+    own tail. Four load-bearing decisions:
+    **Busy-duration, not turn count.** A turn is one row stamped at its
+    START, and turns routinely run tens of minutes, so counting rows
+    leaves the busiest stretches dark.
+    **The per-turn clamp changes the picture, it is not hygiene.**
+    Durations are heavily skewed (p50 2.4 min, p90 14 min, p99 44 min,
+    max 19.2 *hours*) and the tail is idle time — a CLI left open
+    overnight finalizes normally hours later. Unclamped, one 19-hour turn
+    contributed ~8% of the grid's ink and promoted its project from a
+    clear #2 to a near-tie for #1. The 60-minute default touched exactly
+    17 of 3,160 turns (0.5%) on the corpus it was sized against.
+    **Liveness comes from `Command.status`, never `Session.status`** —
+    the session flag is a projection with a known drift mode (see the
+    repair migration `20260827120000_repair_stuck_active_sessions`, whose
+    own ground truth was this predicate), and the live set is clamp-
+    bounded so an abandoned turn can't blink forever.
+    **A live project is always listed, even with `wonSeconds: 0`.** `live`
+    is indices into `projects`, and a project can be running while LOSING
+    the current slot to another one — without the zero-entry it would be
+    filtered out and the wall would sit still while something was
+    demonstrably running.
+    Slot indices are generated arithmetically over ints rather than as a
+    timestamp series, so cost scales with commands × slots-each-spans and
+    is independent of grid size — widening the window to a year costs the
+    same query. Timestamps are `timestamp without time zone` holding UTC
+    (Prisma's default mapping), hence the `AT TIME ZONE 'UTC' AT TIME
+    ZONE tz` two-step; reversing it rotates the whole grid by the offset,
+    silently and plausibly. Both endpoints hash `projectId` into the same
+    opaque `key` so a caller can join them without either payload
+    carrying an absolute `workingDir`.
 - `push/` — APNs sender for native clients. `DeviceController`
   (`POST /me/devices` upsert-by-token — re-homing a token that moved
   accounts — and idempotent `DELETE /me/devices/:token`) plus
@@ -465,10 +568,55 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   prefers the auto-detected string over anything baked in.
   - **Model selection** rides `Command.Options` as flat keys
     (`model` / `effort` / `context` / `speed`, constants in
-    `protocol`); each `Execute` appends only the flags its CLI knows:
-    claude-code `--model x[1m] --effort l`, codex `--model x -c
-    model_reasoning_effort=l -c service_tier=fast`, cursor-cli
-    `--model <slug>` (the slug already encodes everything).
+    `protocol`); each `Execute` passes only the settings its CLI knows:
+    claude-code `--model x[1m] --effort l`, Codex app-server
+    `turn/start.{model,effort,serviceTier}`, cursor-cli `--model <slug>`
+    (the slug already encodes everything).
+  - **Codex uses an app-server transport**, not one `codex exec` child per
+    turn. `codex_app_server.go` owns the JSONL stdio connection for the
+    turn, performs the initialize/initialized handshake, and correlates
+    request ids. Each concurrent turn has an isolated app-server connection,
+    so **the connection IS the turn** — notifications are delivered on the
+    connection they arrive on and are never filtered by `turnId`. The
+    notifications the adapter maps today do all carry one (`turn/completed`
+    carries `turn.id` instead), so filtering was not losing events — but 54
+    of app-server's 81 server notifications carry no `turnId` at all
+    (`configWarning`, `guardianWarning`, `account/rateLimits/updated`,
+    `thread/status/changed`, `process/*`), so anything surfaced later would
+    vanish silently. Dropping that layer also removes the reason
+    `deliverEvent` held a lock across a channel send: `request()` takes
+    `s.mu` *before* it selects on its context, so a lock held across a
+    blocking send made `Cancel` ignore its own deadline and, since the
+    runner dispatches cancels inline on the run loop, stalled command
+    delivery machine-wide. It closes cleanly BEFORE its terminal
+    chunk is published because app-server otherwise retains a loaded thread's
+    writer for a 30-minute unsubscribe grace period (blocking terminal
+    `codex resume`). Fresh sessions call `thread/start`, persisted sessions
+    call `thread/resume`, turns call `turn/start`, and cloning uses
+    `thread/read` + `thread/fork` rather
+    than copying rollout files. **Cancellation is graceful-then-forced**:
+    `turn/interrupt` first, so app-server finalizes the interrupted turn on
+    disk and a later resume sees a coherent thread — but the turn's event
+    loop also selects on the command context, and `Cancel` closes the
+    connection after a 3s grace period. Without that escalation an
+    app-server that acks the interrupt and never emits `turn/completed`
+    leaves the chunk stream open forever: the command is never acked and the
+    session shows "running" indefinitely. The process is not bound to the
+    command context, so nothing else would kill it. **app-server stderr is
+    published as `stderr` chunks**, via an `argus/stderr` synthetic event on
+    the same connection channel, so diagnostics printed while a turn
+    otherwise proceeds (expiring auth, sandbox warnings) stay visible instead
+    of surfacing only inside a crash message. Lines are ANSI-stripped
+    (tracing output is colourised), the every-teardown
+    `Failed to write to stdout: Broken pipe` line is filtered as noise, and
+    output is capped at 100 lines per turn because each chunk is a Redis
+    stream entry. The last 8 lines are still retained separately to decorate
+    a process-failure error. The runner also invokes
+    the optional `Closer` capability during shutdown. Because app-server's
+    `tokenUsage.total` is cumulative for the whole thread, the adapter
+    snapshots it before each turn and folds only the delta into the final
+    chunk as `meta.usage`; `meta.lastUsage` retains the last API call for the
+    context ring.
   - **Model catalogs** come from the optional `ModelLister` capability
     (`models_claude.go` static alias table, `models_codex.go` parses
     `codex debug models` JSON, `models_cursor.go` parses
@@ -520,10 +668,20 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   ANSI-coloured, and HH:MM:SS-eta variants. Carries its own
   `main.Version` (baked by the same Makefile `-ldflags` as the
   sidecar) so `argus-bg version` makes companion drift observable.
-- `updater/` — self-update: reads the GitHub Releases API for
-  `argus-sidecar-v*` tags, picks the matching `OS-arch` asset,
-  verifies it against `SHASUMS256.txt`, and atomically `os.Rename`s
-  over the running binary. The download→verify→chmod→atomic-install
+- `updater/` — self-update: resolves the newest `argus-sidecar-v*`
+  release, picks the matching `OS-arch` asset, verifies it against
+  `SHASUMS256.txt`, and atomically `os.Rename`s over the running
+  binary. **Two resolvers.** The default (`pickLatestReleaseFeed`)
+  reads `github.com/<repo>/releases.atom` and builds asset URLs under
+  `/releases/download/<tag>/`, neither of which counts against the
+  REST API's 60-req/h-per-IP budget that a NAT'd fleet shares — that
+  budget is exhaustible mid-rollout and fails with a 403 that reads
+  like an auth error. `pickLatestReleaseAPI` (the original) is used
+  when `GITHUB_TOKEN` is set — private repos, where the feed is not
+  public and 5000 req/h makes the quota moot — and as the fallback
+  when the feed can't answer. The feed carries no asset listing, so a
+  feed-resolved `release` sets `assetBaseURL` and `findAsset`
+  synthesizes URLs under it. The download→verify→chmod→atomic-install
   step is factored into `installFromRelease`, parameterized by asset
   base name + destination, so it backs both `Update` (sidecar → the
   running executable) and `DownloadCompanion` (a sibling binary →
@@ -559,9 +717,31 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   corrupt `argus-bg` is *not* re-verified (the always-download path used to
   re-check its SHA every run); `--force` or `download-bg` is the escape
   hatch.
-- `cmd/sidecar/main.go` — subcommand dispatch (`init`, `update`,
-  `download-bg`, `version`, default = run daemon), flag parsing, signal
-  handling, runner glue.
+- `cmd/sidecar/main.go` — subcommand dispatch (`init`, `service`,
+  `update`, `download-bg`, `version`, default = run daemon), flag
+  parsing, signal handling, runner glue.
+- `cmd/sidecar/service.go` — `service install|uninstall|status`:
+  renders and enables a systemd unit (Linux) or launchd plist (macOS)
+  so backgrounding the sidecar is one command instead of a doc
+  copy-paste. Everything in the unit comes from live state — the
+  symlink-resolved `os.Executable()`, the invoking account, and the
+  ambient `PATH`. Rendering (`renderSystemdUnit` / `renderLaunchdPlist`)
+  is pure and unit-tested on both shapes regardless of host GOOS;
+  only the drivers (`enableService`, `disableService`) shell out.
+  Scope defaults to per-user because the daemon spawns agent CLIs
+  under the invoking user's credentials and `PATH`; `-system` is
+  opt-in and requires root.
+  Also home to `detectRestartPlan` / `performRestart`, which back the
+  restart offer at the end of `argus-sidecar update` (the CLI
+  counterpart to the remote path's `RestartMode` handling — the swap is
+  an `os.Rename`, so a live process keeps the old inode until it is
+  replaced). Detection order is load-bearing: a managed service wins
+  over the pidfile, because under systemd the daemon holds the pidfile
+  too, `SIGTERM` exits 0, `Restart=on-failure` does not respawn on a
+  clean exit, and the follow-up `start` would spawn a detached process
+  outside the unit — silently orphaning the service. The prompt only
+  appears at a TTY (default yes); non-interactive callers get the
+  command printed, and `--restart` / `--no-restart` skip the question.
 
 ### `apps/web/src/`
 
@@ -722,8 +902,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   failures don't poison the snapshot; restore uses per-item `.catch` so a
   since-destroyed row 404s without blocking the rest. Legacy placeholders
   archived before the snapshot existed fall back to a broad restore.
-  The `showArchivedAgents` toggle (historical name) reveals archived
-  placeholders. Per-project show-archived state lives in
+  The global `uiStore.showArchivedProjects` toggle reveals archived
+  placeholders; per-project show-archived state is a separate map,
   `uiStore.showArchived` keyed by the project-group key. Expansion state
   lives in `uiStore.expanded` keyed by `proj:<machineId>::<workingDir>`
   (default open). The synthetic `no project` bucket hides the project-row
@@ -813,13 +993,96 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - `lib/useGlobalHotkey.ts` — the one home for app-level shortcuts, so the
   guards are written once. Capture phase + `preventDefault` (the terminal
   would forward the key to the PTY; browsers claim Ctrl+K for Firefox's
-  search bar and ⌘P for Print). Shifted/alted variants pass through so
-  ⌘⇧P stays bindable. **Readline exception:** Ctrl+K is kill-line and
-  Ctrl+P is previous-command, so when focus is inside `.xterm` the CTRL
+  search bar, ⌘P for Print, ⌘D for add-bookmark). Shifted/alted variants
+  pass through so ⌘⇧P stays bindable. **Readline exception:** Ctrl+K is
+  kill-line, Ctrl+P is previous-command and Ctrl+D is EOF, so when focus is
+  inside `.xterm` the CTRL
   form defers to the shell — ⌘ is never forwarded to a PTY, so the Cmd
   binding still works everywhere including in the terminal. Before this
   hook existed, ⌘K's raw listener swallowed Ctrl+K unconditionally and
   broke kill-line in the terminal pane for Ctrl-modifier users.
+  **The binding registry is `lib/hotkeys.ts`**, and the hook takes a
+  `HotkeyBinding` from it rather than a bare key string — a raw-string call
+  site would be a binding the shortcuts overlay could never render, so the
+  type makes that unrepresentable. The same table is what the overlay reads
+  and what a dev-only module-load check scans for two bindings claiming one
+  key (a silent failure otherwise: both handlers fire, in mount order).
+  `LOCAL_KEYS` in the same file documents the context-local keys the hook
+  does NOT own (composer Enter/Escape, palette arrows/Tab, and the terminal
+  Ctrl keys that deliberately reach the shell) — deliberately separate,
+  since putting them in `HOTKEYS` would imply something registers them.
+  Current bindings:
+  `⌘P` / `⌘K` open the palette's two modes (`CommandPalette.tsx`, mounted
+  once in `Dashboard` so they fire from any pane); `⌘D` toggles archive on
+  the open session and `⌘.` cancels its running turn (both
+  `SessionPanel.tsx`). **`⌘.` is the only cancel binding.** The composer's
+  `Escape` used to cancel as well, and now blurs instead: ⌘. fires with the
+  textarea focused (the hook has no is-the-user-typing guard, by design),
+  so keeping both meant the one moment you most want to step out of the
+  input — a turn is running and you want to read it — was the moment
+  Escape killed the turn. A reflex key whose meaning depends on whether
+  something is running is how accidental cancels happen. The blur also
+  restores `document.activeElement` to `<body>`, which is precisely what
+  `useTypeToFocus` requires, so esc-out / type-back-in is a closed loop
+  rather than two one-way doors. `⌘B` toggles
+  the sidebar (`Dashboard.tsx`, since the sidebar outlives every pane).
+  The readline deferral is load-bearing for more than readline: `Ctrl+B`
+  is **tmux's default prefix**, so a user running tmux in the PTY would
+  lose every tmux command to the sidebar toggle without it. `⌘/` opens
+  `ShortcutsHelp.tsx`, which RENDERS the registry rather than restating it
+  — so a binding cannot ship undocumented, which is the point of forcing
+  the hook to take a `HotkeyBinding`. The keyboard glyph in `UserRow.tsx`
+  is the only affordance in the app that does not require already knowing a
+  binding, and it exists to break that circle — so keep it **always
+  visible** and don't let another control crowd it (sign-out used to sit
+  beside it and was moved to `/user` partly for that reason). It sits
+  only in the expanded sidebar, not `SidebarRail`: the bootstrap problem is
+  a new-user problem, and the sidebar defaults open. Note that the help
+  overlay is a third
+  consumer of `paletteStore.mode` (`'session' | 'content' | 'help'`): it
+  has no open-state of its own, so ⌘/ while the palette is open is a
+  switch, not two overlays stacking. `CommandPalette`'s `open` is therefore
+  `mode === 'session' || mode === 'content'`, NOT `mode !== null` — if you
+  add a fourth overlay to this field, that check is what you have to
+  revisit. Scope follows the mount point —
+  a binding registered in `SessionPanel` is inert on `/machines/:id` and
+  `/user` because the panel isn't mounted there, which is cheaper than
+  a route check inside the handler. A binding that must work everywhere
+  belongs in `Dashboard`. Every *other* keydown listener in the web app is
+  component-scoped (popover Escape, composer Enter, `ui/Select`); this hook
+  is the only global one, so a new app-level shortcut is a one-liner.
+- `lib/useTypeToFocus.ts` — bare-key "start typing anywhere and it lands in
+  the composer" (`SessionPanel`). Deliberately a SEPARATE hook, not a
+  `useGlobalHotkey` option: that hook is simple precisely because a
+  Cmd/Ctrl combo can't fire mid-sentence, and a bare key gives that up.
+  Opposite posture too — bubble phase, never `preventDefault`, because it
+  must LOSE to anything that wants the key and the keystroke has to
+  survive to reach the newly-focused textarea. **It never inserts the
+  character**: it focuses on `keydown` and lets the same keystroke land by
+  itself, since inserting `e.key` by hand breaks IME composition and dead
+  keys (the composer already guards `isComposing` on Enter for that
+  reason). Two guards carry the whole design and both were found by asking
+  "how does this misfire?":
+  1. **Space is excluded.** It's a printable single character, so the
+     obvious `e.key.length === 1` test lets it through — and Space both
+     pages the transcript while reading and activates whatever control has
+     focus. Letting it through breaks scrolling AND silently swallows
+     button activation. Nobody opens a message with a space.
+  2. **Only fires when `document.activeElement` is body.** Stronger and
+     less brittle than a blocklist of element types: if the user clicked or
+     tabbed onto any control they're driving it, so stay out of the way.
+     This is what keeps Space-to-activate and `ui/Select` typeahead working
+     for keyboard-only users, and `.xterm` plus every input fall out of it
+     for free since all of them take focus. It matters more here than in a
+     pure chat app — a session view also holds a file tree, file tabs, a
+     terminal and the diff/git panes, so focus sits on a control far more
+     often than in a UI where the transcript is the only surface.
+  Typing deliberately does NOT pull you out of a file tab (which unmounts
+  the composer): a stray keystroke would cost the reader their scroll
+  position in that file, a worse misfire than the feature is worth.
+  `Escape` is the explicit way out, and because the composer only mounts on
+  the render AFTER `activeFile` clears, that path sets a pending flag and
+  focuses in a follow-up effect — focusing inline finds a null ref.
 - `stores/paletteStore.ts` — `mode: 'session' | 'content' | null`, where
   null is closed; collapsing open-ness and mode into one field is what
   makes each hotkey a toggle and the other hotkey a mode switch.
@@ -847,8 +1110,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   flyout header replaces the tile's old native `title` tooltip (they'd
   race each other on hover). Archived projects and the synthetic
   `no project` bucket are hidden — the rail is for active-state
-  navigation, not history. Machine strip + logout at the bottom
-  unchanged.
+  navigation, not history. Machine strip at the bottom, then an account
+  avatar linking to `/user` — the rail had no account link at all, so when
+  sign-out moved off the sidebar the footer became the way to the page
+  that owns it rather than being deleted outright.
 - `components/ContextPane.tsx` — right-pane companion to a session. Header
   shows the session's cliType + working dir + model + machine status. A
   collapsible `Details` block surfaces session + machine metadata
@@ -878,7 +1143,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   workingDir — the same unit sessions pin to). Soft-delete lives in the
   header overflow.
 - `pages/UserPanel.tsx` — `/user` route, settings-page layout. Sticky
-  account band at the top (email + role); below it a left section nav
+  account band at the top (email + role, plus the red `SignOutAction` —
+  the account's counterpart to the machine panel's delete, in the same
+  header slot and the same `variant="danger"`, but deliberately with NO
+  confirm since a re-login is the entire cost of a misclick); below it a
+  left section nav
   (Stats / Preferences) and a scroll column with Activity (a `Grid` /
   `Curve` segmented toggle over one `/me/activity` payload — `Grid` is
   the GitHub-style `ActivityHeatmap`, `Curve` is `ActivityLineChart`, a
@@ -1122,6 +1391,36 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Gotchas
 
+- **`ProjectRef` addresses, `SessionOrigin` describes — don't cross the
+  streams.** Both answer "where does this session live", and conflating
+  them is how a deleted machine's session grows controls that cannot
+  work. `useProjectRef` resolves a LIVE project and is what fs, git,
+  terminal, the model chip and dispatch route through; it returns null
+  for a soft-deleted machine and every pane gated on it correctly stays
+  shut. `useSessionOrigin` is display-only and additionally resolves
+  from `removedContextStore`, so a tombstoned machine can still be
+  *named* in a search row or a pane header. Never feed an origin to a
+  routing path. The symptom this fixed: `machineOffline` was
+  `machine?.status === 'offline'`, which is `false` when the machine row
+  is missing entirely, so the composer rendered enabled on a deleted
+  machine and invited a turn the server then refused.
+- **Tombstone guard: check `deletedAt`, never infer it from
+  `status: 'offline'`.** Turn dispatch on a soft-deleted machine was
+  blocked only *transitively*: `removeMachine` forces the tombstone
+  `status` to `offline`, nothing can flip it back (the heartbeat
+  `updateMany` and the `machine-register` early-`break` both filter on
+  `deletedAt`), and `dispatch` rejects offline machines. Correct in
+  practice, but `resolveRouting` selected `machine: { status: true }` and
+  never saw `deletedAt`, so the safety property rested on two facts with
+  nothing local stating the dependency — preserving last-known status on
+  the tombstone, or adding any status write that skipped the `deletedAt`
+  filter, would have silently reopened dispatch to deleted machines.
+  `resolveRouting` now selects `deletedAt` and returns null. Prefer the
+  same shape anywhere else that reasons about machine liveness: the
+  tombstone is the invariant, `offline` is a consequence of it.
+  Returning null (rather than a routing with a "deleted" flag) is what
+  makes `fork` and `cancel` inherit the guard for free — both already
+  treat null as "nothing to route".
 - **A chunk can arrive AFTER its own turn finalized — the live branch must
   be idempotent too.** The result ingestor's finalize branch has always
   been guarded (`updateMany ... status notIn TERMINAL_COMMAND_STATUSES`,
@@ -1586,9 +1885,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   (~300 KB) until the server upgrade creates the group. Nothing
   breaks, but deploy the server before triggering sidecar updates.
 - **stream-json drift**: each CLI's NDJSON event shape changes between
-  versions. The mappers (`mapClaudeLine`, `mapCodexLine`) are
+  versions. The line mappers (`mapClaudeLine` in `claude_code.go`,
+  `mapCursorLine` in `cursor_cli_mapper.go`) are
   defensive — unknown events fall through as `progress` chunks rather than
-  crashing. For `system` events, the unknown-subtype fallback is
+  crashing. Codex has NO line mapper: it speaks the app-server JSONL
+  protocol, so drift there surfaces as unhandled *notifications*
+  instead — see the codex app-server note under `adapter/`. For `system` events, the unknown-subtype fallback is
   **deliberately visible** (Content `"system"` → italic row in the
   activity timeline): that junk row is the observability breadcrumb that
   tells us a new subtype appeared and needs explicit handling. Don't
@@ -1757,14 +2059,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   MAXLEN-trimming gotcha doesn't apply. If you ever want the sidecar to
   pull presigned-direct from S3 (server out of the byte path), gate it on
   the bucket being reachable from every sidecar host.
-- **Image vision is uniform-prompt-path + one per-adapter flag**. The
+- **Image vision is uniform-prompt-path + one per-adapter native input**. The
   cross-adapter floor is the prompt preamble: every agentic CLI opens a
   file whose path it's told, and — verified empirically against the real
   CLIs — `claude -p` over stdin **and** `cursor-agent -p` attach a
   path-mentioned image as *vision* (not just a text read). Codex is the
-  one exception: `codex exec` needs its native `--image <path>` flag for
-  vision (a bare path mention can be read as text), so `codex.go` emits
-  `--image` for every `image/*` attachment with a `LocalPath`. When
+  one exception: Codex needs a native image input for vision (a bare path
+  mention can be read as text), so `codex.go` adds a `localImage` item to
+  `turn/start.input` for every `image/*` attachment with a `LocalPath`. When
   adding an adapter, you get file access + (claude-style) image vision
   for free via the preamble; only wire a native image flag if that CLI
   has one. (Claude's *Read tool* is unreliable for images — several
@@ -2004,6 +2306,26 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   can no longer resurrect it. The delete is terminal — there is no
   un-delete endpoint or UI. The periodic sweeper only flips stale machines
   to `offline` — it never reaps rows.
+  Two consumers close the loop on a delete. Server-side,
+  `SessionService.resolveRouting` returns null for a tombstoned machine,
+  which shuts dispatch, fork and cancel in one place (see the
+  "tombstone guard" gotcha for why this is checked directly instead of
+  inferred from the forced-offline status). Client-side, `machine:removed`
+  prunes `useProjectStore` via `removeForMachine` alongside the machine
+  row — the sidebar builds project rows from that store alone, so dropping
+  only the machine would leave orphans on screen until the next reload.
+  Sessions are deliberately NOT pruned: `GET /sessions` doesn't filter on
+  the machine tombstone, and ⌘K / search rendering them is what "history
+  stays viewable" after a delete actually rests on.
+  Those sessions are named by `GET /projects/removed` — the one endpoint
+  that surfaces tombstoned machines, feeding `removedContextStore` and
+  nothing else. It is a separate route rather than an `includeDeleted`
+  flag on `GET /projects` on purpose: tombstoned rows must never reach
+  `projectStore`, which drives the sidebar and every action, so the
+  dangerous direction is opt-in rather than opt-out. The fetch is
+  conditional (`ensureRemovedContext`) — it fires only when a listed
+  session's `projectId` resolves to no known project, so a fleet that
+  has never deleted a machine never issues it.
 - **Terminal == remote shell access**: ticking "attach interactive
   terminal" when creating a project/session lets *any* dashboard user
   spawn shells on that host as the sidecar daemon's UID. Treat this as
@@ -2170,10 +2492,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   dot-resurrection race**: the dot used to get stuck because the
   status lived only on the server and arrived over two unordered
   channels — the `session:status` WS event and REST `loadSession`
-  responses. A background prefetch (`App.tsx` `onAgentStatus`, fired
-  the instant a turn completes) could issue a `loadSession` whose DB
-  read captured the pre-`markSeen` state and then land AFTER the
-  `markSeen` clear, resurrecting the dot until a hard refresh. Fix:
+  responses. A background prefetch (then `App.tsx`'s per-agent status
+  handler, fired the instant a turn completed) could issue a
+  `loadSession` whose DB read captured the pre-`markSeen` state and then
+  land AFTER the `markSeen` clear, resurrecting the dot until a hard
+  refresh. That prefetch went away with the per-agent WS events in
+  Phase 4, but the guard below is NOT redundant — REST and WS are still
+  two unordered channels carrying the same state. Fix:
   the `session:status` payload carries `unread` + `updatedAt`, and
   `sessionStore`'s `applySessionStatus`/`loadSession`/`upsertSession`
   reject any write whose `updatedAt` is older than what's already
@@ -2238,10 +2563,31 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   launch. Codex's catalog command lives under `codex debug models` —
   machine-readable JSON but nominally a debug surface; the parser is
   defensive and any failure degrades to the free-text input.
-- **Context-window lookup is hand-maintained**: the donut on the
-  session header's `UsageBadge` reads its denominator from
-  `packages/shared-types/src/contextWindow.ts`, a hardcoded family →
-  window map matched by lowercased substring on the active model id.
+- **Context-window denominator has three sources, most authoritative
+  first** (`resolveContextWindow`, mirrored as `ContextWindows.resolve`):
+  1. `meta.modelContextWindow` off the newest `final` chunk — what the
+     turn itself reported. The only source that knows the window actually
+     in effect: it is per-thread, and it is the USABLE ceiling, not the
+     nominal one. Codex reports 258400 where its own catalog says 272000,
+     the difference being `effective_context_window_percent` (95). A
+     name-keyed source cannot express that, nor the fact that one model id
+     can run with different windows (`gpt-5.6-sol` lists context_window
+     272000 but max_context_window 872000).
+  2. The agent's model catalog (`ModelCatalogEntry.contextWindow`, parsed
+     from `codex debug models`) — tracks new releases with no code change.
+     Ids match exact-then-case-insensitively, NOT by substring like the
+     table, so a slug can't borrow a sibling's window.
+  3. The static family → window map in
+     `packages/shared-types/src/contextWindow.ts`, for transcripts whose
+     machine is offline or whose agent is gone.
+
+  The table is a real hazard on its own: it read 400k for the whole gpt-5
+  family against a true 272k, i.e. the ring looked ~32% emptier than
+  reality — the unsafe direction, since the ring exists to warn before
+  overflow. Treat a table edit as a stopgap and check whether source 1 or
+  2 can answer instead. iOS reads source 1 in `TranscriptEngine`
+  (`contextSnapshot`) and shares source 3; it does not yet wire source 2,
+  because `SessionViewModel` holds no catalog.
   The "current context used" numerator is the LATEST `final` chunk's
   `inputTokens + cacheReadTokens + cacheWriteTokens` — not a sum across
   turns — because each CLI re-sends the full history on `--resume`,
@@ -2254,11 +2600,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   from `usage.iterations[-1]`; `parseUsage` (used by `useSessionUsage` and
   the server-side `/me/usage` aggregation) intentionally keeps the
   cumulative aggregate, which is the correct per-turn cost/usage total.
-  codex (`turn.completed.usage`) and cursor-cli expose only a turn-level
-  total in `exec --json`, so their rings can still overcount on multi-call
-  turns — codex's per-call figure lives in the richer `app-server`
-  protocol (`thread/tokenUsage/updated` → `tokenUsage.last`), not adopted
-  here. **Gotcha (hit twice — Fable 5, then Opus 5):** a Claude family
+  cursor-cli exposes only a turn-level total, so its ring can still overcount
+  on multi-call turns. Codex app-server's
+  `thread/tokenUsage/updated.tokenUsage.last` is preserved as
+  `meta.lastUsage`, and `parseContextUsage` uses it for the Codex ring while
+  accounting continues to use the total in `meta.usage`. **Gotcha (hit twice
+  — Fable 5, then Opus 5):** a Claude family
   whose 1M window is the *default* rather than an opt-in facet carries no
   `[1m]` token in its id, so the generic 200k Claude baseline silently
   claims it and the ring reads 5x too full. Those families each need
@@ -2272,6 +2619,30 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   against the upstream announcement, not release-note rumors. Unknown
   models return `null` so the ring just hides instead of rendering a
   misleading percentage; the bare ↑/↓ arrows stay visible.
+- **A forked session replays its source's timestamps, so any aggregate
+  over `Command` double-counts unless it filters them out.**
+  `SessionService.fork` copies each prefix command's `createdAt` /
+  `completedAt` **verbatim** and keeps the source's `projectId`, while
+  deliberately NOT copying `usage` (a fork copied rows; it did not spend
+  tokens, and attributing them again would inflate the ledger on every
+  fork). Two consequences that bite different aggregates:
+  - Anything measuring TIME sees the same span twice in the same project.
+    This was live in `/me/pixels` — ~18% of in-window commands were forks,
+    concentrated in two projects, inflating their busy seconds and their
+    odds of winning those slots.
+  - Anything measuring COVERAGE reads a forked turn's NULL `usage` as a
+    data gap. It is not one; the totals are correct. On the live corpus
+    forks were essentially the ENTIRE apparent gap — the two
+    worst-looking projects were 238-of-238 and 167-of-167 forks — so
+    `/me/usage/by-project` reports `turnsForked` separately from
+    `turnsMissingUsage`.
+  The detector is `Command.createdAt < Session.createdAt`: a real turn
+  can never predate its own session, so it has no false positives and
+  needs no schema change. What a fork DOES carry: `Session.
+  modelSelection` (so the next turn continues on the same model rather
+  than reverting to CLI default) and `Command.options` (so replayed
+  history stays attributable). `usage` is the sole deliberate omission —
+  if you find yourself "fixing" that asymmetry, re-read this entry.
 - **`Command.usage` is denormalized at write time**: the result-ingestor
   calls `parseUsage` once when each turn finalizes and stores the
   normalized `TokenUsage` JSON on the Command row. `/me/usage` SUMs
@@ -2287,13 +2658,52 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   filter), so a recent codex-only stretch never shows a spurious
   "$0.00" even when the lifetime total has a real cost.
   Pre-denormalization rows are populated by SQL migration
-  `6_backfill_command_usage`, which mirrors `parseUsage`'s adapter
-  switch one-for-one — if you change `parseUsage`'s output shape,
-  history won't be retroactively recomputed; ship a follow-up data
-  migration. NULL on a completed Command row means "no usage payload"
-  (cancellation, error, custom adapter that doesn't emit one), not
-  "in flight" — the `/me/usage` query filters to `usage IS NOT NULL`
-  so NULLs cost nothing.
+  `8_backfill_command_usage_skip_terminal_chunk`, which mirrors
+  `parseUsage`'s adapter switch one-for-one — if you change
+  `parseUsage`'s output shape, history won't be retroactively
+  recomputed; ship a follow-up data migration. Rounds `6_` and `7_` are
+  retained but updated **zero** rows: their `latest_final` CTE took the
+  highest-seq terminal chunk, which is always `clistream`'s empty
+  process-exit `final`, so `meta->'usage'` was NULL every time. Round 8
+  filters to chunks whose meta actually carries a usage object first.
+  NULL on a completed Command row does NOT mean "in flight" — the
+  `/me/usage` query filters to `usage IS NOT NULL` so NULLs cost
+  nothing — but see the next entry before reading it as "no usage".
+- **`Command.usage IS NULL` conflates "never reported" with "reported as
+  zero" — measured, and deliberately NOT fixed (Sep 2026).**
+  `parseUsage` ends with `return hasUsage(parsed) ? parsed : null`, and
+  `hasUsage` is a **display** predicate: it answers "would the badge read
+  ↑0 ↓0?", which is not the same question as "did we receive usage?". So
+  a turn reporting a complete, correctly-shaped, all-zero usage envelope
+  is discarded and stored as NULL — indistinguishable from a turn that
+  reported nothing at all.
+  **Grounding** (42-day window on the live corpus, forks excluded): 172
+  Commands had `usage IS NULL`, of which **79 carried a usage object in
+  a terminal chunk**. Every one was `claude-code`, with key names
+  matching the parser exactly (`input_tokens`, `output_tokens`,
+  `cache_read_input_tokens`, `cache_creation_input_tokens`) — not a
+  shape mismatch — all values zero and `iterations: []`. That empty
+  per-API-call array is the tell: these turns never reached the API
+  (failed to start, or returned without calling the model); 47 were
+  `error` kind. The other ~93 carried no envelope at all — genuinely
+  unrecorded, mostly turns cancelled mid-flight, which IS real
+  unmeasured spend and is not fixable server-side.
+  **Why it was left:** token TOTALS are unaffected — discarded rows sum
+  to zero either way, so `/me/usage` and `/me/usage/by-project` are
+  correct. Only COVERAGE is wrong: `ProjectUsageRow.turnsMissingUsage`
+  counts zero-token turns as lost data, overstating the gap by ~2.7x.
+  The debt doesn't compound (totals stay right, the fix stays the same
+  size), so it was deferred. Until then, don't render that field as a
+  loss/percentage.
+  **The fix, if you come back to it:** do NOT change `parseUsage`'s
+  contract. It is shared by the session badge, the context ring,
+  `/me/usage` and the iOS client, and call sites treat non-null as
+  "there is something to render" — returning zeroed objects would sprout
+  ↑0 ↓0 badges across both clients. Instead fall back to `ZERO_USAGE`
+  inside `computeCommandUsage` (result-ingestor) when `meta.usage` is an
+  object but `parseUsage` returned null: ~6 lines, one file, no
+  shared-contract change, sums unmoved. Then a backfill migration on the
+  same predicate to zero the existing rows.
 - **GHA cache budget cap**: GitHub enforces ~10 GB of cache per repo.
   Buildx with `mode=max` writes every intermediate stage; tag pushes
   (`refs/heads/refs/tags/v*`) write under their own ref scope and are
@@ -2302,6 +2712,35 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   effective hit-rate degrades, sweep with
   `gh api /repos/<o>/<r>/actions/caches?ref=refs/pull/<n>/merge` →
   `DELETE`.
+- **A service-managed sidecar discovers zero adapters unless the unit
+  sets `PATH`.** Discovery is `exec.LookPath` at boot
+  (`machine/discovery.go`), and systemd hands a unit a bare
+  `/usr/bin:/bin` — none of `~/.local/bin`, nvm shims, `~/.bun/bin` or
+  Homebrew, which is where `claude`/`codex`/`cursor-agent` actually
+  live. The symptom is not a crash: the daemon boots, registers the
+  machine, and reports an empty adapter list, so the dashboard shows a
+  healthy green machine you cannot create agents on. `argus-sidecar
+  service install` bakes the invoking shell's `PATH` into the unit for
+  exactly this reason. Watch out under `sudo`, which sanitizes `PATH`
+  to `secure_path` — for a `-system` install, pass `-path` explicitly.
+- **`releases.atom` lists bare tags, not just published releases, and
+  carries no prerelease flag.** Both shape the updater's feed resolver.
+  A tag is public the moment it's pushed but its assets only exist once
+  the release workflow finishes, so the newest tag is uninstallable for
+  a few minutes after every cut — the resolver probes `SHASUMS256.txt`
+  per candidate and falls through to the next (`maxFeedCandidates`, 3).
+  Prerelease-ness is derived from the SemVer suffix on the tag, which
+  is sound because `argus-sidecar-release.yml` sets GitHub's flag from
+  a regex on that same tag; the derivation is slightly broader
+  (`rc|alpha|beta|pre` there, any `-suffix` here) and errs toward
+  excluding. The feed also returns only the ten most recent entries
+  **repo-wide**, so a burst of `v*` server releases can hide every
+  sidecar tag — that is the case the REST fallback still covers.
+- **`scripts/install.sh` now installs the newest STABLE release.** It
+  used to take the first `argus-sidecar-v*` tag the API listed, which
+  included prereleases — so a fresh `curl | sh` during an rc cycle
+  silently installed the rc. Stable-only is now the default (matching
+  `argus-sidecar update`); `ARGUS_PRERELEASE=1` opts back in.
 
 ## Tech debt / planned
 
@@ -2311,6 +2750,28 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - Pool routing ("run this on any machine that has CLI type X") — would
   need a type-scoped consumer group across machines; not exposed yet.
 - Pre-commit hooks (ruff/eslint).
+- **The aggregate read endpoints have no tests.** There is no server
+  test harness at all, so CI proves only that `/me/pixels` and
+  `/me/usage/by-project` typecheck. Both were validated once (Sep 2026)
+  by reconciling their output against hand-written SQL on the live
+  corpus — identical winner ranking, identical contested-slot count —
+  which is a point-in-time check, not a regression guard. Two parts of
+  the pixels query are silent-failure shaped and would not throw if
+  broken: the `AT TIME ZONE 'UTC' AT TIME ZONE tz` two-step (reverse it
+  and the whole grid rotates by the UTC offset, looking entirely
+  plausible), and the fork-exclusion predicate (drop it and busy time
+  silently double-counts again — see the fork gotcha).
+- **Fork lineage is inferred, not recorded.** The detector for a
+  replayed turn is `Command.createdAt < Session.createdAt`, which cannot
+  false-positive and was exact on the live corpus, but it stands in for
+  a fact nothing stores. A `Command.forkedFromId` column would make it
+  explicit and would also let the UI show lineage. Only becomes a
+  problem if fork semantics change.
+- **`Command(createdAt)` index has no re-check trigger.** Deliberately
+  not added: at 37% window selectivity Postgres correctly prefers a seq
+  scan, and the grid query measured 13.4 ms with zero disk reads. It
+  becomes worth revisiting when the in-window share drops below ~10%
+  (roughly 30k+ commands), which nothing currently watches for.
 - **Attachments — known debt** (the file/image feature is complete and
   verified end-to-end for claude `-p`/stdin and codex `--image`; these are
   the deferred edges):

@@ -1,5 +1,5 @@
 import { ReactNode, useCallback, useEffect, useState } from 'react';
-import { Check, Copy, KeyRound, Loader2, Trash2, User } from 'lucide-react';
+import { Check, Copy, KeyRound, Loader2, LogOut, Trash2, User } from 'lucide-react';
 import type {
   ActivityDay,
   ApiKeyDTO,
@@ -83,13 +83,16 @@ export function UserPanel() {
             <User className="h-4 w-4" />
           </button>
         )}
-        <header>
-          <h1 className="truncate text-base font-medium text-fg-primary">
-            {user?.email ?? 'you'}
-          </h1>
-          {user?.role && (
-            <p className="mt-0.5 text-xs text-fg-tertiary">{user.role}</p>
-          )}
+        <header className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="truncate text-base font-medium text-fg-primary">
+              {user?.email ?? 'you'}
+            </h1>
+            {user?.role && (
+              <p className="mt-0.5 text-xs text-fg-tertiary">{user.role}</p>
+            )}
+          </div>
+          <SignOutAction />
         </header>
       </div>
 
@@ -289,6 +292,40 @@ function ActivityView({ days }: { days: ActivityDay[] }) {
         <ActivityLineChart days={days} />
       )}
     </div>
+  );
+}
+
+/**
+ * Sign out — the account's counterpart to the machine panel's red delete,
+ * in the same header slot and the same `variant="danger"`.
+ *
+ * It moved here from the sidebar footer (`components/UserRow.tsx`), where
+ * a one-click sign-out sat permanently under every session row. This is
+ * the detail page for the account, so the account-level action belongs
+ * here, next to the identity it acts on.
+ *
+ * Deliberately NO confirm dialog, unlike `DeleteMachineAction`. That one
+ * confirms because it is irreversible; this costs a re-login and nothing
+ * else, and putting a confirm on a reversible action is friction that
+ * mainly teaches people to click through confirms. The red is about
+ * weight, not about danger — it marks this as the one action on the page
+ * that ends your session rather than adjusting a setting.
+ */
+function SignOutAction() {
+  const user = useAuthStore((s) => s.user);
+  const logout = useAuthStore((s) => s.logout);
+  return (
+    <Button
+      size="sm"
+      variant="danger"
+      onClick={logout}
+      title={user?.email ? `sign out ${user.email}` : 'sign out'}
+      aria-label="sign out"
+      className="shrink-0"
+    >
+      <LogOut className="h-3.5 w-3.5" />
+      sign out
+    </Button>
   );
 }
 

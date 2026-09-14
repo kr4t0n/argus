@@ -87,6 +87,32 @@ export interface ProjectDTO {
   iconKey: string | null;
 }
 
+/**
+ * Display context for a project whose machine has been soft-deleted —
+ * served by `GET /projects/removed`, which is the ONLY endpoint that
+ * surfaces tombstoned machines at all.
+ *
+ * Deliberately not a `ProjectDTO`: these rows must never reach the
+ * stores that drive the sidebar or any action (fs/git/terminal 404 on
+ * a deleted machine's project). They exist so a session whose machine
+ * is gone can still say *where it ran* — its history is fully readable,
+ * since every transcript read is user-scoped and joins no machine.
+ *
+ * `machineName` is the pre-delete display name: `removeMachine`
+ * suffixes the `@unique` `Machine.name` with a tombstone marker, and
+ * the server strips it back off here rather than leaking the internal
+ * form to the UI.
+ */
+export interface RemovedProjectDTO {
+  /** Project row id — the join key against `SessionDTO.projectId`. */
+  id: string;
+  machineId: string;
+  workingDir: string;
+  /** User-picked project label; null = derive basename(workingDir). */
+  name: string | null;
+  machineName: string;
+}
+
 
 export interface SessionDTO {
   id: string;
@@ -427,6 +453,136 @@ export interface WindowedUsage {
  *  off this single payload. */
 export interface UserUsageResponse {
   usage: WindowedUsage;
+}
+
+/**
+ * One project's token totals over a window (`GET /me/usage/by-project`).
+ *
+ * `turnsForked` and `turnsMissingUsage` split what looks like one problem
+ * into two with opposite meanings, and the split matters — conflated,
+ * they misreport badly.
+ *
+ * A FORKED turn is history replayed into a new session by `fork()`, which
+ * deliberately does not copy `usage`: the fork copied rows, it did not
+ * spend tokens, and attributing them again would double-count every fork
+ * in the ledger. Its NULL is correct and the project's totals are exactly
+ * right. Measured on the live corpus, forks were essentially the entire
+ * apparent coverage gap — the two worst-looking projects were 238-of-238
+ * and 167-of-167 forks.
+ *
+ * A MISSING turn is one that really ran and whose usage never landed
+ * (cancelled mid-turn, or a final chunk that carried no usage payload).
+ * That is a genuine undercount, so any UI showing `usage` should show
+ * this next to it — but do NOT show `turnsForked` the same way, or a
+ * project whose numbers are perfect will read as 69% incomplete.
+ *
+ * Note on comparing fields ACROSS CLIs: `parseUsage` normalizes every
+ * adapter to the same disjoint convention (`inputTokens` excludes cached
+ * input), but that does not make the fields equally meaningful. Anthropic
+ * caches far more aggressively than OpenAI, so claude-code rows carry
+ * near-zero `inputTokens` and enormous `cacheReadTokens`, while codex rows
+ * split much more evenly. `outputTokens` is the field that compares
+ * cleanly; totals dominated by `cacheReadTokens` mostly measure how long
+ * sessions ran, not how much work was done. `costUsd` is claude-code only
+ * AND notional (what the turn would have cost at API rates), so it is
+ * absent for codex/cursor projects entirely.
+ */
+export interface ProjectUsageRow {
+  projectId: string;
+  /** Stable opaque key derived from `projectId`. Safe to expose where
+   *  the absolute `workingDir` must not appear (e.g. a public page). */
+  key: string;
+  machineId: string;
+  /** Absolute path on the machine. NEVER put this in a public payload. */
+  workingDir: string;
+  /** User-picked label; null means "derive basename(workingDir)". */
+  name: string | null;
+  /** Every CLI type that ran a turn here in the window. */
+  cliTypes: AgentType[];
+  /** Every turn on this project in the window, forks included. Subtract
+   *  `turnsForked` for "turns actually run here". */
+  turns: number;
+  /** Turns replayed in by `fork()` — copied history, correctly carrying
+   *  no usage. Not a data gap. */
+  turnsForked: number;
+  /** Non-forked turns whose `Command.usage` is NULL, so their tokens are
+   *  absent from `usage`. This is the real gap. */
+  turnsMissingUsage: number;
+  usage: TokenUsage;
+}
+
+/** REST response for `GET /me/usage/by-project`. Rows are ordered by
+ *  total tokens descending. `windowDays` echoes the requested window so
+ *  a cached payload is self-describing. */
+export interface UserUsageByProjectResponse {
+  windowDays: number;
+  projects: ProjectUsageRow[];
+}
+
+/**
+ * One project that appears in the grid (`GET /me/pixels`).
+ *
+ * Deliberately carries NO colour. Which hue a project gets, and how many
+ * projects are worth distinct colours before the tail becomes a single
+ * "other" swatch, are both rendering decisions — this endpoint returns
+ * Argus data only. Clients colour by array index, or hash `key`
+ * themselves if they want an assignment stable across window changes.
+ *
+ * Ordered by `wonSeconds` descending, which IS data (a ranking), so a
+ * client wanting only N colours takes the first N and collapses the rest
+ * itself.
+ */
+export interface PixelProject {
+  /** Stable opaque id. Matches `ProjectUsageRow.key`, so the two
+   *  endpoints join without either payload carrying a `workingDir`. */
+  key: string;
+  /** Seconds this project WON across the grid — its own slots only, not
+   *  the total time it was active (see `PixelsResponse.intensity`).
+   *  Zero is possible: a project with a turn in flight is always listed
+   *  so `live` indices resolve, even if it hasn't taken a slot yet. */
+  wonSeconds: number;
+}
+
+/**
+ * REST response for `GET /me/pixels` — a time-sliced wall where each
+ * cell is one slot, coloured by the project that was busiest in it.
+ *
+ * Encoded columnar rather than as an array of objects: at 1,008 slots the
+ * object form is ~10x the bytes for identical information.
+ *
+ * `winners` and `intensity` are both exactly `slotCount` long and index
+ * positionally from `start`. Slot i covers
+ * `[start + i*slotMinutes, start + (i+1)*slotMinutes)` in `tz`.
+ */
+export interface PixelsResponse {
+  /** ISO 8601 UTC instant the first slot begins. */
+  start: string;
+  slotMinutes: number;
+  slotCount: number;
+  /** IANA zone the slots were bucketed in. Load-bearing: with hour-of-day
+   *  as an axis, bucketing in the wrong zone silently rotates the grid. */
+  tz: string;
+  /** Index into `projects` per slot; null = nothing ran. */
+  winners: (number | null)[];
+  /** 0-100 per slot, scaled against the busiest slot in THIS grid. Driven
+   *  by the slot's TOTAL busy seconds, not the winner's share — so a
+   *  packed 55/45 hour reads brighter than a quiet single-project one. */
+  intensity: number[];
+  /** Sparse per-slot split, present only for slots where the winner held
+   *  less than the contested threshold of the time. Keyed by slot index
+   *  then project index; values are seconds, and the winner is included
+   *  so shares are computable without cross-referencing `winners`.
+   *  Omitted entirely unless the caller asks for it. */
+  breakdown?: Record<string, Record<string, number>>;
+  /** Every project with a slot in this grid (or a turn in flight),
+   *  ranked by `wonSeconds` descending. */
+  projects: PixelProject[];
+  /** Indices into `projects` with a turn in flight RIGHT NOW — the blink
+   *  set. Derived from non-terminal `Command` rows, never from
+   *  `Session.status` (which is a projection with a known drift mode).
+   *  Bounded by the same clamp as the grid, so an abandoned turn cannot
+   *  blink forever. */
+  live: number[];
 }
 
 /**

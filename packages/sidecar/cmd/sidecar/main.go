@@ -18,6 +18,8 @@
 //	            path, machineId, and registered workdir count
 //	init        write the on-disk cache (bus URL, server URL, machine
 //	            name) — interactive at a TTY, flag-driven otherwise
+//	service     install/uninstall/inspect the systemd (Linux) or launchd
+//	            (macOS) unit that keeps the daemon running across reboots
 //	update      self-update by fetching the latest release for this OS/arch
 //	            (also refreshes the argus-bg companion so they stay in sync)
 //	download-bg (re)install just the argus-bg companion binary next to the
@@ -86,6 +88,9 @@ func main() {
 		case "init":
 			runInit(os.Args[2:])
 			return
+		case "service":
+			runService(os.Args[2:])
+			return
 		case "update":
 			runUpdate(os.Args[2:])
 			return
@@ -114,6 +119,7 @@ Usage:
   argus-sidecar restart [flags]    stop then start
   argus-sidecar status [flags]     report whether the daemon is running
   argus-sidecar init [flags]       write the on-disk cache (one-time setup)
+  argus-sidecar service <cmd>      install/uninstall/inspect the systemd or launchd unit
   argus-sidecar update [flags]     download the latest release for this OS/arch
   argus-sidecar download-bg [flags] (re)install the argus-bg companion binary
   argus-sidecar version            print the build version
@@ -154,10 +160,26 @@ Init flags:
   -cache <path>      override cache path
   -force             overwrite an existing cache (regenerates machineId)
 
+Service subcommands:
+  install            render + enable the unit (per-user by default; -system for
+                     system-wide). Bakes the current PATH into the unit so the
+                     service discovers the same agent CLIs your shell does.
+  uninstall          stop, disable and remove the unit
+  status             report unit path, enabled and active state
+
+  Run `+"`argus-sidecar service help`"+` for the full flag list.
+
 Update flags:
   -repo <owner/repo> override the GitHub repo (default: %[1]s)
   -prerelease        consider prerelease tags
   -force             reinstall even if already on the latest tag
+  -restart           restart the running sidecar without asking
+  -no-restart        never restart; just print the command
+
+  After a swap, `+"`update`"+` offers to restart whatever is running the old
+  binary — the systemd/launchd service if one is installed, otherwise a
+  daemon started by `+"`argus-sidecar start`"+`. At a TTY it asks (default yes);
+  without one it prints the command instead of blocking.
 
   `+"`update`"+` also refreshes the argus-bg companion (best-effort) when the
   sidecar is swapped or argus-bg is missing, so the pair stays in lockstep.
@@ -366,9 +388,14 @@ func runUpdate(args []string) {
 	repo := fs.String("repo", updater.DefaultRepo, "GitHub repo (owner/name)")
 	prerelease := fs.Bool("prerelease", false, "consider prerelease tags")
 	force := fs.Bool("force", false, "reinstall even if already on the latest tag")
+	restart := fs.Bool("restart", false, "restart the running sidecar without asking")
+	noRestart := fs.Bool("no-restart", false, "never restart; just print the command")
 	_ = fs.Parse(args)
 
 	logger := log.New(os.Stderr, "[argus-sidecar update] ", log.LstdFlags)
+	if *restart && *noRestart {
+		logger.Fatal("--restart and --no-restart are mutually exclusive")
+	}
 	logger.Printf("current version: %s (%s/%s)", Version, runtime.GOOS, runtime.GOARCH)
 
 	opts := updater.Options{
@@ -406,10 +433,88 @@ func runUpdate(args []string) {
 		}
 	}
 
-	if tag == Version {
+	if tag == Version && !*force {
 		return
 	}
-	fmt.Printf("argus-sidecar updated to %s\n", tag)
+	if tag != Version {
+		fmt.Printf("argus-sidecar updated to %s\n", tag)
+	}
+
+	// The swap is an os.Rename over the executable, so anything already
+	// running keeps the old inode — and its old code — until it is
+	// replaced. Offer to do that here rather than printing a command and
+	// trusting it gets run: a sidecar left on the old binary after an
+	// update is invisible until something misbehaves.
+	offerRestart(logger, *restart, *noRestart)
+}
+
+// offerRestart restarts the locally running sidecar, asks first, or just
+// prints the command — in that order of preference, depending on the
+// flags and whether anyone is there to answer.
+//
+// Non-interactive callers (cron, CI, `| sh` pipelines) must never block
+// on a prompt, so a missing TTY degrades to the printed hint. --restart
+// is the way to opt into the restart from those contexts.
+func offerRestart(logger *log.Logger, always, never bool) {
+	plan := detectRestartPlan()
+	if plan.Kind == "" {
+		// Nothing supervised is running; whatever starts next picks up
+		// the new binary on its own.
+		return
+	}
+
+	hint := func() {
+		fmt.Printf("\n%s is still running the previous binary. Restart it with:\n  %s\n", plan.Label, plan.Command)
+	}
+
+	switch {
+	case never:
+		hint()
+		return
+	case always:
+		// fall through to the restart
+	case isStdinTTY():
+		// Default yes: staying on the old binary is rarely what anyone
+		// wants. The interruption is called out because the restart
+		// cancels whatever turns are mid-flight on this machine.
+		if !confirm(fmt.Sprintf("\nrestart %s now? in-flight agent turns will be interrupted", plan.Label), true) {
+			fmt.Printf("not restarted. When you're ready:\n  %s\n", plan.Command)
+			return
+		}
+	default:
+		hint()
+		return
+	}
+
+	if err := performRestart(plan); err != nil {
+		logger.Printf("restart failed: %v", err)
+		hint()
+		return
+	}
+	fmt.Printf("restarted %s\n", plan.Label)
+}
+
+// confirm asks a yes/no question on stdin. Anything unparseable (or a
+// closed stdin) takes the default, so this can never wedge a session.
+func confirm(question string, def bool) bool {
+	suffix := " [y/N]: "
+	if def {
+		suffix = " [Y/n]: "
+	}
+	fmt.Fprint(os.Stderr, question+suffix)
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		fmt.Fprintln(os.Stderr)
+		return def
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	case "n", "no":
+		return false
+	default:
+		return def
+	}
 }
 
 // runDownloadBG (re)installs only the argus-bg companion binary next to the

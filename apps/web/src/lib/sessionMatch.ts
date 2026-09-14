@@ -8,6 +8,12 @@ export interface SessionCandidate {
   session: SessionDTO;
   projectLabel: string | null;
   machineName: string | null;
+  /** The machine these labels name has been soft-deleted. Carried for
+   *  rendering only — scoring ignores it, so a removed machine's
+   *  sessions stay matchable by project and host exactly like live
+   *  ones. That searchability is the point: search is how deleted
+   *  machines' history is reached at all. */
+  removed: boolean;
 }
 
 export interface RankedSession extends SessionCandidate {

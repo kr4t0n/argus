@@ -14,6 +14,7 @@ import { migrateLocalMachineIconsToServer } from './lib/migrateMachineIcons';
 import { migrateLocalProjectIconsToServer } from './lib/migrateProjectIcons';
 import { migrateLocalProjectsToServer } from './lib/migrateLocalProjects';
 import { useProjectStore } from './stores/projectStore';
+import { ensureRemovedContext, useRemovedContextStore } from './stores/removedContextStore';
 import {
   activeSessionIdFromPath,
   playDoneSound,
@@ -56,6 +57,7 @@ export default function App() {
   const upsertMachine = useMachineStore((s) => s.upsert);
   const setMachineStatus = useMachineStore((s) => s.setStatus);
   const removeMachine = useMachineStore((s) => s.remove);
+  const removeProjectsForMachine = useProjectStore((s) => s.removeForMachine);
   const loadSessions = useSessionStore((s) => s.loadList);
   const upsertSession = useSessionStore((s) => s.upsertSession);
   const upsertCommand = useSessionStore((s) => s.upsertCommand);
@@ -95,7 +97,14 @@ export default function App() {
     Promise.all([machinesReady, projectsReady])
       .then(() => Promise.all([migrateLocalProjectIconsToServer(), migrateLocalProjectsToServer()]))
       .catch(() => {});
-    loadSessions();
+    const sessionsReady = loadSessions();
+    // Tombstone context for sessions whose machine was deleted. Gated on
+    // both lists having landed: mid-boot every session looks unresolved,
+    // so checking early would fetch for fleets that have never deleted
+    // anything. Fleets that have deleted nothing never issue the request.
+    Promise.all([projectsReady, sessionsReady])
+      .then(() => ensureRemovedContext())
+      .catch(() => {});
     // Extension flags are account-level (server source of truth) but
     // cached in uiStore/localStorage so the UI reads them synchronously
     // with no flash on reload. Reconcile the cache with the server on
@@ -117,7 +126,20 @@ export default function App() {
     const unsub = subscribeHandler({
       onMachineUpsert: upsertMachine,
       onMachineStatus: (p) => setMachineStatus(p.id, p.status),
-      onMachineRemoved: (p) => removeMachine(p.id),
+      // Projects go with the machine: the sidebar builds its rows from
+      // projectStore alone (groupProjects doesn't check that the machine
+      // still exists), so dropping only the machine would leave orphaned
+      // rows on screen until the next reload. Sessions are deliberately
+      // left in place — they stay reachable through search/⌘K, which is
+      // what "history stays viewable" after a delete rests on.
+      onMachineRemoved: (p) => {
+        removeMachine(p.id);
+        removeProjectsForMachine(p.id);
+        // Those sessions just lost their project rows; refetch so they
+        // can still name where they ran. Unconditional (not `ensure`) —
+        // we know the tombstone set changed.
+        void useRemovedContextStore.getState().refresh();
+      },
       onProjectUpsert: (p) => {
         const store = useProjectStore.getState();
         store.upsertFromDto(p);
@@ -211,6 +233,8 @@ export default function App() {
             store.setServerIcons(rows);
           }),
         ]).catch(() => {});
+        // A machine may have been deleted while we were disconnected.
+        ensureRemovedContext();
         const entriesSnap = useSessionStore.getState().entries;
         for (const [id, e] of Object.entries(entriesSnap)) {
           try {

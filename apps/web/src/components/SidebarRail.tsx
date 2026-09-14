@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router-dom';
-import { LogOut, PanelLeftOpen } from 'lucide-react';
+import { PanelLeftOpen } from 'lucide-react';
 import type { MachineDTO, SessionDTO } from '@argus/shared-types';
 import { MachineIconGlyph } from './MachineIcon';
 import { ProjectIconGlyph } from './ProjectIcon';
@@ -48,7 +48,6 @@ export function SidebarRail() {
   const localProjects = useProjectStore((s) => s.projects);
   const localProjectOrder = useProjectStore((s) => s.order);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
-  const logout = useAuthStore((s) => s.logout);
   const user = useAuthStore((s) => s.user);
 
   // Rail is "active state" only — no archive visibility toggle.
@@ -92,7 +91,7 @@ export function SidebarRail() {
       <div className="flex h-12 shrink-0 items-center justify-center border-b border-default">
         <button
           onClick={toggleSidebar}
-          title="show sidebar"
+          title="show sidebar (⌘B)"
           className="rounded-md p-1.5 text-fg-tertiary hover:bg-surface-1 hover:text-fg-primary transition-colors"
         >
           <PanelLeftOpen className="h-3.5 w-3.5" />
@@ -140,14 +139,20 @@ export function SidebarRail() {
         </div>
       )}
 
+      {/* Sign-out moved to /user, so this footer is the way THERE rather
+          than the action itself. The rail had no account link at all, so
+          simply deleting the button would have left a collapsed sidebar
+          with no path to the page the action now lives on. Mirrors the
+          avatar in `UserRow`. */}
       <div className="flex h-11 shrink-0 items-center justify-center border-t border-default">
-        <button
-          onClick={logout}
-          title={user?.email ?? 'sign out'}
-          className="rounded-md p-1.5 text-fg-tertiary hover:bg-surface-1 hover:text-fg-primary transition-colors"
+        <Link
+          to="/user"
+          title={user?.email ?? 'your account'}
+          aria-label="your account"
+          className="flex h-6 w-6 items-center justify-center rounded-full bg-surface-2 text-[10px] font-medium text-fg-secondary transition-colors hover:bg-surface-1 hover:text-fg-primary"
         >
-          <LogOut className="h-3.5 w-3.5" />
-        </button>
+          {(user?.email ?? '?').trim().charAt(0).toUpperCase()}
+        </Link>
       </div>
     </aside>
   );

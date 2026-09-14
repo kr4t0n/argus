@@ -12,42 +12,30 @@ import (
 	"github.com/kr4t0n/argus/sidecar/internal/protocol"
 )
 
-func TestCodexPromptStartingWithDashUsesEndOfOptions(t *testing.T) {
-	tests := []struct {
-		name       string
-		externalID string
-		wantTail   []string
-	}{
-		{
-			name:     "fresh session",
-			wantTail: []string{"--", "--help"},
+func TestCodexTurnStartInputs(t *testing.T) {
+	a := &CodexAdapter{fullAuto: true}
+	params := a.turnStartParams("thread-123", protocol.Command{
+		ID: "cmd-1", Prompt: "--help",
+		Attachments: []protocol.AttachmentRef{
+			{Mime: "image/png", LocalPath: "/tmp/screenshot.png"},
+			{Mime: "text/plain", LocalPath: "/tmp/notes.txt"},
 		},
-		{
-			name:       "resume session",
-			externalID: "thread-123",
-			wantTail:   []string{"resume", "thread-123", "--", "--help"},
-		},
+	})
+	inputs, ok := params["input"].([]any)
+	if !ok || len(inputs) != 2 {
+		t.Fatalf("input = %#v, want text plus one local image", params["input"])
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			binary, argvFile := writeFakeCLI(t, `printf '%s\n' '{"type":"turn.completed"}'`)
-			a := &CodexAdapter{
-				binary:           binary,
-				skipGitRepoCheck: true,
-				fullAuto:         true,
-				runs:             map[string]*CLIRunner{},
-			}
-
-			drainExecute(t, a, protocol.Command{
-				ID:         "cmd-1",
-				ExternalID: tt.externalID,
-				Prompt:     "--help",
-			})
-
-			got := readArgv(t, argvFile)
-			assertArgvTail(t, got, tt.wantTail)
-		})
+	text, ok := inputs[0].(map[string]any)
+	if !ok || text["type"] != "text" || text["text"] != "--help" {
+		t.Fatalf("input[0] = %#v, want literal text prompt", inputs[0])
+	}
+	image, ok := inputs[1].(map[string]any)
+	if !ok || image["type"] != "localImage" || image["path"] != "/tmp/screenshot.png" {
+		t.Fatalf("input[1] = %#v, want local image", inputs[1])
+	}
+	resume := a.threadResumeParams("thread-123", protocol.Command{})
+	if _, exists := resume["serviceName"]; exists {
+		t.Fatalf("thread/resume must not include thread/start-only serviceName: %#v", resume)
 	}
 }
 
@@ -69,10 +57,9 @@ func TestCursorPromptStartingWithDashUsesEndOfOptions(t *testing.T) {
 	assertArgvTail(t, got, []string{"--resume", "cursor-session-1", "--", "--help"})
 }
 
-// TestModelSelectionArgv covers the ModelSelection → argv mapping for
-// all three adapters: model/effort/context/speed ride Command.Options
-// as flat keys and each adapter appends only the flags its CLI knows.
-func TestModelSelectionArgv(t *testing.T) {
+// TestModelSelectionTransport covers ModelSelection mapping for all three
+// adapters: argv for Claude/Cursor and turn/start fields for Codex app-server.
+func TestModelSelectionTransport(t *testing.T) {
 	t.Run("claude model+effort+1m", func(t *testing.T) {
 		binary, argvFile := writeFakeCLI(t, `printf '%s\n' '{"type":"result","result":"ok","is_error":false}'`)
 		a := &ClaudeCodeAdapter{
@@ -114,14 +101,10 @@ func TestModelSelectionArgv(t *testing.T) {
 	})
 
 	t.Run("codex model+effort+fast", func(t *testing.T) {
-		binary, argvFile := writeFakeCLI(t, `printf '%s\n' '{"type":"turn.completed"}'`)
 		a := &CodexAdapter{
-			binary:           binary,
-			skipGitRepoCheck: true,
-			fullAuto:         true,
-			runs:             map[string]*CLIRunner{},
+			fullAuto: true,
 		}
-		drainExecute(t, a, protocol.Command{
+		params := a.turnStartParams("thread-1", protocol.Command{
 			ID:     "cmd-1",
 			Prompt: "hi",
 			Options: map[string]any{
@@ -130,11 +113,16 @@ func TestModelSelectionArgv(t *testing.T) {
 				"speed":  "fast",
 			},
 		})
-		got := readArgv(t, argvFile)
-		assertArgvContains(t, got, []string{"--model", "gpt-5.5"})
-		assertArgvContains(t, got, []string{"-c", "model_reasoning_effort=high"})
-		assertArgvContains(t, got, []string{"-c", "service_tier=fast"})
-		assertArgvContains(t, got, []string{"--dangerously-bypass-approvals-and-sandbox"})
+		if params["model"] != "gpt-5.5" || params["effort"] != "high" || params["serviceTier"] != "fast" {
+			t.Fatalf("model selection params = %#v", params)
+		}
+		if params["approvalPolicy"] != "never" {
+			t.Fatalf("approvalPolicy = %#v, want never", params["approvalPolicy"])
+		}
+		wantSandbox := map[string]any{"type": "dangerFullAccess"}
+		if !reflect.DeepEqual(params["sandboxPolicy"], wantSandbox) {
+			t.Fatalf("sandboxPolicy = %#v, want %#v", params["sandboxPolicy"], wantSandbox)
+		}
 	})
 
 	t.Run("cursor slug only", func(t *testing.T) {

@@ -40,13 +40,17 @@ type Versioned interface {
 	Version(ctx context.Context) (string, error)
 }
 
-// Cloner is an optional capability for adapters whose CLI persists
-// session state to disk in a format we can fork. The runner calls
-// CloneSession when it receives a Command with Kind=="clone-session";
-// the implementation copies the source session file, rewrites any
-// embedded session id, truncates at the chosen turn boundary, and
-// returns the new external id (which the sidecar then publishes via
-// SessionExternalIDEvent on the result stream).
+// Closer is an optional capability for adapters that own subprocesses or
+// connections beyond the generic CLIRunner. The runner calls it during
+// teardown after it has stopped accepting commands.
+type Closer interface {
+	Close() error
+}
+
+// Cloner is an optional capability for adapters that can fork persisted
+// session state. The runner calls CloneSession when it receives a Command
+// with Kind=="clone-session"; implementations may use a native API (Codex
+// app-server) or rewrite the CLI's on-disk state (Claude/Cursor).
 //
 // workingDir is the command's pinned working directory (Claude and
 // Cursor key their on-disk session storage by it); empty means "use
@@ -54,10 +58,8 @@ type Versioned interface {
 // sessions workdir-independently and ignores it.
 //
 // turnIndex is 1-based and may exceed the source session's actual turn
-// count — implementations should clamp by simply copying the whole file
-// in that case rather than erroring. truncate boundaries are
-// adapter-specific (Claude/Cursor: before the next user-text message;
-// Codex: before the next task_started event).
+// count — implementations should clamp by forking the whole session rather
+// than erroring. Truncation boundaries are adapter-specific.
 type Cloner interface {
 	CloneSession(ctx context.Context, workingDir, srcExternalID string, turnIndex int) (string, error)
 }

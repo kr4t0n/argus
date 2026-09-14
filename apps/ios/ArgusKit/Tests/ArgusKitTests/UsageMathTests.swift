@@ -123,6 +123,25 @@ struct UsageMathTests {
         #expect(fallback.inputTokens == 150_000)
     }
 
+    @Test("parseContextUsage: Codex lastUsage beats the turn aggregate")
+    func codexContextUsesLastUsage() throws {
+        let meta: [String: JSONValue] = [
+            "usage": .object([
+                "input_tokens": .number(100_000),
+                "cached_input_tokens": .number(60_000),
+            ]),
+            "lastUsage": .object([
+                "input_tokens": .number(30_000),
+                "cached_input_tokens": .number(20_000),
+            ]),
+        ]
+        let context = try #require(
+            UsageParser.parseContextUsage(adapterType: KnownAgentType.codex, meta: meta)
+        )
+        #expect(context.inputTokens == 10_000)
+        #expect(context.cacheReadTokens == 20_000)
+    }
+
     @Test("parseModel: top-level beats nested envelopes")
     func modelProbeOrder() {
         #expect(UsageParser.parseModel(meta: nil) == nil)
