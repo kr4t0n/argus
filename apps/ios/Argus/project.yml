@@ -33,6 +33,12 @@ targets:
       - Sources
       # Shared with the widget extension (Live Activity attributes).
       - Shared
+      # Runtime for ```mermaid answer blocks (Views/MermaidRender.swift):
+      # mermaid.html plus the vendored mermaid.min.js, copied flat into
+      # the app bundle. Re-vendor with scripts/sync-ios-mermaid.sh;
+      # MermaidLockstepTests pins it to the web app's resolved version.
+      - path: Resources
+        buildPhase: resources
     dependencies:
       - package: ArgusKit
       - package: MarkdownUI

@@ -830,7 +830,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   serialized through one promise chain; two diagrams under different
   themes would otherwise race on it. GOTCHA: mermaid measures text to
   size nodes, so `fontFamily` has to match tailwind's `font-sans` or
-  boxes come out visibly mis-fitted to their labels.
+  boxes come out visibly mis-fitted to their labels. iOS counterpart:
+  `apps/ios/Argus/Sources/Views/MermaidRender.swift` + a vendored copy
+  of the same mermaid release, version-pinned to this dependency by
+  `MermaidLockstepTests` (see the `apps/ios/` section).
 - `stores/` — Zustand slices: `authStore`, `machineStore`, `sessionStore`,
   `projectStore`, `uiStore` (no `agentStore` — it was deleted with the
   Agent entity). Sessions are stored by id with their full `chunks`
@@ -1324,6 +1327,27 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - Swift is authored on Linux but only compiles on macOS —
   `.github/workflows/ios.yml` (macOS runner, `swift build` + `swift
   test`) is the primary verifier, not the dev box.
+- **```` ```mermaid ```` answer blocks** render through `MermaidBlock`
+  (`Argus/Sources/Views/MermaidRender.swift`): a WKWebView that loads
+  the bundled `Resources/mermaid.html` once via `loadFileURL` and then
+  pushes source + theme in through `window.argusRender`, so a theme
+  flip redraws without re-parsing the runtime. The runtime is a
+  **vendored `Resources/mermaid.min.js`** (3.2 MB, checked in) — the app
+  can't take the npm dependency the web does, and loading it off a CDN
+  would break air-gapped servers and offline phones. Same posture as
+  the web: `securityLevel: 'strict'`, never `'loose'`; a source that
+  doesn't parse falls back to the plain code block with no error state.
+  Every navigation but the initial file load is cancelled (async
+  `decidePolicyFor`, same trap as StaticHtmlView). Lockstep with the
+  web is version-pinned by `MermaidLockstepTests`, which reads the
+  `version:"x.y.z"` literal out of the vendored bundle and compares it
+  to the `apps/web` importer's resolved version in `pnpm-lock.yaml`;
+  after bumping mermaid on the web, run `scripts/sync-ios-mermaid.sh`
+  and commit the refreshed file. `project.yml` lists `Resources` with
+  `buildPhase: resources` — adding it needed an `xcodegen generate`, so
+  a stale local project silently ships without the runtime; the block
+  then degrades to source (missing-resource fallback in
+  `MermaidWebView.makeUIView`) rather than sitting empty.
 - Wire gotcha the fixtures encode: REST-served chunks drop
   `sessionId`/`isFinal` and serialize `ts` as an ISO string, while the WS
   `chunk` event relays the full wire shape with numeric millis; command
