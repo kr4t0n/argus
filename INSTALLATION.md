@@ -1,7 +1,7 @@
 # Argus — Installation Guide
 
 This guide walks through a fresh, production-style install of Argus from
-zero to a working dashboard with one or more remote agents reporting in.
+zero to a working dashboard with one or more remote machines reporting in.
 
 The install splits into two halves:
 
@@ -58,7 +58,8 @@ if you'll enable the interactive terminal feature
 
 ### Step 1: Provision Postgres
 
-Argus stores users, agents, sessions, and command history in Postgres.
+Argus stores users, machines, projects, sessions, and command history in
+Postgres.
 You can either run a Postgres container on the same host as the server
 or point at a managed service. Pick one.
 
@@ -292,7 +293,7 @@ for the full values reference and ingress recipes.
 
 Open `http://<host>:5173` (or your proxied domain). Sign in with the
 `ADMIN_EMAIL` / `ADMIN_PASSWORD` you set. The sidebar will be empty —
-that's expected; agents only show up after at least one sidecar has
+that's expected; machines only show up after at least one sidecar has
 registered. On to Part 2.
 
 ---
@@ -303,20 +304,20 @@ A sidecar is one Go binary you run on each machine that may host one
 or more CLI agents. It does four things:
 
 1. Registers itself as a *Machine* with the server on boot and reports
-  which CLI adapters it found on `PATH` (so the dashboard's "create
-   agent" dropdown shows only what's actually installed).
-2. Subscribes to a per-machine Redis control stream and spawns /
-  destroys agent supervisors as the dashboard creates / removes them.
-3. Consumes per-agent commands from Redis Streams, executes them via
-  the local CLI, and streams results back.
-4. Optionally hosts a PTY per agent for the interactive terminal in
+  which CLI adapters it found on `PATH` (so the dashboard's new-session
+   picker shows only what's actually installed).
+2. Starts one **runner** per installed CLI type and keeps it subscribed
+  to that runner's Redis command stream.
+3. Executes each turn via the local CLI in the session's pinned working
+  directory, and streams results back.
+4. Optionally hosts a PTY per project for the interactive terminal in
   the dashboard.
 
-You install **one sidecar per machine**, regardless of how many agents
-you plan to run on it. A single Mac running both `claude` and `codex`
-runs one daemon and creates two agents on it from the dashboard. A
-fleet of five build boxes runs five daemons (one each), and you create
-agents on whichever fleet member you want.
+You install **one sidecar per machine**, regardless of how many CLIs or
+projects you plan to run on it. A single Mac with both `claude` and
+`codex` installed runs one daemon and starts two runners. A fleet of
+five build boxes runs five daemons (one each), and you create projects
+and sessions on whichever fleet member you want.
 
 ### Step 5: Install the binary
 
@@ -502,16 +503,17 @@ sudo argus-sidecar init \
 ```
 
 Re-running `init` over an existing config errors out by default. Pass
-`--force` to overwrite (you'll keep the same machine ID — agents
-created on this box stay attached).
+`--force` to overwrite. Note that `--force` mints a **new** machine ID:
+the host rejoins the dashboard as a fresh machine, and projects and
+sessions created under the old identity stay attached to it.
 
 #### What gets discovered
 
 On the next `argus-sidecar` boot the daemon probes `PATH` for every
 adapter it knows about (`claude`, `codex`, `cursor-agent`, …) and
 reports what it finds — adapter type, binary path, and `--version` —
-back to the server. The dashboard's "create agent" popover will then
-list only the adapters that actually exist on this host.
+back to the server. The dashboard's new-session picker will then list
+only the adapters that actually exist on this host.
 
 You don't pre-declare adapters or list them anywhere. Install the
 CLI you want exposed (`brew install claude`, `npm i -g @openai/codex`,
@@ -529,12 +531,13 @@ Or pass `-cache /full/path/sidecar.json` to either subcommand for an
 ad-hoc location (handy for system-wide installs at
 `/etc/argus/sidecar.json`).
 
-The file is small JSON — bus URL, server URL, machine name + ID, and
-the canonical agent list. It's safe to inspect and to back up. The
-agent list is rewritten every time the server pushes a `create-agent`
-or `destroy-agent` command, so a sidecar restart re-spawns every
-supervisor instantly without waiting for the server's reconcile
-broadcast.
+The file is small JSON — machine name + ID, bus URL, server link
+credentials, and the project workdir allowlist. It's safe to inspect and
+to back up. Everything else (host info, discovered adapters, sidecar
+version) is recomputed on every boot, so a binary upgrade or a system
+rename can't be driven from a stale snapshot. The allowlist is persisted
+so the file jail and the fs watchers come up on reboot without waiting
+for the server's reconcile broadcast.
 
 ### Step 7: Run the sidecar in the background
 
@@ -667,33 +670,47 @@ sudo journalctl -u argus-sidecar -f
 
 Restart after update: `sudo systemctl restart argus-sidecar`.
 
-#### Quick-and-dirty (non-production)
+#### Without a service manager
+
+The sidecar ships its own background mode, which is what you want for
+interactive use or a quick non-production install:
 
 ```bash
-nohup argus-sidecar >sidecar.log 2>&1 &
+argus-sidecar start      # detach; logs to ~/.local/state/argus/sidecar.log
+argus-sidecar status     # running pid, uptime, log + pidfile paths
+argus-sidecar restart    # graceful stop + start
+argus-sidecar stop       # SIGTERM, then SIGKILL after --timeout (default 10s)
 ```
 
-Survives the terminal but not a reboot. Useful for one-off testing only.
+State files live under `$XDG_STATE_HOME/argus/` (default
+`~/.local/state/argus/`); override with `--pid-file` / `--log-file`. Both
+this and the bare `argus-sidecar` take the same advisory `flock(2)` on
+the pidfile, so you can't accidentally run two daemons against one cache
+(which would share a `machineId` and confuse the server).
 
-### Step 8 — Verify and create your first agent
+This survives the terminal but not a reboot — use `service install` above
+for anything long-lived. The log is append-only; wire it into
+`logrotate` or `newsyslog` if you want rotation.
+
+### Step 8 — Verify and create your first session
 
 1. Refresh the dashboard. The bottom of the sidebar grows a
   **machines** section with your host listed (green dot when
    reachable).
-2. Hover the machine row and click the `+`. A popover appears with:
-  - **adapter** — pre-filtered to whatever the sidecar discovered on
-   `PATH`.
+2. Hover the machine row and click the `+` to create a **project**:
+  - **working dir** — the directory the CLI is launched in. It can't
+   change later, because the CLIs key their `--resume` state on the cwd.
   - **name** — what you'll see in the sidebar.
-  - **working dir** — optional `$CWD` for the wrapped CLI.
   - **attach interactive terminal** — opt-in PTY (see the next
   section).
-3. Click **create**. The agent appears in the sidebar within a
-  fraction of a second. Click it, then **+ new session**, and send a
-   prompt — the response streams back token-by-token, with tool-call
-   cards rendering inline.
+3. The project appears in the sidebar immediately. Hover it, click its
+   `+`, pick an **adapter** (pre-filtered to what the sidecar discovered
+   on `PATH`) and a name, then send a prompt — the response streams back
+   token-by-token, with tool-call cards rendering inline.
 
-Created agents are persisted on the sidecar in `sidecar.json`, so a
-daemon restart immediately re-spawns each agent's supervisor with no
+A session pins to its project and CLI type for life; the server routes
+each turn to that machine's runner for that CLI. Nothing is persisted on
+the sidecar except the workdir allowlist, so a daemon restart needs no
 operator action.
 
 If the machine never appears, jump to [Troubleshooting](#troubleshooting)
@@ -703,12 +720,12 @@ below.
 
 ## Optional: enable the interactive terminal
 
-The PTY is per-agent, ticked at agent-create time via the **attach
-interactive terminal** checkbox in the create-agent popover. When
-enabled, the dashboard grows a real PTY shell on that machine in the
-right-hand panel — full ANSI colors, resize, ctrl-C, usable for
-`vim` / `htop` / anything. Traffic flows over a direct sidecar↔server
-WebSocket (not Redis) so keystroke echo stays sub-10 ms.
+The PTY is per-project, ticked at project-create time via the **attach
+interactive terminal** checkbox. When enabled, the dashboard grows a
+real PTY shell on that machine in the right-hand panel — full ANSI
+colors, resize, ctrl-C, usable for `vim` / `htop` / anything. Traffic
+flows over a direct sidecar↔server WebSocket (not Redis) so keystroke
+echo stays sub-10 ms.
 
 > **This is remote shell access** under whichever user runs the sidecar
 > process. Only enable on hosts where every dashboard user is trusted
@@ -727,8 +744,8 @@ Defaults the sidecar enforces on the PTY:
 
 - Allowed shells: `$SHELL`, `/bin/bash`, `/bin/zsh`, `/bin/sh`.
 - Max concurrent open PTYs per sidecar: 16.
-- `cwd` defaults to the agent's `workingDir` (set when you created the
-agent), falling back to the daemon's own CWD.
+- `cwd` defaults to the project's `workingDir` (set when you created the
+project), falling back to the daemon's own CWD.
 
 These can be overridden with environment variables on the sidecar
 (`ARGUS_TERMINAL_SHELLS=/bin/zsh,/bin/bash` and
@@ -750,6 +767,90 @@ These can be overridden with environment variables on the sidecar
 
 `:latest` follows `main`. For controlled upgrades, pin to `:X.Y.Z` in
 the compose file and bump explicitly.
+
+Server, web and sidecar ship as one release train — run the same minor
+version across all three. Breaking changes between minors are called out
+in the [GitHub release notes](https://github.com/kr4t0n/argus/releases);
+read them before jumping a minor.
+
+### Updating sidecars from the dashboard
+
+You don't have to SSH into every host. The same self-update runs
+remotely:
+
+- **Per-machine** — open a machine's pane (click its row in the sidebar's
+  machines list) and pick **Update sidecar** from the header kebab menu
+  (⋮). A green badge appears whenever a host is running a sidecar older
+  than the latest published release.
+- **Whole fleet** — hover the **machines** header in the sidebar and pick
+  **Update all sidecars…**. A modal previews which hosts will update,
+  which are current, and which are offline (and therefore skipped). The
+  run walks the fleet sequentially and stops on the first failure, so a
+  bad release can't cascade.
+
+The server publishes an `update-sidecar` command on the host's Redis
+control stream; the sidecar reuses its normal update flow, then brings up
+the new binary in whichever way fits how it was started — re-exec in
+place (preserving the pid and its pidfile lock), a clean exit for
+systemd/launchd to respawn, or a "restart needed" notice if it's attached
+to a TTY. Active sessions reconnect across the restart, terminals
+included. Set `GITHUB_TOKEN` in the server env so the release check
+doesn't hit the unauthenticated rate limit.
+
+### Removing a machine
+
+Open the machine's pane and use **delete** (works at any status). This is
+a **soft delete**: the machine and its projects disappear from the
+dashboard, but nothing is destroyed — every session, command and result
+stays in Postgres.
+
+Reach that history through search (`⌘K` for content, `⌘P` to switch
+sessions). Those sessions still list, still name the project and host
+they ran on, and open with their full transcript; they're marked
+**removed** and read-only.
+
+The removal is sticky — a sidecar that keeps running or restarts is
+ignored, so the machine will not reappear, and there is no un-delete in
+the UI. The sidecar process itself is untouched; stop it with
+`argus-sidecar stop` on the host if you're retiring it too. Running
+`argus-sidecar init --force` there mints a new machine identity, so it
+rejoins as a fresh machine and the old sessions stay with the removed one.
+
+---
+
+## API keys
+
+The REST API is normally reached with a JWT from `POST /auth/login`. For
+machine-to-machine callers, mint a **revocable API key** instead: it can
+be revoked without rotating `JWT_SECRET` (which would log out every
+user), and it can be restricted to read-only.
+
+Manage keys from the dashboard's user panel, or over REST:
+
+```bash
+TOKEN=$(curl -s -X POST "$API/auth/login" -H 'Content-Type: application/json' \
+  -d '{"email":"admin@argus.local","password":"…"}' | jq -r .token)
+
+# readonly defaults to true; pass "readonly": false for a read/write key
+curl -s -X POST "$API/auth/api-keys" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"name":"dashboard"}'
+# → {"id":"…","name":"dashboard","prefix":"argus_AbCd12","readonly":true,"key":"argus_…"}
+```
+
+The `key` is shown **once** — store it, it cannot be retrieved again.
+Then call the API with it in the `X-API-Key` header:
+
+```bash
+curl -s "$API/sessions" -H "X-API-Key: argus_…"           # 200 — reads work
+curl -s -X POST "$API/sessions" -H "X-API-Key: argus_…"   # 403 — read-only key
+```
+
+A read-only key is confined to `GET`/`HEAD`/`OPTIONS`. List keys with
+`GET /auth/api-keys` and revoke one with `DELETE /auth/api-keys/:id`
+(both JWT-only — an API key can't manage keys). A key acts as the user
+who created it, so per-user data stays scoped to that account; create a
+dedicated `viewer` user for an integration rather than tying it to your
+admin login.
 
 ---
 
@@ -777,15 +878,15 @@ Network/firewall. From the sidecar host: `redis-cli -u "$REDIS_URL" PING`.
 For Upstash / managed services, double-check you're using the `rediss://`
 scheme (TLS) and including the password.
 
-**Agent registers, but commands hang forever with no output.**
+**Machine registers, but turns hang forever with no output.**
 Almost always a TTY-prompt problem in the wrapped CLI. The built-in
 adapters set the right "skip approval prompts" flag by default
 (`--dangerously-skip-permissions` for claude,
 `--dangerously-bypass-approvals-and-sandbox` for codex, `--yolo` for
-cursor) so this should never bite a stock
-install — but if you create an agent with custom `adapter` overrides
-that disable those, the CLI will sit waiting for a TTY that doesn't
-exist. Drop the override or re-create the agent without it.
+cursor) so this should never bite a stock install — but a CLI
+configured to require approvals some other way (a global config file,
+a wrapper script on `PATH`) will sit waiting for a TTY that doesn't
+exist. Check the CLI runs non-interactively on that host by hand.
 
 **Terminal pane shows "disconnected" immediately.**
 `SIDECAR_LINK_TOKEN` mismatch between server and sidecar, or the sidecar
@@ -818,8 +919,7 @@ API path — private repo — set `GITHUB_TOKEN` for 5000 req/h. Note that
 having `GITHUB_TOKEN` set in your environment *selects* the API path, so
 an expired token turns a working install into this error.
 
-**The machine goes green but the "create agent" popover lists no
-adapters.**
+**The machine goes green but the new-session picker lists no adapters.**
 The sidecar is running without your shell's `PATH`. Adapter discovery is
 a `PATH` probe at boot, and a service manager's default is a bare
 `/usr/bin:/bin` — no `~/.local/bin`, no nvm shims, no Homebrew — so the
@@ -833,5 +933,5 @@ entry (launchd). The daemon logs what it found at boot — grep the journal or
 
 ---
 
-For deeper architectural background see `[AGENTS.md](AGENTS.md)`. For
-the full feature tour and dev-mode setup see `[README.md](README.md)`.
+For deeper architectural background see [AGENTS.md](AGENTS.md). For the
+feature overview and dev-mode setup see [README.md](README.md).
