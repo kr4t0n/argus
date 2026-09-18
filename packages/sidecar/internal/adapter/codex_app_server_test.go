@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -301,6 +302,45 @@ func TestCodexSurfacesAppServerStderr(t *testing.T) {
 	}
 	if joinedDeltas(chunks) != "hello" {
 		t.Fatalf("stderr must not disturb the answer stream: %+v", chunks)
+	}
+}
+
+// app-server resolves its sandbox from config at startup, long before the
+// first thread exists. Leaving that resolution on the config default makes it
+// warn about a missing bubblewrap on every turn — on hosts whose turns all run
+// with full access and never enter a sandbox at all.
+func TestCodexStartArgsCarryTheSandboxToAppServer(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		adapter *CodexAdapter
+		want    []string
+	}{
+		{
+			name:    "full auto",
+			adapter: &CodexAdapter{fullAuto: true},
+			want:    []string{"-c", `sandbox_mode="danger-full-access"`},
+		},
+		{
+			name:    "explicit sandbox outranks full auto",
+			adapter: &CodexAdapter{fullAuto: true, sandbox: "workspaceWrite"},
+			want:    []string{"-c", `sandbox_mode="workspace-write"`},
+		},
+		{
+			name:    "no sandbox decided leaves the config default alone",
+			adapter: &CodexAdapter{},
+			want:    nil,
+		},
+		{
+			name:    "extra args keep the last word",
+			adapter: &CodexAdapter{fullAuto: true, extraArgs: []string{"-c", `sandbox_mode="read-only"`}},
+			want:    []string{"-c", `sandbox_mode="danger-full-access"`, "-c", `sandbox_mode="read-only"`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.adapter.startArgs(); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("startArgs() = %#v, want %#v", got, tc.want)
+			}
+		})
 	}
 }
 

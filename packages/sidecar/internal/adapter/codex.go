@@ -100,7 +100,7 @@ func boolFromCfg(cfg map[string]any, key string, def bool) bool {
 }
 
 func (a *CodexAdapter) Ping(ctx context.Context) error {
-	client, err := startCodexAppServer(ctx, a.binary, a.workingDir, a.extraArgs)
+	client, err := startCodexAppServer(ctx, a.binary, a.workingDir, a.startArgs())
 	if client != nil {
 		_ = client.Close()
 	}
@@ -133,7 +133,7 @@ func (a *CodexAdapter) Execute(
 		})
 	}
 	var err error
-	client, err = startCodexAppServer(ctx, a.binary, a.workingDir, a.extraArgs)
+	client, err = startCodexAppServer(ctx, a.binary, a.workingDir, a.startArgs())
 	if err != nil {
 		cleanup()
 		return nil, err
@@ -296,7 +296,7 @@ func (a *CodexAdapter) Cancel(ctx context.Context, commandID string) error {
 func (a *CodexAdapter) CloneSession(
 	ctx context.Context, _ /* workingDir */, srcExternalID string, turnIndex int,
 ) (string, error) {
-	client, err := startCodexAppServer(ctx, a.binary, a.workingDir, a.extraArgs)
+	client, err := startCodexAppServer(ctx, a.binary, a.workingDir, a.startArgs())
 	if err != nil {
 		return "", fmtCloneError("codex", srcExternalID, err)
 	}
@@ -455,6 +455,23 @@ func (a *CodexAdapter) turnStartParams(threadID string, cmd protocol.Command) ma
 		params["sandboxPolicy"] = sandbox
 	}
 	return params
+}
+
+// startArgs are the process-level args for `codex app-server`. They carry the
+// same sandbox Argus then sets per thread and per turn, because app-server
+// resolves its sandbox from config BEFORE any thread exists: with the config
+// default still in force it decides it will need bubblewrap, and a host without
+// bwrap on PATH gets a "could not find bubblewrap" warning on stderr — which
+// this adapter republishes as a stderr chunk, on every turn, about a sandbox
+// full-access turns never enter. Passing the setting at startup makes that
+// check see what the turns actually run under. It grants nothing extra: the
+// per-thread and per-turn sandbox already decide each turn.
+func (a *CodexAdapter) startArgs() []string {
+	var args []string
+	if sandbox := a.threadSandbox(); sandbox != "" {
+		args = append(args, "-c", fmt.Sprintf("sandbox_mode=%q", sandbox))
+	}
+	return append(args, a.extraArgs...)
 }
 
 func (a *CodexAdapter) threadSandbox() string {
