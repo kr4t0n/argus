@@ -811,6 +811,29 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   tables (`MTMathAtomFactory` + `MTMathListBuilder` string literals)
   rather than assuming KaTeX parity — `\atop` is supported, `\array`
   and `\substack` are not.
+- `lib/mermaid.ts` — lazy mermaid renderer for ```` ```mermaid ````
+  fences, built in the same shape as `lib/shiki.ts`: a module singleton
+  behind a dynamic `import()`, so the library stays out of the main
+  bundle until a response actually contains a diagram. Verified: the
+  entry chunk grows 1.92 kB raw / 0.65 kB gzip, and mermaid lands in its
+  own lazily-imported chunks (`mermaid.core` ~147 kB gzip plus one per
+  diagram type — a flowchart never pulls cytoscape). We render to an SVG
+  string and inject it rather than routing through `HtmlPreview`: the
+  iframe path would need mermaid off a CDN (breaking the air-gapped
+  installs the Helm chart targets) or the whole library inlined into
+  every `srcDoc`, re-parsed on each token while the answer streams.
+  `securityLevel: 'strict'` is what makes injecting model-generated
+  markup acceptable — mermaid DOMPurify-sanitizes its output and
+  disables HTML labels and `click` bindings. **Never relax it to
+  'loose'** for transcript content. GOTCHA: mermaid's config is a
+  module-level global, not a per-render argument, so renders are
+  serialized through one promise chain; two diagrams under different
+  themes would otherwise race on it. GOTCHA: mermaid measures text to
+  size nodes, so `fontFamily` has to match tailwind's `font-sans` or
+  boxes come out visibly mis-fitted to their labels. iOS counterpart:
+  `apps/ios/Argus/Sources/Views/MermaidRender.swift` + a vendored copy
+  of the same mermaid release, version-pinned to this dependency by
+  `MermaidLockstepTests` (see the `apps/ios/` section).
 - `stores/` — Zustand slices: `authStore`, `machineStore`, `sessionStore`,
   `projectStore`, `uiStore` (no `agentStore` — it was deleted with the
   Agent entity). Sessions are stored by id with their full `chunks`
@@ -820,10 +843,26 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   command, concatenates `delta`s, renders tool pills, stdout, errors, and a
   cursor while running. Final-answer markdown is rendered with the shared
   plugin sets from `lib/markdown.ts` (GFM + KaTeX math) and with
-  `MarkdownCodeBlock` as the custom `<pre>` renderer; that component
-  detects ```` ```html ```` fenced blocks and renders them through the
-  shared `HtmlPreview` component, defaulting to the rendered view with
-  a Source toggle. `HtmlPreview` has two sandbox postures keyed off its
+  `MarkdownCodeBlock` as the custom `<pre>` renderer. That component
+  gives two fence languages a rendered view with a Source toggle,
+  defaulting to rendered: ```` ```html ```` goes through the shared
+  `HtmlPreview` component, and ```` ```mermaid ```` through
+  `MermaidBlock` (see `lib/mermaid.ts`). Anything else is a plain
+  `<pre>` with the copy button. NOTE: `sourceText` is extracted for
+  *every* renderable language, not just HTML — the copy button falls
+  back to it whenever the rendered view has unmounted the `<pre>`, so
+  adding a third language means widening that memo too.
+  `MermaidBlock` is built around the fact that a fence streams in token
+  by token: renders are debounced (~200 ms), a failed parse keeps the
+  last good diagram rather than clearing it, and before anything parses
+  it renders the ordinary `<pre>` instead. So a streaming block reads as
+  source and snaps into a diagram when it completes, and a malformed one
+  just stays source — there is deliberately no error state, matching how
+  invalid TeX renders as visible source instead of throwing. GOTCHA:
+  React's `useId()` emits ids like `:r3:` and mermaid feeds the id
+  straight to `querySelector`, where the leading `:` parses as a
+  pseudo-class and throws — `MermaidBlock` strips them.
+  `HtmlPreview` has two sandbox postures keyed off its
   `autoHeight` prop. `FileViewer` (`.html` files) uses the strict
   `sandbox=""`: opaque origin, no scripts, sized by its container —
   remote-tree file content stays fully inert. The chat code-block path
@@ -1288,6 +1327,27 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - Swift is authored on Linux but only compiles on macOS —
   `.github/workflows/ios.yml` (macOS runner, `swift build` + `swift
   test`) is the primary verifier, not the dev box.
+- **```` ```mermaid ```` answer blocks** render through `MermaidBlock`
+  (`Argus/Sources/Views/MermaidRender.swift`): a WKWebView that loads
+  the bundled `Resources/mermaid.html` once via `loadFileURL` and then
+  pushes source + theme in through `window.argusRender`, so a theme
+  flip redraws without re-parsing the runtime. The runtime is a
+  **vendored `Resources/mermaid.min.js`** (3.2 MB, checked in) — the app
+  can't take the npm dependency the web does, and loading it off a CDN
+  would break air-gapped servers and offline phones. Same posture as
+  the web: `securityLevel: 'strict'`, never `'loose'`; a source that
+  doesn't parse falls back to the plain code block with no error state.
+  Every navigation but the initial file load is cancelled (async
+  `decidePolicyFor`, same trap as StaticHtmlView). Lockstep with the
+  web is version-pinned by `MermaidLockstepTests`, which reads the
+  `version:"x.y.z"` literal out of the vendored bundle and compares it
+  to the `apps/web` importer's resolved version in `pnpm-lock.yaml`;
+  after bumping mermaid on the web, run `scripts/sync-ios-mermaid.sh`
+  and commit the refreshed file. `project.yml` lists `Resources` with
+  `buildPhase: resources` — adding it needed an `xcodegen generate`, so
+  a stale local project silently ships without the runtime; the block
+  then degrades to source (missing-resource fallback in
+  `MermaidWebView.makeUIView`) rather than sitting empty.
 - Wire gotcha the fixtures encode: REST-served chunks drop
   `sessionId`/`isFinal` and serialize `ts` as an ISO string, while the WS
   `chunk` event relays the full wire shape with numeric millis; command

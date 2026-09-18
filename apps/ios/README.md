@@ -63,6 +63,7 @@ apps/ios/
 │                                 ContextWindows (all pure + unit-tested)
 └── Argus/                        SwiftUI app target (XcodeGen; .xcodeproj generated)
     ├── project.yml               targets, ATS exception, MarkdownUI + SwiftMath + ArgusKit deps
+    ├── Resources/                mermaid.html + vendored mermaid.min.js (```mermaid answer blocks)
     └── Sources/
         ├── ArgusApp.swift        @main, root phase switch, scenePhase handling
         ├── AppModel.swift        auth, socket ownership, event routing, TokenBox
@@ -81,6 +82,7 @@ Ports that must stay in lockstep with their TS originals:
 | `Engine/ContextWindow.swift` | `packages/shared-types/src/contextWindow.ts` |
 | `Realtime/StreamClient.swift` events | `packages/shared-types/src/ws.ts` |
 | `Models/*` | `packages/shared-types/src/{api,protocol}.ts` |
+| `Argus/Resources/mermaid.min.js` | the `mermaid` version `apps/web` resolves in `pnpm-lock.yaml` (pinned by `MermaidLockstepTests`; re-vendor with `scripts/sync-ios-mermaid.sh`) |
 
 ## Build & test
 
@@ -346,3 +348,20 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   arrives; fences and code spans are immune (a real transcript had
   `find . \( -name "*.h" \)` in a ```bash block). Mirrors the web's
   `normalizeMathDelimiters` — keep the two in step.
+- **Mermaid diagrams (this):** ```mermaid fences in the final answer
+  render as diagrams with a Source toggle, the same affordance as
+  ```html — `MermaidBlock` hosts a WKWebView that loads the bundled
+  `Resources/mermaid.html` once and pushes source + theme in through
+  `window.argusRender`, so a light/dark flip redraws without reloading
+  the runtime. The runtime is vendored (`Resources/mermaid.min.js`,
+  the exact release the web app bundles) rather than fetched from a
+  CDN, so air-gapped servers and offline phones still get diagrams;
+  `MermaidLockstepTests` fails CI if it drifts from the web's
+  resolved version, and `scripts/sync-ios-mermaid.sh` re-vendors it.
+  Mermaid runs at `securityLevel: 'strict'` (DOMPurify, no HTML
+  labels, no click bindings) and the frame cancels every navigation
+  but its own load. A source that doesn't parse falls back to the
+  plain code block — no error state, like unparseable LaTeX. Adding
+  `Resources` to `project.yml` means **`xcodegen generate` is needed
+  once**; a stale project ships without the runtime and the block
+  degrades to source.

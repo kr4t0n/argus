@@ -5,14 +5,15 @@ import MarkdownUI
 
 /// The assistant's final answer — Markdown themed to match the web's
 /// `.markdown` body: inline-code accent, sky links, and a custom fenced
-/// code block that routes ```html to a live preview and everything else
-/// to a styled monospace block with a copy button. Matches the web
-/// deliberately: the transcript does NOT syntax-highlight code (that's
-/// the file viewer's job).
+/// code block that routes ```html to a live preview, ```mermaid to a
+/// rendered diagram, and everything else to a styled monospace block
+/// with a copy button. Matches the web deliberately: the transcript
+/// does NOT syntax-highlight code (that's the file viewer's job).
 struct AnswerView: View {
     let markdown: String
     /// While the turn streams, MarkdownUI re-parses per token — render
-    /// ```html as source until it settles so we don't thrash WKWebViews.
+    /// ```html / ```mermaid as source until it settles so we don't
+    /// thrash WKWebViews.
     var isStreaming = false
 
     var body: some View {
@@ -99,6 +100,8 @@ struct AnswerView: View {
                 Group {
                     if configuration.language?.lowercased() == "html", !isStreaming {
                         HtmlBlock(source: configuration.content)
+                    } else if configuration.language?.lowercased() == "mermaid", !isStreaming {
+                        MermaidBlock(source: configuration.content)
                     } else {
                         CodeBlock(code: configuration.content, language: configuration.language)
                     }

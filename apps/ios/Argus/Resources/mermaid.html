@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<!--
+  Host page for ```mermaid answer blocks (Views/MermaidRender.swift).
+  Loaded once per web view via loadFileURL; the diagram source is then
+  pushed in through window.argusRender(source, dark) and results come
+  back over the `argusMermaid` message handler as {kind, value}:
+    ready   — mermaid.min.js is loaded; renders can be flushed
+    height  — document scrollHeight (pt), after each render and on reflow
+    invalid — the source didn't parse / mermaid failed to load; the Swift
+              side falls back to the plain source block
+  Keeping the page static means a theme flip or re-render never re-parses
+  the ~3 MB runtime — only the diagram is redrawn.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<!-- Pin the layout to the device width: with no viewport WKWebView lays
+     out at a 980px desktop canvas and scales down, inflating the height
+     it reports (same fix as HtmlWebView / StaticHtmlView). -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  #diagram { padding: 12px; }
+  /* Mermaid emits a viewBox'd SVG with an inline max-width; letting it
+     shrink to the column keeps wide flowcharts inside the phone width,
+     and height:auto keeps the reported height honest after scaling. */
+  #diagram svg { display: block; max-width: 100%; height: auto; }
+</style>
+<script src="mermaid.min.js"></script>
+<script>
+(function () {
+  var seq = 0;
+  var appliedDark = null;
+
+  function post(kind, value) {
+    if (window.webkit && window.webkit.messageHandlers
+        && window.webkit.messageHandlers.argusMermaid) {
+      window.webkit.messageHandlers.argusMermaid.postMessage({ kind: kind, value: value });
+    }
+  }
+
+  function height() {
+    var d = document;
+    return Math.max(d.documentElement ? d.documentElement.scrollHeight : 0,
+                    d.body ? d.body.scrollHeight : 0);
+  }
+
+  // Mermaid's config is a module global; re-initialize only when the
+  // theme actually flips. securityLevel 'strict' (DOMPurify, no HTML
+  // labels, no click bindings) is what makes rendering model-generated
+  // diagrams inside a script-enabled page acceptable — never 'loose'.
+  function configure(dark) {
+    if (appliedDark === dark) return;
+    appliedDark = dark;
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      theme: dark ? 'dark' : 'default',
+      fontFamily: '-apple-system, system-ui, sans-serif'
+    });
+  }
+
+  window.argusRender = async function (source, dark) {
+    var id = ++seq;
+    try {
+      configure(dark);
+      if (!(await mermaid.parse(source, { suppressErrors: true }))) {
+        post('invalid', id);
+        return;
+      }
+      var result = await mermaid.render('m' + id, source);
+      if (id !== seq) return; // superseded by a newer render
+      document.getElementById('diagram').innerHTML = result.svg;
+      post('height', height());
+    } catch (e) {
+      post('invalid', id);
+    }
+  };
+
+  // Fonts settling / late layout: keep the reported height current.
+  try {
+    if (typeof ResizeObserver !== 'undefined' && document.documentElement) {
+      new ResizeObserver(function () { post('height', height()); }).observe(document.documentElement);
+    }
+  } catch (e) {}
+
+  if (typeof mermaid === 'undefined') {
+    post('invalid', 0); // runtime failed to load — nothing will ever render
+  } else {
+    post('ready', 0);
+  }
+})();
+</script>
+</head>
+<body><div id="diagram"></div></body>
+</html>
