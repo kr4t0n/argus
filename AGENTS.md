@@ -611,7 +611,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     `Failed to write to stdout: Broken pipe` line is filtered as noise, and
     output is capped at 100 lines per turn because each chunk is a Redis
     stream entry. The last 8 lines are still retained separately to decorate
-    a process-failure error. The runner also invokes
+    a process-failure error. **The sandbox is passed at startup too**
+    (`-c sandbox_mode=…`), not only on `thread/start` and `turn/start`:
+    app-server resolves its sandbox from config before any thread exists, so
+    with the config default still in force a Linux host without `bwrap` on
+    PATH logs a missing-bubblewrap ERROR (and a `configWarning`) during the
+    handshake — which the stderr bridge above then republishes as a stderr
+    chunk, on every turn, about a sandbox full-access turns never enter. The
+    flag grants nothing extra; the per-thread and per-turn sandbox still
+    decide each turn. The runner also invokes
     the optional `Closer` capability during shutdown. Because app-server's
     `tokenUsage.total` is cumulative for the whole thread, the adapter
     snapshots it before each turn and folds only the delta into the final

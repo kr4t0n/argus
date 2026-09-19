@@ -65,8 +65,8 @@ type codexAppEvent struct {
 	params json.RawMessage
 }
 
-func startCodexAppServer(ctx context.Context, binary, workingDir string, extraArgs []string) (*codexAppServer, error) {
-	args := append([]string{"app-server", "--stdio"}, extraArgs...)
+func startCodexAppServer(ctx context.Context, binary, workingDir string, startArgs []string) (*codexAppServer, error) {
+	args := append([]string{"app-server", "--stdio"}, startArgs...)
 	cmd := exec.Command(binary, args...)
 	if workingDir != "" {
 		cmd.Dir = workingDir
