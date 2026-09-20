@@ -894,6 +894,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   answer streams, `srcDoc` changes per token and the iframe reloads, so
   the bootstrap and any chart code re-run on each partial — noisy but
   isolated and harmless; it settles when the block completes.
+  `components/MarkdownImage.tsx` is the custom `img` renderer for the
+  same answer markdown — `![alt](path)` for a path inside the agent's
+  workingDir fetches the real bytes over fs-read and renders them as a
+  `data:` URL; anything else renders as inert alt text. See the
+  "local images in answer markdown" gotcha for why.
 - `components/TodoWindow.tsx` — per-turn task tracker rendered inside the
   sticky band right under `<ActivityPill>`. Sources its rows from the
   *latest* `TodoWrite`-style tool chunk in the command's chunks
@@ -1729,6 +1734,69 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   line number rides on the file-tab entry (`fileTabsStore.ts`, not part
   of the tab key) and the viewer scrolls/highlights via shiki's
   per-line `.line` spans + the `.line-target` rule in `index.css`.
+- **Local images in answer markdown**: agents emit
+  `![Preview](/tmp/shot.png)` or `![x](docs/preview.png)` after writing a
+  file. A markdown image's src is a *URL*, so the browser resolves it
+  against the DASHBOARD's origin — never the agent's machine. Before
+  `MarkdownImage.tsx` this produced a silent broken image: nginx answers
+  `/tmp/shot.png` with the SPA fallback `index.html`
+  (`deploy/web.nginx.conf`), which the browser can't decode as an image.
+  The custom `img` renderer now splits three ways: a real URL is left to
+  the browser (plus `referrerPolicy="no-referrer"`, since the model
+  chose that third party); a path `toAgentRelative` resolves inside
+  workingDir is fetched over fs-read and rendered as a `data:` URL; and
+  everything else renders as inert alt text.
+  The out-of-workspace case is NOT an oversight — the sidecar's fs jail
+  (`resolvePath`, `internal/machine/fs.go`) refuses absolute paths and
+  `..` escapes, so `/tmp/...` is unreadable by design. Widening that jail
+  is a real security decision, not a bug fix: `/tmp` is world-writable,
+  making the jail's EvalSymlinks check race-able by any local account,
+  and fs-read runs OUTSIDE whatever sandbox the CLI runs under
+  (`codex.go` `threadSandbox`), so a wider jail would hand a sandboxed
+  agent a confused-deputy read primitive driven by its own output.
+  The path to render such an image is to have the agent write it under
+  workingDir. iOS counterpart: `Argus/Sources/Views/MarkdownImage.swift`
+  — the same three-way split, classified by ArgusKit
+  `FileReferences.imageSource` (tested), installed on `AnswerView` as
+  BOTH MarkdownUI providers, because MarkdownUI has two image paths: a
+  paragraph that is only an image goes through `ImageProvider` (a full
+  view), an image inside a text run through `InlineImageProvider`
+  (must return a bare `Image`). MarkdownUI GOTCHAS: (1) `makeImage`
+  receives only the URL — alt text never reaches the provider, so the
+  inert fallback shows the path where the web shows alt; (2) an inline
+  provider that THROWS drops every inline image in that paragraph
+  (MarkdownUI awaits the whole task group under one `try?`), so ours
+  never throws — it returns a `photo` glyph; (3) `URL(string:)` fails on
+  a source with spaces → the provider gets nil → inert. Tap (not
+  double-tap) opens the file preview, matching FileChipsRow's touch
+  idiom. Same settled-outcome cache (failures included, keyed on the
+  turn's completedAt), lock-guarded rather than actor-isolated so the
+  synchronous read in `body` compiles under either `View.body`
+  isolation the toolchain assumes. GOTCHA: `MarkdownImage` caches by
+  `(projectId, path, turn completedAt)`. The epoch matters — an agent
+  that regenerates `preview.png` next turn emits the same path, and a
+  path-only key would show the previous turn's bytes. FAILURES are
+  cached too, not just successes: a path that isn't a readable image
+  fails identically every time, and caching only successes made a
+  missing file flicker loading→not-found on every remount. The
+  trade-off is that a transient failure (machine offline) also sticks
+  for that turn; a live turn re-reads when it settles into its own
+  epoch.
+- **`useProjectRef` must return a STABLE object** (`lib/projects.ts`).
+  `resolveProjectRef` builds a fresh `{projectId, machineId,
+  workingDir}` per call, and `SessionPanel` re-renders on every
+  composer keystroke (it subscribes to `drafts[sessionId]` in
+  `uiStore`). Unmemoized, that fresh identity propagated as a prop and
+  (a) defeated `CommandBlock`'s `memo()`, re-rendering every turn in
+  the transcript per keystroke, and (b) invalidated StreamViewer's
+  `markdownComponents` useMemo — and because React keys reconciliation
+  on component-function IDENTITY, a rebuilt `components` object
+  UNMOUNTS and remounts the entire markdown subtree, tearing down every
+  `MermaidBlock`, `HtmlPreview` and `MarkdownImage`. Surfaced as a
+  markdown image for a missing file flickering between its loading and
+  not-found states while typing. The hook now memoizes on the three
+  primitive fields; keep it that way, and prefer passing the ref itself
+  (not a spread of it) so the stability survives.
 - **Prisma + workspace import**: the server can only typecheck if `rootDir`
   is unset, because `@argus/shared-types` lives outside `apps/server/src`.
   `nest build` is fine because it only compiles `src/`.

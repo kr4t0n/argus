@@ -77,6 +77,7 @@ Ports that must stay in lockstep with their TS originals:
 | Swift | TypeScript original |
 | --- | --- |
 | `Engine/DeltaSplit.swift` | `apps/web/src/lib/deltaSplit.ts` |
+| `Engine/FileReferences.swift` | `apps/web/src/components/FileChips.tsx` helpers, plus the `img` source split in `apps/web/src/components/StreamViewer.tsx` |
 | `Engine/MathSegments.swift` | `apps/web/src/lib/markdown.ts` delimiter rules (semantic port; deliberate deviations documented in the file) |
 | `Engine/UsageMath.swift` | `packages/shared-types/src/usage.ts` |
 | `Engine/ContextWindow.swift` | `packages/shared-types/src/contextWindow.ts` |
