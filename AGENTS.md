@@ -93,8 +93,6 @@ Argus has **four** moving parts and one wire format:
        `gitWatcher` — and that is a deliberate invariant, not an
        accident of history; see the `vcs_state_changed` gotcha before
        adding a second.
-     - `agent:background`        — `argus-bg` task progress (see the
-       background-task service note under Server modules).
      - `machine:{mid}:control`   — server → sidecar daemon
        (`sync-projects` — the full workdir allowlist — plus fs/git/model
        RPC requests and sidecar-update commands).
@@ -293,26 +291,6 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   open terminals so the UI doesn't show zombies. Bytes are base64 over
   the wire to survive JSON. A small in-memory cache keyed by terminalId
   short-circuits Postgres ownership checks on every keystroke.
-- `machine/background-task.{service,controller}.ts` — in-memory
-  registry of every active + ended background task, populated by the
-  service's own XREADGROUP loop on `streamKeys.background` (the
-  dedicated `agent:background` stream; deliberately separate from
-  `agent:lifecycle` because a fast tqdm bar emits 20+ events/sec and
-  would otherwise trim heartbeats / sidecar-update progress out via
-  MAXLEN — the same reasoning later moved the fs/git watcher nudges
-  onto `agent:notify`). Keyed by `(machineId, workingDir,
-  taskId)` — workingDir is the project identity, matching how notes
-  scope. Each upsert fans out as `background-task:updated` on the
-  per-project Socket.IO room (`project:<machineId>:<workingDir>`).
-  Ended tasks **stay in memory forever** until a user explicitly
-  dismisses them — `DELETE /machines/:id/background-tasks/:taskId?
-  workingDir=...` removes from the map and broadcasts
-  `background-task:removed`. Effect is global (every dashboard
-  viewing the project sees the card disappear), matching how the
-  earlier wall-clock auto-eviction worked. `GET /machines/:id/
-  background-tasks?workingDir=...` hydrates a tab opening mid-run.
-  No DB persistence — JSONL on the machine's disk is authoritative if
-  you need history.
 - `session/` transcript windowing — three read shapes, all returning
   `{commands, chunks, hasMore, hasMoreNewer}`-ish payloads:
   `?tailCommands=N` (the default open-a-session path, newest N turns),
@@ -458,13 +436,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   module. Pings every 15 s, idle-timeout after 45 s.
 - `gateway/` — Socket.IO namespace `/stream`. Rooms: `user:{id}`,
   `session:{id}`, `terminal:{id}`, and the per-project
-  `project:{machineId}:{workingDir}` (fs/git nudges + background tasks).
+  `project:{machineId}:{workingDir}` (fs/git nudges).
   Authenticates the handshake using the same JWT used for REST. The
   gateway is the **only** thing that emits live data to clients.
-- `infra/redis/` — wrapper that owns *four* connections: one shared `cmd`
+- `infra/redis/` — wrapper that owns *three* connections: one shared `cmd`
   client, plus a dedicated one per blocking consumer loop (lifecycle+notify,
-  result ingestor, background tasks). ioredis requires the split — a parked
-  `XREADGROUP` blocks every other call on that socket.
+  result ingestor). ioredis requires the split — a parked `XREADGROUP`
+  blocks every other call on that socket.
 - `infra/prisma/` — Prisma client.
 
 ### `packages/sidecar/internal/`
@@ -545,20 +523,6 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     pulling in a Go git lib — its output is attached to every
     fs-list response so the dashboard's branch badge refreshes for
     free on every tree refetch.
-  - `progresswatch.go` — tertiary fsnotify watcher rooted at
-    `<workingDir>/.argus/progress/`, picking up the JSONL stream
-    `argus-bg` writes when wrapping a long-running command. Each
-    decoded line becomes one of the three
-    `BackgroundTask{Started,Progress,Ended}Event` frames, forwarded on
-    the `agent:background` stream so the dashboard's per-project
-    Progress tab can render live status for detached background work
-    the CLI's PTY would otherwise never see (anything backgrounded
-    with `&` / `nohup` flows only to log files, not to the PTY the
-    sidecar captures). `bgEvent` is the wire format on disk; the
-    watcher decorates it with machineId / workingDir before publishing
-    (the events are scoped by `(machineId, workingDir, taskId)`).
-    Soft-fails the same way fsw / gitw do — a missing or read-only
-    progress dir just means the tab stays empty.
 - `bus/` — go-redis wrapper with `Publish`, `EnsureGroup`, `ReadMessage`, `Ack`.
 - `adapter/` — `Adapter` interface and process-level **registry**. Each
   adapter file calls `Register(type, &Plugin{Factory, DefaultBinary})`
@@ -654,28 +618,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   caps a single frame. Decoupled from any global config: takes a
   `Settings` struct (shells, max-sessions). `terminal:open` carries the
   explicit `cwd` (the project's workingDir); the runner opens the PTY
-  there. `buildShellEnv` augments the spawned shell's environment with
-  two hooks the Progress extension depends on: prepends the sidecar's own
-  bin directory to `PATH` (so `argus-bg` is reachable without an
-  absolute path) and exports `ARGUS_PROGRESS_DIR` pointing at the
-  project's `<workingDir>/.argus/progress/`, which is also where the
-  per-workdir `progressWatcher` is listening.
-- `cmd/argus-bg/` — sibling binary shipped alongside the sidecar.
-  Wraps any command (`argus-bg --label "training" -- python train.py`),
-  runs the child in its own PTY so tqdm keeps its interactive
-  rendering on, tees raw output to argus-bg's own stdout (so the user
-  still sees the bar) and optionally to `--tee <log-path>`, parses
-  tqdm frames off the byte stream and writes a structured JSONL
-  event stream (`start` / `progress` / `end`) into
-  `$ARGUS_PROGRESS_DIR/<task-id>.jsonl`. Throttled to one progress
-  event per 500 ms OR per integer-percent tick — whichever comes
-  first — so the file stays bounded under a chatty tqdm bar. Exits
-  with the child's exit code so shell pipelines behave.
-  The tqdm parser lives in `tqdm.go` with a table-driven test
-  (`tqdm_test.go`) covering vanilla, description-prefixed,
-  ANSI-coloured, and HH:MM:SS-eta variants. Carries its own
-  `main.Version` (baked by the same Makefile `-ldflags` as the
-  sidecar) so `argus-bg version` makes companion drift observable.
+  there. `buildShellEnv` layers `TERM` / `COLORTERM` defaults over the
+  daemon's own environment and injects nothing else.
 - `updater/` — self-update: resolves the newest `argus-sidecar-v*`
   release, picks the matching `OS-arch` asset, verifies it against
   `SHASUMS256.txt`, and atomically `os.Rename`s over the running
@@ -691,42 +635,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   feed-resolved `release` sets `assetBaseURL` and `findAsset`
   synthesizes URLs under it. The download→verify→chmod→atomic-install
   step is factored into `installFromRelease`, parameterized by asset
-  base name + destination, so it backs both `Update` (sidecar → the
-  running executable) and `DownloadCompanion` (a sibling binary →
-  alongside the executable; `CompanionPath` resolves the location).
-  Drives `argus-sidecar update` (CLI), `argus-sidecar download-bg`
-  (CLI), and remote `update-sidecar` commands from the dashboard
-  (`machine/update.go`). On the remote path the daemon detects its
+  base name + destination. After a successful swap, `Update` sweeps a
+  leftover `argus-bg` binary next to the executable (a companion that
+  sidecars up to 0.3.x shipped; best-effort, never fails the update).
+  Drives `argus-sidecar update` (CLI) and remote `update-sidecar`
+  commands from the dashboard (`machine/update.go`). On the remote
+  path the daemon detects its
   restart mode (`self`, `supervisor`, `manual` — see the gotcha
   below) and either re-execs in place via `syscall.Exec`, exits 0
   for systemd/launchd, or stays put and asks the operator to
   restart manually.
-- **argus-bg lockstep.** `Update` deliberately doesn't touch `argus-bg`;
-  the caller decides when to refresh it. Both the CLI `update`
-  (`cmd/sidecar/main.go`) and the remote `handleUpdateSidecar`
-  (`machine/update.go`, via `refreshBG`) gate the refresh on
-  `updater.CompanionUpToDate("argus-bg", tag)`, where `tag` is the release
-  the sidecar just resolved to. That probe execs the installed
-  `<bin-dir>/argus-bg version` (absolute path — never PATH-resolved) and
-  compares its reported tag to `tag`; it refreshes via
-  `DownloadCompanion("argus-bg")` from the *same* release on anything but
-  an exact match. **It is fail-safe**: a missing file, exec error, wrong
-  arch, an old `argus-bg` with no `version` subcommand, or an unparseable
-  line all read as "not up to date" → reinstall — never skip. This is what
-  closes the *present-but-stale* hole (e.g. a prior best-effort refresh
-  that failed leaves `argus-bg` behind on an otherwise-current sidecar).
-  `--force` bypasses the probe and always reinstalls. The whole step is
-  best-effort: a checksum/permission failure on the companion is logged but
-  never fails the sidecar update. The standalone `download-bg` subcommand
-  fetches the companion unconditionally (no version gate) — it's the
-  explicit repair path. Remote refreshes pin `updater.DefaultRepo` for the
-  same hostile-server reason the remote sidecar update does.
-  Trade-off worth knowing: gating on version means a same-version-but-
-  corrupt `argus-bg` is *not* re-verified (the always-download path used to
-  re-check its SHA every run); `--force` or `download-bg` is the escape
-  hatch.
 - `cmd/sidecar/main.go` — subcommand dispatch (`init`, `service`,
-  `update`, `download-bg`, `version`, default = run daemon), flag
+  `update`, `version`, default = run daemon), flag
   parsing, signal handling, runner glue.
 - `cmd/sidecar/service.go` — `service install|uninstall|status`:
   renders and enables a systemd unit (Linux) or launchd plist (macOS)
@@ -1173,9 +1093,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   model). The bottom region is tabbed: **Commits** (`GitLogPanel`),
   **Files** (`FileTree`), **Terminal** (`<TerminalPane>`), and — only when
   the Notes extension is on (`uiStore.notesExtensionEnabled`) and the
-  session has a `workingDir` — **Note** (`<NotePane>`), plus two more
-  extension tabs gated the same way: **Progress** (`<ProgressPane>`,
-  `progressExtensionEnabled`) and **Diff** (`<DiffPane>`,
+  session has a `workingDir` — **Note** (`<NotePane>`), plus one more
+  extension tab gated the same way: **Diff** (`<DiffPane>`,
   `diffExtensionEnabled`). ContextPane receives the session's `commands`
   (not just `chunks`) so the Diff tab can scope its file diffs to the last
   turn. Commits/Files render only when a `ProjectRef` resolves
@@ -1457,7 +1376,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   collisions.
 - **WS rooms**: clients join `session:{id}` to receive that session's chunks
   and `command:*`/`session:*` updates, and `project:{machineId}:{workingDir}`
-  for fs/git nudges + background tasks. `machine:*` is emitted to everyone;
+  for fs/git nudges. `machine:*` is emitted to everyone;
   per-user events go to `user:{id}` only.
 - **Streaming over batching**: never coalesce `delta` chunks server-side.
   Drop only when a *specific* socket is lagging (TODO — see follow-ups).
@@ -1904,7 +1823,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   chunks mid-command, a sidecar that "didn't get" a control message,
   unrecoverable PEL growth. Current caps are sized for a ~30 MB Redis
   with a handful of machines: `lifecycle`=500, `agent:notify`=2000,
-  `agent:background`=5000, `machine:{id}:cli:{type}:cmd`=200,
+  `machine:{id}:cli:{type}:cmd`=200,
   `machine:{id}:cli:{type}:result`=500, `machine:{id}:control`=200. If
   you scale past that — more machines, chunkier terminal output, longer
   expected consumer outages — bump the relevant entry in *both* helpers
@@ -1959,8 +1878,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   reads. Diagnose from Redis, not from the server: `XINFO CONSUMERS
   <stream> <group>` shows `idle` climbing without bound (observed Aug
   2026: `agent:lifecycle` and every `:result` consumer at 52 minutes
-  idle while `agent:background` — a *sibling connection* on the same
-  process — sat at 2s). The tell is per-connection, not per-process: the
+  idle while a *sibling connection* in the same process — the
+  since-retired background-task reader — sat at 2s). The tell is
+  per-connection, not per-process: the
   server is alive and `_cmd` still works, so health checks pass while
   every machine shows offline and the sidecars poll happily. Left alone
   it never self-heals, and MAXLEN keeps trimming heartbeats the stuck
@@ -2464,8 +2384,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   refcounted, so the first unmounting holder used to kick the socket out
   of the room and silently starve the others of `fs:changed` /
   `git:changed`. This was latent — `ContextPane` renders FileTree /
-  GitLogPanel / ProgressPane as mutually exclusive tabs, so only one ever
-  held a room — and went live the moment `useFileTabAutoRefresh` added a
+  GitLogPanel as mutually exclusive tabs, so only one ever held a room
+  — and went live the moment `useFileTabAutoRefresh` added a
   holder that has to outlive the Files tab. The same map is replayed on
   `connect`: rooms are per-CONNECTION, and nothing re-joined them after a
   reconnect, so a network blip used to stop live updates until the
@@ -2602,8 +2522,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the dashboard's `Update sidecar` action publishes
   `update-sidecar` on the host's Redis control stream. The sidecar
   re-uses `internal/updater` to fetch + verify + atomically rename
-  the new binary (and, best-effort, refresh the `argus-bg` companion
-  from the same release — see the argus-bg lockstep note above), then
+  the new binary (sweeping any retired `argus-bg` companion it finds
+  next to itself — sidecars from before that removal log one harmless
+  `argus-bg refresh skipped` line when they update, because their
+  best-effort companion fetch finds no such asset any more), then
   picks one of three handoff strategies *itself* based on environment
   hints — the server has no say:
     - **`self`**: nothing supervises us. The daemon `syscall.Exec`s
@@ -3006,7 +2928,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   hold whatever they last held forever. Deleting them is data-safe
   (Postgres is the read path) but it is a production mutation, so it was
   deferred rather than scripted. `SCAN MATCH 'agent:*:result'` before
-  assuming a given Redis is clean.
+  assuming a given Redis is clean. The same applies to `agent:background`
+  and its `server-background` consumer group, orphaned when the argus-bg
+  progress extension was removed: sidecars older than that release still
+  `XADD` to it (self-trimmed at 5000 entries), and once the fleet is
+  current the one-time cleanup is `XGROUP DESTROY agent:background
+  server-background` followed by `DEL agent:background`.
 - **The aggregate read endpoints have no tests.** There is no server
   test harness at all, so CI proves only that `/me/pixels` and
   `/me/usage/by-project` typecheck. Both were validated once (Sep 2026)

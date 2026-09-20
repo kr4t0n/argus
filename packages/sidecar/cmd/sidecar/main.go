@@ -21,10 +21,6 @@
 //	service     install/uninstall/inspect the systemd (Linux) or launchd
 //	            (macOS) unit that keeps the daemon running across reboots
 //	update      self-update by fetching the latest release for this OS/arch
-//	            (also refreshes the argus-bg companion so they stay in sync)
-//	download-bg (re)install just the argus-bg companion binary next to the
-//	            sidecar — useful on installs that predate argus-bg or to
-//	            repair a missing/corrupt copy
 //	version     print the build version
 //	help        show usage
 package main
@@ -94,9 +90,6 @@ func main() {
 		case "update":
 			runUpdate(os.Args[2:])
 			return
-		case "download-bg":
-			runDownloadBG(os.Args[2:])
-			return
 		case "version", "--version", "-v":
 			fmt.Printf("argus-sidecar %s %s/%s\n", Version, runtime.GOOS, runtime.GOARCH)
 			return
@@ -121,7 +114,6 @@ Usage:
   argus-sidecar init [flags]       write the on-disk cache (one-time setup)
   argus-sidecar service <cmd>      install/uninstall/inspect the systemd or launchd unit
   argus-sidecar update [flags]     download the latest release for this OS/arch
-  argus-sidecar download-bg [flags] (re)install the argus-bg companion binary
   argus-sidecar version            print the build version
   argus-sidecar help               this message
 
@@ -180,13 +172,6 @@ Update flags:
   binary — the systemd/launchd service if one is installed, otherwise a
   daemon started by `+"`argus-sidecar start`"+`. At a TTY it asks (default yes);
   without one it prints the command instead of blocking.
-
-  `+"`update`"+` also refreshes the argus-bg companion (best-effort) when the
-  sidecar is swapped or argus-bg is missing, so the pair stays in lockstep.
-
-Download-bg flags:
-  -repo <owner/repo> override the GitHub repo (default: %[1]s)
-  -prerelease        consider prerelease tags
 
   Set GITHUB_TOKEN in the environment to authenticate against private
   repos or raise the unauthenticated rate limit (60 req/h → 5000 req/h).
@@ -410,29 +395,6 @@ func runUpdate(args []string) {
 		logger.Fatalf("update failed: %v", err)
 	}
 
-	// Keep argus-bg in lockstep with the sidecar. `tag` is the release the
-	// sidecar just resolved to, so it's also the version argus-bg should be
-	// on. Refresh unless argus-bg already reports that exact tag — a check
-	// that also catches a present-but-stale copy (e.g. a prior refresh that
-	// failed mid-run) and a missing/corrupt one (the probe fails safe toward
-	// reinstall). `--force` always reinstalls. Best-effort: a hiccup here
-	// must not fail the whole command — the sidecar itself is already current.
-	refreshBG := *force
-	if !refreshBG {
-		if upToDate, installed := updater.CompanionUpToDate("argus-bg", tag); upToDate {
-			logger.Printf("argus-bg already on %s — skipping", installed)
-		} else {
-			refreshBG = true
-		}
-	}
-	if refreshBG {
-		if bgTag, err := updater.DownloadCompanion(context.Background(), opts, "argus-bg"); err != nil {
-			logger.Printf("warning: argus-bg refresh skipped: %v", err)
-		} else {
-			fmt.Printf("argus-bg refreshed from %s\n", bgTag)
-		}
-	}
-
 	if tag == Version && !*force {
 		return
 	}
@@ -515,29 +477,6 @@ func confirm(question string, def bool) bool {
 	default:
 		return def
 	}
-}
-
-// runDownloadBG (re)installs only the argus-bg companion binary next to the
-// sidecar executable. Unlike `update` it never touches the sidecar, so it's
-// the right tool for installs that predate argus-bg or to repair a
-// missing/corrupt copy without a full sidecar swap.
-func runDownloadBG(args []string) {
-	fs := flag.NewFlagSet("download-bg", flag.ExitOnError)
-	repo := fs.String("repo", updater.DefaultRepo, "GitHub repo (owner/name)")
-	prerelease := fs.Bool("prerelease", false, "consider prerelease tags")
-	_ = fs.Parse(args)
-
-	logger := log.New(os.Stderr, "[argus-sidecar download-bg] ", log.LstdFlags)
-
-	tag, err := updater.DownloadCompanion(context.Background(), updater.Options{
-		Repo:              *repo,
-		IncludePrerelease: *prerelease,
-		Logger:            logger,
-	}, "argus-bg")
-	if err != nil {
-		logger.Fatalf("download-bg failed: %v", err)
-	}
-	fmt.Printf("argus-bg installed from %s\n", tag)
 }
 
 func resolveCachePath(override string) (string, error) {

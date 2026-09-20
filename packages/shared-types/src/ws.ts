@@ -1,5 +1,4 @@
 import type {
-  BackgroundTaskDTO,
   CommandDTO,
   MachineDTO,
   ProjectDTO,
@@ -100,19 +99,5 @@ export interface ServerToClientEvents {
   'sidecar-update:batch-progress': (payload: {
     batchId: string;
     plan: SidecarUpdatePlanEntry[];
-  }) => void;
-  /** A background task (started via `argus-bg`) in a project room has
-   *  progressed — covers the start / progress / end phases uniformly
-   *  as "the row's latest state." Scoped to `project:<machineId>:
-   *  <workingDir>`; only sockets that subscribed via `subscribe:project`
-   *  for that pair receive it. */
-  'background-task:updated': (task: BackgroundTaskDTO) => void;
-  /** The server's retention window for an ended task elapsed and the
-   *  task has been dropped from in-memory state. The dashboard should
-   *  remove the row. */
-  'background-task:removed': (payload: {
-    machineId: string;
-    workingDir: string;
-    taskId: string;
   }) => void;
 }

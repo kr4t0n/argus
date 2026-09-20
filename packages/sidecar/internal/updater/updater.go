@@ -15,11 +15,6 @@
 //     rename-over-self is atomic and safe: the running process keeps its
 //     in-memory image, future invocations get the new binary.
 //
-// The same download/verify/atomic-swap primitive (installFromRelease) also
-// backs DownloadCompanion, which installs sibling binaries shipped in the
-// same release — currently argus-bg — next to the sidecar executable so the
-// two stay in version lockstep.
-//
 // # Rate limits
 //
 // api.github.com allows 60 unauthenticated requests per hour keyed on the
@@ -53,7 +48,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -145,11 +139,6 @@ func (o Options) resolve() (repo string, logger *log.Logger, client *http.Client
 // Returns the tag we updated to (or the current tag, if already up to date)
 // plus an error describing any failure. The current executable is unchanged
 // unless we successfully completed the swap.
-//
-// Companion binaries (argus-bg) are intentionally NOT touched here — they
-// have no embedded version to compare against, so the caller decides when to
-// refresh them via DownloadCompanion (see `argus-sidecar update` and
-// `download-bg`).
 func Update(ctx context.Context, opts Options) (string, error) {
 	repo, logger, client := opts.resolve()
 
@@ -172,119 +161,35 @@ func Update(ctx context.Context, opts Options) (string, error) {
 	if err := installFromRelease(ctx, client, logger, rel, "argus-sidecar", exe); err != nil {
 		return "", err
 	}
+	removeLegacyCompanion(logger, filepath.Dir(exe))
 
 	logger.Printf("updated %s -> %s", exe, rel.TagName)
 	logger.Printf("restart any running sidecar processes to pick up the new binary")
 	return rel.TagName, nil
 }
 
-// DownloadCompanion fetches a sibling binary published in the same release
-// (e.g. "argus-bg") and installs it into the same directory as the running
-// sidecar executable — the directory the daemon prepends to PATH for the
-// shells it spawns, so the companion becomes callable unqualified.
-//
-// Unlike Update there is no "already current" short-circuit: companions carry
-// no comparable version, so callers decide cadence. The `update` flow calls
-// this after a sidecar swap (and when the companion is missing) to keep the
-// pair in lockstep; the `download-bg` subcommand calls it unconditionally as
-// an explicit (re)install. Returns the release tag installed from.
-func DownloadCompanion(ctx context.Context, opts Options, name string) (string, error) {
-	repo, logger, client := opts.resolve()
-
-	rel, err := pickLatestRelease(ctx, client, logger, repo, opts.IncludePrerelease)
-	if err != nil {
-		return "", err
+// removeLegacyCompanion deletes the retired `argus-bg` binary if one is
+// still installed next to the sidecar. Releases up to 0.3.x shipped it as
+// a sibling and `update` kept it in lockstep; the progress extension it
+// fed is gone, so nothing reads it any more and a leftover copy only
+// confuses `which argus-bg`. Best-effort: a missing file is the expected
+// case, and any other error is logged rather than failing the swap that
+// already succeeded.
+func removeLegacyCompanion(logger *log.Logger, binDir string) {
+	path := filepath.Join(binDir, "argus-bg")
+	switch err := os.Remove(path); {
+	case err == nil:
+		logger.Printf("removed retired companion %s", path)
+	case errors.Is(err, os.ErrNotExist):
+		// Nothing to sweep — fresh installs never had it.
+	default:
+		logger.Printf("warning: could not remove retired companion %s: %v", path, err)
 	}
-	logger.Printf("latest release: %s (%s)", rel.TagName, rel.HTMLURL)
-
-	dest, err := CompanionPath(name)
-	if err != nil {
-		return "", err
-	}
-	if err := installFromRelease(ctx, client, logger, rel, name, dest); err != nil {
-		return "", err
-	}
-
-	logger.Printf("installed %s -> %s (%s)", name, dest, rel.TagName)
-	return rel.TagName, nil
-}
-
-// CompanionPath returns where a sibling binary should live: alongside the
-// resolved sidecar executable. Exported so callers can probe for a missing
-// companion (e.g. an old install that predates argus-bg) before deciding to
-// download it.
-func CompanionPath(name string) (string, error) {
-	exe, err := resolveExe()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(filepath.Dir(exe), name), nil
-}
-
-// companionVersionTimeout bounds the `<companion> version` probe. The
-// subcommand returns instantly for a healthy binary; the cap only matters if
-// a corrupt copy somehow hangs instead of failing fast.
-const companionVersionTimeout = 5 * time.Second
-
-// CompanionVersion execs the installed companion (resolved via CompanionPath)
-// as `<abs-path> version` and returns the version tag it prints. We probe the
-// binary's *own* output rather than trusting a sidecar-side record, so a
-// wrong-arch or hand-swapped copy is caught — not just a stale tag.
-//
-// A non-nil error means we could not positively determine the version: the
-// file is absent, not executable, the wrong architecture, exits non-zero
-// (e.g. an older argus-bg with no `version` subcommand), or prints something
-// unparseable. Callers MUST treat every error as "needs (re)install" — see
-// CompanionUpToDate — so a broken companion always self-heals rather than
-// being skipped.
-func CompanionVersion(name string) (string, error) {
-	path, err := CompanionPath(name)
-	if err != nil {
-		return "", err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), companionVersionTimeout)
-	defer cancel()
-	// Absolute path on purpose: never let PATH resolve to a different copy
-	// than the one we'd be replacing.
-	out, err := exec.CommandContext(ctx, path, "version").Output()
-	if err != nil {
-		return "", fmt.Errorf("probe %s version: %w", name, err)
-	}
-	return parseCompanionVersion(string(out))
-}
-
-// parseCompanionVersion pulls the tag out of the `version` line both binaries
-// share: "<name> <version> <goos>/<goarch>". Anything without at least a name
-// and a version field is rejected so an unexpected format fails safe.
-func parseCompanionVersion(out string) (string, error) {
-	fields := strings.Fields(out)
-	if len(fields) < 2 {
-		return "", fmt.Errorf("unparseable version output %q", strings.TrimSpace(out))
-	}
-	return fields[1], nil
-}
-
-// CompanionUpToDate reports whether the installed companion `name` already
-// matches `wantTag` exactly (the lockstep target — typically the release tag
-// the sidecar just resolved). It returns the detected version for logging.
-//
-// Fail-safe by design: any inability to positively confirm the version
-// (missing, exec error, parse failure, a dev build, or simply a different/
-// older tag) yields upToDate=false, so the caller re-installs rather than
-// risk leaving a stale or corrupt copy. Exact equality — not >= — keeps the
-// companion in true lockstep with the sidecar, including the prerelease↔stable
-// switch where the sidecar itself may move "backwards".
-func CompanionUpToDate(name, wantTag string) (upToDate bool, installed string) {
-	got, err := CompanionVersion(name)
-	if err != nil {
-		return false, ""
-	}
-	return got == wantTag, got
 }
 
 // resolveExe returns the canonical, symlink-resolved path to the running
 // executable. We resolve symlinks so the atomic rename lands on the real file
-// (not a symlink) and so companions install next to the actual binary.
+// (not a symlink).
 func resolveExe() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {

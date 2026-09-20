@@ -41,11 +41,6 @@ interface UIState {
    *  server on bootstrap (see App.tsx). Off by default — extensions are
    *  opt-in. */
   notesExtensionEnabled: boolean;
-  /** Extensions → Progress: when on, the session right-pane gains a
-   *  "Progress" tab that lists live background tasks reported by
-   *  `argus-bg` for the project. Same caching scheme as
-   *  notesExtensionEnabled. */
-  progressExtensionEnabled: boolean;
   /** Extensions → Diff: when on, the session right-pane gains a "Diff"
    *  tab showing the file diffs from the session's most recent turn.
    *  Same caching scheme as notesExtensionEnabled. */
@@ -61,7 +56,6 @@ interface UIState {
   setTheme: (t: ThemePreference) => void;
   setNotificationsEnabled: (v: boolean) => void;
   setNotesExtensionEnabled: (v: boolean) => void;
-  setProgressExtensionEnabled: (v: boolean) => void;
   setDiffExtensionEnabled: (v: boolean) => void;
 }
 
@@ -84,7 +78,6 @@ export const useUIStore = create<UIState>()(
       theme: 'system',
       notificationsEnabled: false,
       notesExtensionEnabled: false,
-      progressExtensionEnabled: false,
       diffExtensionEnabled: false,
       toggleSidebar() {
         set({ sidebarOpen: !get().sidebarOpen });
@@ -129,9 +122,6 @@ export const useUIStore = create<UIState>()(
       },
       setNotesExtensionEnabled(v) {
         set({ notesExtensionEnabled: v });
-      },
-      setProgressExtensionEnabled(v) {
-        set({ progressExtensionEnabled: v });
       },
       setDiffExtensionEnabled(v) {
         set({ diffExtensionEnabled: v });

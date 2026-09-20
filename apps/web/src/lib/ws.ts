@@ -1,6 +1,5 @@
 import { io, Socket } from 'socket.io-client';
 import type {
-  BackgroundTaskDTO,
   ClientToServerEvents,
   CommandDTO,
   MachineDTO,
@@ -66,12 +65,6 @@ type Handler = {
     reason: string;
   }) => void;
   onSidecarUpdateBatchProgress?: (p: { batchId: string; plan: SidecarUpdatePlanEntry[] }) => void;
-  onBackgroundTaskUpdated?: (t: BackgroundTaskDTO) => void;
-  onBackgroundTaskRemoved?: (p: {
-    machineId: string;
-    workingDir: string;
-    taskId: string;
-  }) => void;
   onConnect?: () => void;
   onDisconnect?: () => void;
 };
@@ -130,12 +123,6 @@ export function ensureSocket(): WSSocket {
   socket.on('sidecar-update:batch-progress', (p) =>
     handlers.forEach((h) => h.onSidecarUpdateBatchProgress?.(p)),
   );
-  socket.on('background-task:updated', (t) =>
-    handlers.forEach((h) => h.onBackgroundTaskUpdated?.(t)),
-  );
-  socket.on('background-task:removed', (p) =>
-    handlers.forEach((h) => h.onBackgroundTaskRemoved?.(p)),
-  );
   return socket;
 }
 
@@ -172,8 +159,8 @@ export function leaveTerminal(terminalId: string) {
 /**
  * Project-room membership is REFCOUNTED because several components
  * subscribe to the same (machineId, workingDir) independently —
- * FileTree, GitLogPanel, ProgressPane, and the file-tab auto-refresh
- * hook. Socket.io's `leave` is not refcounted, so without this the
+ * FileTree, GitLogPanel, and the file-tab auto-refresh hook.
+ * Socket.io's `leave` is not refcounted, so without this the
  * first component to unmount would kick the socket out of the room and
  * silently starve every other subscriber of `fs:changed` / `git:changed`.
  * (Latent until now only because ContextPane renders those panels as

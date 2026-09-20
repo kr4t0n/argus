@@ -329,24 +329,6 @@ public final class ArgusClient: @unchecked Sendable {
         return response.notes
     }
 
-    /// Active + recently-ended background tasks (Progress extension) —
-    /// hydrates the pane; `background-task:*` events keep it live.
-    public func listBackgroundTasks(machineId: String, workingDir: String) async throws -> [BackgroundTaskDTO] {
-        let response: BackgroundTasksResponse = try await send(
-            "GET", "/machines/\(machineId)/background-tasks",
-            query: [URLQueryItem(name: "workingDir", value: workingDir)]
-        )
-        return response.tasks
-    }
-
-    /// Global effect: every dashboard viewing the project drops the card.
-    public func dismissBackgroundTask(machineId: String, workingDir: String, taskId: String) async throws {
-        try await sendVoid(
-            "DELETE", "/machines/\(machineId)/background-tasks/\(taskId)",
-            query: [URLQueryItem(name: "workingDir", value: workingDir)]
-        )
-    }
-
     // MARK: Core
 
     private func flag(_ name: String, _ on: Bool) -> [URLQueryItem] {
