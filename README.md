@@ -38,9 +38,9 @@ token-level streaming with reconnect-safe replay.
   math, with `html` and `mermaid` code fences rendered live (HTML in a
   sandboxed frame, Mermaid as an inline diagram) behind a Source toggle.
   Markdown images pointing at files in the project's working directory
-  render inline — the bytes come from the agent's machine over the same
-  file-read path the viewer uses. Paths outside the working directory are
-  shown as text: the sidecar's read jail stops there by design.
+  render inline on both clients — the bytes come from the agent's machine
+  over the same file-read path the viewer uses. Paths outside the working
+  directory are shown as text: the sidecar's read jail stops there by design.
 - **Multi-machine by default** — each host runs one `argus-sidecar` daemon that
   self-registers as a *Machine* and starts one runner per installed CLI. No YAML
   to ship to remote boxes.

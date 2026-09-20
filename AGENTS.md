@@ -1755,7 +1755,24 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   (`codex.go` `threadSandbox`), so a wider jail would hand a sandboxed
   agent a confused-deputy read primitive driven by its own output.
   The path to render such an image is to have the agent write it under
-  workingDir. GOTCHA: `MarkdownImage` caches by
+  workingDir. iOS counterpart: `Argus/Sources/Views/MarkdownImage.swift`
+  — the same three-way split, classified by ArgusKit
+  `FileReferences.imageSource` (tested), installed on `AnswerView` as
+  BOTH MarkdownUI providers, because MarkdownUI has two image paths: a
+  paragraph that is only an image goes through `ImageProvider` (a full
+  view), an image inside a text run through `InlineImageProvider`
+  (must return a bare `Image`). MarkdownUI GOTCHAS: (1) `makeImage`
+  receives only the URL — alt text never reaches the provider, so the
+  inert fallback shows the path where the web shows alt; (2) an inline
+  provider that THROWS drops every inline image in that paragraph
+  (MarkdownUI awaits the whole task group under one `try?`), so ours
+  never throws — it returns a `photo` glyph; (3) `URL(string:)` fails on
+  a source with spaces → the provider gets nil → inert. Tap (not
+  double-tap) opens the file preview, matching FileChipsRow's touch
+  idiom. Same settled-outcome cache (failures included, keyed on the
+  turn's completedAt), lock-guarded rather than actor-isolated so the
+  synchronous read in `body` compiles under either `View.body`
+  isolation the toolchain assumes. GOTCHA: `MarkdownImage` caches by
   `(projectId, path, turn completedAt)`. The epoch matters — an agent
   that regenerates `preview.png` next turn emits the same path, and a
   path-only key would show the previous turn's bytes. FAILURES are

@@ -87,6 +87,41 @@ struct FileReferencesTests {
         #expect(FileReferences.toAgentRelative("rel/dir/", workingDir: "/w/p") == nil)
     }
 
+    @Test("imageSource: workspace paths fetch, http(s) stays remote, everything else is inert")
+    func imageSource() throws {
+        // Relative and absolute-inside-workspace both resolve to the
+        // fs/read form (the web's `toAgentRelative` + `displayPath` pair).
+        #expect(
+            FileReferences.imageSource("assets/icon.png", workingDir: "/w/p")
+                == .workspace(relative: "assets/icon.png")
+        )
+        #expect(
+            FileReferences.imageSource("/w/p/assets/icon.png", workingDir: "/w/p")
+                == .workspace(relative: "assets/icon.png")
+        )
+        // The canonical miss — an agent writing a screenshot to /tmp.
+        #expect(FileReferences.imageSource("/tmp/shot.png", workingDir: "/w/p") == .inert)
+        // Prefix-boundary rule holds here too: /w/px is not inside /w/p.
+        #expect(FileReferences.imageSource("/w/px/shot.png", workingDir: "/w/p") == .inert)
+        // No workingDir at all → nothing can be fetched.
+        #expect(FileReferences.imageSource("assets/icon.png", workingDir: nil) == .workspace(relative: "assets/icon.png"))
+        #expect(FileReferences.imageSource("/w/p/assets/icon.png", workingDir: nil) == .inert)
+        // Directory-shaped and empty sources are inert, never fetched.
+        #expect(FileReferences.imageSource("assets/", workingDir: "/w/p") == .inert)
+        #expect(FileReferences.imageSource("", workingDir: "/w/p") == .inert)
+
+        // Real URLs are left to the system — only http(s).
+        let remote = try #require(URL(string: "https://example.com/a.png"))
+        #expect(FileReferences.imageSource("https://example.com/a.png", workingDir: "/w/p") == .remote(remote))
+        #expect(FileReferences.imageSource("HTTP://example.com/a.png", workingDir: "/w/p") != .inert)
+        // Non-http schemes never load (the web's urlTransform blanks them).
+        #expect(FileReferences.imageSource("data:image/png;base64,AAAA", workingDir: "/w/p") == .inert)
+        #expect(FileReferences.imageSource("file:///w/p/assets/icon.png", workingDir: "/w/p") == .inert)
+        // `xxx.png:1` parses as scheme "xxx.png" on both clients → inert,
+        // not a workspace path. Same shape as the path:line link gotcha.
+        #expect(FileReferences.imageSource("shot.png:1", workingDir: "/w/p") == .inert)
+    }
+
     @Test("Turn.touchedFiles populates from tool chunks")
     func turnIntegration() throws {
         var state = TranscriptState(sessionId: "sess-1")

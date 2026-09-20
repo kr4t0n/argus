@@ -263,6 +263,20 @@ struct SessionView: View {
         )
     }
 
+    /// Per-turn addressing for `![alt](path)` images in the answer. The
+    /// epoch is the turn's completion time, so a path regenerated on a
+    /// later turn isn't served the earlier turn's cached bytes; a turn
+    /// that never completed shares the "live" epoch.
+    private func imageContext(for turn: Turn) -> MarkdownImageContext {
+        MarkdownImageContext(
+            client: app.client,
+            project: projectRef,
+            workingDir: workingDir,
+            epoch: turn.command.completedAt ?? "live",
+            onOpen: { path in openFilePreview(path, line: nil) }
+        )
+    }
+
     private func fork(from turn: Turn) {
         guard let client = app.client else { return }
         Task {
@@ -331,6 +345,7 @@ struct SessionView: View {
                                 TurnBody(
                                     turn: turn,
                                     workingDir: workingDir,
+                                    images: imageContext(for: turn),
                                     timelineExpanded: expandedActivity.contains(turn.id),
                                     onFork: { fork(from: turn) },
                                     onOpenFile: { path, line in openFilePreview(path, line: line) }
@@ -953,6 +968,7 @@ private struct TurnBand: View {
 private struct TurnBody: View {
     let turn: Turn
     let workingDir: String?
+    let images: MarkdownImageContext
     let timelineExpanded: Bool
     let onFork: () -> Void
     /// (raw path, optional line) — from FileChips or path:line links.
@@ -972,7 +988,7 @@ private struct TurnBody: View {
             }
 
             if !turn.answer.isEmpty {
-                AnswerView(markdown: turn.answer, isStreaming: turn.isRunning)
+                AnswerView(markdown: turn.answer, isStreaming: turn.isRunning, images: images)
                     // Route `path:line` citations (and plain file-path
                     // links) into the file preview; real URLs pass
                     // through to the system. Mirrors the web's

@@ -88,4 +88,38 @@ public enum FileReferences {
         if relative.isEmpty || relative == "." || relative.hasSuffix("/") { return nil }
         return relative
     }
+
+    /// Where a `![alt](source)` image in an answer should come from —
+    /// the three-way split of the web's custom `img` renderer
+    /// (`StreamViewer.tsx`). A real http(s) URL is the browser's/system's
+    /// business; a path that resolves inside the workspace is fetched
+    /// over fs/read; everything else renders as inert text, because the
+    /// sidecar's jail wouldn't serve it anyway (`/tmp/shot.png` is the
+    /// canonical case — see the AGENTS.md gotcha before widening this).
+    ///
+    /// The scheme test is the same `^[a-z][a-z0-9+.-]*:` the web uses,
+    /// so `xxx.png:1`-shaped strings classify identically on both
+    /// clients (as a scheme, hence inert — not a workspace path).
+    public static func imageSource(_ source: String, workingDir: String?) -> MarkdownImageSource {
+        if source.firstMatch(of: #/^[A-Za-z][A-Za-z0-9+.-]*:/#) != nil {
+            guard let url = URL(string: source),
+                  let scheme = url.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https"
+            else { return .inert }
+            return .remote(url)
+        }
+        guard let relative = toAgentRelative(source, workingDir: workingDir) else { return .inert }
+        return .workspace(relative: relative)
+    }
+}
+
+/// Outcome of `FileReferences.imageSource`.
+public enum MarkdownImageSource: Equatable, Sendable {
+    /// An http(s) URL — load it directly.
+    case remote(URL)
+    /// Inside the agent's workingDir; the payload is the fs/read path.
+    case workspace(relative: String)
+    /// Unfetchable (outside the workspace, non-http scheme, empty,
+    /// directory-shaped) — render the reference as text.
+    case inert
 }

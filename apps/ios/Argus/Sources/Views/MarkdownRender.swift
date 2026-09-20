@@ -15,6 +15,10 @@ struct AnswerView: View {
     /// ```html / ```mermaid as source until it settles so we don't
     /// thrash WKWebViews.
     var isStreaming = false
+    /// Where `![alt](source)` images resolve from (see MarkdownImage.swift).
+    /// nil = no project context: remote URLs still load, workspace paths
+    /// render as text.
+    var images: MarkdownImageContext? = nil
 
     var body: some View {
         // `$$…$$` display math renders OUTSIDE MarkdownUI — cmark-gfm
@@ -108,6 +112,12 @@ struct AnswerView: View {
                 }
                 .markdownMargin(top: 16, bottom: 16) // web pre my-4
             }
+            // Both image paths — a paragraph that IS an image, and an
+            // image inside a text run — route through the workspace
+            // providers so local paths fetch over fs/read instead of
+            // going to the network as schemeless URLs.
+            .markdownImageProvider(WorkspaceImageProvider(context: images ?? .detached))
+            .markdownInlineImageProvider(WorkspaceInlineImageProvider(context: images ?? .detached))
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
