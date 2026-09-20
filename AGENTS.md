@@ -1513,9 +1513,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   command's state and NOT on "have we seen a final yet":
   1. Claude Code's bridge re-announces `system/init` from a
      fire-and-forget async path that lands after the turn's `result` —
-     measured after, in 30 of 30 sampled turns. See
-     [[model_line_1m_suffix_drop_accepted]] for why that second init
-     exists at all.
+     measured after, in 30 of 30 sampled turns. See the **second
+     `system/init`** gotcha below for why that second init exists at all.
   2. Background sub-agent flows legitimately keep streaming after an
      inner `result` (same reason `splitDeltas` only treats a `final` as a
      boundary when more text follows it).
@@ -1852,6 +1851,28 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `CLIENT KILL` go-redis conns with `idle>300` and `cmd≠xreadgroup`
   (parked stream readers always show `idle≤5`; go-redis re-dials
   transparently, and Postgres is the source of truth).
+- **Server boot BLOCKS on Redis — a probe `connection refused` on :4000
+  means Redis, not Postgres**: `RedisService.onModuleInit` awaits
+  `_cmd.ping()` with `maxRetriesPerRequest: null`, so an unreachable
+  Redis never rejects — `NestFactory.create()` never resolves,
+  `app.listen()` is never reached, and port 4000 never opens. Liveness
+  and readiness then fail with `dial tcp …:4000: connect: connection
+  refused` and the pod crash-loops. **Postgres being healthy is a red
+  herring**: `prisma migrate deploy` runs before node in the Dockerfile
+  CMD, so the route-mapping logs that prove the DB is reachable appear
+  either way — Redis is the differentiator. Diagnose by grepping logs
+  for `redis cmd error` (the `.on('error')` handler emits
+  `ECONNREFUSED` / `ETIMEDOUT` / `ENOTFOUND`) and confirming no
+  `listening on :4000` line is ever printed. `connection refused` means
+  the port is closed (RST); a NetworkPolicy drop reads `connection timed
+  out` instead. The usual cause on a fresh deploy is a bare
+  cross-namespace DNS name in `REDIS_URL` — `redis://redis:6379` needs
+  the FQDN `redis.<ns>.svc.cluster.local:6379`. Two weaknesses sit
+  behind this and neither is fixed: the Helm chart ships no
+  `startupProbe`, so liveness kills any boot slower than ~90s, and
+  blocking on `ping()` at boot turns a *transient* Redis blip into a
+  crash loop — a connection-saturated Redis (see the pool-cap gotcha
+  above) is exactly such a blip, which is how one incident becomes two.
 - **`rediss://` SNI must be set explicitly on the server side** — ioredis
   only flips `tls: true` (a *boolean*) when it sees the scheme, and its
   connector's `Object.assign(connectionOptions, options.tls)` copies nothing
@@ -1969,6 +1990,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   whether the cap is actually being hit. Same caution applies to
   `CLIENT LIST`, which returns only the issuing proxy thread's clients
   (14 rows while the counters described the whole database).
+  **`INFO used_memory` is unreliable on the same instance**, for the same
+  proxying reason — it has been observed frozen at a stale figure while
+  the database was actually filling toward eviction. Size memory against
+  the Cloud dashboard or the sum of per-key `MEMORY USAGE`, never
+  `INFO`. Worth knowing before you debug a fill-up: the one number that
+  looks authoritative is the one that will mislead you.
 - **MAXLEN caps entry COUNT, not bytes — one fat chunk can blow the
   whole budget**: the `streamMaxLen` caps above bound the *number* of
   entries, so the memory model silently assumes each entry is small
@@ -2033,7 +2060,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   "fix" it by making the fallback content-less — special-case known-noisy
   subtypes individually instead (as done for `thinking_tokens`,
   `task_notification`, `api_retry`, `vcs_state_changed`, and
-  `code_change_published`).
+  `code_change_published`). `TestMapClaudeUnknownSystemSubtype`
+  (`claude_code_test.go`) pins the visible fallback — if you ever find
+  yourself making it content-less, that test is what should stop you.
   *Worked example of the breadcrumb doing its job:* a burst of "system"
   rows in a release session on `claude` 2.1.217 turned out to be two
   subtypes added since 2.1.210 (`vcs_state_changed`,
@@ -2106,6 +2135,59 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   output or a file the same command catted — a display hint, not a
   verified identity. Never send credentials to `url` on its strength;
   `provider` is an open set too.
+- **Claude Code emits `system/init` TWICE, and the second one is a
+  state-change stub** (verified against the `claude` 2.1.241 bundle).
+  Both come from the same event helper, but carry very different
+  payloads:
+  1. **Startup init** — full context: real `cwd`, `tools`, `mcp_servers`
+     with live statuses, `plugins`, `skills`, `agents`, `capabilities`,
+     `memory_paths`, `betas`.
+  2. **Bridge state re-announce** — a *stub*: `cwd: ""`, `tools: []`,
+     `mcp_servers: []`, no `memory_paths`/`betas`. Carries only `model`,
+     `permissionMode`, `fastModeState`, `fastModeDisabledReason` and
+     `effort` (plus commands/agents/skills), under a fresh `uuid`.
+
+  The re-announcer fingerprints
+  `[model, permissionMode, fastModeState, fastModeDisabledReason, effort]`
+  and fires **only when that tuple changes** — which is why a short
+  throwaway session never reproduces any of the symptoms below: nothing
+  changes, so it stays quiet. One mechanism, three consequences:
+  - **The `[1m]` model-line flip.** `[1m]` is a CLI flag alias, not an
+    API model id. Startup init can report `claude-opus-5[1m]` while the
+    re-announce reports plain `claude-opus-5` at the same `.model` path
+    `parseModel` probes; both clients are latest-match, so the later
+    (suffix-less) value wins. Judged **cosmetic and accepted** — don't
+    open a fix for it unsolicited. It stopped mattering for the context
+    ring once `contextWindow.ts` grew a dedicated Opus 5 entry, since
+    both id shapes now resolve to 1M.
+  - **Duplicate "session initialised" rows** within one turn's activity
+    timeline: `claude_code.go`'s `system`/`init` branch emits that fixed
+    string per init with no once-guard, so both render. Unfixed. Note
+    nothing in Argus duplicates it — the timeline is 1:1 over chunks, the
+    store dedupes by chunk id, `ResultChunk.id` is a unique PK, and
+    command redelivery is impossible (both readers use `">"`, never the
+    PEL).
+  - **A chunk arriving after its own turn finalized** — see the
+    idempotent-live-branch gotcha above, which this is producer #1 of.
+
+  **Not a data-integrity problem.** `publishExternalIDOnce` in the
+  sidecar runner and write-once `setExternalId` on the server both stop a
+  second init repointing the resume anchor. That the once-guard exists at
+  all is the tell: someone anticipated a repeat init and covered the
+  functional chunk but not the display one.
+  **If you fix the duplicate row, make it content-aware, not a blunt
+  once-guard.** The stub is a real signal (effort / fast-mode /
+  permission changed), it just isn't a session initialisation — detect it
+  via `cwd === ""` / empty `tools` and either drop it or map it to a
+  distinct state-change chunk, keeping the model update flowing so the
+  picker stays accurate. Any once-flag must be **per-`Execute`**, never a
+  field on the shared adapter struct, or it suppresses the init on every
+  later turn.
+  *Technique worth reusing:* the CLI is a single ~340 MB bundle under
+  `~/.local/share/claude/versions/<v>`, and grepping it repeatedly times
+  out. Get a byte offset once (`grep -a -b -o 'subtype:"init"'`) and `dd`
+  a window around it — that is how both emitters and the fingerprint
+  logic were found.
 - **Extended thinking (Claude Code)**: newer `claude` emits two distinct
   thinking signals, handled in `mapClaudeLine`:
   1. `{"type":"system","subtype":"thinking_tokens","estimated_tokens":N,
@@ -2736,6 +2818,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   from `usage.iterations[-1]`; `parseUsage` (used by `useSessionUsage` and
   the server-side `/me/usage` aggregation) intentionally keeps the
   cumulative aggregate, which is the correct per-turn cost/usage total.
+  Two traps if you revisit this: `iterations` is undocumented and
+  version-dependent (present since CC 2.1.167), so the guard must be
+  non-empty-array → last element, else fall back; and do **not** "fix" it
+  by summing the `assistant` events instead — Claude Code repeats each
+  call's `message.usage` across 2–3 assistant events, so that overcounts
+  in a different direction. The overcount this replaced was measured at
+  **5.9x** on a 5-step tool-use turn (157,477 aggregate vs 26,607 true
+  final call), i.e. ~79% of a 200k window shown against ~13% real.
   cursor-cli exposes only a turn-level total, so its ring can still overcount
   on multi-call turns. Codex app-server's
   `thread/tokenUsage/updated.tokenUsage.last` is preserved as
@@ -2749,7 +2839,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the family word (`opus[-\s]?5` covers Opus 5 without claiming the Opus
   4.x ids). The CLI itself is the cheapest oracle for the real number:
   `result.modelUsage[<id>].contextWindow` in a one-line `claude -p
-  --output-format stream-json` run. When a new model
+  --output-format stream-json` run. **Still mis-mapped at the time of
+  writing** (deferred, not overlooked): `claude-opus-4-8`, `-4-7`,
+  `-4-6`, `claude-sonnet-5` and `claude-sonnet-4-6` are all 1M models
+  that still fall through to the generic 200k Claude baseline, so their
+  rings read 5x too full unless that particular turn happens to carry
+  `[1m]`. When a new model
   family ships (Anthropic / OpenAI / Cursor announcement), bump the
   table as `chore(shared): update model context windows` — verify
   against the upstream announcement, not release-note rumors. Unknown
@@ -2886,6 +2981,32 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - Pool routing ("run this on any machine that has CLI type X") — would
   need a type-scoped consumer group across machines; not exposed yet.
 - Pre-commit hooks (ruff/eslint).
+- **Ephemeral progress chunks are persisted forever.** `thinking_tokens`
+  fires roughly once per 150 thinking tokens and `api_retry` can fire
+  repeatedly through an API incident; both are content-less by design
+  (they render nothing in history) yet every one is written to
+  `ResultChunk` and re-shipped on every transcript open. That payload is
+  a confirmed contributor to session-open latency, since transcript
+  paging is per-TURN and a turn's chunk payload — not its count — is what
+  dominates its bytes. The preferred fix is a **read-path filter** in the
+  session module's windowed reads rather than dropping them at ingest:
+  ingestion is not the problem, and the WS emit has to keep flowing or
+  the live "🧠 N" counter stops animating.
+- **No delta-coalescing compaction at turn-finalize.** A finished turn's
+  `delta` chunks are immutable and every client re-joins them in `seq`
+  order, so collapsing them to one row per turn is rendering-invariant
+  (`splitDeltas` boundaries are non-delta chunks and would survive). It
+  is the larger of the two transcript-size wins and the more invasive;
+  do the read-path filter first.
+- **Pre-runner Redis streams may still be orphaned.** The per-agent
+  `agent:{id}:cmd` / `:result` streams left the codebase with the Agent
+  entity, but nothing swept the keys from any Redis that ran the old
+  protocol. They are unreferenced and effectively immortal — `MAXLEN ~`
+  only trims on `XADD`, and nothing writes to them any more, so they
+  hold whatever they last held forever. Deleting them is data-safe
+  (Postgres is the read path) but it is a production mutation, so it was
+  deferred rather than scripted. `SCAN MATCH 'agent:*:result'` before
+  assuming a given Redis is clean.
 - **The aggregate read endpoints have no tests.** There is no server
   test harness at all, so CI proves only that `/me/pixels` and
   `/me/usage/by-project` typecheck. Both were validated once (Sep 2026)
