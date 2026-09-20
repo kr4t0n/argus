@@ -1758,11 +1758,28 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   workingDir. GOTCHA: `MarkdownImage` caches by
   `(projectId, path, turn completedAt)`. The epoch matters — an agent
   that regenerates `preview.png` next turn emits the same path, and a
-  path-only key would show the previous turn's bytes. Caching at all
-  matters too: `markdownComponents` is rebuilt whenever its ProjectRef
-  prop changes identity, and a new component-function identity makes
-  React tear down and rebuild the markdown subtree, so mounts are
-  routine and a cache miss would re-issue the fs-read every time.
+  path-only key would show the previous turn's bytes. FAILURES are
+  cached too, not just successes: a path that isn't a readable image
+  fails identically every time, and caching only successes made a
+  missing file flicker loading→not-found on every remount. The
+  trade-off is that a transient failure (machine offline) also sticks
+  for that turn; a live turn re-reads when it settles into its own
+  epoch.
+- **`useProjectRef` must return a STABLE object** (`lib/projects.ts`).
+  `resolveProjectRef` builds a fresh `{projectId, machineId,
+  workingDir}` per call, and `SessionPanel` re-renders on every
+  composer keystroke (it subscribes to `drafts[sessionId]` in
+  `uiStore`). Unmemoized, that fresh identity propagated as a prop and
+  (a) defeated `CommandBlock`'s `memo()`, re-rendering every turn in
+  the transcript per keystroke, and (b) invalidated StreamViewer's
+  `markdownComponents` useMemo — and because React keys reconciliation
+  on component-function IDENTITY, a rebuilt `components` object
+  UNMOUNTS and remounts the entire markdown subtree, tearing down every
+  `MermaidBlock`, `HtmlPreview` and `MarkdownImage`. Surfaced as a
+  markdown image for a missing file flickering between its loading and
+  not-found states while typing. The hook now memoizes on the three
+  primitive fields; keep it that way, and prefer passing the ref itself
+  (not a spread of it) so the stability survives.
 - **Prisma + workspace import**: the server can only typecheck if `rootDir`
   is unset, because `@argus/shared-types` lives outside `apps/server/src`.
   `nest build` is fine because it only compiles `src/`.
