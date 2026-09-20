@@ -13,6 +13,7 @@ import type { ProjectRef } from '../lib/projects';
 import { TodoWindow } from './TodoWindow';
 import { SubAgentWindow } from './SubAgentWindow';
 import { MarkdownCodeBlock } from './MarkdownCodeBlock';
+import { InertImage, MarkdownImage } from './MarkdownImage';
 import { Tooltip } from './ui/Tooltip';
 import { copyTextToClipboard } from '../lib/clipboard';
 import { useFileTabsStore } from '../stores/fileTabsStore';
@@ -680,9 +681,50 @@ function AnswerBlock({
   // FileChips affordance) instead of trying to navigate the browser
   // to a relative URL like `site/src/foo.astro`, which the browser
   // would resolve against the current host.
+  const imageEpoch = completedAt ?? 'live';
   const markdownComponents = useMemo(
     () => ({
       pre: MarkdownCodeBlock,
+      // Same problem as `a`, different consequence: a markdown image's
+      // src is resolved against the DASHBOARD's origin, so a local path
+      // like `/tmp/shot.png` or `docs/preview.png` fetches from the web
+      // host (nginx answers the SPA fallback) and renders as a broken
+      // image. Inside the workspace we can fetch the real bytes over
+      // fs-read; outside it we render the alt text instead, since the
+      // sidecar's jail wouldn't serve the file anyway.
+      img({ src, alt, title }: { src?: string; alt?: string; title?: string }) {
+        const label = alt || src || 'image';
+        if (typeof src !== 'string' || !src) {
+          return <InertImage label={label} />;
+        }
+        // A real URL — leave it to the browser. `no-referrer` keeps the
+        // session URL out of a third-party request the model chose.
+        if (/^[a-z][a-z0-9+\-.]*:/i.test(src)) {
+          return (
+            <img
+              src={src}
+              alt={alt ?? ''}
+              title={title}
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              className="my-1 max-h-[420px] max-w-full rounded-md border border-default object-contain"
+            />
+          );
+        }
+        const rel = toAgentRelative(src, workingDir);
+        if (!rel || !project) {
+          return <InertImage label={label} title={src} />;
+        }
+        return (
+          <MarkdownImage
+            project={project}
+            path={rel}
+            epoch={imageEpoch}
+            alt={alt}
+            title={title}
+          />
+        );
+      },
       a({ href, children }: { href?: string; children?: React.ReactNode }) {
         // Strip a `path:line` citation suffix BEFORE the URL-scheme test:
         // `xxx.txt:1` would otherwise parse as scheme `xxx.txt` and render
@@ -727,7 +769,7 @@ function AnswerBlock({
         );
       },
     }),
-    [project, workingDir, openFile],
+    [project, workingDir, openFile, imageEpoch],
   );
 
   useEffect(
