@@ -88,6 +88,10 @@ struct FilePreviewSheet: View {
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Done") { dismiss() }
+                            // Escape closes the preview (web: esc closes the
+                            // file tab). A key command, not onKeyPress, so
+                            // it needs no focused view inside the sheet.
+                            .keyboardShortcut(.cancelAction)
                     }
                 }
                 .task { await load(isRefresh: false) }
@@ -495,6 +499,7 @@ struct AttachmentPreviewSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
                 }
             }
         }
