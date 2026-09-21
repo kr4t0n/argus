@@ -4,37 +4,18 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
+import app.argus.android.ui.ArgusApp
+import app.argus.android.ui.theme.ArgusTheme
 
-/**
- * Phase 0 shell: proves the Compose toolchain end to end in CI. The real
- * root (server/login → session list → transcript) arrives in Phase 2.
- */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { ArgusApp() }
-    }
-}
-
-@Composable
-fun ArgusApp() {
-    MaterialTheme {
-        Surface(modifier = Modifier.fillMaxSize()) {
-            Text(text = "Argus")
+        val appModel = (application as ArgusApplication).appModel
+        setContent {
+            ArgusTheme {
+                ArgusApp(appModel)
+            }
         }
     }
-}
-
-@Preview(showBackground = true)
-@Composable
-private fun ArgusAppPreview() {
-    ArgusApp()
 }

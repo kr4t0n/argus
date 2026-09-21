@@ -1,17 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- allowBackup=false: the app will hold a session JWT; nothing here
-         should ride cloud backups or device-to-device transfer. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- allowBackup=false: the app holds a session JWT; nothing here
+         should ride cloud backups or device-to-device transfer.
+         usesCleartextTraffic: self-hosted Argus servers on a LAN rarely
+         have TLS (ServerConfig defaults private hosts to http), the same
+         posture as the iOS app's ATS exception. -->
     <application
+        android:name=".ArgusApplication"
         android:allowBackup="false"
         android:label="@string/app_name"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Argus">
 
+        <!-- configChanges: app state is process-scoped (ArgusApplication),
+             but the transcript hosts WebViews (mermaid, html) that would
+             reload on an activity recreate; Compose re-reads the
+             configuration itself. adjustResize so the composer rides
+             above the keyboard. -->
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

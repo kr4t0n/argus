@@ -36,17 +36,54 @@ android {
     buildFeatures {
         compose = true
     }
+
+    sourceSets {
+        getByName("main") {
+            // The ```mermaid runtime is vendored ONCE, under the iOS app's
+            // Resources (mermaid.min.js + mermaid.LICENSE, pinned to the
+            // web's resolved version by both clients' lockstep tests).
+            // Pointing the asset source set at it keeps a 3 MB bundle out
+            // of the repo twice; the Android host page lives in
+            // src/main/assets and loads mermaid.min.js from the merged
+            // asset root. Re-vendor with scripts/sync-ios-mermaid.sh.
+            assets.srcDirs("src/main/assets", "../../ios/Argus/Resources")
+        }
+    }
 }
 
 dependencies {
     implementation(project(":core"))
+    // :core exposes kotlinx JsonObject in its public API (ResultChunk.meta,
+    // CommandDTO.options, TimelineItem.toolInput) but declares the library
+    // as `implementation`, so the app must add it to see those types.
+    implementation(libs.kotlinx.serializationJson)
+
+    // Dispatchers.Main on Android needs the -android artifact.
+    implementation(libs.kotlinx.coroutinesAndroid)
+    // ProcessLifecycleOwner: disconnect the socket in the background,
+    // reconnect through the snapshot path in the foreground.
+    implementation(libs.androidx.lifecycleProcess)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activityCompose)
     implementation(libs.compose.ui)
+    implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
+    implementation(libs.compose.materialIconsCore)
     implementation(libs.compose.uiToolingPreview)
     debugImplementation(libs.compose.uiTooling)
+
+    // Answer markdown: Markwon (GFM tables, strikethrough, task lists,
+    // LaTeX via JLatexMath) rendered into a TextView hosted by AndroidView.
+    // Chosen over a Compose-native renderer for its LaTeX support and
+    // stable plugin API; see apps/android/README.md.
+    implementation(libs.markwon.core)
+    implementation(libs.markwon.extTables)
+    implementation(libs.markwon.extStrikethrough)
+    implementation(libs.markwon.extTasklist)
+    implementation(libs.markwon.extLatex)
+    implementation(libs.markwon.inlineParser)
+    implementation(libs.markwon.linkify)
 
     testImplementation(libs.junit)
 }

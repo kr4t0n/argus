@@ -30,8 +30,25 @@ coroutines = "1.11.0"
 # org.json for the :core JVM test runtime only — Android ships it in the
 # platform (see core/build.gradle.kts).
 orgJson = "20260814"
+# :app rendering + lifecycle. Markwon's last release is from 2021 — stable
+# and dormant; its LaTeX extension (JLatexMath) is why it was chosen.
+markwon = "4.6.2"
+lifecycle = "2.11.0"
 
 [libraries]
+kotlinx-coroutinesAndroid = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+androidx-lifecycleProcess = { module = "androidx.lifecycle:lifecycle-process", version.ref = "lifecycle" }
+compose-foundation = { module = "androidx.compose.foundation:foundation" }
+compose-materialIconsCore = { module = "androidx.compose.material:material-icons-core" }
+markwon-core = { module = "io.noties.markwon:core", version.ref = "markwon" }
+markwon-extTables = { module = "io.noties.markwon:ext-tables", version.ref = "markwon" }
+markwon-extStrikethrough = { module = "io.noties.markwon:ext-strikethrough", version.ref = "markwon" }
+markwon-extTasklist = { module = "io.noties.markwon:ext-tasklist", version.ref = "markwon" }
+markwon-extLatex = { module = "io.noties.markwon:ext-latex", version.ref = "markwon" }
+# ext-latex's inline `$$…$$` spans hang off Markwon's own inline parser;
+# JLatexMathPlugin `require()`s this plugin when inlines are enabled.
+markwon-inlineParser = { module = "io.noties.markwon:inline-parser", version.ref = "markwon" }
+markwon-linkify = { module = "io.noties.markwon:linkify", version.ref = "markwon" }
 kotlinx-serializationJson = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 kotlinx-coroutinesCore = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }

@@ -1507,12 +1507,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   file exists, so CI stays green until someone runs the capture against
   a server with searchable sessions — do run it and commit the fixture.
 
-### `apps/android/` (native client — Phase 1: core)
+### `apps/android/` (native client — Phase 2: app shell)
 
 - Kotlin + Jetpack Compose, shaped like `apps/ios/`: `:core` is a **plain
   Kotlin/JVM module** (no Android plugin — the counterpart of ArgusKit,
-  all testable without the SDK) and `:app` is the Compose application
-  (still the Phase 0 shell). Design, wire contract, lockstep table and
+  all testable without the SDK) and `:app` is the Compose application.
+  Design, wire contract, lockstep table and
   phases: `docs/plan-android-native-client.md`; build/test/pins and the
   lockstep table: `apps/android/README.md`. `:core` is laid out as
   `model/` (DTO mirrors + `JsonSupport`), `api/` (`ArgusClient` on OkHttp,
@@ -1520,7 +1520,45 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   socket.io-client-java → `Flow<ServerEvent>`, `ProjectRoomRegistry`) and
   `engine/` (the ArgusKit ports: `TranscriptEngine`, `DeltaSplit`,
   `UsageMath`, `ContextWindow`, the math trio, `FileReferences`,
-  `ToolDisplay`, `DedicatedPanels`, `SessionMatch`, `SearchSnippet`).
+  `ToolDisplay`, `DedicatedPanels`, `SessionMatch`, `SearchSnippet`, plus
+  the Phase 2 additions `AnswerSegments`/`MarkwonMath`, `ProjectGroups`,
+  `DiffLines`, `PromptQueue`, `RelativeTime` — pure and unit-tested so the
+  app module carries only Compose).
+- **`:app` mirrors the iOS app's shape**: `ArgusApplication` owns one
+  process-scoped `AppModel` (phase, auth, socket + event pump on
+  `Dispatchers.Main.immediate`, `FleetStore` / `SessionListStore` /
+  `QueueStore` as `StateFlow`s, the LRU `SessionViewModel` cache with the
+  idempotent stale-while-revalidate `start()`, and the app-wide queue
+  drainer ported from the web). `ui/` is a phase switch → session list ↔
+  one session, phone-only for now. Persistence is SharedPreferences (four
+  small values), the JWT also sits in a `@Volatile` field for OkHttp's
+  threads, and cleartext is allowed app-wide (the network security config
+  can't carve out private ranges). Every decision is written up in
+  `apps/android/README.md` "The app module".
+- **Answer markdown renders through Markwon in an `AndroidView`**, not a
+  Compose-native renderer: `AnswerSegments.split` (`:core`, over
+  `MathSegments`) yields a column of Markdown / DisplayMath / Fence
+  (closed ```` ```mermaid ````/```` ```html ```` only) / Image (standalone
+  `![alt](path)` inside the workspace) segments, and `MarkwonMath.
+  rewriteInline` folds `$x$` into Markwon's `$$x$$` inline form (outside
+  fences, honouring `\$` and code spans). Streaming rule as on the web:
+  an UNCLOSED renderable fence stays inside the markdown as a code block
+  and snaps into a diagram when its closer arrives. GOTCHA: Markwon's
+  LaTeX plugin treats `$$…$$` on one line as INLINE and `$$` on its own
+  lines as a block, which is why display math is split out BEFORE
+  Markwon ever sees it — feeding it a `$$\n…\n$$` block would work, but
+  the inline rewrite would then have to know not to touch those lines.
+- **The mermaid runtime is shared with iOS, not vendored twice.**
+  `app/build.gradle.kts` adds `apps/ios/Argus/Resources` as an asset
+  source dir, so `mermaid.min.js` is loaded by `assets/mermaid-android.
+  html` straight out of the iOS folder; `scripts/sync-ios-mermaid.sh`
+  therefore refreshes BOTH native clients, and `MermaidLockstepTest`
+  (an `:app` JVM unit test) pins the bundle's `version:"x.y.z"` literal
+  against the web importer's resolved version in `pnpm-lock.yaml`, same
+  as the Swift test. Same posture as web/iOS: `securityLevel: 'strict'`,
+  every navigation but the initial asset load cancelled, a source that
+  fails to parse keeps the last good diagram (or the code block) with no
+  error state.
 - **Fixtures are shared with iOS.** `scripts/capture-client-fixtures.sh`
   (renamed from `capture-ios-fixtures.sh`) writes sanitized live-server
   responses to `packages/shared-types/fixtures/`, and BOTH
@@ -3166,11 +3204,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Tech debt / planned
 
-- **Native Android client** — Phases 0 (CI bootstrap) and 1 (the `:core`
+- **Native Android client** — Phases 0 (CI bootstrap), 1 (the `:core`
   module: DTO mirrors, REST + realtime clients, engine ports, shared
-  fixtures; 201 JUnit tests) landed on `feat/android-native-client`;
-  Phases 2–6 (app shell, parity, fleet/account, FCM push, terminal +
-  Live Updates) are open. The design,
+  fixtures) and 2 (the app shell: login, project-grouped session list,
+  streaming transcript with Markwon/mermaid/HTML/image rendering,
+  composer + queue, VM cache) landed on `feat/android-native-client`;
+  Phase 2's device round-trip is still owed, and Phases 3–6 (parity,
+  fleet/account, FCM push, terminal + Live Updates) are open. The design,
   wire contract, lockstep table, CI shape and phases are in
   `docs/plan-android-native-client.md`; the module map is under
   `apps/android/` above. Same posture as iOS (thin client, hand-written

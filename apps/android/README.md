@@ -5,14 +5,17 @@ Like the iOS client it is a *thin client*: it speaks the same NestJS REST
 API + Socket.IO `/stream` namespace as the web app and never touches the
 Go sidecar.
 
-> Status: **Phase 1 — core module.** `:core` now holds the full
-> non-UI layer: decode-tolerant DTO mirrors of shared-types, the REST
-> client (OkHttp), the realtime client (socket.io-client-java → a
-> `Flow` of typed events), and the transcript engine ported from
-> ArgusKit — all unit-tested, with the captured live-server fixtures
-> decoded from the directory shared with the iOS client. `:app` is still
-> the Phase 0 shell; the UI arrives in Phase 2. The full design, wire
-> contract and phase plan are in
+> Status: **Phase 2 — app shell.** `:core` holds the full non-UI layer
+> (decode-tolerant DTO mirrors of shared-types, the OkHttp REST client,
+> the socket.io realtime client as a `Flow` of typed events, and the
+> transcript engine ported from ArgusKit — all unit-tested against the
+> fixtures shared with the iOS client). `:app` is now a usable phone
+> client: server + login, the project-grouped session list, a streaming
+> transcript (activity timeline, tool pills, diffs, markdown with math,
+> mermaid, sandboxed HTML and inline workspace images), and a composer
+> with the prompt queue. Inspector, model picker, attachments, fork,
+> palette and push are later phases. The full design, wire contract and
+> phase plan are in
 > [`docs/plan-android-native-client.md`](../../docs/plan-android-native-client.md).
 
 ## CI is the compiler
@@ -96,10 +99,22 @@ apps/android/
 │       ├── api/                ArgusClient (OkHttp), ServerConfig, ApiError
 │       ├── realtime/           StreamClient (socket.io → Flow<ServerEvent>), ProjectRoomRegistry
 │       └── engine/             TranscriptEngine, DeltaSplit, UsageMath, ContextWindow,
-│                               Math{Delimiters,Segments}, InlineMath, FileReferences,
-│                               ToolDisplay, DedicatedPanels, SessionMatch, SearchSnippet
+│                               Math{Delimiters,Segments}, InlineMath, AnswerSegments,
+│                               FileReferences, ToolDisplay, DedicatedPanels, SessionMatch,
+│                               SearchSnippet, ProjectGroups, DiffLines, PromptQueue, RelativeTime
 └── app/                        Jetpack Compose application (app.argus.android)
-    └── src/main/kotlin/app/argus/android/MainActivity.kt
+    ├── src/main/assets/        mermaid-android.html — the WebView host page for ```mermaid
+    │                           (mermaid.min.js itself comes from apps/ios/Argus/Resources, see below)
+    ├── src/test/               MermaidLockstepTest — pins the vendored mermaid to the web's version
+    └── src/main/kotlin/app/argus/android/
+        ├── ArgusApplication.kt process-scoped owner of AppModel; foreground hook
+        ├── AppModel.kt         auth, socket, event routing, VM cache, queue drainer
+        ├── store/              FleetStore, SessionListStore, QueueStore (StateFlow-backed)
+        ├── session/            SessionViewModel — TranscriptState + room + start()/revalidate
+        └── ui/                 ArgusApp (phase switch + routes), login/, sessions/ (list),
+                                session/ (transcript, composer, activity timeline, panels),
+                                markdown/ (AnswerView, Markwon host, WebView blocks, images),
+                                components/ (atoms, DiffBlock, FileChips), theme/
 ```
 
 `:core` has **no Android plugin**. It compiles and tests on any JDK 17
@@ -124,10 +139,72 @@ same table ArgusKit keeps, so a change lands on all three clients):
 | `realtime/StreamClient.kt` events | `packages/shared-types/src/ws.ts` |
 | `model/*` | `packages/shared-types/src/{api,protocol}.ts` |
 
-`MathCompat` is deliberately not ported: the Android renderer will use
-JLatexMath, whose LaTeX subset makes SwiftMath's rewrites unnecessary
-(plan §5). The mermaid version pin joins in the phase that vendors the
-runtime.
+`MathCompat` is deliberately not ported: the Android renderer uses
+JLatexMath (via Markwon's LaTeX extension), whose LaTeX subset makes
+SwiftMath's rewrites unnecessary (plan §5).
+
+## The app module (Phase 2)
+
+**State lives on the process, not the Activity.** `ArgusApplication`
+owns one `AppModel` (auth, the socket, the stores, the session view-model
+cache); `MainActivity` only installs the theme and the root composable.
+Configuration changes are handled in-place (`configChanges` in the
+manifest) so the socket and the transcript survive rotation and theme
+flips. Every store exposes `StateFlow`s that Compose collects; all
+mutation happens on `Dispatchers.Main.immediate`, including the socket
+event pump.
+
+**Persistence is SharedPreferences, not DataStore** (a deviation from the
+plan's first draft): the app persists four small values — server URL,
+email, the JWT, and the prompt queue as JSON — and DataStore would add a
+dependency plus an async read on the launch path for no gain. The JWT is
+also held in a `@Volatile` field the OkHttp token provider reads from its
+own threads.
+
+**Session view-models are cached** (LRU, cap 8, never the one on screen,
+cleared on logout) exactly like the iOS `AppModel`: `SessionViewModel.
+start()` is idempotent — a cold VM loads the tail snapshot, a cached one
+re-joins its room and *revalidates* (refetches the tail and merges when it
+overlaps the cached window; wipes and replaces when it doesn't).
+
+**The prompt queue is drained app-wide** by `AppModel` (port of the web's
+`queueDrainer`): serialization is per session (never two turns for one
+session), reachability is machine-level, a 30 s in-flight bridge covers
+the dispatch → first-chunk window, and a failed send stalls that session
+for 60 s. The composer's send always goes through the queue so a manual
+submit joins the tail of a draining backlog.
+
+**Answer rendering** is a column of segments produced by
+`AnswerSegments.split` (`:core`, layered on `MathSegments`): markdown
+pieces go through **Markwon** (GFM tables, strikethrough, task lists,
+linkify, and JLatexMath for `$$…$$`) hosted in an `AndroidView`
+`TextView`; single-dollar inline math is rewritten to Markwon's
+double-dollar form by `MarkwonMath.rewriteInline`. Markwon was chosen over
+a Compose-native renderer because it ships tables, task lists and LaTeX in
+one library; it is View-based and dormant since 2021, which is accepted
+for now. Closed ```` ```mermaid ```` and ```` ```html ```` fences render
+in `WebView` hosts with a Source toggle (an unclosed fence stays a code
+block while streaming, and a diagram that fails to parse keeps the last
+good render, as on the web); standalone `![alt](path)` images inside the
+workspace are fetched over fs-read. The mermaid runtime is **not copied**:
+the `app` module adds `apps/ios/Argus/Resources` as an asset source
+directory, so the one vendored `mermaid.min.js` serves both native
+clients, and `MermaidLockstepTest` (an `:app` unit test) pins its version
+to the web's resolved dependency in `pnpm-lock.yaml`. After bumping
+mermaid on the web, run `scripts/sync-ios-mermaid.sh` and both clients
+pick it up. `securityLevel: 'strict'` and cancel-every-navigation are the
+same posture as the web and iOS.
+
+**Cleartext is allowed app-wide** (`usesCleartextTraffic="true"`). The
+plan wanted it only for LAN hosts, but Android's network security config
+takes domain lists, not CIDR ranges, so a private-IP carve-out cannot be
+expressed there; `ServerConfig` still infers `http://` only for private
+hosts and `https://` otherwise.
+
+Deliberately not ported in this phase: sticky turn headers (the iOS
+`pinnedViews` band — plain items in the `LazyColumn` instead), the
+vendors' brand glyphs (a brand-coloured monogram stands in), and
+persisted collapse / archived-reveal state for the session list.
 
 ## Wire rules the client encodes
 
@@ -161,6 +238,8 @@ runtime.
 | OkHttp | 5.5.0 | REST + the WebSocket factory socket.io uses; mockwebserver rides the same version |
 | socket.io-client-java | 2.1.2 | speaks the Socket.IO v4 protocol the server runs; supports the `auth` handshake |
 | Compose BOM | 2026.09.00 | one source of truth for Compose artifact versions |
+| activity-compose / lifecycle-process | 1.13.0 / 2.11.0 | `setContent` + `BackHandler`; `ProcessLifecycleOwner` for the foreground refresh |
+| Markwon | 4.6.2 | markdown → `Spanned` with tables, task lists, strikethrough, linkify and JLatexMath in one library (last release; accepted) |
 | JUnit | 4.13.2 | AGP's default unit-test framework; used on both modules so there is one |
 
 Rules that fall out of AGP 9:
@@ -190,8 +269,8 @@ re-validates it against the same list on every CI run.
 ## Roadmap
 
 See the plan for the full phase list. In short: **0** CI bootstrap ✅ →
-**1** core module ✅ (this) → **2** login, session list, streaming
-transcript, composer → **3** inspector, model picker, queue,
-attachments, palette and hotkeys → **4** fleet and account panels →
-**5** push (FCM, with the server-side transport split) → **6** terminal
-and Live Updates.
+**1** core module ✅ → **2** login, session list, streaming transcript,
+composer with the queue ✅ (this; a device round-trip is still owed) →
+**3** inspector, model picker, attachments, fork, palette and hotkeys →
+**4** fleet and account panels → **5** push (FCM, with the server-side
+transport split) → **6** terminal and Live Updates.

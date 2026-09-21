@@ -1,6 +1,6 @@
 # Plan: native Android client — Kotlin + Jetpack Compose
 
-Status: 🟡 IN PROGRESS · Phase 0 ✅ (2026-09-21) · Phase 1 ✅ (2026-09-21, `android.yml` and `ios.yml` both green on the branch) · Phase 2 next
+Status: 🟡 IN PROGRESS · Phase 0 ✅ (2026-09-21) · Phase 1 ✅ (2026-09-21, `android.yml` and `ios.yml` both green on the branch) · Phase 2 ✅ code-complete (2026-09-21, CI green; the device round-trip is still owed) · Phase 3 next
 Branch: `feat/android-native-client` (PRs target `dev`)
 Prereq: none — the server contract the client speaks is already frozen by the
 iOS client and its captured fixtures.
@@ -213,7 +213,8 @@ monolithic renderer:
 - Fallback if the Phase 2 spike shows the Compose renderer can't take the
   paragraph-level override inline math needs: Markwon in `AndroidView`
   (GFM tables, task lists, LaTeX and highlighting in one library, but
-  dormant since 2021 and View-based).
+  dormant since 2021 and View-based). *Phase 2 took this option outright
+  — see the Phase 2 note in §8.*
 - Code highlighting: a Compose-compatible highlighter keyed by the same
   language-alias map `FilePreview.swift` and `lib/shiki.ts` carry.
 
@@ -389,6 +390,25 @@ pills, diffs, answer markdown with math, mermaid, sandboxed HTML, inline
 workdir images); composer with the queue; session view-model cache with
 the stale-while-revalidate `start()` rule. Exit: a turn round-trips on a
 device or emulator someone else runs, recorded in the PR.
+*Done (code) 2026-09-21.* Everything above landed and `android.yml` is
+green; the device round-trip is the one exit criterion still open and is
+recorded in the PR when it happens. Decisions that differ from the draft
+above, each recorded in `apps/android/README.md`: the prose renderer is
+**Markwon** in an `AndroidView` (the "fallback" option — it ships tables,
+task lists, linkify and JLatexMath in one library, and a Compose-native
+renderer would have needed its own LaTeX host anyway), fed by
+`AnswerSegments` (`:core`) which extracts closed mermaid/html fences,
+display math and standalone workspace images into their own composables
+and by `MarkwonMath` which folds single-dollar inline math into Markwon's
+double-dollar form; the mermaid runtime is **not vendored twice** — the
+app module lists `apps/ios/Argus/Resources` as an asset directory, so
+`scripts/sync-ios-mermaid.sh` now serves both native clients and
+`MermaidLockstepTest` (`:app`) pins the version against `pnpm-lock.yaml`
+like the iOS test; persistence is SharedPreferences rather than
+DataStore; cleartext is allowed app-wide because the network security
+config cannot express a private-range carve-out. Not ported: sticky turn
+headers, the brand glyphs (a monogram stands in), persisted list
+collapse state — all Phase 3 polish.
 
 **Phase 3 — parity batch.** Inspector (Files tree with depth-3 prefetch,
 Commits, Diff, Note, Terminal placeholder), model picker keyed (machine,
