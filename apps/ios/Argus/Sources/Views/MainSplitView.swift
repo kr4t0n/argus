@@ -40,6 +40,11 @@ struct MainSplitView: View {
                                 Image(systemName: "sidebar.leading")
                             }
                             .accessibilityLabel("Toggle sidebar")
+                            // ⌘B rides the one explicit toggle, so it is
+                            // regular-width only by construction — on a
+                            // phone the split view is a stack and there
+                            // is no sidebar to hide.
+                            .hotkey(Hotkeys.toggleSidebar)
                         }
                     }
                 }
@@ -51,6 +56,26 @@ struct MainSplitView: View {
         .overlay(alignment: .bottom) {
             CloneFailureToasts()
         }
+        // ⌘P / ⌘K / ⌘/ share ONE sheet keyed on `app.paletteMode` (the
+        // web's paletteStore.mode): another overlay's hotkey swaps the
+        // content in place rather than stacking a second sheet.
+        .sheet(isPresented: paletteShown) {
+            PaletteSheet()
+                // One opaque surface for all three modes. The help sheet
+                // is a List and paints the grouped grey itself; the
+                // palette is a bare ScrollView, and on a translucent
+                // sheet background the detail column's colours bled
+                // through it (a dark green on iPad) while the help sheet
+                // next to it read grey.
+                .presentationBackground(Color(.systemGroupedBackground))
+        }
+    }
+
+    private var paletteShown: Binding<Bool> {
+        Binding(
+            get: { app.paletteMode != nil },
+            set: { if !$0 { app.closePalette() } }
+        )
     }
 
     @ViewBuilder

@@ -114,7 +114,7 @@ struct SessionSidebar: View {
             ProgressView()
             Spacer()
         } else {
-            List(selection: $selection) {
+            List(selection: listSelection) {
                 if groups.isEmpty {
                     Section {
                         Text("No sessions yet — create one with the + button.")
@@ -164,6 +164,21 @@ struct SessionSidebar: View {
                             Text(app.user?.email ?? "Account").font(.callout).lineLimit(1)
                             Text(app.user?.role ?? "").font(.caption2).foregroundStyle(.secondary)
                         }
+                        Spacer(minLength: 6)
+                        // The touch path to the shortcuts list and the only
+                        // thing in the app that reveals ⌘/ exists (the web's
+                        // UserRow glyph). Always visible on purpose: an entry
+                        // point you have to know a binding to reach would not
+                        // break the circle.
+                        Button {
+                            app.openPalette(.help)
+                        } label: {
+                            Image(systemName: "keyboard")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Keyboard shortcuts")
                     }
                     .tag(DetailRoute.user)
                     .listRowSeparator(.hidden)
@@ -299,6 +314,25 @@ struct SessionSidebar: View {
                 if aOffline != bOffline { return aOffline < bOffline }
                 return a.name.localizedCompare(b.name) == .orderedAscending
             }
+    }
+
+    /// The List's selection, with one filter: while `AppModel.pinRoute`
+    /// is in force, writes are dropped. Archiving the session on screen
+    /// (⌘D, the header menu) deletes its SELECTED row, and the List
+    /// answers by writing a selection of its own — nil or a neighbour —
+    /// which moved the detail column off the session. The web keeps the
+    /// panel open while the row disappears into the archive, and this
+    /// is what gives the same result here: the row goes, the route
+    /// stays. Reads are untouched, so programmatic navigation (push
+    /// taps, forks, creation) still highlights and, on iPhone, pushes.
+    private var listSelection: Binding<DetailRoute?> {
+        Binding(
+            get: { selection },
+            set: { newValue in
+                guard !app.routeIsPinned else { return }
+                selection = newValue
+            }
+        )
     }
 
     private var renameAlertBinding: Binding<Bool> {

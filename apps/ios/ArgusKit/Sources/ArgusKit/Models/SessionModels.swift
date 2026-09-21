@@ -249,3 +249,32 @@ public struct CreateSessionResponse: Decodable, Sendable {
     public var session: SessionDTO
     public var command: CommandDTO?
 }
+
+// MARK: Session content search (`GET /search/sessions`)
+
+/// One matching session. The server returns the single best-ranked turn
+/// per session (so one chatty session can't crowd out the results) plus
+/// how many of its turns matched. Session metadata — title, project,
+/// machine — is deliberately absent: every client already holds the
+/// full session list, so re-sending it per hit would be redundant.
+public struct SessionSearchHitDTO: Codable, Equatable, Sendable, Identifiable {
+    public var sessionId: String
+    /// The best-matching turn. The web deep-links to it (`?turn=`); this
+    /// client opens the session at its tail — see AGENTS.md.
+    public var commandId: String
+    /// Total matching turns in this session, not just the one shown.
+    public var matchCount: Int
+    /// Text window around the match, with terms wrapped in the
+    /// `SearchSnippet.highlightStart` / `highlightStop` sentinels.
+    public var snippet: String
+
+    /// Hits are one-per-session, so the session id is a stable row id.
+    public var id: String { sessionId }
+}
+
+public struct SessionSearchResponse: Codable, Equatable, Sendable {
+    /// The trimmed query the server actually ran.
+    public var query: String
+    public var hits: [SessionSearchHitDTO]
+    public var mode: SearchMode
+}

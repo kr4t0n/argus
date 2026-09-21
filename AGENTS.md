@@ -1056,6 +1056,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   belongs in `Dashboard`. Every *other* keydown listener in the web app is
   component-scoped (popover Escape, composer Enter, `ui/Select`); this hook
   is the only global one, so a new app-level shortcut is a one-liner.
+  The iOS client mirrors this table in `apps/ios/Argus/Sources/Hotkeys.swift`
+  (see the keyboard entries under `apps/ios/` for how the mechanisms
+  differ) — add a chord to both tables or to neither.
 - `lib/useTypeToFocus.ts` — bare-key "start typing anywhere and it lands in
   the composer" (`SessionPanel`). Deliberately a SEPARATE hook, not a
   `useGlobalHotkey` option: that hook is simple precisely because a
@@ -1392,6 +1395,116 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   hide toggle's count is over renderable archived *groups*, not project
   rows — an archived project with no sessions has no group and isn't
   counted, which is fine since it wouldn't render either way.
+- **Keyboard shortcuts mirror the web's registry, and are ⌘-only.**
+  `Argus/Sources/Hotkeys.swift` is the counterpart of
+  `apps/web/src/lib/hotkeys.ts` — same chords, labels and scopes, kept in
+  step by hand (nothing hash-pins this pair). Every binding goes through
+  `View.hotkey(_:)`, which takes a `HotkeyBinding`, so a raw
+  `keyboardShortcut` call site is something the ⌘/ sheet
+  (`ShortcutsHelpSheet`, rendered FROM the table) can never list. The
+  mechanism differs by scope and the split is load-bearing: **global**
+  bindings (⌘P / ⌘K / ⌘/) are scene commands (`ArgusCommands`, a
+  `CommandMenu` on the `WindowGroup`) because a `.keyboardShortcut` on a
+  view is inert whenever that view is off screen and the split view swaps
+  its detail column; **session** bindings (⌘D / ⌘. / ⌘⏎) sit on views
+  inside `SessionView`, so they are inert on the machine and account
+  panes by construction. ⌘B rides the one explicit sidebar-toggle button
+  in `MainSplitView`'s regular-width toolbar, so it is iPad-only by
+  construction. The Ctrl form is never claimed: the web binds it and
+  defers it while the terminal has focus, whereas here Ctrl+B / Ctrl+K /
+  Ctrl+D simply reach SwiftTerm untouched — the same posture with no
+  guard to maintain. The three overlays share ONE sheet keyed on
+  `AppModel.paletteMode` (the web's `paletteStore.mode`), so another
+  overlay's hotkey swaps the content in place instead of stacking a
+  second sheet; `togglePalette` no-ops before login, which is how the
+  scene commands stay inert on the login screen without observing
+  `phase` from a `Commands` body. The iPad hold-⌘ HUD lists the scene
+  commands, but treat the ⌘/ sheet, not the HUD, as the authoritative
+  list. Verified on an iPad with a hardware keyboard (Sep 2026): the
+  scene commands, ⌘B, the zero-size ⌘D button below and the Escape
+  paths all dispatch. Still unverified: whether UIKit's text-editing ⌘B
+  (bold) steals the sidebar toggle while the composer is focused.
+- **Three things the first iPad pass found, and the shape of each fix.**
+  (1) A sheet's body keeps rendering through its dismiss animation, and
+  `paletteMode` is already nil by then — so `PaletteSheet` renders the
+  LAST non-nil mode (`shown`) and `CommandPaletteSheet` takes its mode
+  as a parameter instead of reading the store. Without that, closing
+  the help sheet flashed the search palette on the way out, and closing
+  ⌘K would have snapped to ⌘P rows mid-animation. Any future sheet keyed
+  on a nullable store field needs the same latch. (2) The palette is a
+  bare `ScrollView` on a translucent sheet surface, so the detail
+  column's colours bled through it (a dark green) while the help
+  sheet's `List` painted opaque grouped grey; `presentationBackground
+  (Color(.systemGroupedBackground))` on `PaletteSheet` gives all three
+  modes one surface. (3) `List(selection:)` in the split view writes a
+  selection of its own (nil, or a neighbouring row) when the SELECTED
+  row is deleted from its data, so archiving the open session with the
+  project's eye toggle off yanked the detail column onto another
+  session — the opposite of the web, where routing is URL-driven and
+  the panel stays while the row disappears into the archive. On iOS
+  the route IS the list selection, so the write is refused at the
+  binding instead: `SessionView.archive()` calls `AppModel.pinRoute()`
+  right before the upsert that deletes the row, and the sidebar's List
+  is bound to `SessionSidebar.listSelection`, a filtered `Binding`
+  whose setter drops writes while the pin (a 500 ms window) is in
+  force. Reads are untouched, so programmatic navigation still
+  highlights and pushes. Confirmed on the iPad: the row hides at once
+  and the detail column stays. A time window rather than a "cleared after
+  the list updates" flag because the write lands in a UIKit callback
+  with no SwiftUI hook to clear on. A first cut kept the archived row
+  rendered (dimmed) while selected to avoid the deletion altogether;
+  it worked, but diverged visibly from the web, which hides the row at
+  once. Moves are fine — rows re-sort on every status event and never
+  jumped — only deletion of the selected row triggers the write.
+- **⌘D is a zero-size `opacity(0)` button, Escape has three homes, and
+  type-to-focus is deliberately not ported.** ⌘D lives in `SessionView`'s
+  background rather than on the menu's Archive item: a real view in the
+  hierarchy is the one binding mechanism proven on this client (⌘. and
+  ⌘⏎ work the same way), whereas a `Menu` item's shortcut is only
+  dispatched reliably while the menu is open. It is a toggle that STAYS
+  on the session while the sidebar row disappears into the archive
+  (web parity — the toolbar's archivebox badge reports the state and
+  restores on tap; see the `pinRoute` entry above for how the route
+  survives the row's deletion), and the header menu's Archive now
+  stays put too; only the sidebar's swipe action still bounces, because
+  there the row vanishes from under the finger. Escape: `.onKeyPress
+  (.escape)` on the composer blurs it (IME-guarded like Return, and it
+  never cancels — ⌘. is the only cancel, for the reason recorded in the
+  web's Composer), and `.keyboardShortcut(.cancelAction)` on the
+  Done/Cancel buttons of the file-preview, palette and help sheets — a
+  key command rather than `onKeyPress`, because on iOS `onKeyPress` fires
+  only on a FOCUSED view and a sheet with nothing focused would swallow
+  the key. Type-to-focus: the web's version never inserts the character
+  — the same keystroke lands in the newly focused textarea by itself —
+  and that is what keeps IME composition and dead keys intact. On iOS a
+  bare key with nothing focused reaches no view at all, so the only way
+  to port it is to insert `press.characters` by hand, which is precisely
+  the IME-breaking path the web refuses (a CJK user's first Pinyin letter
+  would land as a raw Latin character before the field opened). Left out
+  on purpose; revisit only with a focus-without-insert design and a
+  device test under an IME.
+- **⌘K opens the session at its TAIL, not on the matched turn.** The
+  server endpoint is shared and free to reuse — `getSession` would only
+  need the `aroundCommand` / `beforeCount` / `afterCount` query and a
+  `hasMoreNewer` field — but `TranscriptState` has no floating-window
+  model, and every live path assumes the window reaches the present:
+  `upsert(command:)` appends any unknown turn, `append(chunk:)` accepts
+  chunks for turns outside the window, `SessionView` sticks to the
+  bottom of whatever window it holds, `start()` merges the tail on every
+  appearance (a disjoint window trips the wipe-and-replace fallback and
+  yanks the user off the turn), and `handleReconnect`'s afterSeq
+  backfill merges every command in the session. Porting the deep link
+  means porting the web's three `hasMoreNewer` guards plus a
+  `history?after=` pager and a jump-to-latest control (see the
+  transcript-window invariant under Gotchas), and calling the around
+  endpoint without them fails silently, so the tail-only cut was chosen
+  over a half-guarded middle. `SessionSearchHitDTO.commandId` is carried
+  for that follow-up. `Engine/SessionMatch.swift` (⌘P ranking) and
+  `Engine/SearchSnippet.swift` (`[[hl]]` sentinel runs) are lockstep
+  ports listed in the README table. `search-sessions.json` is captured
+  by the fixture script and its decoding test is `.enabled(if:)` the
+  file exists, so CI stays green until someone runs the capture against
+  a server with searchable sessions — do run it and commit the fixture.
 
 ## Conventions
 
