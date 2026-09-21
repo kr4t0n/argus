@@ -2578,6 +2578,25 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   scope back to `<image>` only or you'll silently halve cache
   hit-rate (the per-platform scopes won't be read by a combined
   build).
+- **`argus-web` deletes nginx's stock `10-listen-on-ipv6-by-default.sh`
+  hook; nginx binds IPv4 only.** `nginx:alpine` runs every script in
+  `/docker-entrypoint.d/` before exec'ing nginx. The stock `10-` script
+  adds `listen [::]:80` to `/etc/nginx/conf.d/default.conf` — but only
+  after proving the file is byte-identical to the packaged one via
+  `apk manifest nginx` + `sha1sum`. `deploy/web.Dockerfile` overwrites
+  that file with `deploy/web.nginx.conf`, so the checksum never
+  matches and the script has always been a no-op for us. It was still
+  executing on every start, and a production rollout was observed
+  stuck at that step, so the runtime stage now `rm`s it. Consequences:
+  (1) the container listens on `0.0.0.0:80` only — on an IPv6-only or
+  IPv6-primary dual-stack cluster, kubelet probes and Service traffic
+  hit the pod's IPv6 address and nginx refuses them; the fix is an
+  explicit `listen [::]:80;` in `web.nginx.conf`, NOT restoring the
+  script (which would still no-op). (2) Our own hook keeps the `40-`
+  prefix so it still runs after the surviving `15-local-resolvers`,
+  `20-envsubst` and `30-tune-worker-processes` scripts. (3) Forks of the Dockerfile
+  built `FROM nginxinc/nginx-unprivileged` inherit the same `10-`
+  script and should keep the `rm`.
 - **`detectRestartMode` must use `term.IsTerminal`, not `os.ModeCharDevice`**:
   the daemon child of `argus-sidecar start` has its stdin dup2'd to
   `/dev/null`, which *is* a character device — so the original
