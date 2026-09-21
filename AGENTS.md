@@ -852,7 +852,34 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   expands directly into its sessions** — there is no agent layer in the
   tree at all. Each `SessionRow` leads with the CLI type icon
   (`AgentTypeIcon` driven by `session.cliType`), so the user can tell a
-  claude session from a codex one. **Creation hierarchy** mirrors the
+  claude session from a codex one. The bottom `MachineList` section
+  collapses behind an arrow **centred on** its `machines` header —
+  deliberately NOT `ProjectRow`'s leading left chevron, since this
+  section is bottom-pinned furniture rather than a tree node: the arrow
+  points DOWN to push it away and UP to bring it back. It is one
+  `ChevronDown` rotated 180°, not two icons, because a 180° flip of
+  chevron-down is pixel-identical to chevron-up and keeps the direction
+  change animated. True centring on the ROW (not on the space the label
+  leaves) needs the toggle to be `absolute inset-0` under the label, which
+  also makes the whole header one hit target — hence
+  `pointer-events-none` on the label spans, so their clicks fall through,
+  and `relative` on the kebab so it paints above and keeps its own.
+  The arrow is hover-only like the kebab, so the resting header is just
+  the label — but the fade sits on the ICON, never the button, so the
+  row stays clickable before the arrow appears and the hit target never
+  moves. It needs the bare `transition` utility rather than
+  `transition-transform`, since the rotate and the fade both have to
+  animate and the two dedicated utilities would fight over
+  `transition-property`.
+  State is `uiStore.machinesOpen` (a dedicated
+  persisted flag, deliberately NOT a key in `uiStore.expanded` — that map
+  is project-rows only) and it defaults open. The machine count is what
+  stays visible while collapsed: the kebab is a
+  SIBLING of the toggle button, since nesting it inside would be invalid
+  markup and its click would have to stop propagation to avoid also
+  collapsing the section. Collapsing clears `openFor` so a
+  `CreateProjectPopover` whose anchor row just unmounted can't pop back up
+  when the section is re-expanded. **Creation hierarchy** mirrors the
   tree: the bottom `MachineList`'s hover `+` opens `CreateProjectPopover`
   (name + workingDir + terminal default — no adapter), which writes a
   placeholder into `useProjectStore`; the project row's hover `+` opens
