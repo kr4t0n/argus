@@ -1,0 +1,36 @@
+{
+  "query": "the",
+  "hits": [
+    {
+      "sessionId": "cmo5unrlc00012idm0fds6eol",
+      "commandId": "cmo6v64rv001h13cklgj1nvgz",
+      "matchCount": 39,
+      "snippet": "… scrubbed context before [[hl]]the[[/hl]] match for hit 1\n\nSecond paragraph of scrubbed transcript text …"
+    },
+    {
+      "sessionId": "cmo5v0xn500072idmu6bk3v0x",
+      "commandId": "cmo5v3dp5000b2idm7cmzudxg",
+      "matchCount": 4,
+      "snippet": "… scrubbed context before [[hl]]the[[/hl]] match for hit 2\n\nSecond paragraph of scrubbed transcript text …"
+    },
+    {
+      "sessionId": "cmo6wgywi001v13ck9qbsvd6i",
+      "commandId": "cmobn64rd000ra8k389mcrz0d",
+      "matchCount": 3,
+      "snippet": "… scrubbed context before [[hl]]the[[/hl]] match for hit 3\n\nSecond paragraph of scrubbed transcript text …"
+    },
+    {
+      "sessionId": "cmo71d91t002t13ckkssb4wpt",
+      "commandId": "cmo72q8f3003513ckemac00rs",
+      "matchCount": 4,
+      "snippet": "… scrubbed context before [[hl]]the[[/hl]] match for hit 4\n\nSecond paragraph of scrubbed transcript text …"
+    },
+    {
+      "sessionId": "cmo71yx37002x13ck1ol64q8y",
+      "commandId": "cmo83cvp5000hiabuveotk3by",
+      "matchCount": 6,
+      "snippet": "… scrubbed context before [[hl]]the[[/hl]] match for hit 5\n\nSecond paragraph of scrubbed transcript text …"
+    }
+  ],
+  "mode": "substring"
+}
