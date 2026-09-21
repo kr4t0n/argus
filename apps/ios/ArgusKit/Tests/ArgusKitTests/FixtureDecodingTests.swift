@@ -63,6 +63,23 @@ struct FixtureDecodingTests {
         #expect(response.models.allSatisfy { !$0.id.isEmpty })
     }
 
+    // git-log / fs-list are answered live by the sidecar, so the capture
+    // script only writes them when the session's machine is online —
+    // gated like the search fixture rather than failing on a quiet fleet.
+    @Test("git-log.json → GitLogResponse",
+          .enabled(if: TestSupport.hasFixture("git-log")))
+    func gitLog() throws {
+        let response = try TestSupport.decodeFixture("git-log", as: GitLogResponse.self)
+        #expect(response.commits.allSatisfy { $0.sha.count == 40 && !$0.subject.isEmpty })
+    }
+
+    @Test("fs-list.json → FSListResponse",
+          .enabled(if: TestSupport.hasFixture("fs-list")))
+    func fsList() throws {
+        let response = try TestSupport.decodeFixture("fs-list", as: FSListResponse.self)
+        #expect(response.entries.allSatisfy { !$0.name.isEmpty && $0.kind != .unknown })
+    }
+
     // Captured only by a server with searchable sessions; the inline
     // shape check lives in SearchModelsTests until then.
     @Test("search-sessions.json → SessionSearchResponse",
