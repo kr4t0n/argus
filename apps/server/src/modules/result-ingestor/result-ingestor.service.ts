@@ -240,10 +240,19 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
     if (kind === 'session-external-id') {
       const e = ev as SessionExternalIdEvent;
       await this.sessions.setExternalId(e.sessionId, e.externalId);
+      // Wakes a `fork()` holding its response for this clone — AFTER the
+      // id is written, so the DTO it returns carries it. A no-op for an
+      // ordinary session's first turn, which announces its id the same way.
+      this.sessions.resolvePendingClone(e.sessionId, 'ready');
       return;
     }
     if (kind === 'session-clone-failed') {
       const e = ev as SessionCloneFailedEvent;
+      // A fork still holding its response takes the failure with it and
+      // toasts AFTER announcing the session, so the toast can name it.
+      // Only a failure with no waiter (it arrived after the fork timed
+      // out) is toasted from here.
+      if (this.sessions.resolvePendingClone(e.sessionId, 'failed', e.reason)) return;
       // Look up the owning user so the gateway can scope the toast to
       // their room. Sidecar doesn't know userId; the Session row does.
       const sess = await this.prisma.session.findUnique({
@@ -257,6 +266,7 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
           reason: e.reason,
         });
       }
+      this.sessions.resolvePendingClone(e.sessionId, 'failed');
       return;
     }
 

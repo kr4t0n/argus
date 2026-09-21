@@ -225,7 +225,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `agentId` attribution echo (fs/git/bg-task events, RPC response frames,
   `ResultChunk`) once the whole fleet was confirmed on runner sidecars.
 - `session/` — CRUD for sessions; resolves `externalId` so each subsequent
-  turn carries it back to the sidecar for `--resume`. Also owns the
+  turn carries it back to the sidecar for `--resume`. `POST
+  /sessions/:id/fork` replays the prefix of Command rows into a new
+  session, then publishes `clone-session` and HOLDS the response until
+  the sidecar's `session-external-id` / `session-clone-failed` event
+  settles it (bounded by `FORK_CLONE_TIMEOUT_MS`), so a client can never
+  prompt a fork before its CLI state exists; `dispatch` 409s in that
+  window as a backstop. See the fork gotchas. Also owns the
   session-default model choice: `POST /sessions` accepts
   `modelSelection`, `PATCH /sessions/:id/model` replaces/clears it
   (null = back to CLI default), both deliberately without deep
@@ -2987,19 +2993,36 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   a fact nothing stores. A `Command.forkedFromId` column would make it
   explicit and would also let the UI show lineage. Only becomes a
   problem if fork semantics change.
-- **Nothing gates a fork's first prompt on the on-disk clone landing.**
-  `fork()` publishes `clone-session` after emitting the new session, and
-  `dispatch` sends whatever `externalId` the row has at that moment —
-  `undefined` until the sidecar's `session-external-id` event arrives.
-  A prompt sent in that window runs without `--resume`, starts a fresh
-  CLI conversation, reports ITS id, and `setExternalId` (first-writer-
-  wins) then discards the clone's id when it lands. The fork keeps its
-  replayed history in the dashboard but the model knows none of it.
-  The window is small for Claude (a file copy) and larger for Codex
-  (spawn app-server + `thread/read` + `thread/fork`). The runner's
-  comment used to claim the server gates this; it does not. Fix shape:
-  a `cloneState` on the session (`pending` → `ready`/`failed`) that
-  `dispatch` waits on or 409s, cleared by the two clone events.
+- **A fork's first prompt used to race the on-disk clone.** `fork()`
+  published `clone-session` after emitting the new session and returned
+  at once, while `dispatch` sends whatever `externalId` the row has —
+  `undefined` until the sidecar's `session-external-id` event lands. A
+  prompt in that window ran without `--resume`, started a fresh CLI
+  conversation, reported ITS id, and `setExternalId` (first-writer-wins)
+  then discarded the clone's id: a fork that showed its history while
+  the model knew none of it, with no toast because nothing had failed.
+  Small window for Claude (a file copy), several seconds for Codex
+  (spawn app-server + hydrate the thread + `thread/fork`). Fixed by
+  holding the fork request: `fork()` registers a waiter keyed by the new
+  session id BEFORE publishing (the answer can beat `publish` itself),
+  the ingestor settles it from `session-external-id` (`ready`, after the
+  id is written) or `session-clone-failed` (`failed`, with the sidecar's
+  reason), and only then is `session:created` emitted and the DTO
+  returned — so no client can prompt a session it has not been told
+  about, and the web's existing "Branching…" button state covers the
+  wait. `FORK_CLONE_TIMEOUT_MS` (15 s) bounds it. Whoever announces the
+  session announces its clone outcome: when a waiter took the event,
+  `fork()` emits the clone-failed toast itself AFTER `session:created`
+  (both clients look the title up at push time and would otherwise show
+  an id prefix), and the ingestor toasts only a failure that arrives
+  with no waiter, i.e. after the fork timed out. Belt and braces:
+  `dispatch` throws 409 while `isClonePending` (a second tab or the REST
+  list could learn the id early); the web queue drainer reads any
+  rejection as "retry after a cooldown", so a queued prompt survives.
+  The waiter set is in-memory on purpose — a restart mid-clone resolves
+  every waiter as `timeout` in `onModuleDestroy` and the row is already
+  durable, so a `cloneState` column would buy nothing but a migration.
+  See "Fork lineage is inferred" above for the still-open ask.
 - **`Command(createdAt)` index has no re-check trigger.** Deliberately
   not added: at 37% window selectivity Postgres correctly prefers a seq
   scan, and the grid query measured 13.4 ms with zero disk reads. It

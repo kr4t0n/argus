@@ -228,11 +228,13 @@ func (r *runner) dispatchCommand(ctx context.Context, wg *sync.WaitGroup, cmdStr
 		// Dispatch off the loop like execute: handleCloneSession copies
 		// + rewrites the CLI's session JSONL synchronously, which would
 		// otherwise stall the next command until the fork finishes.
-		// Note the server does NOT gate the forked session's first
-		// prompt on the session-external-id event this publishes: a
-		// prompt sent before the clone lands runs without --resume and
-		// its fresh id wins (setExternalId is first-writer-wins), so the
-		// clone is orphaned. Known gap, tracked in AGENTS.md.
+		// Safe to run concurrently with turns for OTHER sessions; the
+		// forked session itself can't be prompted yet — the server holds
+		// the fork request until the session-external-id (or
+		// session-clone-failed) event this publishes arrives, with a
+		// bounded timeout, and refuses dispatch while it waits. Answer
+		// promptly: every second here is a second the user's "Branching…"
+		// spinner turns.
 		wg.Add(1)
 		go func(c protocol.Command, id string) {
 			defer wg.Done()
