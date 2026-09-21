@@ -50,6 +50,20 @@ public final class ArgusClient: @unchecked Sendable {
         try await send("GET", "/sessions", query: flag("includeArchived", includeArchived))
     }
 
+    /// Content search across every session the caller owns, archived
+    /// included — the ⌘K palette's backend. The server returns one hit
+    /// per session (its best-matching turn + how many turns matched);
+    /// titles/projects come from the lists the client already holds.
+    /// The server rejects an empty query; the palette mirrors the web's
+    /// two-character floor client-side to save the round-trip.
+    public func searchSessions(query: String, limit: Int? = nil) async throws -> SessionSearchResponse {
+        var items = [URLQueryItem(name: "q", value: query)]
+        if let limit {
+            items.append(URLQueryItem(name: "limit", value: String(limit)))
+        }
+        return try await send("GET", "/search/sessions", query: items)
+    }
+
     /// Initial load: last `tailCommands` turns (+ `hasMore` for scroll-up).
     public func getSession(id: String, tailCommands: Int? = nil) async throws -> SessionDetailResponse {
         var query: [URLQueryItem] = []
@@ -327,24 +341,6 @@ public final class ArgusClient: @unchecked Sendable {
             body: Body(notes: notes)
         )
         return response.notes
-    }
-
-    /// Active + recently-ended background tasks (Progress extension) —
-    /// hydrates the pane; `background-task:*` events keep it live.
-    public func listBackgroundTasks(machineId: String, workingDir: String) async throws -> [BackgroundTaskDTO] {
-        let response: BackgroundTasksResponse = try await send(
-            "GET", "/machines/\(machineId)/background-tasks",
-            query: [URLQueryItem(name: "workingDir", value: workingDir)]
-        )
-        return response.tasks
-    }
-
-    /// Global effect: every dashboard viewing the project drops the card.
-    public func dismissBackgroundTask(machineId: String, workingDir: String, taskId: String) async throws {
-        try await sendVoid(
-            "DELETE", "/machines/\(machineId)/background-tasks/\(taskId)",
-            query: [URLQueryItem(name: "workingDir", value: workingDir)]
-        )
     }
 
     // MARK: Core

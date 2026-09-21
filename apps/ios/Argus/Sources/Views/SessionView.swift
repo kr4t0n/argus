@@ -19,6 +19,9 @@ struct SessionView: View {
     @FocusState private var composerFocused: Bool
     @State private var refocusAfterNewline = false
     @State private var nearBottom = true
+    /// One archive/unarchive request at a time — ⌘D is a toggle, and a
+    /// double-press must not race two flips against each other.
+    @State private var archiveBusy = false
 
     // Attachments being composed (already uploaded — server holds bytes).
     @State private var pendingAttachments: [UploadedAttachment] = []
@@ -65,6 +68,7 @@ struct SessionView: View {
             transcript
             composer
         }
+        .background { archiveHotkey }
         // Opaque cover for the under-bar strip. Pinned section headers
         // defeat the bar's scroll-edge appearance (and forcing
         // toolbarBackground(.visible) proved unreliable in the split
@@ -171,6 +175,19 @@ struct SessionView: View {
                             : nil
                     )
                 }
+                if session?.archivedAt != nil {
+                    // The web's header badge: reports the state ⌘D just
+                    // set and doubles as the tap-to-restore affordance,
+                    // which is what makes staying on the session (rather
+                    // than bouncing to the list) the right call.
+                    Button {
+                        unarchive()
+                    } label: {
+                        Image(systemName: "archivebox.fill")
+                    }
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Archived — tap to restore")
+                }
                 Button {
                     app.inspectorPresented.toggle()
                 } label: {
@@ -226,12 +243,47 @@ struct SessionView: View {
         }
     }
 
+    /// ⌘D lives on a zero-size, invisible button rather than on the
+    /// menu's Archive item: a `.keyboardShortcut` on a real view in the
+    /// hierarchy is the one binding mechanism proven on this client (⌘.
+    /// and ⌘⏎ work the same way), whereas a shortcut on a `Menu` item is
+    /// only dispatched reliably while the menu is open. `opacity(0)`
+    /// keeps the view in the tree; `hidden()` might too, but its key-
+    /// command participation is undocumented.
+    private var archiveHotkey: some View {
+        Button("Archive session") { toggleArchive() }
+            .hotkey(Hotkeys.archiveSession)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
+    }
+
+    /// ⌘D — a TOGGLE that stays on the session (web parity). Making it a
+    /// toggle is what makes the key safe at all: the undo for a misfire
+    /// is the same keystroke, not a hunt through the sidebar's archived
+    /// reveal, and the toolbar badge reports the new state. Guarded like
+    /// ⌘.: the palette is modal and can be showing a different session.
+    private func toggleArchive() {
+        guard app.paletteMode == nil, !archiveBusy else { return }
+        if session?.archivedAt != nil { unarchive() } else { archive() }
+    }
+
+    /// Archiving from here no longer bounces to the list (it used to
+    /// clear `route`): the sidebar's swipe action still does, because
+    /// there the row is about to vanish from under the finger; here the
+    /// transcript stays readable and the badge offers the way back. The
+    /// row itself disappears into the archive at once, as on the web —
+    /// `pinRoute` is what keeps the sidebar's List from rewriting the
+    /// route when its selected row is deleted (see AppModel).
     private func archive() {
-        guard let client = app.client else { return }
+        guard let client = app.client, !archiveBusy else { return }
+        archiveBusy = true
         Task {
+            defer { archiveBusy = false }
             do {
-                app.sessionList.upsert(try await client.archiveSession(id: sessionId))
-                if app.route == .session(sessionId) { app.route = nil }
+                let archived = try await client.archiveSession(id: sessionId)
+                app.pinRoute()
+                app.sessionList.upsert(archived)
             } catch {
                 app.handleAPIError(error)
             }
@@ -239,10 +291,14 @@ struct SessionView: View {
     }
 
     private func unarchive() {
-        guard let client = app.client else { return }
+        guard let client = app.client, !archiveBusy else { return }
+        archiveBusy = true
         Task {
+            defer { archiveBusy = false }
             do {
-                app.sessionList.upsert(try await client.unarchiveSession(id: sessionId))
+                let restored = try await client.unarchiveSession(id: sessionId)
+                app.pinRoute()
+                app.sessionList.upsert(restored)
             } catch {
                 app.handleAPIError(error)
             }
@@ -260,6 +316,20 @@ struct SessionView: View {
             path: relative,
             displayPath: FileReferences.displayPath(rawPath, workingDir: workingDir),
             line: line
+        )
+    }
+
+    /// Per-turn addressing for `![alt](path)` images in the answer. The
+    /// epoch is the turn's completion time, so a path regenerated on a
+    /// later turn isn't served the earlier turn's cached bytes; a turn
+    /// that never completed shares the "live" epoch.
+    private func imageContext(for turn: Turn) -> MarkdownImageContext {
+        MarkdownImageContext(
+            client: app.client,
+            project: projectRef,
+            workingDir: workingDir,
+            epoch: turn.command.completedAt ?? "live",
+            onOpen: { path in openFilePreview(path, line: nil) }
         )
     }
 
@@ -331,6 +401,7 @@ struct SessionView: View {
                                 TurnBody(
                                     turn: turn,
                                     workingDir: workingDir,
+                                    images: imageContext(for: turn),
                                     timelineExpanded: expandedActivity.contains(turn.id),
                                     onFork: { fork(from: turn) },
                                     onOpenFile: { path, line in openFilePreview(path, line: line) }
@@ -521,6 +592,20 @@ struct SessionView: View {
                     send()
                     return .handled
                 }
+                // Escape leaves the field — it does NOT cancel the turn.
+                // ⌘. does that, from anywhere including with this field
+                // focused, so keeping both would mean the one moment you
+                // most want to step out (a turn is running and you want
+                // to read it) is the moment Escape kills the turn instead.
+                // A reflex key whose meaning depends on whether something
+                // is running is how accidental cancels happen. Mid-IME-
+                // composition Escape belongs to the IME (candidate window
+                // dismissal) — the web's isComposing guard.
+                .onKeyPress(.escape) {
+                    guard !ComposerKeyboard.isComposingMarkedText else { return .ignored }
+                    composerFocused = false
+                    return .handled
+                }
                 // UIKit resigns the field on a hardware Shift+Return no
                 // matter what onKeyPress returns — .handled does NOT
                 // stop it (Apple Forums #760511 calls it as-designed;
@@ -547,6 +632,10 @@ struct SessionView: View {
                         primaryButton(symbol: "text.badge.plus")
                     }
                     Button {
+                        // Guarded like the web's ⌘.: the palette is a
+                        // modal that can be showing a different session,
+                        // and a stop key must not reach the one behind it.
+                        guard app.paletteMode == nil else { return }
                         Task { await model?.cancelRunningTurn() }
                     } label: {
                         // Subtle (surface-2) square, NOT red — matches the
@@ -558,7 +647,10 @@ struct SessionView: View {
                             .background(Circle().fill(Color.surface2))
                     }
                     .buttonStyle(.plain)
-                    .keyboardShortcut(".", modifiers: .command)
+                    // Only rendered while a turn runs, so ⌘. no-ops
+                    // otherwise — a stop key that reports "nothing to
+                    // stop" is just noise (web parity).
+                    .hotkey(Hotkeys.cancelTurn)
                 } else {
                     primaryButton(symbol: "arrow.up")
                 }
@@ -677,7 +769,7 @@ struct SessionView: View {
         }
         .buttonStyle(.plain)
         .disabled(!canSend)
-        .keyboardShortcut(.return, modifiers: .command)
+        .hotkey(Hotkeys.sendPrompt)
     }
 
     private func send() {
@@ -953,6 +1045,7 @@ private struct TurnBand: View {
 private struct TurnBody: View {
     let turn: Turn
     let workingDir: String?
+    let images: MarkdownImageContext
     let timelineExpanded: Bool
     let onFork: () -> Void
     /// (raw path, optional line) — from FileChips or path:line links.
@@ -972,7 +1065,7 @@ private struct TurnBody: View {
             }
 
             if !turn.answer.isEmpty {
-                AnswerView(markdown: turn.answer, isStreaming: turn.isRunning)
+                AnswerView(markdown: turn.answer, isStreaming: turn.isRunning, images: images)
                     // Route `path:line` citations (and plain file-path
                     // links) into the file preview; real URLs pass
                     // through to the system. Mirrors the web's

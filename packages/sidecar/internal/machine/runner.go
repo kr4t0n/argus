@@ -228,8 +228,13 @@ func (r *runner) dispatchCommand(ctx context.Context, wg *sync.WaitGroup, cmdStr
 		// Dispatch off the loop like execute: handleCloneSession copies
 		// + rewrites the CLI's session JSONL synchronously, which would
 		// otherwise stall the next command until the fork finishes.
-		// Safe to run concurrently — the server gates prompting a forked
-		// session on the session-external-id event this publishes.
+		// Safe to run concurrently with turns for OTHER sessions; the
+		// forked session itself can't be prompted yet — the server holds
+		// the fork request until the session-external-id (or
+		// session-clone-failed) event this publishes arrives, with a
+		// bounded timeout, and refuses dispatch while it waits. Answer
+		// promptly: every second here is a second the user's "Branching…"
+		// spinner turns.
 		wg.Add(1)
 		go func(c protocol.Command, id string) {
 			defer wg.Done()

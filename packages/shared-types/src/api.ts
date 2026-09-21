@@ -671,10 +671,6 @@ export const PROJECT_NOTES_MAX_BYTES = 32_768;
 export interface UserExtensionsResponse {
   /** Notes extension — adds a per-project Note tab to the session pane. */
   notes: boolean;
-  /** Progress extension — adds a per-project Progress tab that lists
-   *  live background tasks reported by `argus-bg` running in the
-   *  agent's shell. */
-  progress: boolean;
   /** Diff extension — adds a Diff tab to the session pane showing the
    *  file diffs from the session's most recent turn (built from the
    *  per-edit unified diffs the sidecar already captures). */
@@ -685,7 +681,6 @@ export interface UserExtensionsResponse {
  *  set of known extension flags; the server replaces its stored map. */
 export interface UpdateUserExtensionsRequest {
   notes: boolean;
-  progress: boolean;
   diff: boolean;
 }
 
@@ -720,42 +715,6 @@ export interface CreateApiKeyRequest {
  *  it is stored only as a hash, so it can never be retrieved again. */
 export interface CreatedApiKey extends ApiKeyDTO {
   key: string;
-}
-
-/** REST response for `GET /machines/:machineId/background-tasks`. One
- *  row per active-or-recently-ended background task in the given
- *  project, keyed by taskId. `endedAt` set ⇒ task has finished and the
- *  server is keeping it briefly so late-joining dashboards still see
- *  the final state. */
-export interface BackgroundTaskDTO {
-  taskId: string;
-  machineId: string;
-  workingDir: string;
-  label?: string;
-  cmd?: string[];
-  /** Latest progress reading, if any. Omitted when the task started
-   *  but hasn't yet emitted a progress frame (tqdm hasn't fired its
-   *  first update). */
-  current?: number;
-  total?: number;
-  percent?: number;
-  etaSeconds?: number;
-  rate?: number;
-  unit?: string;
-  desc?: string;
-  /** ms epoch — when the task's `start` event was observed. */
-  startedAt: number;
-  /** Latest event timestamp (start OR most recent progress OR end). */
-  ts: number;
-  /** Set only after the task ends. */
-  endedAt?: number;
-  exitCode?: number;
-  status?: 'done' | 'failed';
-}
-
-/** REST response for `GET /machines/:machineId/background-tasks`. */
-export interface BackgroundTasksResponse {
-  tasks: BackgroundTaskDTO[];
 }
 
 // ─────────────────────────────────────────────────────────────────────

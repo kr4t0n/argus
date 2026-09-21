@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -187,11 +188,12 @@ func (a *ClaudeCodeAdapter) Cancel(_ context.Context, commandID string) error {
 //  1. Copy the file under a fresh UUID name in the same project dir.
 //  2. Rewrite every line's `sessionId` to the new UUID.
 //
-// turnIndex is 1-based; we stop emitting at the (turnIndex+1)th user
-// turn boundary. A user line whose `message.content[].type` is
-// `tool_result` is NOT a turn boundary — those are tool feedback paired
-// with the previous assistant turn. Stopping there would leave a
-// dangling tool_use without its result, which Claude refuses to resume.
+// turnIndex is 1-based and counts the server's Command rows — prompts the
+// user sent. The clone keeps everything through the end of that turn and
+// drops the rest. Which lines make up a turn is claudeCloneCut's job: the
+// transcript holds user-typed lines that are not prompts, and counting
+// those is exactly how a fork used to land one or more turns short on any
+// session that had been compacted.
 func (a *ClaudeCodeAdapter) CloneSession(
 	_ context.Context, workingDir, srcExternalID string, turnIndex int,
 ) (string, error) {
@@ -204,52 +206,45 @@ func (a *ClaudeCodeAdapter) CloneSession(
 	if err != nil {
 		return "", fmtCloneError("claude-code", srcExternalID, err)
 	}
-	slug := claudeProjectSlug(wd)
-	projectDir := filepath.Join(home, ".claude", "projects", slug)
-	srcFile := filepath.Join(projectDir, srcExternalID+".jsonl")
-	if _, err := os.Stat(srcFile); err != nil {
-		if os.IsNotExist(err) {
-			return "", fmtCloneError("claude-code", srcExternalID, errCloneSrcNotFound)
-		}
+	srcFile, err := claudeFindSessionFile(home, wd, srcExternalID)
+	if err != nil {
 		return "", fmtCloneError("claude-code", srcExternalID, err)
 	}
+	lines, err := claudeReadTranscript(srcFile)
+	if err != nil {
+		return "", fmtCloneError("claude-code", srcExternalID, err)
+	}
+	cut := claudeCloneCut(lines, turnIndex)
 
 	newID := newSessionUUID()
-	dstFile := filepath.Join(projectDir, newID+".jsonl")
+	// Next to the source rather than under a recomputed slug: that is the
+	// one directory `--resume` is guaranteed to look in for this workdir.
+	dstFile := filepath.Join(filepath.Dir(srcFile), newID+".jsonl")
 	out, err := os.OpenFile(dstFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return "", fmtCloneError("claude-code", srcExternalID, err)
 	}
 
-	userTextSeen := 0
-	stopped := false
-	werr := readJSONLines(srcFile, func(_ []byte, parsed map[string]any) error {
-		if stopped {
-			return nil
+	// Rewrite sessionId by re-encoding the whole line rather than
+	// substring-replacing: the id can legitimately appear inside prompt
+	// text. UseNumber keeps large integers (timestamps, byte offsets)
+	// byte-identical across the round trip, and the encoder leaves `<`
+	// alone so slash-command echoes stay exactly as the CLI wrote them.
+	enc := json.NewEncoder(out)
+	enc.SetEscapeHTML(false)
+	var werr error
+	for _, ln := range lines[:cut] {
+		dec := json.NewDecoder(bytes.NewReader(ln.raw))
+		dec.UseNumber()
+		var m map[string]any
+		if dec.Decode(&m) != nil {
+			continue // undecodable lines were never copied; keep that
 		}
-		if parsed == nil {
-			return nil
+		m["sessionId"] = newID
+		if werr = enc.Encode(m); werr != nil {
+			break
 		}
-		// User-text lines are turn boundaries; tool_result-only user
-		// lines are NOT (they pair with the prior assistant tool_use).
-		if t, _ := parsed["type"].(string); t == "user" && claudeIsUserTextTurn(parsed) {
-			if userTextSeen >= turnIndex {
-				stopped = true
-				return nil
-			}
-			userTextSeen++
-		}
-		// Rewrite every line's sessionId in-place. We re-marshal the
-		// whole map rather than substring-replacing because sessionId
-		// can incidentally appear inside user prompt text and we don't
-		// want to clobber that.
-		parsed["sessionId"] = newID
-		b, err := json.Marshal(parsed)
-		if err != nil {
-			return err
-		}
-		return writeJSONLine(out, b)
-	})
+	}
 	if cerr := out.Close(); werr == nil {
 		werr = cerr
 	}
@@ -260,34 +255,161 @@ func (a *ClaudeCodeAdapter) CloneSession(
 	return newID, nil
 }
 
-// claudeIsUserTextTurn reports whether a `type: "user"` line represents
-// a fresh user prompt (turn boundary) vs. tool-result feedback to the
-// previous assistant turn. Treats lines with mixed content (rare: a
-// tool_result alongside text) as text turns to err on the safe side of
-// "include this turn", since under-truncation is recoverable but
-// over-truncation drops a real prompt.
-func claudeIsUserTextTurn(line map[string]any) bool {
-	msg, _ := line["message"].(map[string]any)
-	contents, _ := msg["content"].([]any)
-	if len(contents) == 0 {
-		// User lines without structured content are treated as text
-		// (older shape: `message.content` was a string).
-		return true
+// claudeLineClass is what claudeCloneCut needs to know about a transcript
+// line. Claude Code's own transcript readers draw the same distinctions —
+// a human turn is a `user` line that is neither `isMeta` nor
+// `isCompactSummary` and carries no tool result — and mirroring them is
+// what keeps the on-disk count aligned with the server's Command count.
+type claudeLineClass uint8
+
+const (
+	// Bookkeeping the CLI writes around messages (attachment, last-prompt,
+	// ai-title, queue-operation, mode, …) plus anything undecodable. Never
+	// counted; transparent when trimming.
+	claudeLineOther claudeLineClass = iota
+	// A prompt the user sent — one per server Command. The echo of a slash
+	// command (`<command-name>/compact…`) counts too: the server dispatched
+	// it as a Command like any other prompt.
+	claudeLinePrompt
+	// Any other conversation line: assistant output, tool feedback,
+	// sub-agent sidechain lines, non-boundary system lines. Ends a turn
+	// when trimming.
+	claudeLineMessage
+	// Lines the CLI injects around a compaction or slash command rather
+	// than the user typing them: the `compact_boundary` system line, the
+	// `isCompactSummary` user line that follows it, `isMeta` caveats and
+	// `<local-command-*>` echoes. Never counted, and trimmed off the end of
+	// a turn — see claudeCloneCut. Verified against claude 2.1.274: one
+	// `/compact` writes four `user` lines (summary, caveat, command echo,
+	// stdout echo) for one server Command, an auto-compaction writes one
+	// for none.
+	claudeLineInjected
+)
+
+func claudeClassifyLine(m map[string]any) claudeLineClass {
+	if m == nil {
+		return claudeLineOther
 	}
-	for _, c := range contents {
-		item, _ := c.(map[string]any)
-		switch item["type"] {
-		case "text", "input_text":
-			return true
-		case "tool_result":
-			// keep walking; tool_result alone means feedback, not a turn
+	switch m["type"] {
+	case "assistant":
+		return claudeLineMessage
+	case "system":
+		if sub, _ := m["subtype"].(string); sub == "compact_boundary" {
+			return claudeLineInjected
+		}
+		return claudeLineMessage
+	case "user":
+		if b, _ := m["isMeta"].(bool); b {
+			return claudeLineInjected
+		}
+		if b, _ := m["isCompactSummary"].(bool); b {
+			return claudeLineInjected
+		}
+		if b, _ := m["isSidechain"].(bool); b {
+			return claudeLineMessage
+		}
+		if _, ok := m["toolUseResult"]; ok {
+			return claudeLineMessage
+		}
+		msg, _ := m["message"].(map[string]any)
+		switch content := msg["content"].(type) {
+		case string:
+			if strings.HasPrefix(content, "<local-command-") {
+				return claudeLineInjected
+			}
+			return claudeLinePrompt
+		case []any:
+			return claudeClassifyUserBlocks(content)
 		default:
-			// unknown content types: treat as text to avoid dropping
-			// a real prompt.
-			return true
+			// No structured content (older shape): a prompt, as before.
+			return claudeLinePrompt
+		}
+	default:
+		return claudeLineOther
+	}
+}
+
+// claudeClassifyUserBlocks handles array-form user content. tool_result
+// blocks are feedback to the previous assistant turn; text is a prompt
+// unless it is a `<local-command-*>` echo; image / document blocks are
+// things the user attached, so a prompt too.
+func claudeClassifyUserBlocks(blocks []any) claudeLineClass {
+	if len(blocks) == 0 {
+		return claudeLinePrompt
+	}
+	for _, b := range blocks {
+		item, _ := b.(map[string]any)
+		switch item["type"] {
+		case "tool_result":
+			continue
+		case "text", "input_text":
+			if text, _ := item["text"].(string); strings.HasPrefix(text, "<local-command-") {
+				return claudeLineInjected
+			}
+			return claudeLinePrompt
+		default:
+			return claudeLinePrompt
 		}
 	}
-	return false
+	return claudeLineMessage // tool_result blocks only
+}
+
+type claudeTranscriptLine struct {
+	raw   []byte
+	class claudeLineClass
+}
+
+// claudeReadTranscript loads a transcript as raw lines plus their class.
+// Only the raw bytes are retained — a long session is tens of MB and a
+// decoded map is several times its JSON — so the copy loop re-decodes
+// each kept line.
+func claudeReadTranscript(path string) ([]claudeTranscriptLine, error) {
+	var lines []claudeTranscriptLine
+	err := readJSONLines(path, func(raw []byte, parsed map[string]any) error {
+		lines = append(lines, claudeTranscriptLine{raw: raw, class: claudeClassifyLine(parsed)})
+		return nil
+	})
+	return lines, err
+}
+
+// claudeCloneCut returns how many leading lines the clone keeps so that it
+// ends with turn turnIndex. Turn N spans from its prompt line to just
+// before the (N+1)th prompt — but the lines the CLI injected right before
+// that next prompt were written by the NEXT command's process (an
+// auto-compaction runs when the next prompt arrives; a manual /compact IS
+// the next command), so they belong to the part being cut off and are
+// trimmed back to turn N's last conversation line. Bookkeeping lines are
+// transparent to that walk, so a compaction that happened MID-turn
+// (inside the tool loop, before the final answer) is kept. A turnIndex
+// past the last prompt keeps the whole file.
+func claudeCloneCut(lines []claudeTranscriptLine, turnIndex int) int {
+	seen := 0
+	lastPrompt := -1
+	end := len(lines)
+	for i, ln := range lines {
+		if ln.class != claudeLinePrompt {
+			continue
+		}
+		if seen >= turnIndex {
+			end = i
+			break
+		}
+		seen++
+		lastPrompt = i
+	}
+	cut := end
+trim:
+	for i := end - 1; i > lastPrompt; i-- {
+		switch lines[i].class {
+		case claudeLineInjected:
+			cut = i
+		case claudeLineOther:
+			// transparent
+		default:
+			break trim
+		}
+	}
+	return cut
 }
 
 // mapClaudeLine handles the Claude Code stream-json schema (also used by

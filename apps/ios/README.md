@@ -6,7 +6,7 @@ namespace as the web app and never touches the Go sidecar.
 
 > Status: **Feature-complete** (2026-07-17), all of it device-verified:
 > streaming transcript + prompt queue + attachments, iPad three-column
-> layout, inspector (Commits / Files / Terminal / Note / Progress /
+> layout, inspector (Commits / Files / Terminal / Note /
 > Diff), fleet + account panels, creation flows, APNs turn-completion
 > alerts with **cross-device read-sync** (read a session anywhere, the
 > phone banner withdraws), lock-screen **Live Activities**, and an
@@ -63,6 +63,7 @@ apps/ios/
 │                                 ContextWindows (all pure + unit-tested)
 └── Argus/                        SwiftUI app target (XcodeGen; .xcodeproj generated)
     ├── project.yml               targets, ATS exception, MarkdownUI + SwiftMath + ArgusKit deps
+    ├── Resources/                mermaid.html + vendored mermaid.min.js (```mermaid answer blocks)
     └── Sources/
         ├── ArgusApp.swift        @main, root phase switch, scenePhase handling
         ├── AppModel.swift        auth, socket ownership, event routing, TokenBox
@@ -76,11 +77,16 @@ Ports that must stay in lockstep with their TS originals:
 | Swift | TypeScript original |
 | --- | --- |
 | `Engine/DeltaSplit.swift` | `apps/web/src/lib/deltaSplit.ts` |
+| `Engine/FileReferences.swift` | `apps/web/src/components/FileChips.tsx` helpers, plus the `img` source split in `apps/web/src/components/StreamViewer.tsx` |
 | `Engine/MathSegments.swift` | `apps/web/src/lib/markdown.ts` delimiter rules (semantic port; deliberate deviations documented in the file) |
 | `Engine/UsageMath.swift` | `packages/shared-types/src/usage.ts` |
 | `Engine/ContextWindow.swift` | `packages/shared-types/src/contextWindow.ts` |
+| `Engine/SessionMatch.swift` | `apps/web/src/lib/sessionMatch.ts` (⌘P ranking — weights, bonuses, tie-breaks) |
+| `Engine/SearchSnippet.swift` | `renderSnippet` in `apps/web/src/components/CommandPalette.tsx` + `SEARCH_HL_START`/`SEARCH_HL_STOP` in `packages/shared-types/src/api.ts` |
+| `Argus/Sources/Hotkeys.swift` | `apps/web/src/lib/hotkeys.ts` (chords, labels, scopes) |
 | `Realtime/StreamClient.swift` events | `packages/shared-types/src/ws.ts` |
 | `Models/*` | `packages/shared-types/src/{api,protocol}.ts` |
+| `Argus/Resources/mermaid.min.js` | the `mermaid` version `apps/web` resolves in `pnpm-lock.yaml` (pinned by `MermaidLockstepTests`; re-vendor with `scripts/sync-ios-mermaid.sh`) |
 
 ## Build & test
 
@@ -205,8 +211,8 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   `POST/DELETE /me/devices`, HTTP/2 APNs sender in the result-ingestor;
   iOS: registration + settings toggle + tap deep-link + on-screen
   suppression.
-- **Post-Phase-4 (done):** inspector parity (Note + Progress tabs, web
-  tab order/gating) and the interactive terminal (SwiftTerm over the
+- **Post-Phase-4 (done):** inspector parity (Note tab, web tab
+  order/gating) and the interactive terminal (SwiftTerm over the
   `terminal:*` socket events, lazy-opened per inspector).
 - **Live Activity (done):** a lock-screen / Dynamic Island card for a
   running turn — session title, live tool count + last tool, on-device
@@ -346,3 +352,37 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   arrives; fences and code spans are immune (a real transcript had
   `find . \( -name "*.h" \)` in a ```bash block). Mirrors the web's
   `normalizeMathDelimiters` — keep the two in step.
+- **Keyboard shortcut parity (this):** the web's bindings, on a hardware
+  keyboard — ⌘P session switcher (ArgusKit `SessionMatch`, a tested port
+  of the web ranker over the already-hydrated list), ⌘K transcript
+  search (`ArgusClient.searchSessions` + `SearchSnippet` sentinel runs;
+  opens the session at its tail — the matched-turn deep link needs the
+  floating-window model the transcript engine doesn't have yet, see
+  AGENTS.md), ⌘B sidebar toggle (iPad), ⌘D archive toggle that stays on
+  the session, ⌘/ shortcuts sheet rendered from the `Hotkeys` registry
+  (also reachable from the keyboard glyph in the sidebar's account row),
+  and Escape to leave the composer or close a preview. Global bindings
+  are scene commands (`ArgusCommands`), session ones sit on views in
+  `SessionView`; every chord is ⌘-only so Ctrl chords keep reaching the
+  terminal's shell; type-to-focus is deliberately not ported (IME).
+  `scripts/capture-ios-fixtures.sh` now also captures
+  `search-sessions.json` (committed, snippet text scrubbed to
+  placeholders — the test checks the envelope and the repo is public);
+  its decoding test is `.enabled(if:)` the file exists.
+- **Mermaid diagrams (this):** ```mermaid fences in the final answer
+  render as diagrams with a Source toggle, the same affordance as
+  ```html — `MermaidBlock` hosts a WKWebView that loads the bundled
+  `Resources/mermaid.html` once and pushes source + theme in through
+  `window.argusRender`, so a light/dark flip redraws without reloading
+  the runtime. The runtime is vendored (`Resources/mermaid.min.js`,
+  the exact release the web app bundles) rather than fetched from a
+  CDN, so air-gapped servers and offline phones still get diagrams;
+  `MermaidLockstepTests` fails CI if it drifts from the web's
+  resolved version, and `scripts/sync-ios-mermaid.sh` re-vendors it.
+  Mermaid runs at `securityLevel: 'strict'` (DOMPurify, no HTML
+  labels, no click bindings) and the frame cancels every navigation
+  but its own load. A source that doesn't parse falls back to the
+  plain code block — no error state, like unparseable LaTeX. Adding
+  `Resources` to `project.yml` means **`xcodegen generate` is needed
+  once**; a stale project ships without the runtime and the block
+  degrades to source.

@@ -43,8 +43,8 @@ jobs:
           go build ./...
 
       # `vet` + `build` prove the sidecar COMPILES; they assert nothing.
-      # Until this step existed, all 58 test functions across
-      # adapter/machine/updater/argus-bg ran only when someone typed
+      # Until this step existed, every test function across
+      # adapter/machine/updater ran only when someone typed
       # `go test` locally — so a change that broke behaviour while still
       # compiling merged green. The whole suite is ~2s.
       - name: Test

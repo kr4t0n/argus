@@ -20,16 +20,57 @@ import (
 //	~/.claude/projects/<slug>/<sessionId>.jsonl
 //	~/.cursor/chats/<md5(workspace)>/<sessionId>/store.db   (SQLite)
 //
-// Claude's slug is the abs path with `/` → `-` (leading slash becomes
-// a leading dash). Cursor uses md5(workspace) instead of a slug — see
-// cursor_cli_clone.go. Codex cloning uses app-server's thread/fork API and
-// deliberately does not depend on its rollout-file layout.
+// Claude's slug is the abs path with every non-alphanumeric character →
+// `-` (leading slash becomes a leading dash) — see claudeProjectSlug.
+// Cursor uses md5(workspace) instead of a slug — see cursor_cli_clone.go.
+// Codex cloning uses app-server's thread/fork API and deliberately does
+// not depend on its rollout-file layout.
 
 // claudeProjectSlug encodes an absolute working directory the way Claude
-// Code does on disk: every `/` becomes `-`, including the leading slash
-// (so /home/kyle/foo becomes -home-kyle-foo).
+// Code names that workdir's transcript directory: every character outside
+// [A-Za-z0-9] becomes `-`, the leading slash included, so /home/kyle/my.app
+// becomes -home-kyle-my-app. That is the CLI's own rule
+// (`replace(/[^a-zA-Z0-9]/g, "-")`); an earlier version here only replaced
+// `/`, so any workdir with a dot or underscore in it "had no session on
+// disk" and every fork of it degraded to history-only. Encoded paths
+// longer than 200 characters get truncated and hash-suffixed by the CLI;
+// claudeFindSessionFile's glob covers those rather than reproducing the
+// hash.
 func claudeProjectSlug(workingDir string) string {
-	return strings.ReplaceAll(workingDir, "/", "-")
+	var b strings.Builder
+	b.Grow(len(workingDir))
+	for _, r := range workingDir {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
+}
+
+// claudeFindSessionFile locates srcID's transcript: the slug fast path
+// first, then a glob across every project directory — session ids are
+// UUIDs, so a name match is unambiguous. The glob is what keeps a fork
+// working for a slug we can't reproduce (hashed long paths, a future rule
+// change), at the cost of one directory listing.
+func claudeFindSessionFile(home, workingDir, srcID string) (string, error) {
+	root := filepath.Join(home, ".claude", "projects")
+	direct := filepath.Join(root, claudeProjectSlug(workingDir), srcID+".jsonl")
+	if _, err := os.Stat(direct); err == nil {
+		return direct, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	match, err := findFirstFile(root, filepath.Join("*", srcID+".jsonl"))
+	if err != nil {
+		return "", err
+	}
+	if match == "" {
+		return "", errCloneSrcNotFound
+	}
+	return match, nil
 }
 
 // homeDir returns $HOME, falling back to os.UserHomeDir.

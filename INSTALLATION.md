@@ -44,6 +44,8 @@ For the control-plane host:
 - Docker 24+ and Docker Compose v2 (`docker compose ...`)
 - Outbound access to Docker Hub (for `kr4t0n/argus-server` and `kr4t0n/argus-web`)
 - Connectivity to your chosen Postgres + Redis (whether local containers or remote)
+- Optionally, an S3-compatible bucket if you want file/image attachments
+  — Step 3 covers running one alongside or pointing at a managed one
 
 For each sidecar host (separate from the control plane in production):
 
@@ -67,7 +69,7 @@ or point at a managed service. Pick one.
 
 You don't need to do anything extra here — the Compose file in
 `[deploy/docker-compose.yml](deploy/docker-compose.yml)` already starts
-a Postgres 16 container with a volume. Skip ahead to Step 3 and use the
+a Postgres 16 container with a volume. Skip ahead to Step 4 and use the
 defaults.
 
 #### Option B — Self-hosted on a separate VM
@@ -124,7 +126,7 @@ self-hosted, or a managed service.
 #### Option A — Self-hosted in Docker Compose (simplest)
 
 The bundled Compose file already includes a Redis 7 container. Nothing
-to do. Skip to Step 3.
+to do. Skip to Step 4.
 
 #### Option B — Self-hosted on a separate VM
 
@@ -155,7 +157,90 @@ care about lives in Postgres.
 
 ---
 
-### Step 3: Deploy `argus-server` + `argus-web`
+### Step 3: Provision an object store (optional — attachments)
+
+Files and images a user attaches to a turn are stored in an
+S3-compatible bucket. This is the one **optional** datastore: leave
+`S3_ENDPOINT` unset and every other part of Argus runs normally. The
+composer's paperclip button is still there — it isn't feature-gated —
+but each upload fails with `file attachments are not configured on this
+server`, so skip this step only if you're content with that. You can
+come back to it later without touching anything else.
+
+Two facts shape how you provision it:
+
+- **Only the server needs to reach the bucket.** Sidecars pull each
+  attached file over HTTP *from the server*, which acts as the S3
+  gateway, and the browser displays it the same way. Remote agent
+  machines on arbitrary networks never talk to S3 — so the bucket can
+  stay private to your control-plane network, and you don't need to
+  expose it to the fleet.
+- **The bucket must already exist.** The server writes objects; it does
+  not create the bucket. Whichever option you pick below, create the
+  bucket as part of provisioning.
+
+#### Option A — Bundled MinIO in Docker Compose (simplest)
+
+Run MinIO next to the server. Nothing to do in this step — the Compose
+file in Step 4 already includes it, along with a `minio-init` one-shot
+that creates the bucket on first boot and exits, so there's no manual
+`mc mb` to remember. Generate a credential pair for it when you write
+the `.env`.
+
+Three things about that definition are deliberate, in case you adapt it:
+
+- **No `ports:` on `minio`.** Nothing outside the Compose network needs
+  to reach it. If you want the MinIO web console for browsing objects,
+  add `- '127.0.0.1:9001:9001'` — bound to localhost, not to every
+  interface — and reach it over an SSH tunnel.
+- **Credentials use `${VAR:?message}`, not a default.** Compose
+  substitutes an *empty string* for an unset variable, which would leave
+  MinIO and the server with different ideas of the credentials and fail
+  at upload time with a signature error. The `:?` form makes
+  `docker compose up` stop immediately and name the missing variable.
+  (The repo's own `deploy/docker-compose.yml` uses throwaway defaults
+  instead — that's the local-development file, not this one.)
+- **`S3_ENDPOINT` is set in the compose file, not `.env`.** It has to be
+  the Compose-internal address `http://minio:9000`; see the comment on
+  the `server` service in Step 4.
+
+#### Option B — Managed S3, Cloudflare R2, or an existing MinIO
+
+Any S3-compatible endpoint works; you provide the endpoint, bucket,
+region and a credential pair.
+
+
+| Provider           | `S3_ENDPOINT`                                    | Notes                                                                    |
+| ------------------ | ------------------------------------------------ | ------------------------------------------------------------------------ |
+| **AWS S3**         | `https://s3.us-east-1.amazonaws.com`             | Use the regional endpoint and set `S3_REGION` to match                   |
+| **Cloudflare R2**  | `https://<accountid>.r2.cloudflarestorage.com`   | Leave `S3_REGION=us-east-1`; R2 ignores it                               |
+| **MinIO elsewhere**| `http://minio.internal:9000`                     | Reachable from the server only                                           |
+| **Others**         | whatever the provider hands you                  | Must support path-style addressing (see the bucket-naming caveat below)  |
+
+
+Scope the credentials to just this bucket. The server only ever does
+`PutObject` / `GetObject` / `DeleteObject` against it.
+
+> **Bucket names must not contain dots.** The server addresses the
+> bucket **path-style** (`<endpoint>/<bucket>/<key>`) rather than as a
+> hostname prefix, because MinIO's default single-host deployment
+> requires it. A name like `my.argus.attachments` works path-style but
+> breaks TLS certificate matching on providers that redirect to
+> virtual-host style. Stick to `argus-attachments`-shaped names.
+
+#### Option C — Leave it off
+
+The default. Don't set `S3_ENDPOINT` (or set it to an empty string) and
+the server logs `S3_ENDPOINT is not set — file attachments are disabled`
+on boot and carries on. Nothing else degrades.
+
+Do **not** "disable" it by pointing `S3_ENDPOINT` at an unreachable
+host — an unset endpoint is a clean 503 with a clear message, whereas a
+dead one makes every upload hang for the connect timeout first.
+
+---
+
+### Step 4: Deploy `argus-server` + `argus-web`
 
 Pre-built multi-arch images live on Docker Hub:
 
@@ -179,8 +264,53 @@ services:
     image: kr4t0n/argus-server:0.1.0
     restart: unless-stopped
     env_file: .env
+    # Attachments only. Skipped Step 3? Delete the `environment:` and
+    # `depends_on:` keys below, plus the two services after this one.
+    #
+    # S3_ENDPOINT is set HERE rather than in .env because it must be the
+    # Compose-internal address. A host-oriented value like
+    # http://localhost:9000 in .env would point the server container at
+    # its own loopback and every upload would fail at connect —
+    # `environment:` wins over `env_file:`, so this can't be overridden
+    # by accident. Using an external bucket (Step 3 Option B)? Put its
+    # endpoint in .env instead and delete both keys here.
+    environment:
+      S3_ENDPOINT: http://minio:9000
+    depends_on:
+      minio:
+        condition: service_healthy
     ports:
       - '4000:4000'
+
+  # ── Attachments (Step 3 Option A) — omit both if you skipped it ──
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ['server', '/data', '--console-address', ':9001']
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot: create the attachments bucket on first boot, then exit.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${S3_ACCESS_KEY} ${S3_SECRET_KEY} &&
+      mc mb --ignore-existing local/${S3_BUCKET} &&
+      echo 'bucket ready';
+      "
+    restart: 'no'
 
   web:
     image: kr4t0n/argus-web:0.1.0
@@ -195,6 +325,9 @@ services:
       ARGUS_WS_URL: ""
     ports:
       - '5173:80'
+
+volumes:
+  minio-data:
 ```
 
 And a sibling `.env` file. **Generate fresh secrets** —
@@ -223,6 +356,22 @@ SIDECAR_LINK_TOKEN=<paste another: openssl rand -hex 32>
 # ─── Seed admin (created on first boot if absent) ───
 ADMIN_EMAIL=you@your-domain.com
 ADMIN_PASSWORD=<a-strong-password>
+
+# ─── Attachments / object store (from Step 3) ───
+# Omit this whole block to run without attachments.
+#
+# With the bundled MinIO (Option A), S3_ENDPOINT lives in the compose
+# file, not here — these credentials are what MinIO is created with AND
+# what the server authenticates with, so the two stay in step by
+# construction. For an external bucket (Option B), add its endpoint here:
+#   S3_ENDPOINT=https://s3.us-east-1.amazonaws.com
+S3_BUCKET=argus-attachments
+S3_ACCESS_KEY=<paste output of: openssl rand -hex 16>
+S3_SECRET_KEY=<paste output of: openssl rand -hex 32>
+S3_REGION=us-east-1
+# Per-file size cap in bytes (default 25 MiB) and max files per turn.
+ATTACHMENT_MAX_FILE_BYTES=26214400
+ATTACHMENT_MAX_FILES=10
 ```
 
 Bring it up:
@@ -289,7 +438,24 @@ sub-charts) — the chart deploys only `argus-server` + `argus-web` plus
 optional `Ingress`. See [`helm/argus/README.md`](./helm/argus/README.md)
 for the full values reference and ingress recipes.
 
-### Step 4: Sign in
+The object store is external too, and — as in Compose — off by default.
+The chart runs no MinIO and creates no bucket. To enable attachments,
+add these flags to the `helm install` above, pointing at a bucket that
+already exists:
+
+```bash
+  --set objectStore.endpoint='http://minio.minio.svc:9000' \
+  --set objectStore.bucket='argus-attachments' \
+  --set objectStore.accessKey='<key>' \
+  --set objectStore.secretKey='<secret>'
+```
+
+For credentials you'd rather not put on the command line, set
+`objectStore.existingSecret` to a Secret carrying `S3_ACCESS_KEY` and
+`S3_SECRET_KEY` instead. Leave the flags off entirely to run without
+attachments.
+
+### Step 5: Sign in
 
 Open `http://<host>:5173` (or your proxied domain). Sign in with the
 `ADMIN_EMAIL` / `ADMIN_PASSWORD` you set. The sidebar will be empty —
@@ -319,7 +485,7 @@ projects you plan to run on it. A single Mac with both `claude` and
 five build boxes runs five daemons (one each), and you create projects
 and sessions on whichever fleet member you want.
 
-### Step 5: Install the binary
+### Step 6: Install the binary
 
 Three ways to get the binary onto the agent machine — pick whichever
 fits — plus how it upgrades itself once it's there (Option D).
@@ -442,7 +608,7 @@ argus-sidecar version             # print the baked-in tag
 The swap is atomic (`os.Rename` over the running executable), which
 means anything already running keeps the old inode — and the old code —
 until it is replaced. So once the swap lands, `update` offers to restart
-whatever is running it: the service installed in Step 7 if there is one,
+whatever is running it: the service installed in Step 8 if there is one,
 otherwise a daemon backgrounded by `argus-sidecar start`. At a TTY it
 asks (default yes, warning that in-flight agent turns will be
 interrupted); with no TTY — cron, CI, a config-management run — it never
@@ -452,17 +618,11 @@ decide up front. Nothing running means nothing to do.
 Like the installer, `update` resolves releases without touching
 `api.github.com` unless `GITHUB_TOKEN` is set.
 
-`update` also refreshes the `argus-bg` companion (the background-task
-progress wrapper) from the same release, so the two stay in lockstep. To
-(re)install just `argus-bg` — e.g. on an older install that predates it,
-or to repair a missing copy — without touching the sidecar:
+Sidecars up to 0.3.x also shipped an `argus-bg` companion binary next
+to the sidecar. It is retired: `update` (and the installer) remove any
+leftover copy, and nothing else needs to change on the host.
 
-```bash
-argus-sidecar download-bg         # installs argus-bg next to the sidecar
-argus-bg version                  # print the baked-in tag
-```
-
-### Step 6: Initialize the sidecar
+### Step 7: Initialize the sidecar
 
 The sidecar has no YAML config file. There's a one-time `init`
 subcommand that records the bus URL, the server URL, and a friendly
@@ -539,7 +699,7 @@ rename can't be driven from a stale snapshot. The allowlist is persisted
 so the file jail and the fs watchers come up on reboot without waiting
 for the server's reconcile broadcast.
 
-### Step 7: Run the sidecar in the background
+### Step 8: Run the sidecar in the background
 
 For development, just run it in a terminal:
 
@@ -692,7 +852,7 @@ This survives the terminal but not a reboot — use `service install` above
 for anything long-lived. The log is append-only; wire it into
 `logrotate` or `newsyslog` if you want rotation.
 
-### Step 8 — Verify and create your first session
+### Step 9 — Verify and create your first session
 
 1. Refresh the dashboard. The bottom of the sidebar grows a
   **machines** section with your host listed (green dot when
@@ -762,7 +922,6 @@ These can be overridden with environment variables on the sidecar
 | `argus-server`  | `docker compose pull server && docker compose up -d server`. Migrations apply on boot.    |
 | `argus-web`     | `docker compose pull web && docker compose up -d web`.                                    |
 | `argus-sidecar` | `argus-sidecar update` (downloads, verifies, atomic swap, then offers to restart the running service). |
-| `argus-bg`      | Refreshed automatically by `argus-sidecar update`; or `argus-sidecar download-bg` to (re)install it on its own. |
 
 
 `:latest` follows `main`. For controlled upgrades, pin to `:X.Y.Z` in
@@ -872,6 +1031,58 @@ set the env vars *after* first boot, exec into the container and create
 one manually with `pnpm exec tsx prisma/seed.ts` (note: `tsx` is dev-only
 in the runtime image; the bootstrap path is the supported one — set the
 env vars before first boot).
+
+**Attaching a file fails with "file attachments are not configured on
+this server".**
+`S3_ENDPOINT` is unset, so the server started with attachments
+deliberately disabled — it logs
+`S3_ENDPOINT is not set — file attachments are disabled` at boot. Either
+that's intended (Step 3 Option C) or the variable didn't reach the
+container: with the bundled MinIO it belongs in the compose file's
+`environment:` block, **not** in `.env`. Confirm with
+`docker compose exec server printenv S3_ENDPOINT`.
+
+**Attaching a file fails with "attachment storage is unreachable".**
+The endpoint is set but the server can't open a connection to it. Nearly
+always one of:
+- `S3_ENDPOINT` points at `localhost` from inside the server container,
+  which is the container's own loopback, not the MinIO one. Use the
+  Compose service name (`http://minio:9000`).
+- The MinIO service isn't up, or the server started before it was ready
+  — `docker compose ps` and check the `minio` healthcheck.
+- A firewall is black-holing an external bucket. The client gives up
+  after a 5s connect deadline; the server log has the per-address
+  errors.
+
+**Attaching a file fails with "attachment storage rejected the
+request".**
+The connection succeeded and the store said no — so it's credentials or
+the bucket. Check the server log for the underlying S3 error name:
+`NoSuchBucket` means the bucket doesn't exist (nothing creates it for
+you — with the bundled MinIO, confirm `minio-init` ran and printed
+`bucket ready`; `docker compose logs minio-init`), while
+`InvalidAccessKeyId` / `SignatureDoesNotMatch` means `S3_ACCESS_KEY` /
+`S3_SECRET_KEY` disagree with the store. With Option A those same two
+variables *create* the MinIO root user, so a mismatch usually means they
+were changed after the `minio-data` volume was first initialised —
+MinIO keeps the credentials it was created with. Either restore the
+original values, or reset that one volume:
+
+```bash
+docker compose stop minio minio-init
+docker volume ls | grep minio-data          # e.g. argus_minio-data
+docker volume rm argus_minio-data           # stored attachments are lost
+docker compose up -d
+```
+
+Remove the named volume specifically — **not** `docker compose down -v`,
+which destroys every volume in the project, Postgres included.
+
+**An old attachment shows "attachment is no longer stored".**
+The `Attachment` row outlived its bytes — the object was removed from
+the bucket, or the bucket was recreated, while the transcript kept
+referencing it. Nothing recovers it; the rest of the turn renders
+normally.
 
 **Sidecar logs `connection refused` to Redis.**
 Network/firewall. From the sidecar host: `redis-cli -u "$REDIS_URL" PING`.

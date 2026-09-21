@@ -52,9 +52,21 @@ COPY --from=builder /repo/apps/web/dist /usr/share/nginx/html
 
 # nginx:alpine's stock entrypoint sources every executable script under
 # /docker-entrypoint.d/ before exec'ing nginx, which is the cleanest
-# hook point. Numeric prefix orders us after the official 10-/20-/30-
-# scripts (env templating, listen tweaks, …) so we don't fight them.
+# hook point. Numeric prefix orders us after the official 15-/20-/30-
+# scripts (resolver env, env templating, worker tuning) so we don't
+# fight them.
+#
+# The stock 10-listen-on-ipv6-by-default.sh is removed. It only ever
+# patches `listen [::]:80` into the PACKAGED default.conf, which we
+# overwrite above, so for us it is a guaranteed no-op — yet it still
+# runs `apk manifest nginx` to checksum the file before concluding
+# that, and a real deployment has been seen stalling at this script
+# on container start. Dropping it removes the stall without changing
+# what nginx binds (IPv4 :80 only, as before). If IPv6 listening is
+# ever needed, add `listen [::]:80;` to web.nginx.conf directly
+# rather than reinstating this script.
 COPY deploy/web.entrypoint.sh /docker-entrypoint.d/40-argus-runtime-config.sh
-RUN chmod +x /docker-entrypoint.d/40-argus-runtime-config.sh
+RUN chmod +x /docker-entrypoint.d/40-argus-runtime-config.sh \
+ && rm -f /docker-entrypoint.d/10-listen-on-ipv6-by-default.sh
 
 EXPOSE 80

@@ -12,6 +12,7 @@ import {
 import { Check, Code2, Copy, Eye } from 'lucide-react';
 import { copyTextToClipboard } from '../lib/clipboard';
 import { HtmlPreview } from './HtmlPreview';
+import { MermaidBlock } from './MermaidBlock';
 
 /**
  * Custom <pre> renderer for ReactMarkdown that overlays a copy button on
@@ -19,10 +20,10 @@ import { HtmlPreview } from './HtmlPreview';
  * it works regardless of any inline syntax-highlight markup the markdown
  * pipeline may inject inside the <code>.
  *
- * For ```html``` fenced blocks we additionally surface a Preview toggle
- * that renders the source inside a sandboxed iframe (see HtmlPreview),
- * so users get the rendered page without having to copy-paste it into
- * a separate viewer.
+ * Two fence languages get a rendered view with a Source toggle:
+ * ```html``` renders inside a sandboxed iframe (see HtmlPreview), and
+ * ```mermaid``` renders as an inline SVG diagram (see MermaidBlock), so
+ * users get the result without copy-pasting into a separate viewer.
  *
  * The buttons sit in the wrapping div (not the <pre>) so the pre's own
  * `overflow-x-auto` can't scroll them out of view.
@@ -38,9 +39,9 @@ export function MarkdownCodeBlock({ children, node: _node, ...rest }: Props) {
   const preRef = useRef<HTMLPreElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [copied, setCopied] = useState(false);
-  // HTML blocks default to the rendered preview; the toggle (and any
-  // non-HTML block) still falls back to source. `preview` is inert for
-  // non-HTML since the render path is gated on `isHtml` below.
+  // Renderable blocks default to the rendered preview; the toggle (and
+  // any other block) still falls back to source. `preview` is inert for
+  // non-renderable languages since the render path is gated below.
   const [preview, setPreview] = useState(true);
 
   // react-markdown wraps fenced blocks as <pre><code class="language-xxx">.
@@ -48,11 +49,16 @@ export function MarkdownCodeBlock({ children, node: _node, ...rest }: Props) {
   // whether the Preview affordance applies.
   const lang = useMemo(() => detectLanguage(children), [children]);
   const isHtml = lang === 'html';
+  const isMermaid = lang === 'mermaid';
+  const renderable = isHtml || isMermaid;
   // Pre-compute the raw source up front so it's available whether the
-  // <pre> is currently mounted (source view) or replaced by the iframe
-  // (preview view). Walking the React tree also stays in sync with
-  // streaming updates, unlike a one-shot innerText snapshot.
-  const sourceText = useMemo(() => (isHtml ? extractText(children) : ''), [children, isHtml]);
+  // <pre> is currently mounted (source view) or replaced by the rendered
+  // view. Walking the React tree also stays in sync with streaming
+  // updates, unlike a one-shot innerText snapshot.
+  const sourceText = useMemo(
+    () => (renderable ? extractText(children) : ''),
+    [children, renderable],
+  );
 
   useEffect(
     () => () => {
@@ -74,6 +80,12 @@ export function MarkdownCodeBlock({ children, node: _node, ...rest }: Props) {
     timerRef.current = setTimeout(() => setCopied(false), 1500);
   }, [sourceText]);
 
+  const sourceView = (
+    <pre ref={preRef} {...rest}>
+      {children}
+    </pre>
+  );
+
   return (
     <div className="group/code relative">
       {preview && isHtml ? (
@@ -85,13 +97,15 @@ export function MarkdownCodeBlock({ children, node: _node, ...rest }: Props) {
             className="min-h-[3rem]"
           />
         </div>
+      ) : preview && isMermaid ? (
+        // Renders `sourceView` itself until the diagram parses, so a
+        // still-streaming or malformed block reads as source.
+        <MermaidBlock source={sourceText} fallback={sourceView} />
       ) : (
-        <pre ref={preRef} {...rest}>
-          {children}
-        </pre>
+        sourceView
       )}
       <div className="absolute right-2 top-2 flex items-center gap-1">
-        {isHtml && (
+        {renderable && (
           <button
             type="button"
             onClick={() => setPreview((v) => !v)}

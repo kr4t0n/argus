@@ -93,8 +93,6 @@ Argus has **four** moving parts and one wire format:
        `gitWatcher` — and that is a deliberate invariant, not an
        accident of history; see the `vcs_state_changed` gotcha before
        adding a second.
-     - `agent:background`        — `argus-bg` task progress (see the
-       background-task service note under Server modules).
      - `machine:{mid}:control`   — server → sidecar daemon
        (`sync-projects` — the full workdir allowlist — plus fs/git/model
        RPC requests and sidecar-update commands).
@@ -227,7 +225,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `agentId` attribution echo (fs/git/bg-task events, RPC response frames,
   `ResultChunk`) once the whole fleet was confirmed on runner sidecars.
 - `session/` — CRUD for sessions; resolves `externalId` so each subsequent
-  turn carries it back to the sidecar for `--resume`. Also owns the
+  turn carries it back to the sidecar for `--resume`. `POST
+  /sessions/:id/fork` replays the prefix of Command rows into a new
+  session, then publishes `clone-session` and HOLDS the response until
+  the sidecar's `session-external-id` / `session-clone-failed` event
+  settles it (bounded by `FORK_CLONE_TIMEOUT_MS`), so a client can never
+  prompt a fork before its CLI state exists; `dispatch` 409s in that
+  window as a backstop. See the fork gotchas. Also owns the
   session-default model choice: `POST /sessions` accepts
   `modelSelection`, `PATCH /sessions/:id/model` replaces/clears it
   (null = back to CLI default), both deliberately without deep
@@ -293,26 +297,6 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   open terminals so the UI doesn't show zombies. Bytes are base64 over
   the wire to survive JSON. A small in-memory cache keyed by terminalId
   short-circuits Postgres ownership checks on every keystroke.
-- `machine/background-task.{service,controller}.ts` — in-memory
-  registry of every active + ended background task, populated by the
-  service's own XREADGROUP loop on `streamKeys.background` (the
-  dedicated `agent:background` stream; deliberately separate from
-  `agent:lifecycle` because a fast tqdm bar emits 20+ events/sec and
-  would otherwise trim heartbeats / sidecar-update progress out via
-  MAXLEN — the same reasoning later moved the fs/git watcher nudges
-  onto `agent:notify`). Keyed by `(machineId, workingDir,
-  taskId)` — workingDir is the project identity, matching how notes
-  scope. Each upsert fans out as `background-task:updated` on the
-  per-project Socket.IO room (`project:<machineId>:<workingDir>`).
-  Ended tasks **stay in memory forever** until a user explicitly
-  dismisses them — `DELETE /machines/:id/background-tasks/:taskId?
-  workingDir=...` removes from the map and broadcasts
-  `background-task:removed`. Effect is global (every dashboard
-  viewing the project sees the card disappear), matching how the
-  earlier wall-clock auto-eviction worked. `GET /machines/:id/
-  background-tasks?workingDir=...` hydrates a tab opening mid-run.
-  No DB persistence — JSONL on the machine's disk is authoritative if
-  you need history.
 - `session/` transcript windowing — three read shapes, all returning
   `{commands, chunks, hasMore, hasMoreNewer}`-ish payloads:
   `?tailCommands=N` (the default open-a-session path, newest N turns),
@@ -458,13 +442,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   module. Pings every 15 s, idle-timeout after 45 s.
 - `gateway/` — Socket.IO namespace `/stream`. Rooms: `user:{id}`,
   `session:{id}`, `terminal:{id}`, and the per-project
-  `project:{machineId}:{workingDir}` (fs/git nudges + background tasks).
+  `project:{machineId}:{workingDir}` (fs/git nudges).
   Authenticates the handshake using the same JWT used for REST. The
   gateway is the **only** thing that emits live data to clients.
-- `infra/redis/` — wrapper that owns *four* connections: one shared `cmd`
+- `infra/redis/` — wrapper that owns *three* connections: one shared `cmd`
   client, plus a dedicated one per blocking consumer loop (lifecycle+notify,
-  result ingestor, background tasks). ioredis requires the split — a parked
-  `XREADGROUP` blocks every other call on that socket.
+  result ingestor). ioredis requires the split — a parked `XREADGROUP`
+  blocks every other call on that socket.
 - `infra/prisma/` — Prisma client.
 
 ### `packages/sidecar/internal/`
@@ -545,20 +529,6 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     pulling in a Go git lib — its output is attached to every
     fs-list response so the dashboard's branch badge refreshes for
     free on every tree refetch.
-  - `progresswatch.go` — tertiary fsnotify watcher rooted at
-    `<workingDir>/.argus/progress/`, picking up the JSONL stream
-    `argus-bg` writes when wrapping a long-running command. Each
-    decoded line becomes one of the three
-    `BackgroundTask{Started,Progress,Ended}Event` frames, forwarded on
-    the `agent:background` stream so the dashboard's per-project
-    Progress tab can render live status for detached background work
-    the CLI's PTY would otherwise never see (anything backgrounded
-    with `&` / `nohup` flows only to log files, not to the PTY the
-    sidecar captures). `bgEvent` is the wire format on disk; the
-    watcher decorates it with machineId / workingDir before publishing
-    (the events are scoped by `(machineId, workingDir, taskId)`).
-    Soft-fails the same way fsw / gitw do — a missing or read-only
-    progress dir just means the tab stays empty.
 - `bus/` — go-redis wrapper with `Publish`, `EnsureGroup`, `ReadMessage`, `Ack`.
 - `adapter/` — `Adapter` interface and process-level **registry**. Each
   adapter file calls `Register(type, &Plugin{Factory, DefaultBinary})`
@@ -611,7 +581,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     `Failed to write to stdout: Broken pipe` line is filtered as noise, and
     output is capped at 100 lines per turn because each chunk is a Redis
     stream entry. The last 8 lines are still retained separately to decorate
-    a process-failure error. The runner also invokes
+    a process-failure error. **The sandbox is passed at startup too**
+    (`-c sandbox_mode=…`), not only on `thread/start` and `turn/start`:
+    app-server resolves its sandbox from config before any thread exists, so
+    with the config default still in force a Linux host without `bwrap` on
+    PATH logs a missing-bubblewrap ERROR (and a `configWarning`) during the
+    handshake — which the stderr bridge above then republishes as a stderr
+    chunk, on every turn, about a sandbox full-access turns never enter. The
+    flag grants nothing extra; the per-thread and per-turn sandbox still
+    decide each turn. The runner also invokes
     the optional `Closer` capability during shutdown. Because app-server's
     `tokenUsage.total` is cumulative for the whole thread, the adapter
     snapshots it before each turn and folds only the delta into the final
@@ -646,28 +624,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   caps a single frame. Decoupled from any global config: takes a
   `Settings` struct (shells, max-sessions). `terminal:open` carries the
   explicit `cwd` (the project's workingDir); the runner opens the PTY
-  there. `buildShellEnv` augments the spawned shell's environment with
-  two hooks the Progress extension depends on: prepends the sidecar's own
-  bin directory to `PATH` (so `argus-bg` is reachable without an
-  absolute path) and exports `ARGUS_PROGRESS_DIR` pointing at the
-  project's `<workingDir>/.argus/progress/`, which is also where the
-  per-workdir `progressWatcher` is listening.
-- `cmd/argus-bg/` — sibling binary shipped alongside the sidecar.
-  Wraps any command (`argus-bg --label "training" -- python train.py`),
-  runs the child in its own PTY so tqdm keeps its interactive
-  rendering on, tees raw output to argus-bg's own stdout (so the user
-  still sees the bar) and optionally to `--tee <log-path>`, parses
-  tqdm frames off the byte stream and writes a structured JSONL
-  event stream (`start` / `progress` / `end`) into
-  `$ARGUS_PROGRESS_DIR/<task-id>.jsonl`. Throttled to one progress
-  event per 500 ms OR per integer-percent tick — whichever comes
-  first — so the file stays bounded under a chatty tqdm bar. Exits
-  with the child's exit code so shell pipelines behave.
-  The tqdm parser lives in `tqdm.go` with a table-driven test
-  (`tqdm_test.go`) covering vanilla, description-prefixed,
-  ANSI-coloured, and HH:MM:SS-eta variants. Carries its own
-  `main.Version` (baked by the same Makefile `-ldflags` as the
-  sidecar) so `argus-bg version` makes companion drift observable.
+  there. `buildShellEnv` layers `TERM` / `COLORTERM` defaults over the
+  daemon's own environment and injects nothing else.
 - `updater/` — self-update: resolves the newest `argus-sidecar-v*`
   release, picks the matching `OS-arch` asset, verifies it against
   `SHASUMS256.txt`, and atomically `os.Rename`s over the running
@@ -683,42 +641,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   feed-resolved `release` sets `assetBaseURL` and `findAsset`
   synthesizes URLs under it. The download→verify→chmod→atomic-install
   step is factored into `installFromRelease`, parameterized by asset
-  base name + destination, so it backs both `Update` (sidecar → the
-  running executable) and `DownloadCompanion` (a sibling binary →
-  alongside the executable; `CompanionPath` resolves the location).
-  Drives `argus-sidecar update` (CLI), `argus-sidecar download-bg`
-  (CLI), and remote `update-sidecar` commands from the dashboard
-  (`machine/update.go`). On the remote path the daemon detects its
+  base name + destination. After a successful swap, `Update` sweeps a
+  leftover `argus-bg` binary next to the executable (a companion that
+  sidecars up to 0.3.x shipped; best-effort, never fails the update).
+  Drives `argus-sidecar update` (CLI) and remote `update-sidecar`
+  commands from the dashboard (`machine/update.go`). On the remote
+  path the daemon detects its
   restart mode (`self`, `supervisor`, `manual` — see the gotcha
   below) and either re-execs in place via `syscall.Exec`, exits 0
   for systemd/launchd, or stays put and asks the operator to
   restart manually.
-- **argus-bg lockstep.** `Update` deliberately doesn't touch `argus-bg`;
-  the caller decides when to refresh it. Both the CLI `update`
-  (`cmd/sidecar/main.go`) and the remote `handleUpdateSidecar`
-  (`machine/update.go`, via `refreshBG`) gate the refresh on
-  `updater.CompanionUpToDate("argus-bg", tag)`, where `tag` is the release
-  the sidecar just resolved to. That probe execs the installed
-  `<bin-dir>/argus-bg version` (absolute path — never PATH-resolved) and
-  compares its reported tag to `tag`; it refreshes via
-  `DownloadCompanion("argus-bg")` from the *same* release on anything but
-  an exact match. **It is fail-safe**: a missing file, exec error, wrong
-  arch, an old `argus-bg` with no `version` subcommand, or an unparseable
-  line all read as "not up to date" → reinstall — never skip. This is what
-  closes the *present-but-stale* hole (e.g. a prior best-effort refresh
-  that failed leaves `argus-bg` behind on an otherwise-current sidecar).
-  `--force` bypasses the probe and always reinstalls. The whole step is
-  best-effort: a checksum/permission failure on the companion is logged but
-  never fails the sidecar update. The standalone `download-bg` subcommand
-  fetches the companion unconditionally (no version gate) — it's the
-  explicit repair path. Remote refreshes pin `updater.DefaultRepo` for the
-  same hostile-server reason the remote sidecar update does.
-  Trade-off worth knowing: gating on version means a same-version-but-
-  corrupt `argus-bg` is *not* re-verified (the always-download path used to
-  re-check its SHA every run); `--force` or `download-bg` is the escape
-  hatch.
 - `cmd/sidecar/main.go` — subcommand dispatch (`init`, `service`,
-  `update`, `download-bg`, `version`, default = run daemon), flag
+  `update`, `version`, default = run daemon), flag
   parsing, signal handling, runner glue.
 - `cmd/sidecar/service.go` — `service install|uninstall|status`:
   renders and enables a systemd unit (Linux) or launchd plist (macOS)
@@ -811,6 +745,29 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   tables (`MTMathAtomFactory` + `MTMathListBuilder` string literals)
   rather than assuming KaTeX parity — `\atop` is supported, `\array`
   and `\substack` are not.
+- `lib/mermaid.ts` — lazy mermaid renderer for ```` ```mermaid ````
+  fences, built in the same shape as `lib/shiki.ts`: a module singleton
+  behind a dynamic `import()`, so the library stays out of the main
+  bundle until a response actually contains a diagram. Verified: the
+  entry chunk grows 1.92 kB raw / 0.65 kB gzip, and mermaid lands in its
+  own lazily-imported chunks (`mermaid.core` ~147 kB gzip plus one per
+  diagram type — a flowchart never pulls cytoscape). We render to an SVG
+  string and inject it rather than routing through `HtmlPreview`: the
+  iframe path would need mermaid off a CDN (breaking the air-gapped
+  installs the Helm chart targets) or the whole library inlined into
+  every `srcDoc`, re-parsed on each token while the answer streams.
+  `securityLevel: 'strict'` is what makes injecting model-generated
+  markup acceptable — mermaid DOMPurify-sanitizes its output and
+  disables HTML labels and `click` bindings. **Never relax it to
+  'loose'** for transcript content. GOTCHA: mermaid's config is a
+  module-level global, not a per-render argument, so renders are
+  serialized through one promise chain; two diagrams under different
+  themes would otherwise race on it. GOTCHA: mermaid measures text to
+  size nodes, so `fontFamily` has to match tailwind's `font-sans` or
+  boxes come out visibly mis-fitted to their labels. iOS counterpart:
+  `apps/ios/Argus/Sources/Views/MermaidRender.swift` + a vendored copy
+  of the same mermaid release, version-pinned to this dependency by
+  `MermaidLockstepTests` (see the `apps/ios/` section).
 - `stores/` — Zustand slices: `authStore`, `machineStore`, `sessionStore`,
   `projectStore`, `uiStore` (no `agentStore` — it was deleted with the
   Agent entity). Sessions are stored by id with their full `chunks`
@@ -820,10 +777,26 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   command, concatenates `delta`s, renders tool pills, stdout, errors, and a
   cursor while running. Final-answer markdown is rendered with the shared
   plugin sets from `lib/markdown.ts` (GFM + KaTeX math) and with
-  `MarkdownCodeBlock` as the custom `<pre>` renderer; that component
-  detects ```` ```html ```` fenced blocks and renders them through the
-  shared `HtmlPreview` component, defaulting to the rendered view with
-  a Source toggle. `HtmlPreview` has two sandbox postures keyed off its
+  `MarkdownCodeBlock` as the custom `<pre>` renderer. That component
+  gives two fence languages a rendered view with a Source toggle,
+  defaulting to rendered: ```` ```html ```` goes through the shared
+  `HtmlPreview` component, and ```` ```mermaid ```` through
+  `MermaidBlock` (see `lib/mermaid.ts`). Anything else is a plain
+  `<pre>` with the copy button. NOTE: `sourceText` is extracted for
+  *every* renderable language, not just HTML — the copy button falls
+  back to it whenever the rendered view has unmounted the `<pre>`, so
+  adding a third language means widening that memo too.
+  `MermaidBlock` is built around the fact that a fence streams in token
+  by token: renders are debounced (~200 ms), a failed parse keeps the
+  last good diagram rather than clearing it, and before anything parses
+  it renders the ordinary `<pre>` instead. So a streaming block reads as
+  source and snaps into a diagram when it completes, and a malformed one
+  just stays source — there is deliberately no error state, matching how
+  invalid TeX renders as visible source instead of throwing. GOTCHA:
+  React's `useId()` emits ids like `:r3:` and mermaid feeds the id
+  straight to `querySelector`, where the leading `:` parses as a
+  pseudo-class and throws — `MermaidBlock` strips them.
+  `HtmlPreview` has two sandbox postures keyed off its
   `autoHeight` prop. `FileViewer` (`.html` files) uses the strict
   `sandbox=""`: opaque origin, no scripts, sized by its container —
   remote-tree file content stays fully inert. The chat code-block path
@@ -847,6 +820,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   answer streams, `srcDoc` changes per token and the iframe reloads, so
   the bootstrap and any chart code re-run on each partial — noisy but
   isolated and harmless; it settles when the block completes.
+  `components/MarkdownImage.tsx` is the custom `img` renderer for the
+  same answer markdown — `![alt](path)` for a path inside the agent's
+  workingDir fetches the real bytes over fs-read and renders them as a
+  `data:` URL; anything else renders as inert alt text. See the
+  "local images in answer markdown" gotcha for why.
 - `components/TodoWindow.tsx` — per-turn task tracker rendered inside the
   sticky band right under `<ActivityPill>`. Sources its rows from the
   *latest* `TodoWrite`-style tool chunk in the command's chunks
@@ -874,7 +852,34 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   expands directly into its sessions** — there is no agent layer in the
   tree at all. Each `SessionRow` leads with the CLI type icon
   (`AgentTypeIcon` driven by `session.cliType`), so the user can tell a
-  claude session from a codex one. **Creation hierarchy** mirrors the
+  claude session from a codex one. The bottom `MachineList` section
+  collapses behind an arrow **centred on** its `machines` header —
+  deliberately NOT `ProjectRow`'s leading left chevron, since this
+  section is bottom-pinned furniture rather than a tree node: the arrow
+  points DOWN to push it away and UP to bring it back. It is one
+  `ChevronDown` rotated 180°, not two icons, because a 180° flip of
+  chevron-down is pixel-identical to chevron-up and keeps the direction
+  change animated. True centring on the ROW (not on the space the label
+  leaves) needs the toggle to be `absolute inset-0` under the label, which
+  also makes the whole header one hit target — hence
+  `pointer-events-none` on the label spans, so their clicks fall through,
+  and `relative` on the kebab so it paints above and keeps its own.
+  The arrow is hover-only like the kebab, so the resting header is just
+  the label — but the fade sits on the ICON, never the button, so the
+  row stays clickable before the arrow appears and the hit target never
+  moves. It needs the bare `transition` utility rather than
+  `transition-transform`, since the rotate and the fade both have to
+  animate and the two dedicated utilities would fight over
+  `transition-property`.
+  State is `uiStore.machinesOpen` (a dedicated
+  persisted flag, deliberately NOT a key in `uiStore.expanded` — that map
+  is project-rows only) and it defaults open. The machine count is what
+  stays visible while collapsed: the kebab is a
+  SIBLING of the toggle button, since nesting it inside would be invalid
+  markup and its click would have to stop propagation to avoid also
+  collapsing the section. Collapsing clears `openFor` so a
+  `CreateProjectPopover` whose anchor row just unmounted can't pop back up
+  when the section is re-expanded. **Creation hierarchy** mirrors the
   tree: the bottom `MachineList`'s hover `+` opens `CreateProjectPopover`
   (name + workingDir + terminal default — no adapter), which writes a
   placeholder into `useProjectStore`; the project row's hover `+` opens
@@ -1051,6 +1056,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   belongs in `Dashboard`. Every *other* keydown listener in the web app is
   component-scoped (popover Escape, composer Enter, `ui/Select`); this hook
   is the only global one, so a new app-level shortcut is a one-liner.
+  The iOS client mirrors this table in `apps/ios/Argus/Sources/Hotkeys.swift`
+  (see the keyboard entries under `apps/ios/` for how the mechanisms
+  differ) — add a chord to both tables or to neither.
 - `lib/useTypeToFocus.ts` — bare-key "start typing anywhere and it lands in
   the composer" (`SessionPanel`). Deliberately a SEPARATE hook, not a
   `useGlobalHotkey` option: that hook is simple precisely because a
@@ -1121,9 +1129,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   model). The bottom region is tabbed: **Commits** (`GitLogPanel`),
   **Files** (`FileTree`), **Terminal** (`<TerminalPane>`), and — only when
   the Notes extension is on (`uiStore.notesExtensionEnabled`) and the
-  session has a `workingDir` — **Note** (`<NotePane>`), plus two more
-  extension tabs gated the same way: **Progress** (`<ProgressPane>`,
-  `progressExtensionEnabled`) and **Diff** (`<DiffPane>`,
+  session has a `workingDir` — **Note** (`<NotePane>`), plus one more
+  extension tab gated the same way: **Diff** (`<DiffPane>`,
   `diffExtensionEnabled`). ContextPane receives the session's `commands`
   (not just `chunks`) so the Diff tab can scope its file diffs to the last
   turn. Commits/Files render only when a `ProjectRef` resolves
@@ -1288,6 +1295,27 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - Swift is authored on Linux but only compiles on macOS —
   `.github/workflows/ios.yml` (macOS runner, `swift build` + `swift
   test`) is the primary verifier, not the dev box.
+- **```` ```mermaid ```` answer blocks** render through `MermaidBlock`
+  (`Argus/Sources/Views/MermaidRender.swift`): a WKWebView that loads
+  the bundled `Resources/mermaid.html` once via `loadFileURL` and then
+  pushes source + theme in through `window.argusRender`, so a theme
+  flip redraws without re-parsing the runtime. The runtime is a
+  **vendored `Resources/mermaid.min.js`** (3.2 MB, checked in) — the app
+  can't take the npm dependency the web does, and loading it off a CDN
+  would break air-gapped servers and offline phones. Same posture as
+  the web: `securityLevel: 'strict'`, never `'loose'`; a source that
+  doesn't parse falls back to the plain code block with no error state.
+  Every navigation but the initial file load is cancelled (async
+  `decidePolicyFor`, same trap as StaticHtmlView). Lockstep with the
+  web is version-pinned by `MermaidLockstepTests`, which reads the
+  `version:"x.y.z"` literal out of the vendored bundle and compares it
+  to the `apps/web` importer's resolved version in `pnpm-lock.yaml`;
+  after bumping mermaid on the web, run `scripts/sync-ios-mermaid.sh`
+  and commit the refreshed file. `project.yml` lists `Resources` with
+  `buildPhase: resources` — adding it needed an `xcodegen generate`, so
+  a stale local project silently ships without the runtime; the block
+  then degrades to source (missing-resource fallback in
+  `MermaidWebView.makeUIView`) rather than sitting empty.
 - Wire gotcha the fixtures encode: REST-served chunks drop
   `sessionId`/`isFinal` and serialize `ts` as an ISO string, while the WS
   `chunk` event relays the full wire shape with numeric millis; command
@@ -1367,6 +1395,116 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   hide toggle's count is over renderable archived *groups*, not project
   rows — an archived project with no sessions has no group and isn't
   counted, which is fine since it wouldn't render either way.
+- **Keyboard shortcuts mirror the web's registry, and are ⌘-only.**
+  `Argus/Sources/Hotkeys.swift` is the counterpart of
+  `apps/web/src/lib/hotkeys.ts` — same chords, labels and scopes, kept in
+  step by hand (nothing hash-pins this pair). Every binding goes through
+  `View.hotkey(_:)`, which takes a `HotkeyBinding`, so a raw
+  `keyboardShortcut` call site is something the ⌘/ sheet
+  (`ShortcutsHelpSheet`, rendered FROM the table) can never list. The
+  mechanism differs by scope and the split is load-bearing: **global**
+  bindings (⌘P / ⌘K / ⌘/) are scene commands (`ArgusCommands`, a
+  `CommandMenu` on the `WindowGroup`) because a `.keyboardShortcut` on a
+  view is inert whenever that view is off screen and the split view swaps
+  its detail column; **session** bindings (⌘D / ⌘. / ⌘⏎) sit on views
+  inside `SessionView`, so they are inert on the machine and account
+  panes by construction. ⌘B rides the one explicit sidebar-toggle button
+  in `MainSplitView`'s regular-width toolbar, so it is iPad-only by
+  construction. The Ctrl form is never claimed: the web binds it and
+  defers it while the terminal has focus, whereas here Ctrl+B / Ctrl+K /
+  Ctrl+D simply reach SwiftTerm untouched — the same posture with no
+  guard to maintain. The three overlays share ONE sheet keyed on
+  `AppModel.paletteMode` (the web's `paletteStore.mode`), so another
+  overlay's hotkey swaps the content in place instead of stacking a
+  second sheet; `togglePalette` no-ops before login, which is how the
+  scene commands stay inert on the login screen without observing
+  `phase` from a `Commands` body. The iPad hold-⌘ HUD lists the scene
+  commands, but treat the ⌘/ sheet, not the HUD, as the authoritative
+  list. Verified on an iPad with a hardware keyboard (Sep 2026): the
+  scene commands, ⌘B, the zero-size ⌘D button below and the Escape
+  paths all dispatch. Still unverified: whether UIKit's text-editing ⌘B
+  (bold) steals the sidebar toggle while the composer is focused.
+- **Three things the first iPad pass found, and the shape of each fix.**
+  (1) A sheet's body keeps rendering through its dismiss animation, and
+  `paletteMode` is already nil by then — so `PaletteSheet` renders the
+  LAST non-nil mode (`shown`) and `CommandPaletteSheet` takes its mode
+  as a parameter instead of reading the store. Without that, closing
+  the help sheet flashed the search palette on the way out, and closing
+  ⌘K would have snapped to ⌘P rows mid-animation. Any future sheet keyed
+  on a nullable store field needs the same latch. (2) The palette is a
+  bare `ScrollView` on a translucent sheet surface, so the detail
+  column's colours bled through it (a dark green) while the help
+  sheet's `List` painted opaque grouped grey; `presentationBackground
+  (Color(.systemGroupedBackground))` on `PaletteSheet` gives all three
+  modes one surface. (3) `List(selection:)` in the split view writes a
+  selection of its own (nil, or a neighbouring row) when the SELECTED
+  row is deleted from its data, so archiving the open session with the
+  project's eye toggle off yanked the detail column onto another
+  session — the opposite of the web, where routing is URL-driven and
+  the panel stays while the row disappears into the archive. On iOS
+  the route IS the list selection, so the write is refused at the
+  binding instead: `SessionView.archive()` calls `AppModel.pinRoute()`
+  right before the upsert that deletes the row, and the sidebar's List
+  is bound to `SessionSidebar.listSelection`, a filtered `Binding`
+  whose setter drops writes while the pin (a 500 ms window) is in
+  force. Reads are untouched, so programmatic navigation still
+  highlights and pushes. Confirmed on the iPad: the row hides at once
+  and the detail column stays. A time window rather than a "cleared after
+  the list updates" flag because the write lands in a UIKit callback
+  with no SwiftUI hook to clear on. A first cut kept the archived row
+  rendered (dimmed) while selected to avoid the deletion altogether;
+  it worked, but diverged visibly from the web, which hides the row at
+  once. Moves are fine — rows re-sort on every status event and never
+  jumped — only deletion of the selected row triggers the write.
+- **⌘D is a zero-size `opacity(0)` button, Escape has three homes, and
+  type-to-focus is deliberately not ported.** ⌘D lives in `SessionView`'s
+  background rather than on the menu's Archive item: a real view in the
+  hierarchy is the one binding mechanism proven on this client (⌘. and
+  ⌘⏎ work the same way), whereas a `Menu` item's shortcut is only
+  dispatched reliably while the menu is open. It is a toggle that STAYS
+  on the session while the sidebar row disappears into the archive
+  (web parity — the toolbar's archivebox badge reports the state and
+  restores on tap; see the `pinRoute` entry above for how the route
+  survives the row's deletion), and the header menu's Archive now
+  stays put too; only the sidebar's swipe action still bounces, because
+  there the row vanishes from under the finger. Escape: `.onKeyPress
+  (.escape)` on the composer blurs it (IME-guarded like Return, and it
+  never cancels — ⌘. is the only cancel, for the reason recorded in the
+  web's Composer), and `.keyboardShortcut(.cancelAction)` on the
+  Done/Cancel buttons of the file-preview, palette and help sheets — a
+  key command rather than `onKeyPress`, because on iOS `onKeyPress` fires
+  only on a FOCUSED view and a sheet with nothing focused would swallow
+  the key. Type-to-focus: the web's version never inserts the character
+  — the same keystroke lands in the newly focused textarea by itself —
+  and that is what keeps IME composition and dead keys intact. On iOS a
+  bare key with nothing focused reaches no view at all, so the only way
+  to port it is to insert `press.characters` by hand, which is precisely
+  the IME-breaking path the web refuses (a CJK user's first Pinyin letter
+  would land as a raw Latin character before the field opened). Left out
+  on purpose; revisit only with a focus-without-insert design and a
+  device test under an IME.
+- **⌘K opens the session at its TAIL, not on the matched turn.** The
+  server endpoint is shared and free to reuse — `getSession` would only
+  need the `aroundCommand` / `beforeCount` / `afterCount` query and a
+  `hasMoreNewer` field — but `TranscriptState` has no floating-window
+  model, and every live path assumes the window reaches the present:
+  `upsert(command:)` appends any unknown turn, `append(chunk:)` accepts
+  chunks for turns outside the window, `SessionView` sticks to the
+  bottom of whatever window it holds, `start()` merges the tail on every
+  appearance (a disjoint window trips the wipe-and-replace fallback and
+  yanks the user off the turn), and `handleReconnect`'s afterSeq
+  backfill merges every command in the session. Porting the deep link
+  means porting the web's three `hasMoreNewer` guards plus a
+  `history?after=` pager and a jump-to-latest control (see the
+  transcript-window invariant under Gotchas), and calling the around
+  endpoint without them fails silently, so the tail-only cut was chosen
+  over a half-guarded middle. `SessionSearchHitDTO.commandId` is carried
+  for that follow-up. `Engine/SessionMatch.swift` (⌘P ranking) and
+  `Engine/SearchSnippet.swift` (`[[hl]]` sentinel runs) are lockstep
+  ports listed in the README table. `search-sessions.json` is captured
+  by the fixture script and its decoding test is `.enabled(if:)` the
+  file exists, so CI stays green until someone runs the capture against
+  a server with searchable sessions — do run it and commit the fixture.
 
 ## Conventions
 
@@ -1384,7 +1522,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   collisions.
 - **WS rooms**: clients join `session:{id}` to receive that session's chunks
   and `command:*`/`session:*` updates, and `project:{machineId}:{workingDir}`
-  for fs/git nudges + background tasks. `machine:*` is emitted to everyone;
+  for fs/git nudges. `machine:*` is emitted to everyone;
   per-user events go to `user:{id}` only.
 - **Streaming over batching**: never coalesce `delta` chunks server-side.
   Drop only when a *specific* socket is lagging (TODO — see follow-ups).
@@ -1440,9 +1578,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   command's state and NOT on "have we seen a final yet":
   1. Claude Code's bridge re-announces `system/init` from a
      fire-and-forget async path that lands after the turn's `result` —
-     measured after, in 30 of 30 sampled turns. See
-     [[model_line_1m_suffix_drop_accepted]] for why that second init
-     exists at all.
+     measured after, in 30 of 30 sampled turns. See the **second
+     `system/init`** gotcha below for why that second init exists at all.
   2. Background sub-agent flows legitimately keep streaming after an
      inner `result` (same reason `splitDeltas` only treats a `final` as a
      boundary when more text follows it).
@@ -1661,6 +1798,69 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   line number rides on the file-tab entry (`fileTabsStore.ts`, not part
   of the tab key) and the viewer scrolls/highlights via shiki's
   per-line `.line` spans + the `.line-target` rule in `index.css`.
+- **Local images in answer markdown**: agents emit
+  `![Preview](/tmp/shot.png)` or `![x](docs/preview.png)` after writing a
+  file. A markdown image's src is a *URL*, so the browser resolves it
+  against the DASHBOARD's origin — never the agent's machine. Before
+  `MarkdownImage.tsx` this produced a silent broken image: nginx answers
+  `/tmp/shot.png` with the SPA fallback `index.html`
+  (`deploy/web.nginx.conf`), which the browser can't decode as an image.
+  The custom `img` renderer now splits three ways: a real URL is left to
+  the browser (plus `referrerPolicy="no-referrer"`, since the model
+  chose that third party); a path `toAgentRelative` resolves inside
+  workingDir is fetched over fs-read and rendered as a `data:` URL; and
+  everything else renders as inert alt text.
+  The out-of-workspace case is NOT an oversight — the sidecar's fs jail
+  (`resolvePath`, `internal/machine/fs.go`) refuses absolute paths and
+  `..` escapes, so `/tmp/...` is unreadable by design. Widening that jail
+  is a real security decision, not a bug fix: `/tmp` is world-writable,
+  making the jail's EvalSymlinks check race-able by any local account,
+  and fs-read runs OUTSIDE whatever sandbox the CLI runs under
+  (`codex.go` `threadSandbox`), so a wider jail would hand a sandboxed
+  agent a confused-deputy read primitive driven by its own output.
+  The path to render such an image is to have the agent write it under
+  workingDir. iOS counterpart: `Argus/Sources/Views/MarkdownImage.swift`
+  — the same three-way split, classified by ArgusKit
+  `FileReferences.imageSource` (tested), installed on `AnswerView` as
+  BOTH MarkdownUI providers, because MarkdownUI has two image paths: a
+  paragraph that is only an image goes through `ImageProvider` (a full
+  view), an image inside a text run through `InlineImageProvider`
+  (must return a bare `Image`). MarkdownUI GOTCHAS: (1) `makeImage`
+  receives only the URL — alt text never reaches the provider, so the
+  inert fallback shows the path where the web shows alt; (2) an inline
+  provider that THROWS drops every inline image in that paragraph
+  (MarkdownUI awaits the whole task group under one `try?`), so ours
+  never throws — it returns a `photo` glyph; (3) `URL(string:)` fails on
+  a source with spaces → the provider gets nil → inert. Tap (not
+  double-tap) opens the file preview, matching FileChipsRow's touch
+  idiom. Same settled-outcome cache (failures included, keyed on the
+  turn's completedAt), lock-guarded rather than actor-isolated so the
+  synchronous read in `body` compiles under either `View.body`
+  isolation the toolchain assumes. GOTCHA: `MarkdownImage` caches by
+  `(projectId, path, turn completedAt)`. The epoch matters — an agent
+  that regenerates `preview.png` next turn emits the same path, and a
+  path-only key would show the previous turn's bytes. FAILURES are
+  cached too, not just successes: a path that isn't a readable image
+  fails identically every time, and caching only successes made a
+  missing file flicker loading→not-found on every remount. The
+  trade-off is that a transient failure (machine offline) also sticks
+  for that turn; a live turn re-reads when it settles into its own
+  epoch.
+- **`useProjectRef` must return a STABLE object** (`lib/projects.ts`).
+  `resolveProjectRef` builds a fresh `{projectId, machineId,
+  workingDir}` per call, and `SessionPanel` re-renders on every
+  composer keystroke (it subscribes to `drafts[sessionId]` in
+  `uiStore`). Unmemoized, that fresh identity propagated as a prop and
+  (a) defeated `CommandBlock`'s `memo()`, re-rendering every turn in
+  the transcript per keystroke, and (b) invalidated StreamViewer's
+  `markdownComponents` useMemo — and because React keys reconciliation
+  on component-function IDENTITY, a rebuilt `components` object
+  UNMOUNTS and remounts the entire markdown subtree, tearing down every
+  `MermaidBlock`, `HtmlPreview` and `MarkdownImage`. Surfaced as a
+  markdown image for a missing file flickering between its loading and
+  not-found states while typing. The hook now memoizes on the three
+  primitive fields; keep it that way, and prefer passing the ref itself
+  (not a spread of it) so the stability survives.
 - **Prisma + workspace import**: the server can only typecheck if `rootDir`
   is unset, because `@argus/shared-types` lives outside `apps/server/src`.
   `nest build` is fine because it only compiles `src/`.
@@ -1716,6 +1916,28 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `CLIENT KILL` go-redis conns with `idle>300` and `cmd≠xreadgroup`
   (parked stream readers always show `idle≤5`; go-redis re-dials
   transparently, and Postgres is the source of truth).
+- **Server boot BLOCKS on Redis — a probe `connection refused` on :4000
+  means Redis, not Postgres**: `RedisService.onModuleInit` awaits
+  `_cmd.ping()` with `maxRetriesPerRequest: null`, so an unreachable
+  Redis never rejects — `NestFactory.create()` never resolves,
+  `app.listen()` is never reached, and port 4000 never opens. Liveness
+  and readiness then fail with `dial tcp …:4000: connect: connection
+  refused` and the pod crash-loops. **Postgres being healthy is a red
+  herring**: `prisma migrate deploy` runs before node in the Dockerfile
+  CMD, so the route-mapping logs that prove the DB is reachable appear
+  either way — Redis is the differentiator. Diagnose by grepping logs
+  for `redis cmd error` (the `.on('error')` handler emits
+  `ECONNREFUSED` / `ETIMEDOUT` / `ENOTFOUND`) and confirming no
+  `listening on :4000` line is ever printed. `connection refused` means
+  the port is closed (RST); a NetworkPolicy drop reads `connection timed
+  out` instead. The usual cause on a fresh deploy is a bare
+  cross-namespace DNS name in `REDIS_URL` — `redis://redis:6379` needs
+  the FQDN `redis.<ns>.svc.cluster.local:6379`. Two weaknesses sit
+  behind this and neither is fixed: the Helm chart ships no
+  `startupProbe`, so liveness kills any boot slower than ~90s, and
+  blocking on `ping()` at boot turns a *transient* Redis blip into a
+  crash loop — a connection-saturated Redis (see the pool-cap gotcha
+  above) is exactly such a blip, which is how one incident becomes two.
 - **`rediss://` SNI must be set explicitly on the server side** — ioredis
   only flips `tls: true` (a *boolean*) when it sees the scheme, and its
   connector's `Object.assign(connectionOptions, options.tls)` copies nothing
@@ -1747,7 +1969,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   chunks mid-command, a sidecar that "didn't get" a control message,
   unrecoverable PEL growth. Current caps are sized for a ~30 MB Redis
   with a handful of machines: `lifecycle`=500, `agent:notify`=2000,
-  `agent:background`=5000, `machine:{id}:cli:{type}:cmd`=200,
+  `machine:{id}:cli:{type}:cmd`=200,
   `machine:{id}:cli:{type}:result`=500, `machine:{id}:control`=200. If
   you scale past that — more machines, chunkier terminal output, longer
   expected consumer outages — bump the relevant entry in *both* helpers
@@ -1802,8 +2024,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   reads. Diagnose from Redis, not from the server: `XINFO CONSUMERS
   <stream> <group>` shows `idle` climbing without bound (observed Aug
   2026: `agent:lifecycle` and every `:result` consumer at 52 minutes
-  idle while `agent:background` — a *sibling connection* on the same
-  process — sat at 2s). The tell is per-connection, not per-process: the
+  idle while a *sibling connection* in the same process — the
+  since-retired background-task reader — sat at 2s). The tell is
+  per-connection, not per-process: the
   server is alive and `_cmd` still works, so health checks pass while
   every machine shows offline and the sidecars poll happily. Left alone
   it never self-heals, and MAXLEN keeps trimming heartbeats the stuck
@@ -1833,6 +2056,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   whether the cap is actually being hit. Same caution applies to
   `CLIENT LIST`, which returns only the issuing proxy thread's clients
   (14 rows while the counters described the whole database).
+  **`INFO used_memory` is unreliable on the same instance**, for the same
+  proxying reason — it has been observed frozen at a stale figure while
+  the database was actually filling toward eviction. Size memory against
+  the Cloud dashboard or the sum of per-key `MEMORY USAGE`, never
+  `INFO`. Worth knowing before you debug a fill-up: the one number that
+  looks authoritative is the one that will mislead you.
 - **MAXLEN caps entry COUNT, not bytes — one fat chunk can blow the
   whole budget**: the `streamMaxLen` caps above bound the *number* of
   entries, so the memory model silently assumes each entry is small
@@ -1897,7 +2126,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   "fix" it by making the fallback content-less — special-case known-noisy
   subtypes individually instead (as done for `thinking_tokens`,
   `task_notification`, `api_retry`, `vcs_state_changed`, and
-  `code_change_published`).
+  `code_change_published`). `TestMapClaudeUnknownSystemSubtype`
+  (`claude_code_test.go`) pins the visible fallback — if you ever find
+  yourself making it content-less, that test is what should stop you.
   *Worked example of the breadcrumb doing its job:* a burst of "system"
   rows in a release session on `claude` 2.1.217 turned out to be two
   subtypes added since 2.1.210 (`vcs_state_changed`,
@@ -1970,6 +2201,59 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   output or a file the same command catted — a display hint, not a
   verified identity. Never send credentials to `url` on its strength;
   `provider` is an open set too.
+- **Claude Code emits `system/init` TWICE, and the second one is a
+  state-change stub** (verified against the `claude` 2.1.241 bundle).
+  Both come from the same event helper, but carry very different
+  payloads:
+  1. **Startup init** — full context: real `cwd`, `tools`, `mcp_servers`
+     with live statuses, `plugins`, `skills`, `agents`, `capabilities`,
+     `memory_paths`, `betas`.
+  2. **Bridge state re-announce** — a *stub*: `cwd: ""`, `tools: []`,
+     `mcp_servers: []`, no `memory_paths`/`betas`. Carries only `model`,
+     `permissionMode`, `fastModeState`, `fastModeDisabledReason` and
+     `effort` (plus commands/agents/skills), under a fresh `uuid`.
+
+  The re-announcer fingerprints
+  `[model, permissionMode, fastModeState, fastModeDisabledReason, effort]`
+  and fires **only when that tuple changes** — which is why a short
+  throwaway session never reproduces any of the symptoms below: nothing
+  changes, so it stays quiet. One mechanism, three consequences:
+  - **The `[1m]` model-line flip.** `[1m]` is a CLI flag alias, not an
+    API model id. Startup init can report `claude-opus-5[1m]` while the
+    re-announce reports plain `claude-opus-5` at the same `.model` path
+    `parseModel` probes; both clients are latest-match, so the later
+    (suffix-less) value wins. Judged **cosmetic and accepted** — don't
+    open a fix for it unsolicited. It stopped mattering for the context
+    ring once `contextWindow.ts` grew a dedicated Opus 5 entry, since
+    both id shapes now resolve to 1M.
+  - **Duplicate "session initialised" rows** within one turn's activity
+    timeline: `claude_code.go`'s `system`/`init` branch emits that fixed
+    string per init with no once-guard, so both render. Unfixed. Note
+    nothing in Argus duplicates it — the timeline is 1:1 over chunks, the
+    store dedupes by chunk id, `ResultChunk.id` is a unique PK, and
+    command redelivery is impossible (both readers use `">"`, never the
+    PEL).
+  - **A chunk arriving after its own turn finalized** — see the
+    idempotent-live-branch gotcha above, which this is producer #1 of.
+
+  **Not a data-integrity problem.** `publishExternalIDOnce` in the
+  sidecar runner and write-once `setExternalId` on the server both stop a
+  second init repointing the resume anchor. That the once-guard exists at
+  all is the tell: someone anticipated a repeat init and covered the
+  functional chunk but not the display one.
+  **If you fix the duplicate row, make it content-aware, not a blunt
+  once-guard.** The stub is a real signal (effort / fast-mode /
+  permission changed), it just isn't a session initialisation — detect it
+  via `cwd === ""` / empty `tools` and either drop it or map it to a
+  distinct state-change chunk, keeping the model update flowing so the
+  picker stays accurate. Any once-flag must be **per-`Execute`**, never a
+  field on the shared adapter struct, or it suppresses the init on every
+  later turn.
+  *Technique worth reusing:* the CLI is a single ~340 MB bundle under
+  `~/.local/share/claude/versions/<v>`, and grepping it repeatedly times
+  out. Get a byte offset once (`grep -a -b -o 'subtype:"init"'`) and `dd`
+  a window around it — that is how both emitters and the fingerprint
+  logic were found.
 - **Extended thinking (Claude Code)**: newer `claude` emits two distinct
   thinking signals, handled in `mapClaudeLine`:
   1. `{"type":"system","subtype":"thinking_tokens","estimated_tokens":N,
@@ -2246,8 +2530,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   refcounted, so the first unmounting holder used to kick the socket out
   of the room and silently starve the others of `fs:changed` /
   `git:changed`. This was latent — `ContextPane` renders FileTree /
-  GitLogPanel / ProgressPane as mutually exclusive tabs, so only one ever
-  held a room — and went live the moment `useFileTabAutoRefresh` added a
+  GitLogPanel as mutually exclusive tabs, so only one ever held a room
+  — and went live the moment `useFileTabAutoRefresh` added a
   holder that has to outlive the Files tab. The same map is replayed on
   `connect`: rooms are per-CONNECTION, and nothing re-joined them after a
   reconnect, so a network blip used to stop live updates until the
@@ -2384,8 +2668,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the dashboard's `Update sidecar` action publishes
   `update-sidecar` on the host's Redis control stream. The sidecar
   re-uses `internal/updater` to fetch + verify + atomically rename
-  the new binary (and, best-effort, refresh the `argus-bg` companion
-  from the same release — see the argus-bg lockstep note above), then
+  the new binary (sweeping any retired `argus-bg` companion it finds
+  next to itself — sidecars from before that removal log one harmless
+  `argus-bg refresh skipped` line when they update, because their
+  best-effort companion fetch finds no such asset any more), then
   picks one of three handoff strategies *itself* based on environment
   hints — the server has no say:
     - **`self`**: nothing supervises us. The daemon `syscall.Exec`s
@@ -2432,6 +2718,25 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   scope back to `<image>` only or you'll silently halve cache
   hit-rate (the per-platform scopes won't be read by a combined
   build).
+- **`argus-web` deletes nginx's stock `10-listen-on-ipv6-by-default.sh`
+  hook; nginx binds IPv4 only.** `nginx:alpine` runs every script in
+  `/docker-entrypoint.d/` before exec'ing nginx. The stock `10-` script
+  adds `listen [::]:80` to `/etc/nginx/conf.d/default.conf` — but only
+  after proving the file is byte-identical to the packaged one via
+  `apk manifest nginx` + `sha1sum`. `deploy/web.Dockerfile` overwrites
+  that file with `deploy/web.nginx.conf`, so the checksum never
+  matches and the script has always been a no-op for us. It was still
+  executing on every start, and a production rollout was observed
+  stuck at that step, so the runtime stage now `rm`s it. Consequences:
+  (1) the container listens on `0.0.0.0:80` only — on an IPv6-only or
+  IPv6-primary dual-stack cluster, kubelet probes and Service traffic
+  hit the pod's IPv6 address and nginx refuses them; the fix is an
+  explicit `listen [::]:80;` in `web.nginx.conf`, NOT restoring the
+  script (which would still no-op). (2) Our own hook keeps the `40-`
+  prefix so it still runs after the surviving `15-local-resolvers`,
+  `20-envsubst` and `30-tune-worker-processes` scripts. (3) Forks of the Dockerfile
+  built `FROM nginxinc/nginx-unprivileged` inherit the same `10-`
+  script and should keep the `rm`.
 - **`detectRestartMode` must use `term.IsTerminal`, not `os.ModeCharDevice`**:
   the daemon child of `argus-sidecar start` has its stdin dup2'd to
   `/dev/null`, which *is* a character device — so the original
@@ -2600,6 +2905,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   from `usage.iterations[-1]`; `parseUsage` (used by `useSessionUsage` and
   the server-side `/me/usage` aggregation) intentionally keeps the
   cumulative aggregate, which is the correct per-turn cost/usage total.
+  Two traps if you revisit this: `iterations` is undocumented and
+  version-dependent (present since CC 2.1.167), so the guard must be
+  non-empty-array → last element, else fall back; and do **not** "fix" it
+  by summing the `assistant` events instead — Claude Code repeats each
+  call's `message.usage` across 2–3 assistant events, so that overcounts
+  in a different direction. The overcount this replaced was measured at
+  **5.9x** on a 5-step tool-use turn (157,477 aggregate vs 26,607 true
+  final call), i.e. ~79% of a 200k window shown against ~13% real.
   cursor-cli exposes only a turn-level total, so its ring can still overcount
   on multi-call turns. Codex app-server's
   `thread/tokenUsage/updated.tokenUsage.last` is preserved as
@@ -2613,7 +2926,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   the family word (`opus[-\s]?5` covers Opus 5 without claiming the Opus
   4.x ids). The CLI itself is the cheapest oracle for the real number:
   `result.modelUsage[<id>].contextWindow` in a one-line `claude -p
-  --output-format stream-json` run. When a new model
+  --output-format stream-json` run. **Still mis-mapped at the time of
+  writing** (deferred, not overlooked): `claude-opus-4-8`, `-4-7`,
+  `-4-6`, `claude-sonnet-5` and `claude-sonnet-4-6` are all 1M models
+  that still fall through to the generic 200k Claude baseline, so their
+  rings read 5x too full unless that particular turn happens to carry
+  `[1m]`. When a new model
   family ships (Anthropic / OpenAI / Cursor announcement), bump the
   table as `chore(shared): update model context windows` — verify
   against the upstream announcement, not release-note rumors. Unknown
@@ -2643,6 +2961,42 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   than reverting to CLI default) and `Command.options` (so replayed
   history stays attributable). `usage` is the sole deliberate omission —
   if you find yourself "fixing" that asymmetry, re-read this entry.
+- **Forking a Claude Code session: `turnIndex` counts server Commands,
+  and the transcript has user-typed lines that are not prompts.** The
+  `clone-session` command carries `turnIndex = prefix.length` (Command
+  rows up to and including the anchor), and the sidecar's Claude cloner
+  truncates the JSONL at the (N+1)th *prompt*. For months that cloner
+  counted every `type: "user"` line whose content wasn't purely
+  `tool_result` blocks — but Claude Code also writes, as `user` lines:
+  the compaction summary (`isCompactSummary: true`, after every auto or
+  manual compaction), and for a manual `/compact` the `isMeta` caveat,
+  the `<command-name>` echo and the `<local-command-stdout>` echo.
+  Verified against claude 2.1.274 by compacting a throwaway print-mode
+  session: one `/compact` = one Command = FOUR user lines on disk; an
+  auto-compaction = zero Commands = one. Every such line before the
+  branch point shifted the cut one prompt earlier, so a fork of any
+  compacted session was missing its last turn(s) — the anchor turn
+  first — while the dashboard replay (server-side, from Command rows)
+  looked right. Symptom: "the model doesn't remember the turn I
+  branched from". The cloner now classifies lines the way Claude Code's
+  own transcript readers do (`claudeClassifyLine`: `isMeta` /
+  `isCompactSummary` / `<local-command-*>` are injected, tool feedback
+  is not a prompt, the `<command-name>` echo IS the Command), and trims
+  a compaction footprint that trails the anchor turn — those lines were
+  written by the NEXT command's process, so they belong to the part
+  being cut. A compaction that fired mid-turn (inside the tool loop) is
+  kept. Fixture and cases live in `claude_code_clone_test.go`; extend
+  the fixture from a real capture, not from memory, if the CLI's shape
+  drifts again. Two smaller things fixed in the same pass:
+  `claudeProjectSlug` replaced only `/`, but the CLI's rule is
+  `replace(/[^a-zA-Z0-9]/g, "-")` (a workdir with a `.` or `_` in it
+  was "not on disk" and every fork of it silently degraded to
+  history-only), and slugs over 200 chars are hash-suffixed — so the
+  cloner now falls back to a glob for `<id>.jsonl` under any project
+  dir and writes the clone next to the source. Codex is unaffected:
+  `thread/fork`'s `lastTurnId` is inclusive and `thread/read` folds
+  compactions into turns (checked on an 18-prompt, 4-compaction thread
+  on codex 0.154.0: 18 turns).
 - **`Command.usage` is denormalized at write time**: the result-ingestor
   calls `parseUsage` once when each turn finalizes and stores the
   normalized `TokenUsage` JSON on the Command row. `/me/usage` SUMs
@@ -2750,6 +3104,37 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - Pool routing ("run this on any machine that has CLI type X") — would
   need a type-scoped consumer group across machines; not exposed yet.
 - Pre-commit hooks (ruff/eslint).
+- **Ephemeral progress chunks are persisted forever.** `thinking_tokens`
+  fires roughly once per 150 thinking tokens and `api_retry` can fire
+  repeatedly through an API incident; both are content-less by design
+  (they render nothing in history) yet every one is written to
+  `ResultChunk` and re-shipped on every transcript open. That payload is
+  a confirmed contributor to session-open latency, since transcript
+  paging is per-TURN and a turn's chunk payload — not its count — is what
+  dominates its bytes. The preferred fix is a **read-path filter** in the
+  session module's windowed reads rather than dropping them at ingest:
+  ingestion is not the problem, and the WS emit has to keep flowing or
+  the live "🧠 N" counter stops animating.
+- **No delta-coalescing compaction at turn-finalize.** A finished turn's
+  `delta` chunks are immutable and every client re-joins them in `seq`
+  order, so collapsing them to one row per turn is rendering-invariant
+  (`splitDeltas` boundaries are non-delta chunks and would survive). It
+  is the larger of the two transcript-size wins and the more invasive;
+  do the read-path filter first.
+- **Pre-runner Redis streams may still be orphaned.** The per-agent
+  `agent:{id}:cmd` / `:result` streams left the codebase with the Agent
+  entity, but nothing swept the keys from any Redis that ran the old
+  protocol. They are unreferenced and effectively immortal — `MAXLEN ~`
+  only trims on `XADD`, and nothing writes to them any more, so they
+  hold whatever they last held forever. Deleting them is data-safe
+  (Postgres is the read path) but it is a production mutation, so it was
+  deferred rather than scripted. `SCAN MATCH 'agent:*:result'` before
+  assuming a given Redis is clean. The same applies to `agent:background`
+  and its `server-background` consumer group, orphaned when the argus-bg
+  progress extension was removed: sidecars older than that release still
+  `XADD` to it (self-trimmed at 5000 entries), and once the fleet is
+  current the one-time cleanup is `XGROUP DESTROY agent:background
+  server-background` followed by `DEL agent:background`.
 - **The aggregate read endpoints have no tests.** There is no server
   test harness at all, so CI proves only that `/me/pixels` and
   `/me/usage/by-project` typecheck. Both were validated once (Sep 2026)
@@ -2767,6 +3152,36 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   a fact nothing stores. A `Command.forkedFromId` column would make it
   explicit and would also let the UI show lineage. Only becomes a
   problem if fork semantics change.
+- **A fork's first prompt used to race the on-disk clone.** `fork()`
+  published `clone-session` after emitting the new session and returned
+  at once, while `dispatch` sends whatever `externalId` the row has —
+  `undefined` until the sidecar's `session-external-id` event lands. A
+  prompt in that window ran without `--resume`, started a fresh CLI
+  conversation, reported ITS id, and `setExternalId` (first-writer-wins)
+  then discarded the clone's id: a fork that showed its history while
+  the model knew none of it, with no toast because nothing had failed.
+  Small window for Claude (a file copy), several seconds for Codex
+  (spawn app-server + hydrate the thread + `thread/fork`). Fixed by
+  holding the fork request: `fork()` registers a waiter keyed by the new
+  session id BEFORE publishing (the answer can beat `publish` itself),
+  the ingestor settles it from `session-external-id` (`ready`, after the
+  id is written) or `session-clone-failed` (`failed`, with the sidecar's
+  reason), and only then is `session:created` emitted and the DTO
+  returned — so no client can prompt a session it has not been told
+  about, and the web's existing "Branching…" button state covers the
+  wait. `FORK_CLONE_TIMEOUT_MS` (15 s) bounds it. Whoever announces the
+  session announces its clone outcome: when a waiter took the event,
+  `fork()` emits the clone-failed toast itself AFTER `session:created`
+  (both clients look the title up at push time and would otherwise show
+  an id prefix), and the ingestor toasts only a failure that arrives
+  with no waiter, i.e. after the fork timed out. Belt and braces:
+  `dispatch` throws 409 while `isClonePending` (a second tab or the REST
+  list could learn the id early); the web queue drainer reads any
+  rejection as "retry after a cooldown", so a queued prompt survives.
+  The waiter set is in-memory on purpose — a restart mid-clone resolves
+  every waiter as `timeout` in `onModuleDestroy` and the row is already
+  durable, so a `cloneState` column would buy nothing but a migration.
+  See "Fork lineage is inferred" above for the still-open ask.
 - **`Command(createdAt)` index has no re-check trigger.** Deliberately
   not added: at 37% window selectivity Postgres correctly prefers a seq
   scan, and the grid query measured 13.4 ms with zero disk reads. It

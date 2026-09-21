@@ -26,6 +26,11 @@ struct ArgusApp: App {
                     if phase == .active { app.handleForeground() }
                 }
         }
+        // ⌘P / ⌘K / ⌘/ — see Hotkeys.swift for the registry and
+        // CommandPalette.swift for why these are scene commands.
+        .commands {
+            ArgusCommands(app: app)
+        }
     }
 }
 

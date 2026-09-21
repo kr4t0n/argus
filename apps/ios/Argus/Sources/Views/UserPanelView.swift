@@ -161,7 +161,6 @@ struct UserPanelView: View {
     private var extensionsSection: some View {
         Section {
             Toggle("Notes", isOn: extensionBinding(\.notes))
-            Toggle("Progress", isOn: extensionBinding(\.progress))
             Toggle("Diff", isOn: extensionBinding(\.diff))
         } header: {
             Text("Extensions")

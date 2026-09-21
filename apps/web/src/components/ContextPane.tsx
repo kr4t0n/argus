@@ -8,7 +8,6 @@ import { FileTree } from './FileTree';
 import { GitLogPanel } from './GitLogPanel';
 import { SessionModelChip } from './SessionModelChip';
 import { NotePane } from './NotePane';
-import { ProgressPane } from './ProgressPane';
 import { DiffPane } from './DiffPane';
 import { TerminalPane } from './TerminalPane';
 import { cn, relativeTime } from '../lib/utils';
@@ -31,7 +30,7 @@ type Props = {
   chunks: ResultChunkDTO[];
 };
 
-type TabKey = 'commits' | 'files' | 'terminal' | 'note' | 'progress' | 'diff';
+type TabKey = 'commits' | 'files' | 'terminal' | 'note' | 'diff';
 
 export function ContextPane({ session, commands, chunks }: Props) {
   // Project identity drives every pane now that the Agent entity is
@@ -60,12 +59,10 @@ export function ContextPane({ session, commands, chunks }: Props) {
   // switchover migrated it off terminal-capable agents), so the
   // project route gates without an agent.
   const projectSupportsTerminal = projectRow?.supportsTerminal === true;
-  // Notes / Progress / Diff extensions: when on, each adds a tab to the
-  // pane. All gate on a workingDir (the project key for Notes/Progress;
-  // file diffs only exist when there's a working tree), matching the
-  // Commits/Files tabs.
+  // Notes / Diff extensions: when on, each adds a tab to the pane. Both
+  // gate on a workingDir (the project key for Notes; file diffs only
+  // exist when there's a working tree), matching the Commits/Files tabs.
   const notesEnabled = useUIStore((s) => s.notesExtensionEnabled);
-  const progressEnabled = useUIStore((s) => s.progressExtensionEnabled);
   const diffEnabled = useUIStore((s) => s.diffExtensionEnabled);
   // Model surfaces in the very first system / init progress chunk a
   // turn emits, so it appears almost immediately on session open.
@@ -85,14 +82,11 @@ export function ContextPane({ session, commands, chunks }: Props) {
     if (notesEnabled && workingDir) {
       t.push({ key: 'note', label: 'Note' });
     }
-    if (progressEnabled && workingDir) {
-      t.push({ key: 'progress', label: 'Progress' });
-    }
     if (diffEnabled && workingDir) {
       t.push({ key: 'diff', label: 'Diff' });
     }
     return t;
-  }, [session, workingDir, notesEnabled, progressEnabled, diffEnabled]);
+  }, [session, workingDir, notesEnabled, diffEnabled]);
 
   const [active, setActive] = useState<TabKey>('commits');
   useEffect(() => {
@@ -202,13 +196,6 @@ export function ContextPane({ session, commands, chunks }: Props) {
           )}
           {active === 'note' && projectRef && (
             <NotePane
-              key={projectRef.projectId}
-              machineId={projectRef.machineId}
-              workingDir={projectRef.workingDir}
-            />
-          )}
-          {active === 'progress' && projectRef && (
-            <ProgressPane
               key={projectRef.projectId}
               machineId={projectRef.machineId}
               workingDir={projectRef.workingDir}

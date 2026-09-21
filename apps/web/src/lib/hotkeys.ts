@@ -13,6 +13,12 @@
  * is a property of the mount point, not of this table — a `session`
  * binding is registered in `SessionPanel` and is simply not mounted on
  * `/machines/:id` or `/user`. Keep the two in agreement when you add one.
+ *
+ * The iOS client mirrors this table by hand in
+ * `apps/ios/Argus/Sources/Hotkeys.swift` (same chords, labels and
+ * scopes; ⌘-only there, and nothing hash-pins the pair). Add a chord to
+ * both tables or to neither — see the keyboard entries under `apps/ios/`
+ * in AGENTS.md for how the two mechanisms differ.
  */
 export interface HotkeyBinding {
   /** Matched against `KeyboardEvent.key.toLowerCase()`. */

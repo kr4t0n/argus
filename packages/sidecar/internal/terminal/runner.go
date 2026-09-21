@@ -22,7 +22,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -252,7 +251,7 @@ func (r *Runner) handleOpen(parent context.Context, ev protocol.TerminalOpen) {
 	ctx, cancel := context.WithCancel(parent)
 	cmd := exec.CommandContext(ctx, shell, "-l")
 	cmd.Dir = cwd
-	cmd.Env = buildShellEnv(cwd)
+	cmd.Env = buildShellEnv()
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 	if err != nil {
 		cancel()
@@ -521,7 +520,7 @@ func splitCsv(s string) []string {
 }
 
 // buildShellEnv constructs the environment for a freshly spawned PTY
-// shell. Three layers, applied last-wins:
+// shell. Two layers, applied last-wins:
 //
 //  1. The sidecar daemon's own environment (PATH, HOME, locale, …) so
 //     the operator's shell behaves identically whether they ssh'd in
@@ -529,34 +528,11 @@ func splitCsv(s string) []string {
 //
 //  2. Terminal defaults (TERM / COLORTERM) so colour and 256-colour
 //     rendering work out of the box.
-//
-//  3. argus-bg discovery: prepend the sidecar's bin dir to PATH so
-//     `argus-bg` is callable without an absolute path, and export
-//     ARGUS_PROGRESS_DIR so it writes its JSONL stream into the same
-//     directory the per-agent progressWatcher tails.
-//
-// Layer 3 is best-effort: if os.Executable() fails (extremely rare —
-// stripped binaries on some unusual filesystems) we silently skip the
-// PATH prepend and leave argus-bg unreachable; the dashboard's
-// Progress tab will be empty but the shell still works.
-func buildShellEnv(cwd string) []string {
-	env := append(os.Environ(),
+func buildShellEnv() []string {
+	return append(os.Environ(),
 		"TERM=xterm-256color",
 		"COLORTERM=truecolor",
 	)
-	if exe, err := os.Executable(); err == nil {
-		binDir := filepath.Dir(exe)
-		existing := os.Getenv("PATH")
-		if existing == "" {
-			env = append(env, "PATH="+binDir)
-		} else {
-			env = append(env, "PATH="+binDir+string(os.PathListSeparator)+existing)
-		}
-	}
-	if cwd != "" {
-		env = append(env, "ARGUS_PROGRESS_DIR="+filepath.Join(cwd, ".argus", "progress"))
-	}
-	return env
 }
 
 // Ensure Link (and thus *sidecarlink.Client) is importable for

@@ -61,11 +61,20 @@ TOKEN=$(curl -sf -X POST "$SERVER_URL/auth/login" \
 [[ -n "$TOKEN" && "$TOKEN" != "null" ]] || { echo "error: login failed" >&2; exit 1; }
 
 fetch() { # fetch <path> <outfile>
-  local path="$1" out="$2"
+  local path="$1" out="$2" tmp
+  # Capture into a temp file and move it into place only on success: a
+  # failed fetch used to leave an EMPTY fixture behind (the redirect ran
+  # before curl failed), and several decoding tests are now enabled by
+  # the file's mere existence — so an empty leftover would be a broken
+  # fixture one `git add` away. This also keeps the previous good
+  # capture when a route is transiently unavailable (offline machine).
+  tmp=$(mktemp)
   if curl -sf "$SERVER_URL$path" -H "Authorization: Bearer $TOKEN" \
-      | jq "$SANITIZE" > "$OUT_DIR/$out"; then
+      | jq "$SANITIZE" > "$tmp"; then
+    mv "$tmp" "$OUT_DIR/$out"
     echo "  ✓ $out  ($path)"
   else
+    rm -f "$tmp"
     echo "  ✗ $out  ($path) — skipped" >&2
   fi
 }
@@ -80,12 +89,14 @@ curl -sf -X POST "$SERVER_URL/auth/login" \
 echo "  ✓ login.json  (/auth/login, token redacted)"
 
 fetch "/sessions" "sessions.json"
-fetch "/agents" "agents.json"
 fetch "/machines" "machines.json"
 fetch "/projects" "projects.json"
 fetch "/me/usage" "me-usage.json"
 fetch "/me/quota" "me-quota.json"
 fetch "/me/extensions" "me-extensions.json"
+# ⌘K content search. Any two-letter word will do — the fixture tests the
+# envelope, not the hits (an empty `hits` array decodes fine too).
+fetch "/search/sessions?q=the&limit=5" "search-sessions.json"
 
 # Session detail: --session wins; otherwise the most recently updated
 # session. Includes commands + chunks — the decode-critical fixture.
@@ -95,11 +106,28 @@ if [[ -z "$SESSION_ID" ]]; then
 fi
 if [[ -n "$SESSION_ID" ]]; then
   fetch "/sessions/$SESSION_ID?tailCommands=5" "session-detail.json"
-  AGENT_ID=$(jq -r '.session.agentId' "$OUT_DIR/session-detail.json")
-  if [[ -n "$AGENT_ID" && "$AGENT_ID" != "null" ]]; then
-    fetch "/agents/$AGENT_ID/models" "model-catalog.json"
-    fetch "/agents/$AGENT_ID/git/log?limit=5" "git-log.json"
-    fetch "/agents/$AGENT_ID/fs/list?depth=1" "fs-list.json"
+  # The Agent entity is retired: fs/git are PROJECT-addressed and the
+  # model catalog is keyed (machineId, cliType). Both come off the
+  # session row — its projectId, and the project's machineId from the
+  # /projects capture above. The sidecar answers fs/git live, so those
+  # two are skipped (not failed) when the machine is offline.
+  PROJECT_ID=$(jq -r '.session.projectId // empty' "$OUT_DIR/session-detail.json")
+  CLI_TYPE=$(jq -r '.session.cliType // empty' "$OUT_DIR/session-detail.json")
+  if [[ -n "$PROJECT_ID" ]]; then
+    fetch "/projects/$PROJECT_ID/git/log?limit=5" "git-log.json"
+    fetch "/projects/$PROJECT_ID/fs/list?depth=1" "fs-list.json"
+    MACHINE_ID=""
+    if [[ -f "$OUT_DIR/projects.json" ]]; then
+      MACHINE_ID=$(jq -r --arg id "$PROJECT_ID" \
+        '[.[] | select(.id == $id) | .machineId][0] // empty' "$OUT_DIR/projects.json")
+    fi
+    if [[ -n "$MACHINE_ID" && -n "$CLI_TYPE" ]]; then
+      fetch "/machines/$MACHINE_ID/models?cliType=$CLI_TYPE" "model-catalog.json"
+    else
+      echo "  ! could not resolve the machine or cliType for project $PROJECT_ID — model-catalog not captured" >&2
+    fi
+  else
+    echo "  ! session $SESSION_ID is workdir-less (no project) — git-log/fs-list/model-catalog not captured; pass --session <id> with a project-pinned session" >&2
   fi
 else
   echo "  ! no sessions on this server — session-detail/model-catalog/git-log/fs-list not captured" >&2

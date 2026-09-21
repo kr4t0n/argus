@@ -16,7 +16,7 @@ import (
 // uploadsSubdir is where pulled attachments land, relative to the
 // command's workingDir. Kept under .argus/ so the file-tree walker and
 // gitignore stripping already hide it (see fs.go's hard-skip of
-// .argus/), and it sits beside .argus/progress.
+// .argus/).
 const uploadsSubdir = ".argus/uploads"
 
 // attachmentSizeCeiling bounds a pull whose ref declares no size — a

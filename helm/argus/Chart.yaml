@@ -12,10 +12,42 @@ type: application
 # field — see helm-publish.yml. Prerelease versions (-rc.N) are hidden
 # from plain `helm search`/`helm upgrade`; install them with
 # `--version 0.2.7-rc.3` (or `--devel`).
-version: 0.3.5
+version: 0.3.6
 # App version tracks the Docker image tags pulled by default. Bump in
 # lockstep with `version` whenever the chart starts requiring features
 # only present in newer images; otherwise it can lag.
+#
+# 0.3.6 is a control-plane + iOS release with NO schema change and no
+# migration — `schema.prisma` and `prisma/migrations/` are byte-identical
+# to 0.3.5, so first boot is normal speed and rollback needs no snapshot.
+# appVersion pins the 0.3.6 server/web images. No chart templates changed;
+# `version` moves only to keep it in lockstep with the app.
+#
+# THE SIDECAR MOVES TOO — cut and roll out argus-sidecar v0.3.6 (the
+# v0.3.6-rc.3 tag already carries everything in it but a comment). The
+# protocol mirrors change by REMOVAL only: the argus-bg companion and
+# its background-task events/stream are gone end to end (sidecar
+# watcher, the server's fourth Redis connection, the `progress`
+# extension flag, both clients' Progress panes). An un-updated sidecar
+# still talks to a 0.3.6 server; its `agent:background` writes are
+# simply orphaned (self-trimmed) until the fleet is current. Sidecar
+# fixes: the Claude Code cloner cuts a compacted session at the right
+# turn, and the Codex sandbox is passed at app-server startup so Linux
+# hosts without bwrap stop logging a missing-bubblewrap warning on
+# every turn.
+#
+# Highlights: the native iOS client gains the web's keyboard shortcuts
+# on an iPad hardware keyboard (⌘P switcher, ⌘K transcript search, ⌘B
+# sidebar, ⌘D archive toggle, ⌘/ shortcuts sheet, esc paths), from one
+# registry mirrored from the web's; ```mermaid fences render as diagrams
+# on web and iOS (bundled locally, strict security level); `![alt](path)`
+# workspace images render inline on both clients; and the sidebar's
+# machines section is collapsible. Fork correctness: a fork's first
+# prompt can no longer race the sidecar's on-disk clone — the server
+# holds the fork until the clone lands and refuses dispatch while it
+# waits. The argus-web image no longer runs nginx's stock IPv6
+# entrypoint hook (always a no-op here, observed stalling a rollout);
+# nginx binds IPv4 :80 exactly as before.
 #
 # 0.3.5 is a control-plane release with NO schema change and no
 # migration — `schema.prisma` and `prisma/migrations/` are byte-identical
@@ -212,7 +244,7 @@ version: 0.3.5
 # 0.2.0 shipped file/image attachments — the default images include the
 # attachment module, so `objectStore` works out of the box (set the
 # endpoint + bucket + creds to enable it).
-appVersion: "0.3.5"
+appVersion: "0.3.6"
 
 home: https://github.com/kr4t0n/argus
 sources:

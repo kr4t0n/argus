@@ -11,7 +11,6 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { Server, Socket } from 'socket.io';
 import type {
-  BackgroundTaskDTO,
   CommandDTO,
   MachineDTO,
   ProjectDTO,
@@ -81,11 +80,11 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   /**
-   * Subscribe to project-scoped events (currently: background-task
-   * progress). A project is identified by its `(machineId, workingDir)`
-   * pair, the same key used by notes and the dashboard's per-project
-   * panes. workingDir is an arbitrary string (absolute path) — Socket.IO
-   * room names don't care, so we just concatenate.
+   * Subscribe to project-scoped events (the `fs:changed` / `git:changed`
+   * watcher nudges). A project is identified by its `(machineId,
+   * workingDir)` pair, the same key used by notes and the dashboard's
+   * per-project panes. workingDir is an arbitrary string (absolute path)
+   * — Socket.IO room names don't care, so we just concatenate.
    */
   @SubscribeMessage('subscribe:project')
   subProject(
@@ -255,24 +254,6 @@ export class StreamGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server.emit('sidecar-update:batch-progress', payload);
   }
 
-  // ------- Background task events (per-project room) -------
-  //
-  // One DTO per upsert — the dashboard treats start / progress / end
-  // events uniformly as "the row's latest state." When the server
-  // evicts an ended task after its retention window, it emits a
-  // separate `:removed` so the dashboard can drop it from the list.
-
-  emitBackgroundTaskUpdated(task: BackgroundTaskDTO) {
-    this.server
-      .to(projectRoom(task.machineId, task.workingDir))
-      .emit('background-task:updated', task);
-  }
-
-  emitBackgroundTaskRemoved(payload: { machineId: string; workingDir: string; taskId: string }) {
-    this.server
-      .to(projectRoom(payload.machineId, payload.workingDir))
-      .emit('background-task:removed', payload);
-  }
 }
 
 function projectRoom(machineId: string, workingDir: string): string {

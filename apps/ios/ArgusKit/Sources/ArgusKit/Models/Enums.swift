@@ -104,6 +104,20 @@ public enum ResultKind: String, Codable, Equatable, Sendable {
     }
 }
 
+/// Which pass produced a `GET /search/sessions` page: the indexed
+/// tsvector match, or the raw substring scan that runs only when full
+/// text found nothing (the normal path for code strings and partial
+/// identifiers). Informational — clients render both the same way.
+public enum SearchMode: String, Codable, Equatable, Sendable {
+    case fulltext
+    case substring
+    case unknown
+
+    public init(from decoder: Decoder) throws {
+        self = decodeTolerant(decoder, fallback: .unknown)
+    }
+}
+
 /// Shared helper for the same pattern outside this file (FSEntryKind).
 enum TolerantDecode {
     static func decode<T: RawRepresentable>(

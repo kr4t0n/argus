@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import type { MachineDTO, RemovedProjectDTO, SessionDTO } from '@argus/shared-types';
 import { useMachineStore } from '../stores/machineStore';
 import { useProjectStore, projectKey, type LocalProject } from '../stores/projectStore';
@@ -37,12 +38,39 @@ export function resolveProjectRef(
   return null;
 }
 
-/** Hook flavor of resolveProjectRef, subscribed to the project store. */
+/**
+ * Hook flavor of resolveProjectRef, subscribed to the project store.
+ *
+ * The returned object is referentially STABLE while its three fields
+ * are unchanged, and that stability is load-bearing rather than a
+ * micro-optimization. `resolveProjectRef` builds a fresh object on
+ * every call, and SessionPanel re-renders on every composer keystroke
+ * (it subscribes to `drafts[sessionId]`). An unmemoized ref therefore
+ * changed identity per keystroke, which:
+ *   - defeated `CommandBlock`'s `memo()` (it takes the ref as a prop),
+ *     re-rendering every turn in the transcript;
+ *   - rebuilt StreamViewer's `markdownComponents` memo, and a new
+ *     component-function identity makes React UNMOUNT and remount the
+ *     whole markdown subtree — tearing down every MermaidBlock,
+ *     HtmlPreview and MarkdownImage and re-running their work.
+ * Symptom that surfaced it: a markdown image for a missing file
+ * flickered between "loading" and "not found" on every keystroke.
+ */
 export function useProjectRef(
   session: Pick<SessionDTO, 'projectId'> | null | undefined,
 ): ProjectRef | null {
   const projects = useProjectStore((s) => s.projects);
-  return resolveProjectRef(session, projects);
+  const resolved = resolveProjectRef(session, projects);
+  // Destructured to primitives so useMemo compares the FIELDS, not the
+  // freshly-built wrapper they arrived in.
+  const { projectId = null, machineId = null, workingDir = null } = resolved ?? {};
+  return useMemo(
+    () =>
+      projectId !== null && machineId !== null && workingDir !== null
+        ? { projectId, machineId, workingDir }
+        : null,
+    [projectId, machineId, workingDir],
+  );
 }
 
 /**
