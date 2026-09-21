@@ -17,6 +17,10 @@ import kotlinx.serialization.json.Json
  *   enum on the wire is modelled with an `UNKNOWN` default member.
  * - `explicitNulls = false` — a nullable field that is absent decodes as
  *   `null`, and `null` fields are omitted when encoding.
+ * - `encodeDefaults` is left at the library default (`false`): a property
+ *   equal to its declared default is omitted when encoding, so request
+ *   bodies stay minimal. Give a field no default if the server must always
+ *   see it.
  *
  * Never add strictness here that rejects an unknown field.
  */

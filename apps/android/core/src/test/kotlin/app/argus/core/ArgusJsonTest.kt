@@ -40,9 +40,11 @@ class ArgusJsonTest {
     }
 
     @Test
-    fun `absent nullable fields decode as null and are not encoded`() {
+    fun `absent nullable fields decode as null, and neither nulls nor defaults are encoded`() {
         val probe = ArgusJson.decodeFromString(Probe.serializer(), """{"id":"s3"}""")
         assertNull(probe.title)
-        assertEquals("""{"id":"s3","status":"UNKNOWN"}""", ArgusJson.encodeToString(Probe.serializer(), probe))
+        // explicitNulls=false drops `title`; the library default
+        // encodeDefaults=false drops `status` because it equals its default.
+        assertEquals("""{"id":"s3"}""", ArgusJson.encodeToString(Probe.serializer(), probe))
     }
 }
