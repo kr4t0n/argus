@@ -1,6 +1,6 @@
 # Plan: native Android client — Kotlin + Jetpack Compose
 
-Status: 🟡 IN PROGRESS (2026-09-21) · Phase 0 scaffolded, awaiting its first green `android.yml` run
+Status: 🟡 IN PROGRESS · Phase 0 ✅ (2026-09-21, first green `android.yml` run on the branch) · Phase 1 next
 Branch: `feat/android-native-client` (PRs target `dev`)
 Prereq: none — the server contract the client speaks is already frozen by the
 iOS client and its captured fixtures.
@@ -350,6 +350,14 @@ wrapper, `android.yml`, `.gitignore` entries (`.gradle/`, `local.properties`,
 `.kotlin/`, `*.keystore`), README and AGENTS.md sections. Exit: the
 workflow has run green via `workflow_dispatch`. **This is the phase the
 maintainer asked to see first**, and it is the smallest one.
+*Done 2026-09-21.* Landed as Gradle 9.7.1 / AGP 9.4.1 / Kotlin 2.4.10 /
+Compose BOM 2026.09.00 (see `apps/android/README.md` for the pin table and
+the AGP 9 built-in-Kotlin rule). The first push went red on a wrong test
+expectation, not on the toolchain — the library's `encodeDefaults=false`
+omits default-valued fields — and the second run was green: `core` in
+about 1 min 20 s, `app` (assemble + lint + unit tests + APK artifact) in
+about 2 min 45 s on a cold cache. `setup-gradle` validated the committed
+wrapper jar as part of that run.
 
 **Phase 1 — core.** DTO mirrors; `ArgusClient`; `StreamClient` as a
 `Flow` of a sealed event type; the engine ports from §4 including
