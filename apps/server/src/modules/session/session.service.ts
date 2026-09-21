@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import type { Session as PSession } from '@prisma/client';
 import type {
@@ -29,6 +34,29 @@ import { MachineService } from '../machine/machine.service';
  */
 export const TERMINAL_COMMAND_STATUSES = ['completed', 'failed', 'cancelled'] as const;
 
+/**
+ * How long `fork()` holds its response waiting for the sidecar to clone
+ * the source's CLI state. Claude is a file copy (well under a second);
+ * Codex spawns app-server, hydrates the whole thread and forks it, which
+ * is seconds on a long session. Past this the fork returns history-only
+ * and the user is toasted — see `fork()` for why the wait exists at all.
+ */
+const FORK_CLONE_TIMEOUT_MS = 15_000;
+
+type CloneOutcome = 'ready' | 'failed' | 'timeout';
+
+/** What a fork learned about its clone. `reason` is the sidecar's own
+ *  wording for `failed` and ours for `timeout`; it ends up on the toast. */
+interface CloneResult {
+  outcome: CloneOutcome;
+  reason?: string;
+}
+
+interface PendingClone {
+  resolve: (result: CloneResult) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 /** Internal shape of `create` — a project-first session (machineId +
  *  cliType + optional workingDir). `agentId` is gone since Phase 4. */
 export interface CreateSessionInput {
@@ -41,7 +69,12 @@ export interface CreateSessionInput {
 }
 
 @Injectable()
-export class SessionService {
+export class SessionService implements OnModuleDestroy {
+  /** Forks whose on-disk clone the sidecar has not answered yet, keyed by
+   *  the NEW session's id. In-memory on purpose: the row is durable, and a
+   *  restart mid-clone just returns those forks history-only. */
+  private readonly pendingClones = new Map<string, PendingClone>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
@@ -425,22 +458,29 @@ export class SessionService {
       return created;
     });
 
-    const dto = SessionService.toDto(newSession);
-    this.gateway.emitSessionCreated(dto);
-
-    // Best-effort dispatch of the on-disk clone to the sidecar. We do
-    // this AFTER the gateway emit so the dashboard can navigate
-    // immediately and the externalId fills in once the sidecar reports
-    // back; if the machine is offline or the adapter doesn't implement
-    // Cloner, the session remains a history-only fork (no externalId)
-    // and the next prompt starts a fresh CLI conversation. The clone
-    // runs in the SOURCE session's project (a fork stays in the same
-    // workdir — that's what makes the cwd-keyed on-disk state valid).
+    // Clone the CLI's on-disk state and WAIT for the sidecar's answer
+    // before telling anyone the session exists. The row is created with
+    // `externalId` NULL and the sidecar fills it in via a
+    // `session-external-id` event; until that lands, a prompt would
+    // `dispatch` without `--resume`, start a fresh CLI conversation, and
+    // report a fresh id that `setExternalId` (first-writer-wins) would keep
+    // over the clone's — a fork that shows its history but whose model
+    // knows none of it. Holding the HTTP response is what closes that
+    // window for every client: the web only navigates (and the composer
+    // only appears) once this returns, and the button already renders a
+    // "Branching…" state for the wait. `dispatch` additionally refuses a
+    // turn while `isClonePending`, for a client that learns the id some
+    // other way. The clone runs in the SOURCE session's project (a fork
+    // stays in the same workdir — that's what makes the cwd-keyed on-disk
+    // state valid). No externalId on the source (it never ran a turn) or
+    // no routing (machine gone) means there is nothing to clone and the
+    // history-only fork is complete as it is.
     const routing = src.externalId ? await this.resolveRouting(src) : null;
+    let result: CloneResult | null = null; // null: nothing to clone
     if (src.externalId && routing) {
       const wire: WireCommand = {
         id: randomUUID(),
-        sessionId: dto.id,
+        sessionId: newSession.id,
         kind: 'clone-session',
         clone: {
           srcExternalId: src.externalId,
@@ -449,6 +489,10 @@ export class SessionService {
         workingDir: routing.workingDir ?? undefined,
         cliType: routing.cliType,
       };
+      // Register the waiter BEFORE publishing: a Claude clone is a file
+      // copy, and its answer can reach the ingestor before `publish`
+      // itself resolves.
+      const clone = this.awaitClone(newSession.id);
       try {
         await this.redis.publish(
           streamKeys.runnerCommand(routing.machineId, routing.cliType),
@@ -456,13 +500,93 @@ export class SessionService {
         );
       } catch (err) {
         // Don't fail the fork if Redis hiccups — the session row is
-        // already there; the user can retry by sending a prompt (which
-        // triggers a fresh CLI run regardless).
+        // already there. Settle the waiter so the fork returns as
+        // history-only rather than sitting out the full timeout.
         console.warn(`[fork] clone-session publish failed`, err);
+        this.resolvePendingClone(
+          newSession.id,
+          'failed',
+          'could not send the clone request to the sidecar',
+        );
       }
+      result = await clone;
     }
 
+    // `ready` means setExternalId already wrote the clone's id; re-read so
+    // the DTO the client navigates with carries it.
+    const row =
+      result?.outcome === 'ready'
+        ? await this.prisma.session.findUnique({ where: { id: newSession.id } })
+        : null;
+    const dto = SessionService.toDto(row ?? newSession);
+    this.gateway.emitSessionCreated(dto);
+    if (result && result.outcome !== 'ready') {
+      // Announce the outcome AFTER the session, so the clients' toast can
+      // name it. `failed` carries the sidecar's reason (the ingestor leaves
+      // the toast to us whenever a waiter was there to take the event);
+      // `timeout` has no sidecar event at all. On a timeout the clone may
+      // still land — if it does before the first prompt, the fork resumes
+      // it after all — but the user has to be told the state is uncertain
+      // NOW, because the next prompt is what makes it permanent.
+      this.gateway.emitSessionCloneFailed({
+        sessionId: dto.id,
+        userId,
+        reason: result.reason ?? 'clone failed',
+      });
+    }
     return dto;
+  }
+
+  /**
+   * True while `fork()` is waiting for the sidecar to clone this session's
+   * CLI state. `dispatch` refuses to run a turn in that window — see the
+   * comment in `fork()` for what a turn dispatched then would do.
+   */
+  isClonePending(sessionId: string): boolean {
+    return this.pendingClones.has(sessionId);
+  }
+
+  /**
+   * Settle the waiter registered by `fork()`. Called by the result ingestor
+   * for `session-external-id` (`ready`, after `setExternalId` has written
+   * the id) and `session-clone-failed` (`failed`, with the sidecar's
+   * reason). Returns whether a fork was waiting — false for an ordinary
+   * session's first turn, which announces its id through the same
+   * external-id event, and for a clone event that arrives after the fork
+   * gave up on it.
+   */
+  resolvePendingClone(sessionId: string, outcome: 'ready' | 'failed', reason?: string): boolean {
+    const p = this.pendingClones.get(sessionId);
+    if (!p) return false;
+    clearTimeout(p.timer);
+    this.pendingClones.delete(sessionId);
+    p.resolve({ outcome, reason });
+    return true;
+  }
+
+  private awaitClone(sessionId: string): Promise<CloneResult> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingClones.delete(sessionId);
+        resolve({
+          outcome: 'timeout',
+          reason: `the sidecar did not answer within ${FORK_CLONE_TIMEOUT_MS / 1000}s`,
+        });
+      }, FORK_CLONE_TIMEOUT_MS);
+      this.pendingClones.set(sessionId, { resolve, timer });
+    });
+  }
+
+  onModuleDestroy() {
+    // A fork caught mid-clone by a shutdown returns as history-only (with
+    // the toast). The row is already there, and the sidecar's answer, if
+    // it comes, still lands through setExternalId on the next server
+    // process.
+    for (const [, p] of this.pendingClones) {
+      clearTimeout(p.timer);
+      p.resolve({ outcome: 'timeout', reason: 'the server restarted while cloning' });
+    }
+    this.pendingClones.clear();
   }
 
   /**

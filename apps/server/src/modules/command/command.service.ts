@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   forwardRef,
   Inject,
   Injectable,
@@ -46,6 +47,17 @@ export class CommandService {
     attachmentIds?: string[],
   ): Promise<CommandDTO> {
     const session = await this.sessions.get(userId, sessionId);
+
+    // `fork()` is still waiting for the sidecar to clone the source's CLI
+    // state. A turn dispatched now would run without `--resume`, and its
+    // fresh conversation id would beat the clone's to `setExternalId`
+    // (first-writer-wins) — the fork would silently forget its history.
+    // The web can't reach this (it only navigates once the fork returns),
+    // and its queue drainer treats any rejection as "retry after a
+    // cooldown", so a queued prompt survives it.
+    if (this.sessions.isClonePending(sessionId)) {
+      throw new ConflictException('session is still being branched — try again in a moment');
+    }
 
     // Since Phase 4 a turn routes entirely by the session's pinned
     // (project → machine, cliType) — no Agent row. Gate on machine
