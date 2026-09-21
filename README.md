@@ -68,8 +68,9 @@ token-level streaming with reconnect-safe replay.
   queue and dispatch as the session goes idle. Opt-in desktop and iOS alerts when
   something finishes off-screen.
 
-`⌘/` lists every keyboard shortcut. See [`AGENTS.md`](./AGENTS.md) for design
-notes and gotchas.
+`⌘/` lists every keyboard shortcut — on the web, and on the iOS client with
+an iPad hardware keyboard. See [`AGENTS.md`](./AGENTS.md) for design notes
+and gotchas.
 
 ## Repo layout
 
