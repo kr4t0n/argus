@@ -2796,6 +2796,42 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   than reverting to CLI default) and `Command.options` (so replayed
   history stays attributable). `usage` is the sole deliberate omission —
   if you find yourself "fixing" that asymmetry, re-read this entry.
+- **Forking a Claude Code session: `turnIndex` counts server Commands,
+  and the transcript has user-typed lines that are not prompts.** The
+  `clone-session` command carries `turnIndex = prefix.length` (Command
+  rows up to and including the anchor), and the sidecar's Claude cloner
+  truncates the JSONL at the (N+1)th *prompt*. For months that cloner
+  counted every `type: "user"` line whose content wasn't purely
+  `tool_result` blocks — but Claude Code also writes, as `user` lines:
+  the compaction summary (`isCompactSummary: true`, after every auto or
+  manual compaction), and for a manual `/compact` the `isMeta` caveat,
+  the `<command-name>` echo and the `<local-command-stdout>` echo.
+  Verified against claude 2.1.274 by compacting a throwaway print-mode
+  session: one `/compact` = one Command = FOUR user lines on disk; an
+  auto-compaction = zero Commands = one. Every such line before the
+  branch point shifted the cut one prompt earlier, so a fork of any
+  compacted session was missing its last turn(s) — the anchor turn
+  first — while the dashboard replay (server-side, from Command rows)
+  looked right. Symptom: "the model doesn't remember the turn I
+  branched from". The cloner now classifies lines the way Claude Code's
+  own transcript readers do (`claudeClassifyLine`: `isMeta` /
+  `isCompactSummary` / `<local-command-*>` are injected, tool feedback
+  is not a prompt, the `<command-name>` echo IS the Command), and trims
+  a compaction footprint that trails the anchor turn — those lines were
+  written by the NEXT command's process, so they belong to the part
+  being cut. A compaction that fired mid-turn (inside the tool loop) is
+  kept. Fixture and cases live in `claude_code_clone_test.go`; extend
+  the fixture from a real capture, not from memory, if the CLI's shape
+  drifts again. Two smaller things fixed in the same pass:
+  `claudeProjectSlug` replaced only `/`, but the CLI's rule is
+  `replace(/[^a-zA-Z0-9]/g, "-")` (a workdir with a `.` or `_` in it
+  was "not on disk" and every fork of it silently degraded to
+  history-only), and slugs over 200 chars are hash-suffixed — so the
+  cloner now falls back to a glob for `<id>.jsonl` under any project
+  dir and writes the clone next to the source. Codex is unaffected:
+  `thread/fork`'s `lastTurnId` is inclusive and `thread/read` folds
+  compactions into turns (checked on an 18-prompt, 4-compaction thread
+  on codex 0.154.0: 18 turns).
 - **`Command.usage` is denormalized at write time**: the result-ingestor
   calls `parseUsage` once when each turn finalizes and stores the
   normalized `TokenUsage` JSON on the Command row. `/me/usage` SUMs
@@ -2951,6 +2987,19 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   a fact nothing stores. A `Command.forkedFromId` column would make it
   explicit and would also let the UI show lineage. Only becomes a
   problem if fork semantics change.
+- **Nothing gates a fork's first prompt on the on-disk clone landing.**
+  `fork()` publishes `clone-session` after emitting the new session, and
+  `dispatch` sends whatever `externalId` the row has at that moment —
+  `undefined` until the sidecar's `session-external-id` event arrives.
+  A prompt sent in that window runs without `--resume`, starts a fresh
+  CLI conversation, reports ITS id, and `setExternalId` (first-writer-
+  wins) then discards the clone's id when it lands. The fork keeps its
+  replayed history in the dashboard but the model knows none of it.
+  The window is small for Claude (a file copy) and larger for Codex
+  (spawn app-server + `thread/read` + `thread/fork`). The runner's
+  comment used to claim the server gates this; it does not. Fix shape:
+  a `cloneState` on the session (`pending` → `ready`/`failed`) that
+  `dispatch` waits on or 409s, cleared by the two clone events.
 - **`Command(createdAt)` index has no re-check trigger.** Deliberately
   not added: at 37% window selectivity Postgres correctly prefers a seq
   scan, and the grid query measured 13.4 ms with zero disk reads. It
