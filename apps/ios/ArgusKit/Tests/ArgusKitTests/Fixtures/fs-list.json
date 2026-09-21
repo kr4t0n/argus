@@ -1,0 +1,154 @@
+{
+  "path": "",
+  "entries": [
+    {
+      "name": "dir-1",
+      "kind": "dir",
+      "size": 4096,
+      "mtime": 1784704322523
+    },
+    {
+      "name": "dir-2",
+      "kind": "dir",
+      "size": 4096,
+      "mtime": 1786086131323
+    },
+    {
+      "name": "dir-3",
+      "kind": "dir",
+      "size": 4096,
+      "mtime": 1789877619775
+    },
+    {
+      "name": "dir-4",
+      "kind": "dir",
+      "size": 4096,
+      "mtime": 1780027752771
+    },
+    {
+      "name": "dir-5",
+      "kind": "dir",
+      "size": 4096,
+      "mtime": 1789665281380
+    },
+    {
+      "name": "dir-6",
+      "kind": "dir",
+      "size": 4096,
+      "mtime": 1782714749383
+    },
+    {
+      "name": "dir-7",
+      "kind": "dir",
+      "size": 4096,
+      "mtime": 1782370123878
+    },
+    {
+      "name": "dir-8",
+      "kind": "dir",
+      "size": 4096,
+      "mtime": 1785146416354
+    },
+    {
+      "name": "dir-9",
+      "kind": "dir",
+      "size": 4096,
+      "mtime": 1789911905859
+    },
+    {
+      "name": "file-10.txt",
+      "kind": "file",
+      "size": 725,
+      "mtime": 1780989472421
+    },
+    {
+      "name": "file-11.txt",
+      "kind": "file",
+      "size": 983,
+      "mtime": 1789665273534
+    },
+    {
+      "name": "file-12.txt",
+      "kind": "file",
+      "size": 5,
+      "mtime": 1780025686051
+    },
+    {
+      "name": "file-13.txt",
+      "kind": "file",
+      "size": 463,
+      "mtime": 1786676157048
+    },
+    {
+      "name": "file-14.txt",
+      "kind": "file",
+      "size": 170182,
+      "mtime": 1789912211283
+    },
+    {
+      "name": "file-15.txt",
+      "kind": "file",
+      "size": 4009,
+      "mtime": 1786525394612
+    },
+    {
+      "name": "file-16.txt",
+      "kind": "file",
+      "size": 3436,
+      "mtime": 1785928596429
+    },
+    {
+      "name": "file-17.txt",
+      "kind": "file",
+      "size": 10,
+      "mtime": 1784862181336
+    },
+    {
+      "name": "file-18.txt",
+      "kind": "file",
+      "size": 8406,
+      "mtime": 1784877393710
+    },
+    {
+      "name": "file-19.txt",
+      "kind": "file",
+      "size": 1854,
+      "mtime": 1785749262959
+    },
+    {
+      "name": "file-20.txt",
+      "kind": "file",
+      "size": 432,
+      "mtime": 1783511703355
+    },
+    {
+      "name": "file-21.txt",
+      "kind": "file",
+      "size": 254,
+      "mtime": 1785167765181
+    },
+    {
+      "name": "file-22.txt",
+      "kind": "file",
+      "size": 54001,
+      "mtime": 1789912193215
+    },
+    {
+      "name": "file-23.txt",
+      "kind": "file",
+      "size": 2905,
+      "mtime": 1785553793185
+    },
+    {
+      "name": "file-24.txt",
+      "kind": "file",
+      "size": 425977,
+      "mtime": 1783511703513
+    }
+  ],
+  "git": {
+    "branch": "main",
+    "head": "1012345",
+    "detached": false
+  }
+}

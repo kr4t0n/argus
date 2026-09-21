@@ -1,0 +1,44 @@
+{
+  "commits": [
+    {
+      "sha": "10123456789abcdef0123456789abcdef0123456",
+      "shortSha": "1012345",
+      "subject": "Scrubbed commit 1: placeholder subject",
+      "authorName": "Argus Fixture",
+      "authorDate": "2026-09-02T10:42:26+08:00"
+    },
+    {
+      "sha": "20123456789abcdef0123456789abcdef0123456",
+      "shortSha": "2012345",
+      "subject": "Scrubbed commit 2: placeholder subject",
+      "authorName": "Argus Fixture",
+      "authorDate": "2026-08-06T19:05:03+08:00"
+    },
+    {
+      "sha": "30123456789abcdef0123456789abcdef0123456",
+      "shortSha": "3012345",
+      "subject": "Scrubbed commit 3: placeholder subject",
+      "authorName": "Argus Fixture",
+      "authorDate": "2026-07-29T15:24:53+08:00"
+    },
+    {
+      "sha": "40123456789abcdef0123456789abcdef0123456",
+      "shortSha": "4012345",
+      "subject": "Scrubbed commit 4: placeholder subject",
+      "authorName": "Argus Fixture",
+      "authorDate": "2026-07-29T15:24:04+08:00"
+    },
+    {
+      "sha": "50123456789abcdef0123456789abcdef0123456",
+      "shortSha": "5012345",
+      "subject": "Scrubbed commit 5: placeholder subject",
+      "authorName": "Argus Fixture",
+      "authorDate": "2026-07-27T23:17:01+08:00"
+    }
+  ],
+  "git": {
+    "branch": "main",
+    "head": "1012345",
+    "detached": false
+  }
+}
