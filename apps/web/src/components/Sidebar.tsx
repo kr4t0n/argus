@@ -534,6 +534,8 @@ function ProjectRow({
 function MachineList() {
   const order = useMachineStore((s) => s.order);
   const machines = useMachineStore((s) => s.machines);
+  const open = useUIStore((s) => s.machinesOpen);
+  const toggleOpen = useUIStore((s) => s.toggleMachines);
   const [openFor, setOpenFor] = useState<string | null>(null);
 
   if (order.length === 0) {
@@ -550,26 +552,47 @@ function MachineList() {
 
   return (
     <div className="shrink-0 py-1.5 px-1 max-h-[40%] overflow-y-auto">
+      {/* The kebab stays a SIBLING of the toggle rather than living inside
+          it — nesting a button in a button is invalid markup and the inner
+          click would need to stop propagation to avoid also collapsing the
+          section. The count keeps the fleet size readable while collapsed. */}
       <div className="group flex items-center px-3 py-1">
-        <span className="text-caps">machines</span>
-        <span className="ml-1.5 text-meta text-fg-muted">({order.length})</span>
-        <span className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+          onClick={() => {
+            // Drop any open create-project popover on the way out: its
+            // anchor row is about to unmount, and a stale `openFor` would
+            // pop it back up when the section is expanded again.
+            setOpenFor(null);
+            toggleOpen();
+          }}
+          aria-expanded={open}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+          title={open ? 'collapse machines' : 'expand machines'}
+        >
+          <ChevronRight
+            className={cn('h-3 w-3 text-fg-tertiary transition-transform', open && 'rotate-90')}
+          />
+          <span className="text-caps">machines</span>
+          <span className="text-meta text-fg-muted">({order.length})</span>
+        </button>
+        <span className="ml-auto pl-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <MachinesHeaderMenu />
         </span>
       </div>
-      {order.map((id) => {
-        const m = machines[id];
-        if (!m) return null;
-        return (
-          <MachineRow
-            key={id}
-            machine={m}
-            popoverOpen={openFor === id}
-            onOpenPopover={() => setOpenFor(id)}
-            onClosePopover={() => setOpenFor(null)}
-          />
-        );
-      })}
+      {open &&
+        order.map((id) => {
+          const m = machines[id];
+          if (!m) return null;
+          return (
+            <MachineRow
+              key={id}
+              machine={m}
+              popoverOpen={openFor === id}
+              onOpenPopover={() => setOpenFor(id)}
+              onClosePopover={() => setOpenFor(null)}
+            />
+          );
+        })}
     </div>
   );
 }

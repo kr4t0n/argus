@@ -20,6 +20,10 @@ interface UIState {
   showArchived: Record<string, boolean>;
   /** Global toggle: show archived projects in the sidebar. */
   showArchivedProjects: boolean;
+  /** Sidebar "machines" section expanded. A dedicated flag rather than a
+   *  key in `expanded`, which is documented as project-rows only. Open by
+   *  default — the section is where projects get created from. */
+  machinesOpen: boolean;
   /** sessionId → the composer's unsent draft for that session. */
   drafts: Record<string, string>;
   /** User's theme preference. The resolved (system → light/dark) value
@@ -52,6 +56,7 @@ interface UIState {
   toggleExpanded: (id: string, expanded?: boolean) => void;
   toggleShowArchived: (key: string) => void;
   toggleShowArchivedProjects: () => void;
+  toggleMachines: () => void;
   setDraft: (sessionId: string, v: string) => void;
   setTheme: (t: ThemePreference) => void;
   setNotificationsEnabled: (v: boolean) => void;
@@ -74,6 +79,7 @@ export const useUIStore = create<UIState>()(
       expanded: {},
       showArchived: {},
       showArchivedProjects: false,
+      machinesOpen: true,
       drafts: {},
       theme: 'system',
       notificationsEnabled: false,
@@ -110,6 +116,9 @@ export const useUIStore = create<UIState>()(
       },
       toggleShowArchivedProjects() {
         set({ showArchivedProjects: !get().showArchivedProjects });
+      },
+      toggleMachines() {
+        set({ machinesOpen: !get().machinesOpen });
       },
       setDraft(sessionId, v) {
         set({ drafts: { ...get().drafts, [sessionId]: v } });

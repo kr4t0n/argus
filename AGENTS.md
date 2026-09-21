@@ -852,7 +852,17 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   expands directly into its sessions** — there is no agent layer in the
   tree at all. Each `SessionRow` leads with the CLI type icon
   (`AgentTypeIcon` driven by `session.cliType`), so the user can tell a
-  claude session from a codex one. **Creation hierarchy** mirrors the
+  claude session from a codex one. The bottom `MachineList` section
+  collapses behind a chevron on its `machines` header, matching
+  `ProjectRow`'s toggle. State is `uiStore.machinesOpen` (a dedicated
+  persisted flag, deliberately NOT a key in `uiStore.expanded` — that map
+  is project-rows only) and it defaults open. The header keeps the machine
+  count and the fleet kebab visible while collapsed: the kebab is a
+  SIBLING of the toggle button, since nesting it inside would be invalid
+  markup and its click would have to stop propagation to avoid also
+  collapsing the section. Collapsing clears `openFor` so a
+  `CreateProjectPopover` whose anchor row just unmounted can't pop back up
+  when the section is re-expanded. **Creation hierarchy** mirrors the
   tree: the bottom `MachineList`'s hover `+` opens `CreateProjectPopover`
   (name + workingDir + terminal default — no adapter), which writes a
   placeholder into `useProjectStore`; the project row's hover `+` opens
