@@ -176,8 +176,10 @@ string and the UI falls back to a generic icon for unknown types.
 
 Actively developed. Deploy via Docker Compose or the Helm chart; a native
 SwiftUI iOS/iPadOS client is in progress (see
-[`apps/ios/README.md`](apps/ios/README.md)), and a native Android client is
-scaffolded (see [`apps/android/README.md`](apps/android/README.md) and
+[`apps/ios/README.md`](apps/ios/README.md)), and a native Kotlin/Compose
+Android client is in progress — login, session list, streaming transcript
+and composer have landed, CI-compiled only (see
+[`apps/android/README.md`](apps/android/README.md) and
 [`docs/plan-android-native-client.md`](docs/plan-android-native-client.md)).
 Single-tenant admin auth today, with RBAC and OpenTelemetry still deferred.
 
