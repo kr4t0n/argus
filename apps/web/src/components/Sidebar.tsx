@@ -581,9 +581,19 @@ function MachineList() {
           {/* One rotating element rather than swapping ChevronDown for
               ChevronUp: a 180° flip of chevron-down IS chevron-up, so
               this renders identically while the direction change stays
-              animated. Down = push the section away, up = bring it back. */}
+              animated. Down = push the section away, up = bring it back.
+              Hover-only like the kebab, so the resting header is just the
+              label. The opacity sits on the ICON, not the button, so the
+              whole row stays clickable even before the arrow shows — the
+              affordance fades in, the hit target never moves. Bare
+              `transition` (not `transition-transform`) because both the
+              rotate and the fade have to animate, and the two dedicated
+              utilities would fight over `transition-property`. */}
           <ChevronDown
-            className={cn('h-3.5 w-3.5 transition-transform', !open && 'rotate-180')}
+            className={cn(
+              'h-3.5 w-3.5 opacity-0 transition group-hover:opacity-100',
+              !open && 'rotate-180',
+            )}
           />
         </button>
         <span className="text-caps pointer-events-none">machines</span>

@@ -864,10 +864,17 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   also makes the whole header one hit target — hence
   `pointer-events-none` on the label spans, so their clicks fall through,
   and `relative` on the kebab so it paints above and keeps its own.
+  The arrow is hover-only like the kebab, so the resting header is just
+  the label — but the fade sits on the ICON, never the button, so the
+  row stays clickable before the arrow appears and the hit target never
+  moves. It needs the bare `transition` utility rather than
+  `transition-transform`, since the rotate and the fade both have to
+  animate and the two dedicated utilities would fight over
+  `transition-property`.
   State is `uiStore.machinesOpen` (a dedicated
   persisted flag, deliberately NOT a key in `uiStore.expanded` — that map
-  is project-rows only) and it defaults open. The header keeps the machine
-  count and the fleet kebab visible while collapsed: the kebab is a
+  is project-rows only) and it defaults open. The machine count is what
+  stays visible while collapsed: the kebab is a
   SIBLING of the toggle button, since nesting it inside would be invalid
   markup and its click would have to stop propagation to avoid also
   collapsing the section. Collapsing clears `openFor` so a
