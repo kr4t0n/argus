@@ -1,6 +1,6 @@
 # Plan: native Android client — Kotlin + Jetpack Compose
 
-Status: 🟡 IN PROGRESS · Phase 0 ✅ (2026-09-21, first green `android.yml` run on the branch) · Phase 1 next
+Status: 🟡 IN PROGRESS · Phase 0 ✅ (2026-09-21) · Phase 1 ✅ (2026-09-21, `android.yml` and `ios.yml` both green on the branch) · Phase 2 next
 Branch: `feat/android-native-client` (PRs target `dev`)
 Prereq: none — the server contract the client speaks is already frozen by the
 iOS client and its captured fixtures.
@@ -365,6 +365,22 @@ wrapper jar as part of that run.
 generalized fixture script and the shared fixture directory, with
 `FixtureDecodingTests` in both clients pointed at it. Exit: `:core:test`
 green decoding every fixture, including `search-sessions.json`.
+*Done 2026-09-21.* 4.6k lines of Kotlin under `core/src/main`, 3.7k of
+tests — 201 JUnit tests, every Swift test ported one-to-one, all green on
+the first CI run after a blind port (verified from the uploaded JUnit
+XML, which `android.yml` now publishes on every run). The fixtures moved
+to `packages/shared-types/fixtures/`, the capture script became
+`scripts/capture-client-fixtures.sh`, ArgusKit's tests read the shared
+directory from `#filePath`, and `ios.yml` now also runs on
+`feat/android-*` branches so a cross-client change is proved on both
+runners. Decisions recorded in `apps/android/README.md` and AGENTS.md:
+explicit per-enum tolerant serializers rather than `coerceInputValues`
+alone; a dedicated 30 s read-timeout client for fork; `org.json`
+excluded from socket.io-client-java for the platform copy; the Kotlin
+ports follow the TypeScript (UTF-16) string semantics where the Swift
+port had to deviate for grapheme clusters; `MathCompat` not ported. The
+mermaid version pin (§4) is deferred to the phase that vendors the
+runtime.
 
 **Phase 2 — app shell.** Server/login flow (scheme inference for LAN
 hosts, cleartext allowed for them); project-grouped session list with the

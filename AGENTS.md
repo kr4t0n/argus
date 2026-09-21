@@ -3166,9 +3166,11 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Tech debt / planned
 
-- **Native Android client** — Phase 0 (CI bootstrap) landed on
-  `feat/android-native-client`; Phases 1–6 (core ports, app shell, parity,
-  fleet/account, FCM push, terminal + Live Updates) are open. The design,
+- **Native Android client** — Phases 0 (CI bootstrap) and 1 (the `:core`
+  module: DTO mirrors, REST + realtime clients, engine ports, shared
+  fixtures; 201 JUnit tests) landed on `feat/android-native-client`;
+  Phases 2–6 (app shell, parity, fleet/account, FCM push, terminal +
+  Live Updates) are open. The design,
   wire contract, lockstep table, CI shape and phases are in
   `docs/plan-android-native-client.md`; the module map is under
   `apps/android/` above. Same posture as iOS (thin client, hand-written
