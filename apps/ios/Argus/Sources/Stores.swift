@@ -155,6 +155,53 @@ final class SessionListStore {
         sessions[id] = session
     }
 
+    /// Candidates for the ⌘P switcher: every session plus the labels the
+    /// ranker matches against (the web palette's candidate build). Labels
+    /// resolve through the session's Project row exactly like
+    /// `projectGroups`; a session whose row is missing still ranks by
+    /// title and cliType.
+    func searchCandidates(fleet: FleetStore) -> [SessionCandidate] {
+        var projectsById: [String: ProjectDTO] = [:]
+        for project in fleet.projects.values {
+            projectsById[project.id] = project
+        }
+        return sessions.values.map {
+            Self.searchCandidate(for: $0, fleet: fleet, projectsById: projectsById)
+        }
+    }
+
+    /// Single-row form of `searchCandidates` (a ⌘K hit's trailing label).
+    func searchCandidate(for session: SessionDTO, fleet: FleetStore) -> SessionCandidate {
+        var projectsById: [String: ProjectDTO] = [:]
+        if let projectId = session.projectId,
+           let project = fleet.projects.values.first(where: { $0.id == projectId }) {
+            projectsById[projectId] = project
+        }
+        return Self.searchCandidate(for: session, fleet: fleet, projectsById: projectsById)
+    }
+
+    private static func searchCandidate(
+        for session: SessionDTO,
+        fleet: FleetStore,
+        projectsById: [String: ProjectDTO]
+    ) -> SessionCandidate {
+        var projectLabel: String?
+        var machineName: String?
+        if let projectId = session.projectId, let project = projectsById[projectId] {
+            if let name = project.name, !name.isEmpty {
+                projectLabel = name
+            } else {
+                let base = (project.workingDir as NSString).lastPathComponent
+                projectLabel = base.isEmpty ? nil : base
+            }
+            machineName = fleet.machines[project.machineId]?.name
+        }
+        // No removed-machine context on this client (the web's
+        // removedContextStore): a tombstoned machine's sessions rank by
+        // title and cliType only and carry no "removed" tag.
+        return SessionCandidate(session: session, projectLabel: projectLabel, machineName: machineName)
+    }
+
     /// Group visible sessions into projects. Since the runner refactor
     /// the grouping key is `session.projectId` resolved through the
     /// server's Project rows. Sessions whose Project row hasn't hydrated

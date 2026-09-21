@@ -30,6 +30,31 @@ final class AppModel {
     /// Right inspector (Files / Commits / Diff) visibility.
     var inspectorPresented = false
 
+    /// Which overlay is showing — the web's `paletteStore.mode`; nil is
+    /// closed. ⌘P / ⌘K / ⌘/ all ride this ONE field so each hotkey is a
+    /// toggle for its own mode and a switch away from another's, instead
+    /// of three sheets negotiating which of them is up. Deliberately not
+    /// persisted: an open palette restored on relaunch is a bug, not a
+    /// preference.
+    var paletteMode: PaletteMode?
+
+    func openPalette(_ mode: PaletteMode) {
+        guard phase == .ready else { return }
+        paletteMode = mode
+    }
+
+    /// Press-again-to-dismiss: open `mode`, or close if it is already up.
+    /// No-ops before login, which is how the scene commands stay inert on
+    /// the login screen without observing `phase` from a `Commands` body.
+    func togglePalette(_ mode: PaletteMode) {
+        guard phase == .ready else { return }
+        paletteMode = paletteMode == mode ? nil : mode
+    }
+
+    func closePalette() {
+        paletteMode = nil
+    }
+
     var selectedSessionId: String? {
         if case .session(let id) = route { return id }
         return nil
@@ -240,6 +265,7 @@ final class AppModel {
         sessionVMOrder = []
         route = nil
         inspectorPresented = false
+        paletteMode = nil
         drainInFlight = [:]
         drainCooldown = [:]
         cloneFailures = []
@@ -660,6 +686,16 @@ enum DetailRoute: Hashable {
     case session(String)
     case machine(String)
     case user
+}
+
+/// The overlay `AppModel.paletteMode` names (web `PaletteMode`):
+/// `session` (⌘P) switches by NAME, client-side over the hydrated list;
+/// `content` (⌘K) searches what was SAID, server-side; `help` (⌘/) is
+/// the shortcuts list.
+enum PaletteMode: Equatable, Sendable {
+    case session
+    case content
+    case help
 }
 
 /// Lock-guarded JWT holder. URLSession invokes the client's token

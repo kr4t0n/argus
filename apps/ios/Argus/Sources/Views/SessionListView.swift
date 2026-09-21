@@ -164,6 +164,21 @@ struct SessionSidebar: View {
                             Text(app.user?.email ?? "Account").font(.callout).lineLimit(1)
                             Text(app.user?.role ?? "").font(.caption2).foregroundStyle(.secondary)
                         }
+                        Spacer(minLength: 6)
+                        // The touch path to the shortcuts list and the only
+                        // thing in the app that reveals ⌘/ exists (the web's
+                        // UserRow glyph). Always visible on purpose: an entry
+                        // point you have to know a binding to reach would not
+                        // break the circle.
+                        Button {
+                            app.openPalette(.help)
+                        } label: {
+                            Image(systemName: "keyboard")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Keyboard shortcuts")
                     }
                     .tag(DetailRoute.user)
                     .listRowSeparator(.hidden)
