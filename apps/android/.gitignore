@@ -1,0 +1,16 @@
+# Gradle
+.gradle/
+build/
+.kotlin/
+
+# Local machine state — SDK location and signing material are never committed
+local.properties
+*.keystore
+*.jks
+
+# IDE
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/

@@ -1506,6 +1506,38 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   file exists, so CI stays green until someone runs the capture against
   a server with searchable sessions — do run it and commit the fixture.
 
+### `apps/android/` (native client — Phase 0)
+
+- Kotlin + Jetpack Compose, shaped like `apps/ios/`: `:core` is a **plain
+  Kotlin/JVM module** (no Android plugin — the counterpart of ArgusKit:
+  wire models, REST + Socket.IO clients, transcript engine, all testable
+  without the SDK) and `:app` is the Compose application. Design, wire
+  contract, lockstep table and phases: `docs/plan-android-native-client.md`;
+  build/test/pins: `apps/android/README.md`.
+- **Kotlin is CI-compiled only, by decision.** The dev box gets no JDK,
+  Gradle or Android SDK; `.github/workflows/android.yml` (ubuntu runner,
+  `:core:build` + `:app:assembleDebug :app:lintDebug :app:testDebugUnitTest`)
+  IS the compiler, exactly as `ios.yml` is for Swift. It runs on push to
+  main/dev/`feat/android-*`, on PRs, on `workflow_dispatch`, and — like
+  `ios.yml` — on edits to `packages/shared-types/src/contextWindow.ts` and
+  `apps/web/src/lib/hotkeys.ts`, the two files the Kotlin side will mirror.
+  A Kotlin change is unverified until that workflow has run on it; say so.
+- **Every dependency is an exact pin** (`gradle/libs.versions.toml`, plus
+  `distributionSha256Sum` on the wrapper), the fix the iOS side still owes
+  itself after the floating-range CI break. `setup-gradle` validates the
+  committed wrapper jar against Gradle's published checksums on every run.
+- **AGP 9 gotcha: never apply `org.jetbrains.kotlin.android`.** AGP 9 has
+  built-in Kotlin and errors if that plugin is applied. The catalog's
+  Kotlin still reaches `:app` because `kotlin.jvm` is declared in the
+  top-level `plugins {}` (`apply false`), which puts that KGP on the build
+  classpath ahead of AGP's older runtime dependency. `jvmTarget` in `:app`
+  follows `compileOptions.targetCompatibility`.
+- `ArgusJson` (`core/…/ArgusJson.kt`) is the one `Json` instance every
+  wire model will decode through: `ignoreUnknownKeys`, `coerceInputValues`
+  (unknown enum values → the property's `UNKNOWN` default),
+  `explicitNulls = false`. `ArgusJsonTest` pins that posture. Same rule as
+  iOS: never add strictness that rejects an unknown field.
+
 ## Conventions
 
 - **Path alias**: `@argus/shared-types` resolves to the package's source
@@ -3098,13 +3130,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Tech debt / planned
 
-- **Native Android client** — planned, not started; the design, wire
-  contract, lockstep table, CI shape and phases are in
-  `docs/plan-android-native-client.md`. Same posture as iOS (thin client,
-  hand-written decode-tolerant DTOs, ported engine, shared fixtures) with
-  one deliberate constraint: **Kotlin is CI-compiled only** — the dev box
-  gets no JDK/Gradle/Android SDK, so `.github/workflows/android.yml`
-  will be the compiler exactly as `ios.yml` is for Swift.
+- **Native Android client** — Phase 0 (CI bootstrap) landed on
+  `feat/android-native-client`; Phases 1–6 (core ports, app shell, parity,
+  fleet/account, FCM push, terminal + Live Updates) are open. The design,
+  wire contract, lockstep table, CI shape and phases are in
+  `docs/plan-android-native-client.md`; the module map is under
+  `apps/android/` above. Same posture as iOS (thin client, hand-written
+  decode-tolerant DTOs, ported engine, shared fixtures) with one
+  deliberate constraint: **Kotlin is CI-compiled only** — the dev box
+  gets no JDK/Gradle/Android SDK.
 - Per-socket backpressure for `delta` chunks (drop-on-lag).
 - Real RBAC and multi-tenant isolation.
 - OpenTelemetry traces from web → server → sidecar (we already log structured).

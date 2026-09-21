@@ -1,6 +1,6 @@
 # Plan: native Android client — Kotlin + Jetpack Compose
 
-Status: 🟡 DRAFT (2026-09-21) · Phase 0 not started
+Status: 🟡 IN PROGRESS (2026-09-21) · Phase 0 scaffolded, awaiting its first green `android.yml` run
 Branch: `feat/android-native-client` (PRs target `dev`)
 Prereq: none — the server contract the client speaks is already frozen by the
 iOS client and its captured fixtures.

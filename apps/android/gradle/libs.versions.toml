@@ -1,0 +1,38 @@
+# Version catalog — every entry is an EXACT pin, by decision
+# (docs/plan-android-native-client.md §2: the iOS build broke once with no
+# iOS commit because floating ranges re-resolved in CI). Update procedure and
+# the compatibility rules behind each pin are in apps/android/README.md.
+
+[versions]
+# Android Gradle Plugin. Needs Gradle >= 9.6.0 (wrapper is 9.7.1), JDK 17,
+# SDK Build-Tools 36.0.0; supports compileSdk <= 37. Built-in Kotlin: do not
+# apply org.jetbrains.kotlin.android anywhere.
+agp = "9.4.1"
+# Kotlin Gradle plugin. The Compose compiler and serialization plugins ship at
+# this exact version; the :core JVM module compiles with it and AGP's
+# built-in Kotlin picks it up from the build classpath.
+kotlin = "2.4.10"
+# Runtime library; the plugin is versioned by `kotlin` above.
+kotlinxSerialization = "1.11.0"
+# Compose BOM — the one place Compose artifact versions come from.
+composeBom = "2026.09.00"
+activityCompose = "1.13.0"
+# JUnit 4 on both modules: :app's unit tests are JUnit 4 by AGP default, and
+# kotlin("test") resolves to kotlin-test-junit under `useJUnit()`.
+junit = "4.13.2"
+
+[libraries]
+kotlinx-serializationJson = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+androidx-activityCompose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+compose-uiTooling = { module = "androidx.compose.ui:ui-tooling" }
+compose-uiToolingPreview = { module = "androidx.compose.ui:ui-tooling-preview" }
+compose-material3 = { module = "androidx.compose.material3:material3" }
+junit = { module = "junit:junit", version.ref = "junit" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
