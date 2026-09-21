@@ -140,7 +140,7 @@ object ProjectGroups {
                     archived = row?.archivedAt != null,
                 )
             }
-            if (session.archivedAt == null) builder.live += session else builder.archived += session
+            if (session.archivedAt == null) builder.live += session else builder.archivedList += session
         }
 
         val result = ArrayList<ProjectGroup>(builders.size + 1)
@@ -153,7 +153,7 @@ object ProjectGroups {
                 machineName = b.machineName,
                 archived = b.archived,
                 sessions = b.live.sortedByDescending { it.updatedAt },
-                archivedSessions = b.archived.sortedByDescending { it.updatedAt },
+                archivedSessions = b.archivedList.sortedByDescending { it.updatedAt },
             )
         }
         if (orphans.isNotEmpty()) {
@@ -220,6 +220,6 @@ object ProjectGroups {
         val archived: Boolean,
     ) {
         val live = ArrayList<SessionDTO>()
-        val archived = ArrayList<SessionDTO>()
+        val archivedList = ArrayList<SessionDTO>()
     }
 }
