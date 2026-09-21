@@ -271,14 +271,19 @@ struct SessionView: View {
     /// Archiving from here no longer bounces to the list (it used to
     /// clear `route`): the sidebar's swipe action still does, because
     /// there the row is about to vanish from under the finger; here the
-    /// transcript stays readable and the badge offers the way back.
+    /// transcript stays readable and the badge offers the way back. The
+    /// row itself disappears into the archive at once, as on the web —
+    /// `pinRoute` is what keeps the sidebar's List from rewriting the
+    /// route when its selected row is deleted (see AppModel).
     private func archive() {
         guard let client = app.client, !archiveBusy else { return }
         archiveBusy = true
         Task {
             defer { archiveBusy = false }
             do {
-                app.sessionList.upsert(try await client.archiveSession(id: sessionId))
+                let archived = try await client.archiveSession(id: sessionId)
+                app.pinRoute()
+                app.sessionList.upsert(archived)
             } catch {
                 app.handleAPIError(error)
             }
@@ -291,7 +296,9 @@ struct SessionView: View {
         Task {
             defer { archiveBusy = false }
             do {
-                app.sessionList.upsert(try await client.unarchiveSession(id: sessionId))
+                let restored = try await client.unarchiveSession(id: sessionId)
+                app.pinRoute()
+                app.sessionList.upsert(restored)
             } catch {
                 app.handleAPIError(error)
             }

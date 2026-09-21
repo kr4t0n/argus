@@ -55,6 +55,28 @@ final class AppModel {
         paletteMode = nil
     }
 
+    /// While the window is open, the sidebar's List may not write the
+    /// route. Armed by the session view right before it archives the
+    /// session on screen: that deletes the SELECTED row from the sidebar
+    /// list, and `List(selection:)` answers by writing a selection of
+    /// its own (nil, or a neighbouring row) — which is what yanked the
+    /// detail column off the session. The web stays put because its
+    /// routing is URL-driven; here the route IS the list selection, so
+    /// the write has to be refused at the binding (`SessionSidebar.
+    /// listSelection`). A time window rather than a flag cleared "once
+    /// the list has updated", because the write lands in a UIKit
+    /// callback with no SwiftUI hook to clear on; 500 ms is far beyond
+    /// one update pass and far below any deliberate tap.
+    @ObservationIgnored private var routePinnedUntil: Date = .distantPast
+
+    func pinRoute() {
+        routePinnedUntil = Date().addingTimeInterval(0.5)
+    }
+
+    var routeIsPinned: Bool {
+        Date() < routePinnedUntil
+    }
+
     var selectedSessionId: String? {
         if case .session(let id) = route { return id }
         return nil

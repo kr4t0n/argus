@@ -1436,23 +1436,35 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   column's colours bled through it (a dark green) while the help
   sheet's `List` painted opaque grouped grey; `presentationBackground
   (Color(.systemGroupedBackground))` on `PaletteSheet` gives all three
-  modes one surface. (3) `List(selection:)` in the split view moves its
-  selection to a neighbour when the SELECTED row is deleted from its
-  data, so archiving the open session with the project's eye toggle off
-  yanked the detail column onto another session — the opposite of the
-  web, where routing is URL-driven and the panel stays. The sidebar now
-  keeps rendering the selected session's row (dimmed, as archived) even
-  while archived sessions are hidden; it disappears once the selection
-  moves away. Moves are fine — rows re-sort on every status event and
-  never jumped — only deletion of the selected row triggers it.
+  modes one surface. (3) `List(selection:)` in the split view writes a
+  selection of its own (nil, or a neighbouring row) when the SELECTED
+  row is deleted from its data, so archiving the open session with the
+  project's eye toggle off yanked the detail column onto another
+  session — the opposite of the web, where routing is URL-driven and
+  the panel stays while the row disappears into the archive. On iOS
+  the route IS the list selection, so the write is refused at the
+  binding instead: `SessionView.archive()` calls `AppModel.pinRoute()`
+  right before the upsert that deletes the row, and the sidebar's List
+  is bound to `SessionSidebar.listSelection`, a filtered `Binding`
+  whose setter drops writes while the pin (a 500 ms window) is in
+  force. Reads are untouched, so programmatic navigation still
+  highlights and pushes. A time window rather than a "cleared after
+  the list updates" flag because the write lands in a UIKit callback
+  with no SwiftUI hook to clear on. A first cut kept the archived row
+  rendered (dimmed) while selected to avoid the deletion altogether;
+  it worked, but diverged visibly from the web, which hides the row at
+  once. Moves are fine — rows re-sort on every status event and never
+  jumped — only deletion of the selected row triggers the write.
 - **⌘D is a zero-size `opacity(0)` button, Escape has three homes, and
   type-to-focus is deliberately not ported.** ⌘D lives in `SessionView`'s
   background rather than on the menu's Archive item: a real view in the
   hierarchy is the one binding mechanism proven on this client (⌘. and
   ⌘⏎ work the same way), whereas a `Menu` item's shortcut is only
   dispatched reliably while the menu is open. It is a toggle that STAYS
-  on the session (web parity — the toolbar's archivebox badge reports
-  the state and restores on tap), and the header menu's Archive now
+  on the session while the sidebar row disappears into the archive
+  (web parity — the toolbar's archivebox badge reports the state and
+  restores on tap; see the `pinRoute` entry above for how the route
+  survives the row's deletion), and the header menu's Archive now
   stays put too; only the sidebar's swipe action still bounces, because
   there the row vanishes from under the finger. Escape: `.onKeyPress
   (.escape)` on the composer blurs it (IME-guarded like Return, and it
