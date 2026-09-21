@@ -3098,6 +3098,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Tech debt / planned
 
+- **Native Android client** — planned, not started; the design, wire
+  contract, lockstep table, CI shape and phases are in
+  `docs/plan-android-native-client.md`. Same posture as iOS (thin client,
+  hand-written decode-tolerant DTOs, ported engine, shared fixtures) with
+  one deliberate constraint: **Kotlin is CI-compiled only** — the dev box
+  gets no JDK/Gradle/Android SDK, so `.github/workflows/android.yml`
+  will be the compiler exactly as `ios.yml` is for Swift.
 - Per-socket backpressure for `delta` chunks (drop-on-lag).
 - Real RBAC and multi-tenant isolation.
 - OpenTelemetry traces from web → server → sidecar (we already log structured).

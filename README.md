@@ -175,8 +175,9 @@ string and the UI falls back to a generic icon for unknown types.
 
 Actively developed. Deploy via Docker Compose or the Helm chart; a native
 SwiftUI iOS/iPadOS client is in progress (see
-[`apps/ios/README.md`](apps/ios/README.md)). Single-tenant admin auth today, with
-RBAC and OpenTelemetry still deferred.
+[`apps/ios/README.md`](apps/ios/README.md)), and a native Android client is
+planned (see [`docs/plan-android-native-client.md`](docs/plan-android-native-client.md)).
+Single-tenant admin auth today, with RBAC and OpenTelemetry still deferred.
 
 Contributing? [`AGENTS.md`](./AGENTS.md) has the local-development setup plus
 design notes, gotchas and known follow-ups.
