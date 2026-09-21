@@ -63,6 +63,17 @@ struct FixtureDecodingTests {
         #expect(response.models.allSatisfy { !$0.id.isEmpty })
     }
 
+    // Captured only by a server with searchable sessions; the inline
+    // shape check lives in SearchModelsTests until then.
+    @Test("search-sessions.json → SessionSearchResponse",
+          .enabled(if: TestSupport.hasFixture("search-sessions")))
+    func searchSessions() throws {
+        let response = try TestSupport.decodeFixture("search-sessions", as: SessionSearchResponse.self)
+        #expect(!response.query.isEmpty)
+        #expect(response.mode != .unknown)
+        #expect(response.hits.allSatisfy { !$0.sessionId.isEmpty && !$0.commandId.isEmpty })
+    }
+
     @Test("session-detail.json → SessionDetailResponse, and the engine digests it")
     func sessionDetail() throws {
         let detail = try TestSupport.decodeFixture("session-detail", as: SessionDetailResponse.self)

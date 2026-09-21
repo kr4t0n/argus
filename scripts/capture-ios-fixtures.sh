@@ -86,6 +86,9 @@ fetch "/projects" "projects.json"
 fetch "/me/usage" "me-usage.json"
 fetch "/me/quota" "me-quota.json"
 fetch "/me/extensions" "me-extensions.json"
+# ⌘K content search. Any two-letter word will do — the fixture tests the
+# envelope, not the hits (an empty `hits` array decodes fine too).
+fetch "/search/sessions?q=the&limit=5" "search-sessions.json"
 
 # Session detail: --session wins; otherwise the most recently updated
 # session. Includes commands + chunks — the decode-critical fixture.
