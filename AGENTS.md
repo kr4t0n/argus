@@ -853,8 +853,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   tree at all. Each `SessionRow` leads with the CLI type icon
   (`AgentTypeIcon` driven by `session.cliType`), so the user can tell a
   claude session from a codex one. The bottom `MachineList` section
-  collapses behind a chevron on its `machines` header, matching
-  `ProjectRow`'s toggle. State is `uiStore.machinesOpen` (a dedicated
+  collapses behind an arrow **centred on** its `machines` header —
+  deliberately NOT `ProjectRow`'s leading left chevron, since this
+  section is bottom-pinned furniture rather than a tree node: the arrow
+  points DOWN to push it away and UP to bring it back. It is one
+  `ChevronDown` rotated 180°, not two icons, because a 180° flip of
+  chevron-down is pixel-identical to chevron-up and keeps the direction
+  change animated. True centring on the ROW (not on the space the label
+  leaves) needs the toggle to be `absolute inset-0` under the label, which
+  also makes the whole header one hit target — hence
+  `pointer-events-none` on the label spans, so their clicks fall through,
+  and `relative` on the kebab so it paints above and keeps its own.
+  State is `uiStore.machinesOpen` (a dedicated
   persisted flag, deliberately NOT a key in `uiStore.expanded` — that map
   is project-rows only) and it defaults open. The header keeps the machine
   count and the fleet kebab visible while collapsed: the kebab is a

@@ -4,6 +4,7 @@ import {
   Archive,
   ArchiveRestore,
   ArrowUpCircle,
+  ChevronDown,
   ChevronRight,
   Eye,
   EyeOff,
@@ -552,11 +553,18 @@ function MachineList() {
 
   return (
     <div className="shrink-0 py-1.5 px-1 max-h-[40%] overflow-y-auto">
-      {/* The kebab stays a SIBLING of the toggle rather than living inside
-          it — nesting a button in a button is invalid markup and the inner
-          click would need to stop propagation to avoid also collapsing the
-          section. The count keeps the fleet size readable while collapsed. */}
-      <div className="group flex items-center px-3 py-1">
+      {/* The toggle spans the whole header (absolute inset-0) with its
+          arrow centred, so the arrow sits at the ROW's midpoint rather
+          than the midpoint of whatever space the label leaves — and the
+          whole header stays one big hit target. The label is
+          pointer-events-none so clicks on it fall through to the button
+          underneath; the kebab is `relative` (positioned, later in DOM
+          order) so it paints above and keeps its own clicks. It stays a
+          SIBLING of the toggle rather than living inside it — nesting a
+          button in a button is invalid markup and the inner click would
+          need to stop propagation to avoid also collapsing the section.
+          The count keeps the fleet size readable while collapsed. */}
+      <div className="group relative flex items-center px-3 py-1">
         <button
           onClick={() => {
             // Drop any open create-project popover on the way out: its
@@ -566,16 +574,23 @@ function MachineList() {
             toggleOpen();
           }}
           aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+          aria-label={open ? 'collapse machines' : 'expand machines'}
+          className="absolute inset-0 flex items-center justify-center text-fg-tertiary transition-colors hover:text-fg-primary"
           title={open ? 'collapse machines' : 'expand machines'}
         >
-          <ChevronRight
-            className={cn('h-3 w-3 text-fg-tertiary transition-transform', open && 'rotate-90')}
+          {/* One rotating element rather than swapping ChevronDown for
+              ChevronUp: a 180° flip of chevron-down IS chevron-up, so
+              this renders identically while the direction change stays
+              animated. Down = push the section away, up = bring it back. */}
+          <ChevronDown
+            className={cn('h-3.5 w-3.5 transition-transform', !open && 'rotate-180')}
           />
-          <span className="text-caps">machines</span>
-          <span className="text-meta text-fg-muted">({order.length})</span>
         </button>
-        <span className="ml-auto pl-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <span className="text-caps pointer-events-none">machines</span>
+        <span className="ml-1.5 text-meta text-fg-muted pointer-events-none">
+          ({order.length})
+        </span>
+        <span className="relative ml-auto pl-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <MachinesHeaderMenu />
         </span>
       </div>
