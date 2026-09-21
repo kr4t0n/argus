@@ -138,6 +138,22 @@ struct SessionSidebar: View {
                                 ForEach(group.archivedSessions) { session in
                                     sessionRow(session, archived: true)
                                 }
+                            } else {
+                                // The session on screen keeps its row once
+                                // archived (⌘D, the header menu). Deleting
+                                // the SELECTED row makes the split view's
+                                // List move its selection to a neighbour,
+                                // which yanked the detail column onto
+                                // another session — the web stays put
+                                // because its routing is URL-driven. The
+                                // row renders dimmed like any archived one
+                                // and goes away the next time the
+                                // selection moves.
+                                ForEach(group.archivedSessions.filter {
+                                    selection == .session($0.id)
+                                }) { session in
+                                    sessionRow(session, archived: true)
+                                }
                             }
                         }
                     }

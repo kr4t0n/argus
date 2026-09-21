@@ -1420,11 +1420,31 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   scene commands stay inert on the login screen without observing
   `phase` from a `Commands` body. The iPad hold-⌘ HUD lists the scene
   commands, but treat the ⌘/ sheet, not the HUD, as the authoritative
-  list. Two things to device-test before trusting the port: whether
-  UIKit's text-editing ⌘B (bold) steals the sidebar toggle while the
-  composer is focused, and that the zero-size ⌘D button below dispatches
-  on iOS 17 — if it doesn't, the fallback is an always-visible toolbar
-  archive button.
+  list. Verified on an iPad with a hardware keyboard (Sep 2026): the
+  scene commands, ⌘B, the zero-size ⌘D button below and the Escape
+  paths all dispatch. Still unverified: whether UIKit's text-editing ⌘B
+  (bold) steals the sidebar toggle while the composer is focused.
+- **Three things the first iPad pass found, and the shape of each fix.**
+  (1) A sheet's body keeps rendering through its dismiss animation, and
+  `paletteMode` is already nil by then — so `PaletteSheet` renders the
+  LAST non-nil mode (`shown`) and `CommandPaletteSheet` takes its mode
+  as a parameter instead of reading the store. Without that, closing
+  the help sheet flashed the search palette on the way out, and closing
+  ⌘K would have snapped to ⌘P rows mid-animation. Any future sheet keyed
+  on a nullable store field needs the same latch. (2) The palette is a
+  bare `ScrollView` on a translucent sheet surface, so the detail
+  column's colours bled through it (a dark green) while the help
+  sheet's `List` painted opaque grouped grey; `presentationBackground
+  (Color(.systemGroupedBackground))` on `PaletteSheet` gives all three
+  modes one surface. (3) `List(selection:)` in the split view moves its
+  selection to a neighbour when the SELECTED row is deleted from its
+  data, so archiving the open session with the project's eye toggle off
+  yanked the detail column onto another session — the opposite of the
+  web, where routing is URL-driven and the panel stays. The sidebar now
+  keeps rendering the selected session's row (dimmed, as archived) even
+  while archived sessions are hidden; it disappears once the selection
+  moves away. Moves are fine — rows re-sort on every status event and
+  never jumped — only deletion of the selected row triggers it.
 - **⌘D is a zero-size `opacity(0)` button, Escape has three homes, and
   type-to-focus is deliberately not ported.** ⌘D lives in `SessionView`'s
   background rather than on the menu's Archive item: a real view in the

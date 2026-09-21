@@ -61,6 +61,13 @@ struct MainSplitView: View {
         // content in place rather than stacking a second sheet.
         .sheet(isPresented: paletteShown) {
             PaletteSheet()
+                // One opaque surface for all three modes. The help sheet
+                // is a List and paints the grouped grey itself; the
+                // palette is a bare ScrollView, and on a translucent
+                // sheet background the detail column's colours bled
+                // through it (a dark green on iPad) while the help sheet
+                // next to it read grey.
+                .presentationBackground(Color(.systemGroupedBackground))
         }
     }
 

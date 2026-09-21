@@ -34,11 +34,25 @@ struct ArgusCommands: Commands {
 struct PaletteSheet: View {
     @Environment(AppModel.self) private var app
 
+    /// The mode last shown. `app.paletteMode` goes nil the moment the
+    /// sheet starts dismissing, and this body keeps rendering through
+    /// the dismiss animation — read the store directly and the outgoing
+    /// help sheet re-rendered as the search palette on its way out (seen
+    /// on iPad). Only non-nil modes are recorded, so whatever was up
+    /// stays up until the sheet is gone.
+    @State private var shown: PaletteMode = .session
+
     var body: some View {
-        if app.paletteMode == .help {
-            ShortcutsHelpSheet()
-        } else {
-            CommandPaletteSheet()
+        let mode = app.paletteMode ?? shown
+        Group {
+            if mode == .help {
+                ShortcutsHelpSheet()
+            } else {
+                CommandPaletteSheet(mode: mode)
+            }
+        }
+        .onChange(of: app.paletteMode, initial: true) {
+            if let live = app.paletteMode { shown = live }
         }
     }
 }
@@ -62,6 +76,12 @@ struct CommandPaletteSheet: View {
     @Environment(AppModel.self) private var app
     @Environment(\.horizontalSizeClass) private var sizeClass
 
+    /// Handed in by `PaletteSheet` rather than read from the store, for
+    /// the same reason it records the last mode: the store is nil while
+    /// the sheet dismisses, and a ⌘K page would otherwise snap to ⌘P
+    /// rows during the animation.
+    let mode: PaletteMode
+
     @State private var query = ""
     @State private var cursor = 0
     @State private var hits: [SessionSearchHitDTO] = []
@@ -78,7 +98,7 @@ struct CommandPaletteSheet: View {
     /// Rows shown in session mode, including the zero-query recents list.
     private static let sessionLimit = 12
 
-    private var sessionMode: Bool { app.paletteMode != .content }
+    private var sessionMode: Bool { mode != .content }
 
     private var trimmedQuery: String {
         query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -140,7 +160,7 @@ struct CommandPaletteSheet: View {
         }
         .onDisappear { searchTask?.cancel() }
         .onChange(of: query) { runContentSearch() }
-        .onChange(of: app.paletteMode) {
+        .onChange(of: mode) {
             // Mode switch: same words, other index.
             cursor = 0
             runContentSearch()
