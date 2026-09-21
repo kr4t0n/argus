@@ -366,8 +366,9 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   `SessionView`; every chord is ⌘-only so Ctrl chords keep reaching the
   terminal's shell; type-to-focus is deliberately not ported (IME).
   `scripts/capture-ios-fixtures.sh` now also captures
-  `search-sessions.json`; its decoding test is skipped until the file
-  exists.
+  `search-sessions.json` (committed, snippet text scrubbed to
+  placeholders — the test checks the envelope and the repo is public);
+  its decoding test is `.enabled(if:)` the file exists.
 - **Mermaid diagrams (this):** ```mermaid fences in the final answer
   render as diagrams with a Source toggle, the same affordance as
   ```html — `MermaidBlock` hosts a WKWebView that loads the bundled

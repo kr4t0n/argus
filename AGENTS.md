@@ -1448,7 +1448,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   is bound to `SessionSidebar.listSelection`, a filtered `Binding`
   whose setter drops writes while the pin (a 500 ms window) is in
   force. Reads are untouched, so programmatic navigation still
-  highlights and pushes. A time window rather than a "cleared after
+  highlights and pushes. Confirmed on the iPad: the row hides at once
+  and the detail column stays. A time window rather than a "cleared after
   the list updates" flag because the write lands in a UIKit callback
   with no SwiftUI hook to clear on. A first cut kept the archived row
   rendered (dimmed) while selected to avoid the deletion altogether;
