@@ -199,19 +199,6 @@ export function UserPanel() {
                 control={<NotesExtensionToggle />}
               />
               <Row
-                title="Progress"
-                description={
-                  <>
-                    Adds a Progress tab to the session right panel that lists live background tasks
-                    running in the project. Wrap any long-running command with{' '}
-                    <code className="font-mono text-[12px]">argus-bg -- &lt;command&gt;</code> and
-                    its tqdm-style progress shows up here in real time, even after you background it
-                    with <code className="font-mono text-[12px]">&amp;</code>.
-                  </>
-                }
-                control={<ProgressExtensionToggle />}
-              />
-              <Row
                 title="Diff"
                 description="Adds a Diff tab to the session right panel showing every file the agent changed in the most recent turn, as a per-file diff. Updates live as the turn edits files."
                 control={<DiffExtensionToggle />}
@@ -441,7 +428,6 @@ function NotificationToggle() {
 function NotesExtensionToggle() {
   const enabled = useUIStore((s) => s.notesExtensionEnabled);
   const setEnabled = useUIStore((s) => s.setNotesExtensionEnabled);
-  const progressEnabled = useUIStore((s) => s.progressExtensionEnabled);
   const diffEnabled = useUIStore((s) => s.diffExtensionEnabled);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -457,57 +443,14 @@ function NotesExtensionToggle() {
     setEnabled(next);
     setBusy(true);
     try {
-      await api.setMyExtensions({ notes: next, progress: progressEnabled, diff: diffEnabled });
+      await api.setMyExtensions({ notes: next, diff: diffEnabled });
     } catch (err) {
       setEnabled(!next);
       setError(err instanceof ApiError ? err.message : 'failed to save');
     } finally {
       setBusy(false);
     }
-  }, [enabled, setEnabled, progressEnabled, diffEnabled]);
-
-  return (
-    <div className="flex flex-col items-end gap-2">
-      <Button onClick={onToggle} disabled={busy} size="sm" variant={enabled ? 'subtle' : 'default'}>
-        {busy ? (
-          <>
-            <Loader2 className="h-3 w-3 animate-spin" /> saving…
-          </>
-        ) : enabled ? (
-          'Disable'
-        ) : (
-          'Enable'
-        )}
-      </Button>
-      {error && (
-        <p className="max-w-xs text-right text-xs text-red-500 dark:text-red-400">{error}</p>
-      )}
-    </div>
-  );
-}
-
-function ProgressExtensionToggle() {
-  const enabled = useUIStore((s) => s.progressExtensionEnabled);
-  const setEnabled = useUIStore((s) => s.setProgressExtensionEnabled);
-  const notesEnabled = useUIStore((s) => s.notesExtensionEnabled);
-  const diffEnabled = useUIStore((s) => s.diffExtensionEnabled);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const onToggle = useCallback(async () => {
-    const next = !enabled;
-    setError(null);
-    setEnabled(next);
-    setBusy(true);
-    try {
-      await api.setMyExtensions({ notes: notesEnabled, progress: next, diff: diffEnabled });
-    } catch (err) {
-      setEnabled(!next);
-      setError(err instanceof ApiError ? err.message : 'failed to save');
-    } finally {
-      setBusy(false);
-    }
-  }, [enabled, setEnabled, notesEnabled, diffEnabled]);
+  }, [enabled, setEnabled, diffEnabled]);
 
   return (
     <div className="flex flex-col items-end gap-2">
@@ -533,7 +476,6 @@ function DiffExtensionToggle() {
   const enabled = useUIStore((s) => s.diffExtensionEnabled);
   const setEnabled = useUIStore((s) => s.setDiffExtensionEnabled);
   const notesEnabled = useUIStore((s) => s.notesExtensionEnabled);
-  const progressEnabled = useUIStore((s) => s.progressExtensionEnabled);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -543,14 +485,14 @@ function DiffExtensionToggle() {
     setEnabled(next);
     setBusy(true);
     try {
-      await api.setMyExtensions({ notes: notesEnabled, progress: progressEnabled, diff: next });
+      await api.setMyExtensions({ notes: notesEnabled, diff: next });
     } catch (err) {
       setEnabled(!next);
       setError(err instanceof ApiError ? err.message : 'failed to save');
     } finally {
       setBusy(false);
     }
-  }, [enabled, setEnabled, notesEnabled, progressEnabled]);
+  }, [enabled, setEnabled, notesEnabled]);
 
   return (
     <div className="flex flex-col items-end gap-2">

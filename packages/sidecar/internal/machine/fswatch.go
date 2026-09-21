@@ -91,9 +91,9 @@ func (w *fsWatcher) Close() {
 
 // ignoredDir reports whether abspath (or one of its parents between
 // root and itself) should be skipped. We always skip `.git` (handled
-// by the dedicated gitWatcher) and `.argus` (handled by the dedicated
-// progressWatcher) — both would otherwise produce noisy generic
-// FSChangedEvents that are already covered by a more specific channel.
+// by the dedicated gitWatcher — generic FSChangedEvents there would be
+// noise on top of git-changed) and `.argus` (sidecar-private state such
+// as staged attachment uploads, never part of the project tree).
 func (w *fsWatcher) ignoredDir(abspath string) bool {
 	if abspath == w.root {
 		return false

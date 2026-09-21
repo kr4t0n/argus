@@ -115,7 +115,6 @@ export default function App() {
       .then((e) => {
         const ui = useUIStore.getState();
         ui.setNotesExtensionEnabled(e.notes);
-        ui.setProgressExtensionEnabled(e.progress);
         ui.setDiffExtensionEnabled(e.diff);
       })
       .catch(() => {});

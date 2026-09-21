@@ -1,16 +1,15 @@
 // Package machine — per-workdir watcher registry.
 //
-// Phase 3 of docs/plan-agent-to-runners.md moves the fs / git / progress
-// watchers off the per-agent supervisors onto a single registry keyed by
+// Phase 3 of docs/plan-agent-to-runners.md moves the fs / git watchers
+// off the per-agent supervisors onto a single registry keyed by
 // workdir, driven by the server's sync-projects allowlist. One watcher
-// trio per project directory kills the old duplicate inotify watches
-// (two agents sharing a workdir used to double every fs-changed /
-// background-task event).
+// pair per project directory kills the old duplicate inotify watches
+// (two agents sharing a workdir used to double every fs-changed event).
 //
 // Events carry WorkingDir only — the Agent entity is retired, so these
-// shapes have no agentId (see FSChangedEvent / GitChangedEvent / the
-// background-task section in protocol.go), and the server's project-room
-// fanout routes on workingDir.
+// shapes have no agentId (see FSChangedEvent / GitChangedEvent in
+// protocol.go), and the server's project-room fanout routes on
+// workingDir.
 package machine
 
 import (
@@ -23,10 +22,10 @@ import (
 	"github.com/kr4t0n/argus/sidecar/internal/protocol"
 )
 
-// watchRegistry owns one watcher set (fs + git + progress) per
-// allowlisted workdir. Reconcile is the only mutation surface: it
-// diffs the desired set against what's running, starts watchers for
-// new dirs, and closes watchers for removed ones.
+// watchRegistry owns one watcher set (fs + git) per allowlisted
+// workdir. Reconcile is the only mutation surface: it diffs the desired
+// set against what's running, starts watchers for new dirs, and closes
+// watchers for removed ones.
 type watchRegistry struct {
 	machine string
 	bus     *bus.Bus
@@ -36,7 +35,7 @@ type watchRegistry struct {
 	sets map[string]*watcherSet // workdir → running set
 }
 
-// watcherSet is the running trio for one workdir. cancel tears the set
+// watcherSet is the running pair for one workdir. cancel tears the set
 // down; the bring-up goroutine owns the watcher handles and closes them
 // on ctx.Done(), so the fields are touched from a single goroutine —
 // same ownership model the supervisors used.
@@ -94,7 +93,7 @@ func (wr *watchRegistry) Reconcile(ctx context.Context, workdirs []string) {
 	}
 }
 
-// runSet brings up (and eventually closes) the watcher trio for one
+// runSet brings up (and eventually closes) the watcher pair for one
 // workdir. Startup is deliberately async off Reconcile's caller:
 // newFSWatcher walks the workingDir and registers inotify watches
 // *synchronously*, which on a large tree takes many seconds — long
@@ -105,7 +104,6 @@ func (wr *watchRegistry) Reconcile(ctx context.Context, workdirs []string) {
 func (wr *watchRegistry) runSet(ctx context.Context, workdir string) {
 	fsw := wr.startFSWatcher(ctx, workdir)
 	gitw := wr.startGitWatcher(ctx, workdir)
-	progw := wr.startProgressWatcher(ctx, workdir)
 
 	<-ctx.Done()
 	if fsw != nil {
@@ -113,9 +111,6 @@ func (wr *watchRegistry) runSet(ctx context.Context, workdir string) {
 	}
 	if gitw != nil {
 		gitw.Close()
-	}
-	if progw != nil {
-		progw.Close()
 	}
 }
 
@@ -158,75 +153,4 @@ func (wr *watchRegistry) startGitWatcher(ctx context.Context, workdir string) *g
 	}
 	// Non-repo workingDir returns (nil, nil) — quiet, expected.
 	return w
-}
-
-// startProgressWatcher brings up the argus-bg JSONL tailer for one
-// workdir so background-task progress lands on the background stream.
-// Failures (MkdirAll denied, fsnotify out of inotify watches) downgrade
-// silently — the Progress tab stays empty, everything else runs.
-func (wr *watchRegistry) startProgressWatcher(ctx context.Context, workdir string) *progressWatcher {
-	w, err := newProgressWatcher(ctx, workdir, func(ev bgEvent) {
-		publishBackgroundTaskEvent(ctx, wr.bus, wr.machine, workdir, ev)
-	}, wr.log)
-	if err != nil {
-		wr.log.Printf("watchers %s: progress watcher disabled: %v", workdir, err)
-		return nil
-	}
-	return w
-}
-
-// publishBackgroundTaskEvent turns one bgEvent (the JSONL wire format
-// argus-bg writes) into the matching protocol event and publishes it
-// on the background stream. Unknown event types are dropped silently
-// — newer argus-bg versions might emit kinds this sidecar doesn't
-// recognize, and we don't want one stray line to surface as noise.
-//
-// The events are scoped by (machineId, workingDir, taskId); the Agent
-// entity is retired, so they carry no agentId.
-func publishBackgroundTaskEvent(ctx context.Context, b *bus.Bus, machineID, workingDir string, ev bgEvent) {
-	now := time.Now().UnixMilli()
-	switch ev.Type {
-	case "start":
-		_ = b.Publish(ctx, protocol.BackgroundTaskStream(), protocol.BackgroundTaskStartedEvent{
-			Kind:       "background-task-started",
-			MachineID:  machineID,
-			WorkingDir: workingDir,
-			TaskID:     ev.ID,
-			Label:      ev.Label,
-			Cmd:        ev.Cmd,
-			PID:        ev.PID,
-			StartedAt:  ev.StartedAt,
-			TS:         now,
-		})
-	case "progress":
-		_ = b.Publish(ctx, protocol.BackgroundTaskStream(), protocol.BackgroundTaskProgressEvent{
-			Kind:       "background-task-progress",
-			MachineID:  machineID,
-			WorkingDir: workingDir,
-			TaskID:     ev.ID,
-			Label:      ev.Label,
-			Cmd:        ev.Cmd,
-			Current:    ev.Current,
-			Total:      ev.Total,
-			Percent:    ev.Percent,
-			EtaSeconds: ev.EtaSeconds,
-			Rate:       ev.Rate,
-			Unit:       ev.Unit,
-			Desc:       ev.Desc,
-			TS:         now,
-		})
-	case "end":
-		_ = b.Publish(ctx, protocol.BackgroundTaskStream(), protocol.BackgroundTaskEndedEvent{
-			Kind:       "background-task-ended",
-			MachineID:  machineID,
-			WorkingDir: workingDir,
-			TaskID:     ev.ID,
-			Label:      ev.Label,
-			Cmd:        ev.Cmd,
-			ExitCode:   ev.ExitCode,
-			Status:     ev.Status,
-			EndedAt:    ev.EndedAt,
-			TS:         now,
-		})
-	}
 }

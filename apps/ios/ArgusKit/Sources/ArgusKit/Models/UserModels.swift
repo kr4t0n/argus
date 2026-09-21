@@ -117,12 +117,10 @@ public struct UserQuotaResponse: Decodable, Sendable {
 /// PUT sends the full set (no server-side merge).
 public struct UserExtensions: Codable, Equatable, Sendable {
     public var notes: Bool
-    public var progress: Bool
     public var diff: Bool
 
-    public init(notes: Bool = false, progress: Bool = false, diff: Bool = false) {
+    public init(notes: Bool = false, diff: Bool = false) {
         self.notes = notes
-        self.progress = progress
         self.diff = diff
     }
 }

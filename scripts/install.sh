@@ -98,13 +98,9 @@ detect_arch() {
 OS=$(detect_os)
 ARCH=$(detect_arch)
 ASSET="${BIN_NAME}-${OS}-${ARCH}"
-# argus-bg is the per-shell wrapper that exposes a long-running
-# command's tqdm progress to the dashboard's Progress tab. It ships
-# alongside the sidecar; older releases predate it, so the install
-# pass below treats it as optional and gracefully skips the install
-# when the asset isn't in SHASUMS256.txt.
-BG_ASSET="argus-bg-${OS}-${ARCH}"
-BG_BIN_NAME="argus-bg"
+# Releases up to 0.3.x also shipped an `argus-bg` companion binary next
+# to the sidecar. It is retired; an upgrade sweeps any leftover copy.
+LEGACY_BG_BIN_NAME="argus-bg"
 
 # ── Pick a downloader (curl > wget) ───────────────────────────────────
 if command -v curl >/dev/null 2>&1; then
@@ -335,8 +331,6 @@ done
 info "installing $TAG ($OS/$ARCH) → $INSTALL_DIR/$BIN_NAME"
 
 # ── Install one asset: download → verify → atomic mv ─────────────────
-# Refactored from the original single-binary path so we can install
-# argus-bg the same way without duplicating the SHA-256 dance.
 install_asset() {
     _asset="$1"; _install_as="$2"
     _url=$(asset_url "$_asset")
@@ -366,17 +360,15 @@ fi
 
 install_asset "$ASSET" "$BIN_NAME"
 
-# Best-effort install of argus-bg. The Progress dashboard tab depends
-# on it being on PATH inside the sidecar's spawned shells — the
-# sidecar prepends its own bin dir to PATH so dropping argus-bg here
-# is sufficient. Older releases predate this binary; skip cleanly so
-# the rest of the install isn't broken for them.
-if awk -v a="$BG_ASSET" '$2==a {found=1} END{exit !found}' "$TMP_DIR/SHASUMS256.txt"; then
-    install_asset "$BG_ASSET" "$BG_BIN_NAME"
-    INSTALLED_BG=1
-else
-    warn "release $TAG does not ship $BG_ASSET — Progress tab will be empty until you upgrade"
-    INSTALLED_BG=0
+# Sweep the retired argus-bg companion an older install may have left
+# next to the sidecar. Nothing reads it any more; best-effort so a
+# permissions hiccup never fails an otherwise-complete install.
+if [ -e "$INSTALL_DIR/$LEGACY_BG_BIN_NAME" ]; then
+    if rm -f "$INSTALL_DIR/$LEGACY_BG_BIN_NAME" 2>/dev/null; then
+        info "removed retired $LEGACY_BG_BIN_NAME from $INSTALL_DIR"
+    else
+        warn "could not remove retired $INSTALL_DIR/$LEGACY_BG_BIN_NAME — delete it by hand"
+    fi
 fi
 
 # ── Post-install: PATH check + version banner ─────────────────────────
@@ -384,11 +376,9 @@ case ":$PATH:" in
     *":$INSTALL_DIR:"*)
         info "$BIN_NAME installed:"
         "$INSTALL_DIR/$BIN_NAME" version
-        [ "$INSTALLED_BG" = "1" ] && info "$BG_BIN_NAME installed at $INSTALL_DIR/$BG_BIN_NAME"
         ;;
     *)
         info "$BIN_NAME installed at $INSTALL_DIR/$BIN_NAME"
-        [ "$INSTALLED_BG" = "1" ] && info "$BG_BIN_NAME installed at $INSTALL_DIR/$BG_BIN_NAME"
         warn "$INSTALL_DIR is not on your PATH. Add this to your shell profile:"
         printf '\n    export PATH="%s:$PATH"\n\n' "$INSTALL_DIR" >&2
         printf '%sThen reload your shell, or invoke directly:%s %s/%s version\n' \

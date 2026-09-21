@@ -229,10 +229,10 @@ func TestPickLatestReleaseFeedNoMatch(t *testing.T) {
 }
 
 // fakeRelease spins up an httptest server serving a single binary asset plus
-// a SHASUMS256.txt, and returns a *release pointing at them. assetBase lets
-// each test name the binary asset for whatever component it's exercising
-// (argus-sidecar / argus-bg). sums overrides the checksum file body so the
-// mismatch path can be tested; pass "" to serve the correct checksum.
+// a SHASUMS256.txt, and returns a *release pointing at them. assetBase names
+// the binary asset (`<assetBase>-<goos>-<goarch>`). sums overrides the
+// checksum file body so the mismatch path can be tested; pass "" to serve
+// the correct checksum.
 func fakeRelease(t *testing.T, assetBase string, payload []byte, sums string) (*release, *http.Client, func()) {
 	t.Helper()
 	binName := fmt.Sprintf("%s-%s-%s", assetBase, runtime.GOOS, runtime.GOARCH)
@@ -261,17 +261,16 @@ func fakeRelease(t *testing.T, assetBase string, payload []byte, sums string) (*
 }
 
 // TestInstallFromRelease exercises the full download → checksum-verify →
-// chmod → atomic-install primitive that backs both Update and
-// DownloadCompanion. The destination need not pre-exist (the argus-bg case),
-// so we install into a fresh temp path.
+// chmod → atomic-install primitive that backs Update. The destination need
+// not pre-exist, so we install into a fresh temp path.
 func TestInstallFromRelease(t *testing.T) {
-	payload := []byte("#!/bin/sh\necho fake argus-bg\n")
-	rel, client, closeSrv := fakeRelease(t, "argus-bg", payload, "")
+	payload := []byte("#!/bin/sh\necho fake argus-sidecar\n")
+	rel, client, closeSrv := fakeRelease(t, "argus-sidecar", payload, "")
 	defer closeSrv()
 
-	dest := filepath.Join(t.TempDir(), "argus-bg")
+	dest := filepath.Join(t.TempDir(), "argus-sidecar")
 	logger := log.New(io.Discard, "", 0)
-	if err := installFromRelease(context.Background(), client, logger, rel, "argus-bg", dest); err != nil {
+	if err := installFromRelease(context.Background(), client, logger, rel, "argus-sidecar", dest); err != nil {
 		t.Fatalf("installFromRelease: %v", err)
 	}
 
@@ -295,15 +294,15 @@ func TestInstallFromRelease(t *testing.T) {
 // leave nothing behind) when the downloaded bytes don't match SHASUMS256.txt.
 func TestInstallFromReleaseChecksumMismatch(t *testing.T) {
 	payload := []byte("real payload")
-	binName := fmt.Sprintf("argus-bg-%s-%s", runtime.GOOS, runtime.GOARCH)
+	binName := fmt.Sprintf("argus-sidecar-%s-%s", runtime.GOOS, runtime.GOARCH)
 	// A syntactically valid but wrong checksum line.
 	wrongSums := fmt.Sprintf("%064x  %s\n", 0, binName)
-	rel, client, closeSrv := fakeRelease(t, "argus-bg", payload, wrongSums)
+	rel, client, closeSrv := fakeRelease(t, "argus-sidecar", payload, wrongSums)
 	defer closeSrv()
 
-	dest := filepath.Join(t.TempDir(), "argus-bg")
+	dest := filepath.Join(t.TempDir(), "argus-sidecar")
 	logger := log.New(io.Discard, "", 0)
-	err := installFromRelease(context.Background(), client, logger, rel, "argus-bg", dest)
+	err := installFromRelease(context.Background(), client, logger, rel, "argus-sidecar", dest)
 	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("err = %v, want checksum mismatch", err)
 	}
@@ -313,70 +312,33 @@ func TestInstallFromReleaseChecksumMismatch(t *testing.T) {
 }
 
 // TestInstallFromReleaseMissingAsset covers a release that lacks the binary
-// for this OS/arch (e.g. an old release published before argus-bg shipped):
-// we surface a clear error rather than panicking or installing garbage.
+// for this OS/arch (e.g. a release built for fewer platforms): we surface a
+// clear error rather than panicking or installing garbage.
 func TestInstallFromReleaseMissingAsset(t *testing.T) {
 	rel := &release{TagName: "argus-sidecar-v1.2.3", Assets: nil}
 	logger := log.New(io.Discard, "", 0)
-	err := installFromRelease(context.Background(), &http.Client{}, logger, rel, "argus-bg", filepath.Join(t.TempDir(), "argus-bg"))
+	err := installFromRelease(context.Background(), &http.Client{}, logger, rel, "argus-sidecar", filepath.Join(t.TempDir(), "argus-sidecar"))
 	if err == nil || !strings.Contains(err.Error(), "no asset named") {
 		t.Fatalf("err = %v, want missing-asset error", err)
 	}
 }
 
-// TestParseCompanionVersion pins the "<name> <version> <goos>/<goarch>"
-// parsing both binaries' `version` output shares — including extra
-// whitespace — and confirms unparseable lines are rejected (so the probe
-// fails safe rather than returning a bogus version).
-func TestParseCompanionVersion(t *testing.T) {
-	ok := []struct{ in, want string }{
-		{"argus-bg argus-sidecar-v1.2.3 linux/amd64\n", "argus-sidecar-v1.2.3"},
-		{"argus-bg dev darwin/arm64\n", "dev"},
-		{"  argus-bg   argus-sidecar-v9.9.9   linux/amd64  \n", "argus-sidecar-v9.9.9"},
+// TestRemoveLegacyCompanion covers the post-swap sweep of the retired
+// argus-bg sibling: an installed copy is deleted, and a missing one is the
+// quiet no-op fresh installs hit every time.
+func TestRemoveLegacyCompanion(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "argus-bg")
+	if err := os.WriteFile(legacy, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("seed legacy companion: %v", err)
 	}
-	for _, tc := range ok {
-		got, err := parseCompanionVersion(tc.in)
-		if err != nil || got != tc.want {
-			t.Errorf("parseCompanionVersion(%q) = (%q, %v), want (%q, nil)", tc.in, got, err, tc.want)
-		}
-	}
-	bad := []string{"", "\n", "argus-bg\n", "   \n"}
-	for _, in := range bad {
-		if got, err := parseCompanionVersion(in); err == nil {
-			t.Errorf("parseCompanionVersion(%q) = (%q, nil), want error", in, got)
-		}
-	}
-}
+	logger := log.New(io.Discard, "", 0)
 
-// TestCompanionUpToDateMissing exercises the fail-safe path: with no companion
-// binary next to the test executable, the version probe fails and
-// CompanionUpToDate must report "not up to date" (so the caller re-installs)
-// with an empty detected version.
-func TestCompanionUpToDateMissing(t *testing.T) {
-	upToDate, installed := CompanionUpToDate("argus-bg-nonexistent-xyz", "argus-sidecar-v1.0.0")
-	if upToDate {
-		t.Errorf("CompanionUpToDate(missing) upToDate = true, want false")
+	removeLegacyCompanion(logger, dir)
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("legacy companion still present after sweep, stat err = %v", err)
 	}
-	if installed != "" {
-		t.Errorf("CompanionUpToDate(missing) installed = %q, want empty", installed)
-	}
-}
 
-// TestCompanionPath confirms a companion resolves to a sibling of the running
-// executable (the directory the daemon prepends to PATH for spawned shells).
-func TestCompanionPath(t *testing.T) {
-	p, err := CompanionPath("argus-bg")
-	if err != nil {
-		t.Fatalf("CompanionPath: %v", err)
-	}
-	if filepath.Base(p) != "argus-bg" {
-		t.Errorf("CompanionPath base = %q, want argus-bg", filepath.Base(p))
-	}
-	exe, err := resolveExe()
-	if err != nil {
-		t.Fatalf("resolveExe: %v", err)
-	}
-	if filepath.Dir(p) != filepath.Dir(exe) {
-		t.Errorf("CompanionPath dir = %q, want %q", filepath.Dir(p), filepath.Dir(exe))
-	}
+	// Second pass: nothing to remove, must not panic or log an error path.
+	removeLegacyCompanion(logger, dir)
 }

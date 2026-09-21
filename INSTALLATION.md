@@ -452,15 +452,9 @@ decide up front. Nothing running means nothing to do.
 Like the installer, `update` resolves releases without touching
 `api.github.com` unless `GITHUB_TOKEN` is set.
 
-`update` also refreshes the `argus-bg` companion (the background-task
-progress wrapper) from the same release, so the two stay in lockstep. To
-(re)install just `argus-bg` — e.g. on an older install that predates it,
-or to repair a missing copy — without touching the sidecar:
-
-```bash
-argus-sidecar download-bg         # installs argus-bg next to the sidecar
-argus-bg version                  # print the baked-in tag
-```
+Sidecars up to 0.3.x also shipped an `argus-bg` companion binary next
+to the sidecar. It is retired: `update` (and the installer) remove any
+leftover copy, and nothing else needs to change on the host.
 
 ### Step 6: Initialize the sidecar
 
@@ -762,7 +756,6 @@ These can be overridden with environment variables on the sidecar
 | `argus-server`  | `docker compose pull server && docker compose up -d server`. Migrations apply on boot.    |
 | `argus-web`     | `docker compose pull web && docker compose up -d web`.                                    |
 | `argus-sidecar` | `argus-sidecar update` (downloads, verifies, atomic swap, then offers to restart the running service). |
-| `argus-bg`      | Refreshed automatically by `argus-sidecar update`; or `argus-sidecar download-bg` to (re)install it on its own. |
 
 
 `:latest` follows `main`. For controlled upgrades, pin to `:X.Y.Z` in

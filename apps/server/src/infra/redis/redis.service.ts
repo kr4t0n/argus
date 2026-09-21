@@ -63,8 +63,8 @@ function redactUrl(url: string): string {
  * 'error', so the consumer loop awaiting it parks permanently: nothing in
  * the logs, no reconnect, the consumer simply stops issuing reads.
  * Observed live — the lifecycle and result readers sat at 52 minutes idle
- * while the background reader on a sibling connection stayed at 2s, so
- * every machine showed offline while the sidecars were polling happily.
+ * while a sibling connection in the same process stayed at 2s, so every
+ * machine showed offline while the sidecars were polling happily.
  *
  * Three layers, each covering the previous one's blind spot:
  *
@@ -102,7 +102,6 @@ const BLOCKING_TIMEOUT_GRACE_MS = 5_000;
  *   - `cmd`: for XADD/XACK/DEL/etc. (shared)
  *   - `read`: the lifecycle+notify loop (MachineService)
  *   - `readResults`: the result-ingestor loop
- *   - `readBackground`: the background-task loop
  *
  * ioredis requires a dedicated connection for blocking commands because
  * each XREAD/XREADGROUP call with BLOCK parks the socket — and two
@@ -110,7 +109,7 @@ const BLOCKING_TIMEOUT_GRACE_MS = 5_000;
  * window (up to 5s of added latency per hop). That was masked while
  * per-agent heartbeats kept the lifecycle stream busy; with runner
  * sidecars (Phase 3) the steady state is quiet, so every loop gets its
- * own socket. Three extra connections per server process — noise.
+ * own socket. Two extra connections per server process — noise.
  */
 @Injectable()
 export class RedisService implements OnModuleInit, OnModuleDestroy {
@@ -118,7 +117,6 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   private _cmd!: Redis;
   private _read!: Redis;
   private _readResults!: Redis;
-  private _readBackground!: Redis;
   /** Set on shutdown so the expected teardown doesn't log as churn. */
   private closing = false;
 
@@ -138,7 +136,6 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     this._cmd = this.open(url, opts, 'cmd');
     this._read = this.open(url, opts, 'read');
     this._readResults = this.open(url, opts, 'readResults');
-    this._readBackground = this.open(url, opts, 'readBackground');
     await this._cmd.ping();
     this.logger.log(`Connected to ${redactUrl(url)}`);
   }
@@ -171,7 +168,6 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this._cmd?.quit();
     await this._read?.quit();
     await this._readResults?.quit();
-    await this._readBackground?.quit();
   }
 
   get cmd(): Redis {
@@ -184,10 +180,6 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
   get readResults(): Redis {
     return this._readResults;
-  }
-
-  get readBackground(): Redis {
-    return this._readBackground;
   }
 
   /** Publish a JSON payload as a single-field `data` entry on a stream.

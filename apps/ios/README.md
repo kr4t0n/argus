@@ -6,7 +6,7 @@ namespace as the web app and never touches the Go sidecar.
 
 > Status: **Feature-complete** (2026-07-17), all of it device-verified:
 > streaming transcript + prompt queue + attachments, iPad three-column
-> layout, inspector (Commits / Files / Terminal / Note / Progress /
+> layout, inspector (Commits / Files / Terminal / Note /
 > Diff), fleet + account panels, creation flows, APNs turn-completion
 > alerts with **cross-device read-sync** (read a session anywhere, the
 > phone banner withdraws), lock-screen **Live Activities**, and an
@@ -208,8 +208,8 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   `POST/DELETE /me/devices`, HTTP/2 APNs sender in the result-ingestor;
   iOS: registration + settings toggle + tap deep-link + on-screen
   suppression.
-- **Post-Phase-4 (done):** inspector parity (Note + Progress tabs, web
-  tab order/gating) and the interactive terminal (SwiftTerm over the
+- **Post-Phase-4 (done):** inspector parity (Note tab, web tab
+  order/gating) and the interactive terminal (SwiftTerm over the
   `terminal:*` socket events, lazy-opened per inspector).
 - **Live Activity (done):** a lock-screen / Dynamic Island card for a
   running turn — session title, live tool count + last tool, on-device

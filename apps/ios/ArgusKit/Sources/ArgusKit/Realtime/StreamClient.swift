@@ -45,14 +45,6 @@ public struct GitChangedPayload: Decodable, Equatable, Sendable {
     public let workingDir: String?
 }
 
-/// The server's retention window for an ended task elapsed (or a user
-/// dismissed it) — drop the row.
-public struct BackgroundTaskRemovedPayload: Decodable, Equatable, Sendable {
-    public let machineId: String
-    public let workingDir: String
-    public let taskId: String
-}
-
 /// One chunk of PTY output. `data` is base64 raw bytes; `seq` is the
 /// duplicate guard (feed strictly increasing seqs only).
 public struct TerminalOutputPayload: Decodable, Equatable, Sendable {
@@ -68,8 +60,8 @@ public struct TerminalClosedPayload: Decodable, Equatable, Sendable {
 }
 
 /// One live event from the `/stream` namespace — the Phase-1 subset plus
-/// fleet upkeep. Terminal, background-task, and sidecar-update events are
-/// wired in later phases.
+/// fleet upkeep. Terminal and sidecar-update events are wired in later
+/// phases.
 public enum ServerEvent: Sendable {
     case connected
     case disconnected
@@ -92,11 +84,6 @@ public enum ServerEvent: Sendable {
 
     case fsChanged(FSChangedPayload)
     case gitChanged(GitChangedPayload)
-
-    /// Scoped to `project:<machineId>:<workingDir>` rooms
-    /// (`subscribe:project`).
-    case backgroundTaskUpdated(BackgroundTaskDTO)
-    case backgroundTaskRemoved(BackgroundTaskRemovedPayload)
 
     /// created/updated arrive on the user room; output/closed on the
     /// `terminal:{id}` room (`subscribe:terminal`).
@@ -281,8 +268,6 @@ public final class StreamClient {
         on(socket, "project:upsert") { .projectUpsert($0) }
         on(socket, "fs:changed") { .fsChanged($0) }
         on(socket, "git:changed") { .gitChanged($0) }
-        on(socket, "background-task:updated") { .backgroundTaskUpdated($0) }
-        on(socket, "background-task:removed") { .backgroundTaskRemoved($0) }
         on(socket, "terminal:created") { .terminalCreated($0) }
         on(socket, "terminal:updated") { .terminalUpdated($0) }
         on(socket, "terminal:output") { .terminalOutput($0) }

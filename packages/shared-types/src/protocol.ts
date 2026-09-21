@@ -352,97 +352,6 @@ export interface GitChangedEvent {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Background task progress (sidecar → server)
-//
-// Commands wrapped by `argus-bg` (the sidecar's tqdm-aware shell
-// wrapper) write a JSONL event stream into
-// `<workingDir>/.argus/progress/<taskId>.jsonl` as they run. The
-// sidecar's progress watcher (parallel to fs / git watchers) tails
-// those files and forwards each line on `agent:lifecycle` as one of the
-// three events below.
-//
-// Scoped by (machineId, workingDir, taskId) — `workingDir` is the
-// project key, and the dashboard's Progress tab is per-project.
-// ─────────────────────────────────────────────────────────────────────
-
-/**
- * Fires once per task when `argus-bg` writes its "start" JSONL line.
- * `cmd` is the wrapped argv after the `--` separator so the dashboard
- * can render what is actually running.
- */
-export interface BackgroundTaskStartedEvent {
-  kind: 'background-task-started';
-  machineId: string;
-  workingDir: string;
-  taskId: string;
-  label?: string;
-  cmd?: string[];
-  pid?: number;
-  startedAt: number;
-  ts: number;
-}
-
-/**
- * Emitted as `argus-bg` parses tqdm frames from the wrapped command's
- * PTY. Throttled inside `argus-bg` (at most one per 500ms OR when
- * integer percent ticks), so the server-side throttle stays coarse.
- *
- * `total === 0` means an unbounded progress bar (tqdm without a known
- * total); the dashboard renders a spinner / indeterminate bar in that
- * case rather than a filled percentage.
- *
- * `label` + `cmd` are decorated by the sidecar's progressWatcher from
- * the cached `start` line for this taskId so every progress event is
- * self-describing. A consumer-group's high-water-mark blocks replay of
- * past `start` events, which would otherwise cause cards for tasks
- * already running at server-restart time to render with no
- * label / command.
- */
-export interface BackgroundTaskProgressEvent {
-  kind: 'background-task-progress';
-  machineId: string;
-  workingDir: string;
-  taskId: string;
-  label?: string;
-  cmd?: string[];
-  current: number;
-  total?: number;
-  percent: number;
-  etaSeconds?: number;
-  rate?: number;
-  unit?: string;
-  desc?: string;
-  ts: number;
-}
-
-/**
- * Closes out a task. `status` is `'done'` on exit code 0 and `'failed'`
- * otherwise (including SIGINT / SIGTERM forwarded to the child). The
- * server retains the ended record until a user explicitly dismisses
- * it via the X button on the card.
- *
- * `label` + `cmd` are decorated from the cached `start` line for the
- * same reason as on Progress; see that comment.
- */
-export interface BackgroundTaskEndedEvent {
-  kind: 'background-task-ended';
-  machineId: string;
-  workingDir: string;
-  taskId: string;
-  label?: string;
-  cmd?: string[];
-  exitCode: number;
-  status: 'done' | 'failed';
-  endedAt: number;
-  ts: number;
-}
-
-export type BackgroundTaskEvent =
-  | BackgroundTaskStartedEvent
-  | BackgroundTaskProgressEvent
-  | BackgroundTaskEndedEvent;
-
-// ─────────────────────────────────────────────────────────────────────
 // Remote sidecar update (server → sidecar)
 //
 // The dashboard exposes an "Update sidecar" action per machine and a
@@ -725,13 +634,7 @@ export interface SidecarUpdateFailedEvent {
 }
 
 /** Anything the server expects on the lifecycle stream. Ordering matters:
- *  more specific kinds first so TS narrows correctly.
- *
- *  `BackgroundTask{Started,Progress,Ended}Event` deliberately are NOT
- *  in this union — they ride a dedicated background stream
- *  (see streamKeys.background) so chatty progress frames can't trim
- *  the shared lifecycle stream via MAXLEN. They're consumed by
- *  BackgroundTaskService.consumeLoop, not MachineService.handle. */
+ *  more specific kinds first so TS narrows correctly. */
 export type AnyLifecycleEvent =
   | MachineRegisterEvent
   | MachineHeartbeatEvent
@@ -983,14 +886,8 @@ export const streamKeys = {
    *  server's single sweep loop can preserve causal ordering between
    *  machine-register and agent-register. */
   lifecycle: 'agent:lifecycle',
-  /** Background-task progress events from `argus-bg` (start / progress /
-   *  ended). Split off from `lifecycle` because a fast tqdm bar emits
-   *  20+ events/sec — at 500 MAXLEN those bursts would silently trim
-   *  heartbeats / sidecar-update events. Higher MAXLEN + its own
-   *  consumer keep both planes fast. */
-  background: 'agent:background',
   /** Watcher nudges (`fs-changed` / `git-changed`). Split off from
-   *  `lifecycle` for the same reason as `background`: fs-changed emits
+   *  `lifecycle` for MAXLEN buffer isolation: fs-changed emits
    *  one event per dirty directory per 250ms window, so a build across
    *  N agents' workingDirs can burst hundreds of entries and trim
    *  unread heartbeats out of the 500-cap lifecycle stream. Nudges are
@@ -1024,9 +921,6 @@ export const streamKeys = {
  *  `packages/sidecar/internal/protocol/protocol.go::StreamMaxLen`. */
 export const streamMaxLen = (streamKey: string): number => {
   if (streamKey === streamKeys.lifecycle) return 500;
-  // See the streamKeys.background comment for why this is much larger
-  // than lifecycle: a single chatty tqdm bar would otherwise self-trim.
-  if (streamKey === streamKeys.background) return 5000;
   // Nudge entries are ~150 bytes, so 2000 costs well under 1 MB while
   // absorbing a multi-agent build burst without evicting unread git
   // nudges (fs and git share this stream and burst at correlated
@@ -1049,16 +943,11 @@ export const consumerGroups = {
    *  on `agent:notify`: MachineService drains both streams with a
    *  single XREADGROUP (one blocking call needs one group *name*, and
    *  groups are per-stream, so the same name is registered on each).
-   *  Unlike `background` there's no separate consumer service — the
-   *  split exists for MAXLEN buffer isolation, not consumer isolation,
-   *  and a third blocking loop would add up to 5s of round-robin
-   *  latency on the shared `read` connection. */
+   *  There's no separate consumer service for `notify` — the split
+   *  exists for MAXLEN buffer isolation, not consumer isolation, and
+   *  a second blocking loop would add up to 5s of round-robin latency
+   *  on the shared `read` connection. */
   lifecycle: 'server-lifecycle',
-  /** server-side consumer group reading background-task events.
-   *  Separate group (not just stream) because the consumer is a
-   *  different service (BackgroundTaskService) running its own
-   *  XREADGROUP loop. */
-  background: 'server-background',
   /** per-machine consumer group on the machine control stream */
   machine: (machineId: string) => `machine-${machineId}`,
 };

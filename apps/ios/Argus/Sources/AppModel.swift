@@ -110,13 +110,8 @@ final class AppModel {
 
     private(set) var lastGitChange: GitChangedPayload?
 
-    /// Latest background-task events (Progress extension) — the pane
-    /// watches these while subscribed to its project room.
-    private(set) var lastBackgroundTaskUpdate: BackgroundTaskDTO?
-    private(set) var lastBackgroundTaskRemoval: BackgroundTaskRemovedPayload?
-
     /// Account-level extension opt-ins — gate the inspector's Note /
-    /// Progress / Diff tabs, exactly like the web's ContextPane.
+    /// Diff tabs, exactly like the web's ContextPane.
     private(set) var extensions = UserExtensions()
 
     /// Task-completion push notifications (device-local preference; the
@@ -649,11 +644,6 @@ final class AppModel {
             scheduleFSFlush()
         case .gitChanged(let payload):
             lastGitChange = payload
-
-        case .backgroundTaskUpdated(let task):
-            lastBackgroundTaskUpdate = task
-        case .backgroundTaskRemoved(let payload):
-            lastBackgroundTaskRemoval = payload
 
         case .terminalOutput, .terminalClosed:
             activeTerminal?.handle(event)
