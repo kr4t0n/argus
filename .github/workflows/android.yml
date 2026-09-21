@@ -61,8 +61,12 @@ jobs:
           cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
       - name: Build and test :core
         run: ./gradlew :core:build
-      - name: Upload test reports
-        if: failure()
+      # Always, not only on failure: Gradle logs nothing per passing test,
+      # and this workflow is the only test runner the project has for
+      # Kotlin — the JUnit XML is how "201 tests ran" gets verified from
+      # a dev box with no toolchain.
+      - name: Upload test results and reports
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: android-core-reports
@@ -70,6 +74,7 @@ jobs:
             apps/android/core/build/reports/**
             apps/android/core/build/test-results/**
           if-no-files-found: ignore
+          retention-days: 14
 
   app:
     name: app (assembleDebug + lint + unit tests)

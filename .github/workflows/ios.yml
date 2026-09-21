@@ -7,7 +7,11 @@ name: ios
 # which runners have).
 on:
   push:
-    branches: [main, dev, 'feat/ios-*']
+    # `feat/android-*` too: the native clients share the fixture directory
+    # and the capture script, so an Android branch can change what the
+    # Swift tests read — the paths filter below still decides whether a
+    # given push matters.
+    branches: [main, dev, 'feat/ios-*', 'feat/android-*']
     paths:
       - 'apps/ios/**'
       - '.github/workflows/ios.yml'
