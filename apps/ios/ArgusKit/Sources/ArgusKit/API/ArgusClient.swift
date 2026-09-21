@@ -7,7 +7,7 @@ import Foundation
 /// Deliberately NOT generated: models decode tolerantly (unknown fields
 /// ignored, open enums fall back) so server-side additions never break a
 /// shipped build. When shared-types changes shape, update the mirror in
-/// Models/ and refresh the test fixtures (`scripts/capture-ios-fixtures.sh`).
+/// Models/ and refresh the test fixtures (`scripts/capture-client-fixtures.sh`).
 ///
 /// The JWT is held by the token provider closure — keep it in memory
 /// (see `TokenStore`) and persist to Keychain separately; per-request

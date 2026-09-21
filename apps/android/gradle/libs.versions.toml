@@ -20,9 +20,24 @@ activityCompose = "1.13.0"
 # JUnit 4 on both modules: :app's unit tests are JUnit 4 by AGP default, and
 # kotlin("test") resolves to kotlin-test-junit under `useJUnit()`.
 junit = "4.13.2"
+# :core networking. socket.io-client 2.1.x speaks the Socket.IO v4 protocol
+# the server runs (socket.io 4.8) and supports the `auth` handshake payload;
+# its engine.io-client declares an ancient okhttp (3.12) that Gradle
+# resolves up to this one. mockwebserver rides the okhttp version.
+okhttp = "5.5.0"
+socketio = "2.1.2"
+coroutines = "1.11.0"
+# org.json for the :core JVM test runtime only — Android ships it in the
+# platform (see core/build.gradle.kts).
+orgJson = "20260814"
 
 [libraries]
 kotlinx-serializationJson = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+kotlinx-coroutinesCore = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "okhttp" }
+socketio-client = { module = "io.socket:socket.io-client", version.ref = "socketio" }
+orgJson = { module = "org.json:json", version.ref = "orgJson" }
 androidx-activityCompose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
 compose-ui = { module = "androidx.compose.ui:ui" }

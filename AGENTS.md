@@ -1258,8 +1258,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   constantly. Instead the Swift models are hand-written and
   decode-tolerant (unknown fields ignored, open enums fall back to
   `.unknown`), and contract confidence comes from
-  `scripts/capture-ios-fixtures.sh`: it captures sanitized live-server
-  responses into the package's test fixtures, which CI decodes.
+  `scripts/capture-client-fixtures.sh`: it captures sanitized live-server
+  responses into `packages/shared-types/fixtures/` — shared with the
+  Android client's `:core` tests — which CI decodes on both platforms.
 - **Runner-refactor posture** (docs/plan-agent-to-runners.md, complete):
   the Agent entity is retired, so there is no `agentId`, `AgentDTO`, or
   fleet-agents store on the client. Sessions carry their own
@@ -1506,14 +1507,49 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   file exists, so CI stays green until someone runs the capture against
   a server with searchable sessions — do run it and commit the fixture.
 
-### `apps/android/` (native client — Phase 0)
+### `apps/android/` (native client — Phase 1: core)
 
 - Kotlin + Jetpack Compose, shaped like `apps/ios/`: `:core` is a **plain
-  Kotlin/JVM module** (no Android plugin — the counterpart of ArgusKit:
-  wire models, REST + Socket.IO clients, transcript engine, all testable
-  without the SDK) and `:app` is the Compose application. Design, wire
-  contract, lockstep table and phases: `docs/plan-android-native-client.md`;
-  build/test/pins: `apps/android/README.md`.
+  Kotlin/JVM module** (no Android plugin — the counterpart of ArgusKit,
+  all testable without the SDK) and `:app` is the Compose application
+  (still the Phase 0 shell). Design, wire contract, lockstep table and
+  phases: `docs/plan-android-native-client.md`; build/test/pins and the
+  lockstep table: `apps/android/README.md`. `:core` is laid out as
+  `model/` (DTO mirrors + `JsonSupport`), `api/` (`ArgusClient` on OkHttp,
+  `ServerConfig`, `ApiError`), `realtime/` (`StreamClient` on
+  socket.io-client-java → `Flow<ServerEvent>`, `ProjectRoomRegistry`) and
+  `engine/` (the ArgusKit ports: `TranscriptEngine`, `DeltaSplit`,
+  `UsageMath`, `ContextWindow`, the math trio, `FileReferences`,
+  `ToolDisplay`, `DedicatedPanels`, `SessionMatch`, `SearchSnippet`).
+- **Fixtures are shared with iOS.** `scripts/capture-client-fixtures.sh`
+  (renamed from `capture-ios-fixtures.sh`) writes sanitized live-server
+  responses to `packages/shared-types/fixtures/`, and BOTH
+  `FixtureDecodingTests` (Swift, resolved from `#filePath`; no SwiftPM
+  resource bundle any more) and `FixtureDecodingTest` (Kotlin, via a
+  Gradle system property with a walk-up fallback) decode every file
+  there — so one capture re-proves both mirrors, and both `ios.yml` and
+  `android.yml` trigger on that directory.
+- **Decode tolerance is explicit, per enum.** Every wire enum names a
+  `TolerantEnumSerializer` (`model/JsonSupport.kt`) that maps an unknown
+  or non-string value to its `UNKNOWN` member — chosen over relying on
+  `coerceInputValues`, which only coerces when the PROPERTY declares a
+  default, so one forgotten `= UNKNOWN` would silently reintroduce strict
+  decoding. `ResultChunk.ts` goes through `EpochMillisSerializer` (numeric
+  millis on WS relays, ISO string on REST rows, unparseable → 0).
+  `explicitNulls = false` drops null properties on encode, so the one
+  body that needs an explicit JSON null — `PATCH /sessions/:id/model`
+  clearing the model — is built as a `JsonObject`
+  (`UpdateSessionModelRequest.toJson()`); `RequestShapesTest` pins it.
+- **Two OkHttp facts the client works around:** it refuses a body-less
+  POST (archive/seen/cancel/sidecar-update send an empty body), and its
+  default read timeout (10 s) is shorter than the server's 15 s fork
+  hold — `forkSession` uses a dedicated client with a 30 s read timeout.
+  Gzip is negotiated and inflated by OkHttp itself; never set
+  `Accept-Encoding` by hand or that stops.
+- **`org.json` is excluded from socket.io-client-java** in `:core`
+  (`compileOnly` for the sources, `testRuntimeOnly` for the JVM tests):
+  Android ships it in the platform, and leaving it on the app's runtime
+  classpath fails lint's `DuplicatePlatformClasses` check.
 - **Kotlin is CI-compiled only, by decision.** The dev box gets no JDK,
   Gradle or Android SDK; `.github/workflows/android.yml` (ubuntu runner,
   `:core:build` + `:app:assembleDebug :app:lintDebug :app:testDebugUnitTest`)

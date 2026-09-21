@@ -28,10 +28,12 @@ let package = Package(
                 .product(name: "SocketIO", package: "socket.io-client-swift")
             ]
         ),
+        // Fixtures are no longer a resource bundle: they live in
+        // packages/shared-types/fixtures, shared with the Android client,
+        // and TestSupport resolves them from #filePath.
         .testTarget(
             name: "ArgusKitTests",
-            dependencies: ["ArgusKit"],
-            resources: [.copy("Fixtures")]
+            dependencies: ["ArgusKit"]
         ),
     ],
     swiftLanguageModes: [.v6]

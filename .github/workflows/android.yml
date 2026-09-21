@@ -18,12 +18,16 @@ on:
       - 'packages/shared-types/src/contextWindow.ts'
       # Same idea for the hotkey registry the Kotlin table mirrors (Phase 3).
       - 'apps/web/src/lib/hotkeys.ts'
+      # The captured live-server fixtures :core's decoding tests consume
+      # (shared with ArgusKit) — a re-capture must re-prove the mirror.
+      - 'packages/shared-types/fixtures/**'
   pull_request:
     paths:
       - 'apps/android/**'
       - '.github/workflows/android.yml'
       - 'packages/shared-types/src/contextWindow.ts'
       - 'apps/web/src/lib/hotkeys.ts'
+      - 'packages/shared-types/fixtures/**'
   workflow_dispatch:
 
 permissions:

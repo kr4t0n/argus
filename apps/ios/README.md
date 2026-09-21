@@ -39,11 +39,12 @@ Contract confidence comes from **fixtures captured from a real server**:
 ```bash
 # repo root; needs a running server + jq. Credentials fall back to
 # ADMIN_EMAIL/ADMIN_PASSWORD in .env.
-scripts/capture-ios-fixtures.sh [--session <id>]
+scripts/capture-client-fixtures.sh [--session <id>]
 ```
 
 That writes sanitized responses (tokens redacted, long strings truncated)
-into `ArgusKit/Tests/ArgusKitTests/Fixtures/`, and
+into `packages/shared-types/fixtures/` (shared with the Android client's
+`:core` tests — one capture keeps both mirrors honest), and
 `FixtureDecodingTests` decodes every one of them in CI. **When
 shared-types changes shape: re-run the capture script, run the tests,
 commit the fixture diff.** Review the diff before committing — fixtures
@@ -365,7 +366,7 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   are scene commands (`ArgusCommands`), session ones sit on views in
   `SessionView`; every chord is ⌘-only so Ctrl chords keep reaching the
   terminal's shell; type-to-focus is deliberately not ported (IME).
-  `scripts/capture-ios-fixtures.sh` now also captures
+  `scripts/capture-client-fixtures.sh` now also captures
   `search-sessions.json` (committed, snippet text scrubbed to
   placeholders — the test checks the envelope and the repo is public);
   its decoding test is `.enabled(if:)` the file exists.
