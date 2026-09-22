@@ -2232,7 +2232,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   content), `xcode_project` (`SDKROOT = iphone*`, `IPHONEOS_DEPLOYMENT_
   TARGET`, `TARGETED_DEVICE_FAMILY` in a tool result) or `ios_command`
   (`simctl`, `-sdk iphonesimulator`, `platform=iOS Simulator` in a Bash
-  command); `android_app` is the mirror image. It is guarded once per
+  command); `android_app` is the mirror image. **The conjunction is
+  verified, not just read off the bundle** — reproduced against claude
+  2.1.278 in a scratch dir with `claude -p --output-format stream-json`:
+  Read-an-Xcode-project alone emits nothing, Write-a-`.swift` alone emits
+  nothing, the two together emit it. *Trap when reading such a capture:*
+  in a FRESH session the `dev_intent` line can be flushed to stdout
+  AHEAD of the assistant `tool_use` line that completed the pair, so the
+  transcript reads as though the evidence alone sufficed. It did not —
+  that is stdout ordering, not causation, and the controls above are what
+  settle it. It is guarded once per
   kind per PROCESS — but every Argus turn is a fresh `claude --resume`,
   so the detector re-folds the RESUMED TRANSCRIPT at startup. Once a
   session's history holds the pair, every later turn re-emits it before

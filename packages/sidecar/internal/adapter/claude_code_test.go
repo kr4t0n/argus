@@ -143,8 +143,11 @@ func TestMapClaudeCodeChangePublished(t *testing.T) {
 	}
 }
 
-// TestMapClaudeDevIntent verifies the `system`/`dev_intent` event (observed
-// on claude 2.1.278) stays content-less with its classification in Meta.
+// TestMapClaudeDevIntent verifies the `system`/`dev_intent` event stays
+// content-less with its classification in Meta. The payload below is the
+// VERBATIM shape claude 2.1.278 emits — reproduced in a scratch dir with
+// `claude -p --output-format stream-json` and diffed field-for-field against
+// this literal, not transcribed from an observation.
 // Unmapped it is worse than the other subtypes: the detector re-folds the
 // resumed transcript on every `--resume`, so it lands at seq 1 — ahead of the
 // turn's own `init` — on EVERY turn of a session whose history holds the
