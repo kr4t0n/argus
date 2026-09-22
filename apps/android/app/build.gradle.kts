@@ -63,6 +63,13 @@ dependencies {
     // ProcessLifecycleOwner: disconnect the socket in the background,
     // reconnect through the snapshot path in the foreground.
     implementation(libs.androidx.lifecycleProcess)
+    // NotificationCompat for the turn-finished banners.
+    implementation(libs.androidx.coreKtx)
+    // Push (Phase 5): FCM registration tokens + the messaging service.
+    // Firebase is initialised at RUNTIME from the server's public client
+    // identifiers — no google-services.json, no google-services plugin —
+    // so one APK works against any server. See push/AndroidPushBridge.kt.
+    implementation(libs.firebase.messaging)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.activityCompose)

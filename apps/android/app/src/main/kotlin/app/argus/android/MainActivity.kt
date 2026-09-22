@@ -1,10 +1,12 @@
 package app.argus.android
 
+import android.content.Intent
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import app.argus.android.push.TurnNotifications
 import app.argus.android.ui.ArgusApp
 import app.argus.android.ui.theme.ArgusTheme
 
@@ -20,6 +22,24 @@ class MainActivity : ComponentActivity() {
                 ArgusApp(appModel)
             }
         }
+        // A notification tap on a cold start arrives as the launching
+        // intent; only a fresh launch, never a recreate, or a rotation
+        // would re-open the tapped session over wherever the user went.
+        if (savedInstanceState == null) handleDeepLink(intent)
+    }
+
+    /** `singleTop`: a tap while the app is running lands here. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleDeepLink(intent)
+    }
+
+    private fun handleDeepLink(intent: Intent?) {
+        val sessionId = intent?.getStringExtra(TurnNotifications.EXTRA_SESSION_ID) ?: return
+        // Consume it so a later getIntent() (recreate) doesn't re-route.
+        intent.removeExtra(TurnNotifications.EXTRA_SESSION_ID)
+        appModel.openSessionFromNotification(sessionId)
     }
 
     /**

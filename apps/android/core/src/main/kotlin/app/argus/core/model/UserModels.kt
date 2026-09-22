@@ -132,6 +132,22 @@ data class DeviceDTO(
     val createdAt: String = "",
 )
 
+/**
+ * `GET /me/push/config` — the PUBLIC Firebase client identifiers the app
+ * initialises Firebase from at runtime, so one APK works against any
+ * server (the service-account secret never leaves the server). The
+ * server answers 404 when it has no FCM client config; the app reads
+ * that as "this server has no Android push". Android-only: there is no
+ * Swift mirror by design.
+ */
+@Serializable
+data class PushConfigDTO(
+    val projectId: String,
+    val applicationId: String,
+    val apiKey: String,
+    val senderId: String,
+)
+
 /** `GET`/`PUT /me/project-notes` envelope. */
 @Serializable
 data class ProjectNotesResponse(val notes: String)

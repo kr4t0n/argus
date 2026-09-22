@@ -20,6 +20,7 @@ import app.argus.core.model.ModelCatalogResponse
 import app.argus.core.model.ModelSelection
 import app.argus.core.model.ProjectDTO
 import app.argus.core.model.ProjectNotesResponse
+import app.argus.core.model.PushConfigDTO
 import app.argus.core.model.SessionChunksResponse
 import app.argus.core.model.SessionDTO
 import app.argus.core.model.SessionDetailResponse
@@ -286,9 +287,15 @@ class ArgusClient(
     suspend fun getMyQuota(): List<UserQuotaRow> = send<UserQuotaResponse>("GET", "/me/quota").quotas
 
     /**
+     * The server's public Firebase client identifiers. Throws [ApiError]
+     * with status 404 when the server has no Android push configured.
+     */
+    suspend fun getPushConfig(): PushConfigDTO = send("GET", "/me/push/config")
+
+    /**
      * Register (or refresh) this device's push token — idempotent, so
      * call on every launch while push is enabled. The server validates
-     * the token per [platform] (Phase 5 adds the `android` alphabet).
+     * the token per [platform] (`android` is the FCM alphabet).
      */
     suspend fun registerDevice(token: String, platform: String = "android"): DeviceDTO =
         send("POST", "/me/devices", body = json(RegisterDeviceRequest(token = token, platform = platform)))

@@ -1,10 +1,12 @@
 package app.argus.android
 
 import android.content.SharedPreferences
+import app.argus.android.push.PushBridge
 import app.argus.android.session.SessionViewModel
 import app.argus.android.store.FleetStore
 import app.argus.android.store.QueueStore
 import app.argus.android.store.SessionListStore
+import app.argus.core.ArgusJson
 import app.argus.core.api.ApiError
 import app.argus.core.api.ArgusClient
 import app.argus.core.api.ServerConfig
@@ -13,6 +15,7 @@ import app.argus.core.model.AuthUser
 import app.argus.core.model.CreateCommandRequest
 import app.argus.core.model.CreateSessionRequest
 import app.argus.core.model.ModelSelection
+import app.argus.core.model.PushConfigDTO
 import app.argus.core.model.SessionDTO
 import app.argus.core.model.MachineStatus
 import app.argus.core.model.SessionStatus
@@ -79,6 +82,40 @@ class AppModel(private val prefs: SharedPreferences) {
     /** Account-level extension opt-ins — gate the inspector's Note / Diff tabs, like the web's ContextPane. */
     private val _extensions = MutableStateFlow(UserExtensions())
     val extensions: StateFlow<UserExtensions> = _extensions.asStateFlow()
+
+    /**
+     * Task-completion push notifications — a device-local preference,
+     * as on iOS (`argus.push.enabled`). Kept across logout so the next
+     * login re-registers; the token itself is unregistered on logout.
+     */
+    private val _pushEnabled = MutableStateFlow(prefs.getBoolean(KEY_PUSH_ENABLED, false))
+    val pushEnabled: StateFlow<Boolean> = _pushEnabled.asStateFlow()
+
+    /** A registration is in flight (the toggle disables itself meanwhile). */
+    private val _pushBusy = MutableStateFlow(false)
+    val pushBusy: StateFlow<Boolean> = _pushBusy.asStateFlow()
+
+    /** Why the last enable/refresh failed, for the toggle's footer; null when fine. */
+    private val _pushError = MutableStateFlow<String?>(null)
+    val pushError: StateFlow<String?> = _pushError.asStateFlow()
+
+    /** The push platform — installed by `ArgusApplication`; null in a build without one. */
+    var push: PushBridge? = null
+
+    /**
+     * Whether the process is in the foreground (ProcessLifecycleOwner
+     * STARTED). Written by the Application's lifecycle observer on the
+     * main thread, read by the messaging service on its own thread to
+     * suppress a banner for the session on screen.
+     */
+    @Volatile
+    var isForeground: Boolean = false
+
+    /**
+     * A notification tap that arrived before the app was `Ready` (cold
+     * launch); consumed the moment it is.
+     */
+    private var pendingSessionLink: String? = null
 
     /**
      * Which overlay is showing — the web's `paletteStore.mode`; null is
@@ -264,8 +301,7 @@ class AppModel(private val prefs: SharedPreferences) {
         this.client = client
         try {
             _user.value = client.me()
-            _phase.value = Phase.Ready
-            connectSocket()
+            becameReady()
             refreshAll()
         } catch (e: Exception) {
             // Expired/revoked token or unreachable server → login screen
@@ -294,13 +330,30 @@ class AppModel(private val prefs: SharedPreferences) {
             .putString(KEY_EMAIL, email)
             .apply()
 
+        becameReady()
+        refreshAll()
+    }
+
+    /**
+     * The one transition into `Ready` (cold bootstrap and fresh login
+     * alike): open the socket, honour a notification tap that arrived
+     * while launching, and refresh this device's push registration when
+     * the user left the toggle on — a rotated token or a re-login must
+     * not silently strand the device (registration is idempotent).
+     */
+    private fun becameReady() {
         _phase.value = Phase.Ready
         connectSocket()
-        refreshAll()
+        pendingSessionLink?.let {
+            pendingSessionLink = null
+            navigate(Route.Session(it))
+        }
+        if (_pushEnabled.value) refreshPushRegistration()
     }
 
     fun logOut() {
         prefs.edit().remove(KEY_TOKEN).apply()
+        unregisterPushForLogout()
         eventPump?.cancel()
         eventPump = null
         stream?.shutdown()
@@ -405,6 +458,150 @@ class AppModel(private val prefs: SharedPreferences) {
             runCatching { _extensions.value = extensions.await() }.onFailure(::handleApiError)
         }
         maybeDrainAllQueues()
+        // Banners for sessions read elsewhere (or superseded) while we
+        // weren't reachable are stale — sweep against the fresh unread
+        // flags. Covers cold launch, foreground, and reconnect alike;
+        // the server's live clear can't (a data message is best-effort,
+        // and never delivered to a force-stopped app).
+        push?.reconcile(sessionList.sessions.value.values.filter { it.unread }.map { it.id }.toSet())
+    }
+
+    // MARK: Push notifications
+
+    /**
+     * Toggle handler. Enabling fetches the server's public Firebase
+     * identifiers, initialises Firebase from them, mints a registration
+     * token and registers it; any step failing leaves the toggle off
+     * with the reason in [pushError]. Disabling unregisters the token
+     * server-side and invalidates it locally. Runs on the process scope
+     * so leaving the account panel mid-registration cannot cancel it
+     * between "token minted" and "token registered".
+     */
+    fun setPushEnabled(enabled: Boolean) {
+        scope.launch {
+            _pushBusy.value = true
+            try {
+                if (enabled) enablePush() else disablePush()
+            } finally {
+                _pushBusy.value = false
+            }
+        }
+    }
+
+    private suspend fun enablePush() {
+        val push = push
+        val client = client
+        if (push == null || client == null) {
+            _pushError.value = "Push is unavailable right now."
+            return
+        }
+        try {
+            registerPush(push, client)
+            _pushEnabled.value = true
+            prefs.edit().putBoolean(KEY_PUSH_ENABLED, true).apply()
+            _pushError.value = null
+        } catch (e: Exception) {
+            handleApiError(e)
+            _pushError.value = describePushFailure(e)
+        }
+    }
+
+    private suspend fun disablePush() {
+        _pushEnabled.value = false
+        _pushError.value = null
+        prefs.edit().putBoolean(KEY_PUSH_ENABLED, false).apply()
+        val token = prefs.getString(KEY_PUSH_TOKEN, null)
+        prefs.edit().remove(KEY_PUSH_TOKEN).apply()
+        val client = client
+        if (token != null && client != null) runCatching { client.unregisterDevice(token) }.onFailure(::handleApiError)
+        runCatching { push?.deleteToken() }
+    }
+
+    /** The registration sequence shared by the toggle and the refresh paths. */
+    private suspend fun registerPush(push: PushBridge, client: ArgusClient) {
+        val config = client.getPushConfig()
+        prefs.edit().putString(KEY_PUSH_CONFIG, ArgusJson.encodeToString(config)).apply()
+        push.initialize(config)
+        val token = push.token()
+        client.registerDevice(token, platform = "android")
+        prefs.edit().putString(KEY_PUSH_TOKEN, token).apply()
+    }
+
+    /** Re-run registration in the background (app reached Ready with push on). */
+    private fun refreshPushRegistration() {
+        val push = push ?: return
+        val client = client ?: return
+        scope.launch {
+            try {
+                registerPush(push, client)
+                _pushError.value = null
+            } catch (e: Exception) {
+                handleApiError(e)
+                _pushError.value = describePushFailure(e)
+            }
+        }
+    }
+
+    /**
+     * Firebase's `onNewToken`: the token rotated. Re-register it if push
+     * is on and we are signed in; otherwise the next Ready refresh
+     * picks it up.
+     */
+    fun onPushTokenRotated(token: String) {
+        if (!_pushEnabled.value) return
+        val client = client ?: return
+        scope.launch {
+            runCatching {
+                client.registerDevice(token, platform = "android")
+                prefs.edit().putString(KEY_PUSH_TOKEN, token).apply()
+            }.onFailure(::handleApiError)
+        }
+    }
+
+    /**
+     * Initialise Firebase from the cached client config, for a process
+     * the messaging service started (an incoming message) rather than
+     * the user — there is no login path to do it on that route. Only
+     * while push is on: a config left over from a disabled toggle must
+     * not bring Firebase back up.
+     */
+    fun initializePushFromCache() {
+        if (!_pushEnabled.value) return
+        val push = push ?: return
+        val raw = prefs.getString(KEY_PUSH_CONFIG, null) ?: return
+        runCatching { push.initialize(ArgusJson.decodeFromString<PushConfigDTO>(raw)) }
+    }
+
+    /** Best-effort server-side cleanup before the credentials vanish (iOS parity). */
+    private fun unregisterPushForLogout() {
+        val client = client ?: return
+        val token = prefs.getString(KEY_PUSH_TOKEN, null) ?: return
+        prefs.edit().remove(KEY_PUSH_TOKEN).apply()
+        scope.launch { runCatching { client.unregisterDevice(token) } }
+    }
+
+    /** A notification tap: route now, or remember it until the app is Ready. */
+    fun openSessionFromNotification(sessionId: String) {
+        if (_phase.value == Phase.Ready) {
+            _paletteMode.value = null
+            navigate(Route.Session(sessionId))
+        } else {
+            pendingSessionLink = sessionId
+        }
+    }
+
+    private fun describePushFailure(error: Throwable): String = when {
+        error is ApiError && error.status == 404 ->
+            "This server has no Android push configured (its FCM settings are unset)."
+        error is ApiError -> "The server rejected the registration (${error.status})."
+        else -> {
+            val message = error.message.orEmpty()
+            if ("SERVICE_NOT_AVAILABLE" in message || "MISSING_INSTANCEID_SERVICE" in message) {
+                "Google Play services are unavailable on this device."
+            } else {
+                "Couldn't register for push: ${message.ifEmpty { error.javaClass.simpleName }}"
+            }
+        }
     }
 
     // MARK: Creation (project-first)
@@ -543,6 +740,12 @@ class AppModel(private val prefs: SharedPreferences) {
                 val status = event.event
                 sessionList.applyStatus(status)
                 activeSession?.handleStatus(status)
+                // The banner is a projection of `unread`: the moment the
+                // socket says it cleared (read on any client, or a fresh
+                // turn started), drop it locally too — instant while
+                // we're connected, without waiting on the server's
+                // best-effort clear message.
+                if (!status.unread) push?.cancel(status.id)
                 if (status.status == SessionStatus.ACTIVE) {
                     // Dispatch→active bridge closed; the queue stays parked
                     // until this turn finishes.
@@ -587,6 +790,9 @@ class AppModel(private val prefs: SharedPreferences) {
         private const val KEY_SERVER = "argus.serverURL"
         private const val KEY_EMAIL = "argus.email"
         private const val KEY_TOKEN = "argus.token"
+        private const val KEY_PUSH_ENABLED = "argus.push.enabled"
+        private const val KEY_PUSH_TOKEN = "argus.push.token"
+        private const val KEY_PUSH_CONFIG = "argus.push.config"
         private const val SESSION_VM_CACHE_LIMIT = 8
         private const val DRAIN_IN_FLIGHT_MS = 30_000L
         private const val DRAIN_COOLDOWN_MS = 60_000L

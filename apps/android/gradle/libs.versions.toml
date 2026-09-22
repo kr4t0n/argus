@@ -34,10 +34,20 @@ orgJson = "20260814"
 # and dormant; its LaTeX extension (JLatexMath) is why it was chosen.
 markwon = "4.6.2"
 lifecycle = "2.11.0"
+# NotificationCompat / NotificationManagerCompat / ContextCompat for the
+# turn-finished banners. Direct pin: the app calls these APIs itself
+# rather than leaning on the copy activity-compose drags in.
+androidxCore = "1.19.0"
+# Firebase Cloud Messaging (HTTP v1 on the server side). No google-services
+# plugin: Firebase is initialised at runtime from the server's public
+# client identifiers (GET /me/push/config). Needs minSdk >= 23.
+firebaseMessaging = "25.1.3"
 
 [libraries]
 kotlinx-coroutinesAndroid = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 androidx-lifecycleProcess = { module = "androidx.lifecycle:lifecycle-process", version.ref = "lifecycle" }
+androidx-coreKtx = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
+firebase-messaging = { module = "com.google.firebase:firebase-messaging", version.ref = "firebaseMessaging" }
 compose-foundation = { module = "androidx.compose.foundation:foundation" }
 compose-materialIconsCore = { module = "androidx.compose.material:material-icons-core" }
 markwon-core = { module = "io.noties.markwon:core", version.ref = "markwon" }

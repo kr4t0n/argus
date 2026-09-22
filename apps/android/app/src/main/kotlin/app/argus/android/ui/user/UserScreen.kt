@@ -2,6 +2,11 @@
 
 package app.argus.android.ui.user
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -62,12 +67,14 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import app.argus.android.AppModel
 import app.argus.android.ui.components.AgentTypeGlyph
 import app.argus.android.ui.components.ConnectionBanner
@@ -190,7 +197,7 @@ fun UserScreen(app: AppModel, onBack: () -> Unit, showBack: Boolean = true) {
                     ActivitySection(activity)
                     UsageSection(usage)
                     QuotaSection(quotas)
-                    NotificationsSection()
+                    NotificationsSection(app)
                     ExtensionsSection(
                         extensions = extensions,
                         onChange = { next ->
@@ -591,22 +598,51 @@ private fun QuotaBar(window: QuotaWindow, now: Long) {
 }
 
 /**
- * Push arrives in a later phase (FCM, with the server's transport split),
- * so the alert toggle is rendered DISABLED rather than faked: a switch
- * that flips and persists nothing would teach the user it works.
+ * Task-completion push (iOS `setPushEnabled` parity). Turning it on
+ * first asks for the Android 13+ notification permission — the prompt
+ * must come from a user gesture, and a registration without the grant
+ * would mint a token for banners that can never show — then hands off
+ * to `AppModel.setPushEnabled`, which fetches the server's Firebase
+ * identifiers, mints the token and registers it. Failures (no FCM on
+ * this server, no Play services, denied permission) land in the footer
+ * and the switch stays off; the switch is disabled while a
+ * registration is in flight.
  */
 @Composable
-private fun NotificationsSection() {
+private fun NotificationsSection(app: AppModel) {
+    val enabled by app.pushEnabled.collectAsState()
+    val busy by app.pushBusy.collectAsState()
+    val error by app.pushError.collectAsState()
+    val context = LocalContext.current
+    var denied by remember { mutableStateOf(false) }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        denied = !granted
+        if (granted) app.setPushEnabled(true)
+    }
     Section(
         title = "Notifications",
-        footer = "A push arrives when a turn finishes in a session you're not looking at.",
+        footer = when {
+            denied -> "Notification permission was denied. Allow it in system settings, then try again."
+            error != null -> error
+            else -> "A push arrives when a turn finishes in a session you're not looking at."
+        },
     ) {
         ToggleRow(
             title = "Task completion alerts",
-            subtitle = "Arrives with push notifications",
-            checked = false,
-            enabled = false,
-            onCheckedChange = null,
+            subtitle = if (busy) "Registering…" else "Arrives with push notifications",
+            checked = enabled,
+            enabled = !busy,
+            onCheckedChange = { on ->
+                denied = false
+                when {
+                    !on -> app.setPushEnabled(false)
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+                        PackageManager.PERMISSION_GRANTED ->
+                        permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    else -> app.setPushEnabled(true)
+                }
+            },
         )
     }
 }

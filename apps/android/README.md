@@ -5,7 +5,7 @@ Like the iOS client it is a *thin client*: it speaks the same NestJS REST
 API + Socket.IO `/stream` namespace as the web app and never touches the
 Go sidecar.
 
-> Status: **Phase 4 — fleet and account.** `:core` holds the full non-UI
+> Status: **Phase 5 — push.** `:core` holds the full non-UI
 > layer (decode-tolerant DTO mirrors of shared-types, the OkHttp REST
 > client, the socket.io realtime client as a `Flow` of typed events, and
 > the transcript engine ported from ArgusKit — all unit-tested against
@@ -19,10 +19,11 @@ Go sidecar.
 > fork, the Ctrl+P / Ctrl+K palette (also behind the list's search
 > button) and the Ctrl+/ shortcuts sheet, the machine panel (host,
 > adapters, projects, sidecar update, remove), the account panel
-> (activity grid/curve, usage windows, plan quota, extensions), and the
-> project / session creation sheets. Push notifications and the terminal
-> are the remaining phases. The full design, wire contract and phase
-> plan are in
+> (activity grid/curve, usage windows, plan quota, extensions, the
+> push toggle), the project / session creation sheets, and
+> turn-finished push notifications over FCM (deep link, on-screen
+> suppression, read-sync clear). The terminal and Live Updates are the
+> remaining phase. The full design, wire contract and phase plan are in
 > [`docs/plan-android-native-client.md`](../../docs/plan-android-native-client.md).
 
 ## CI is the compiler
@@ -305,6 +306,28 @@ lands. The list's top bar gained a search action that opens the palette
 in session mode — the on-screen entry point a phone needs, since the
 chords are Ctrl-only.
 
+**Push (Phase 5).** Firebase Cloud Messaging, with Firebase initialised
+at RUNTIME: there is no `google-services.json` and no google-services
+plugin. Turning the account panel's toggle on requests the Android 13+
+notification permission from the gesture, then `AppModel.setPushEnabled`
+fetches the server's public Firebase identifiers (`GET /me/push/config`
+— 404 means "this server has no Android push", shown in the footer),
+`AndroidPushBridge` builds `FirebaseOptions` from them, mints the
+registration token and registers it as `platform: "android"`. The
+config is cached so a process that an incoming message starts can
+re-initialise Firebase without a login; auto-init is off in the
+manifest, so no token exists before opt-in. Every message the server
+sends is a data message (see the server's `push/` module for why), so
+`ArgusMessagingService` renders the banner itself through
+`TurnNotifications`: posted under the session id as its tag (a newer
+completion replaces the older banner), suppressed while that session is
+on screen in the foreground, cancelled on the server's `clear` message,
+on the socket's `session:status` with `unread: false`, and by the
+`refreshAll` sweep against the fresh unread set. A tap deep-links via an
+intent extra with a per-session request code; `MainActivity` is
+`singleTop`. The enabled flag survives logout and the token is
+unregistered, so the next login re-registers — iOS parity throughout.
+
 **Attachments.** The system photo and document pickers feed
 `ArgusClient.uploadAttachment`; uploads happen ahead of send, the chips
 show a local thumbnail from the bytes in hand, and the ids ride the
@@ -331,6 +354,11 @@ dependency, on purpose.
 - **`org.json` is excluded from socket.io-client-java** in `:core` and
   restored only on the JVM test runtime: Android ships it in the
   platform, and the app module would fail lint's `DuplicatePlatformClasses`.
+- **Push tokens are validated per platform** by `POST /me/devices`:
+  `platform: "android"` accepts the FCM alphabet, `ios` (the default)
+  APNs hex — always send the platform. `GET /me/push/config` is
+  Android-only and 404s on a server without `FCM_*`; `PushConfigDTO`
+  has no Swift mirror by design.
 
 ## Toolchain and pins
 
@@ -346,6 +374,8 @@ dependency, on purpose.
 | Compose BOM | 2026.09.00 | one source of truth for Compose artifact versions |
 | activity-compose / lifecycle-process | 1.13.0 / 2.11.0 | `setContent` + `BackHandler`; `ProcessLifecycleOwner` for the foreground refresh |
 | Markwon | 4.6.2 | markdown → `Spanned` with tables, task lists, strikethrough, linkify and JLatexMath in one library (last release; accepted) |
+| androidx.core (core-ktx) | 1.19.0 | `NotificationCompat` for the turn banners — used directly, so pinned directly rather than inherited |
+| firebase-messaging | 25.1.3 | FCM registration tokens + the messaging service; initialised at runtime, no google-services plugin |
 | JUnit | 4.13.2 | AGP's default unit-test framework; used on both modules so there is one |
 
 Rules that fall out of AGP 9:
@@ -378,6 +408,6 @@ See the plan for the full phase list. In short: **0** CI bootstrap ✅ →
 **1** core module ✅ → **2** login, session list, streaming transcript,
 composer with the queue ✅ (device-verified) → **3** inspector, file
 preview, model picker, usage badge, attachments, fork, palette and
-hotkeys ✅ → **4** fleet and account panels, creation sheets ✅ (this) →
-**5** push (FCM, with the server-side transport split) → **6** terminal
-and Live Updates.
+hotkeys ✅ → **4** fleet and account panels, creation sheets ✅ →
+**5** push (FCM, with the server-side transport split) ✅ (this) →
+**6** terminal and Live Updates.

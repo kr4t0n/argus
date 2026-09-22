@@ -1,6 +1,6 @@
 # Plan: native Android client — Kotlin + Jetpack Compose
 
-Status: 🟡 IN PROGRESS · Phase 0 ✅ (2026-09-21) · Phase 1 ✅ (2026-09-21, `android.yml` and `ios.yml` both green on the branch) · Phase 2 ✅ (2026-09-22, CI green and a turn round-tripped on a device) · Phase 3 ✅ (2026-09-22, CI green; device-verified) · Phase 4 ✅ (2026-09-22, CI green; verified on an emulator the same day) · Phase 5 next
+Status: 🟡 IN PROGRESS · Phase 0 ✅ (2026-09-21) · Phase 1 ✅ (2026-09-21, `android.yml` and `ios.yml` both green on the branch) · Phase 2 ✅ (2026-09-22, CI green and a turn round-tripped on a device) · Phase 3 ✅ (2026-09-22, CI green; device-verified) · Phase 4 ✅ (2026-09-22, CI green; verified on an emulator the same day) · Phase 5 ✅ (2026-09-22, CI green; device pass against an FCM-configured server pending) · Phase 6 next
 Branch: `feat/android-native-client` (PRs target `dev`)
 Prereq: none — the server contract the client speaks is already frozen by the
 iOS client and its captured fixtures.
@@ -308,6 +308,7 @@ The only server changes in the whole plan, all in `apps/server/src/modules/push/
    Document in `.env.example`, `INSTALLATION.md`, and the Helm values.
 5. **Live Updates pushes** — data messages from the same throttle the
    `liveactivity` APNs type uses; can land after the rest of Phase 5.
+   (Items 1–4 landed with Phase 5; item 5 is Phase 6 work.)
 
 ## 7. CI: `.github/workflows/android.yml`
 
@@ -452,6 +453,18 @@ menu to the account panel, matching the web.
 registration on login and token refresh, the notifications toggle, tap
 deep-link, on-screen suppression, read-sync clear, and the `refreshAll`
 sweep for banners a best-effort data message missed.
+*Done 2026-09-22.* Server: `PushService` split into the trigger plus
+`ApnsTransport` / `FcmTransport` (HTTP v1, service-account OAuth2 over
+global fetch), per-platform token validation on `POST /me/devices`,
+`GET /me/push/config`, env + Helm + `.env.example` documented; item 5
+(Live Updates pushes) moves to Phase 6 with the client side. Client:
+`push/` package (`PushBridge`, `AndroidPushBridge`, `TurnNotifications`,
+`ArgusMessagingService`), the toggle with the 13+ permission prompt,
+deep link through a `singleTop` activity, the `session:status` local
+cancel and the `refreshAll` sweep. Every server message is a DATA
+message so the app renders and withdraws banners itself. `android.yml`
+green; what remains is a device pass against a server with `FCM_*` set
+(no such server was available on the day).
 
 **Phase 6 — terminal and Live Updates.** xterm.js host with the explicit
 lifecycle; the promoted ongoing notification with local and pushed updates.

@@ -404,36 +404,67 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     silently and plausibly. Both endpoints hash `projectId` into the same
     opaque `key` so a caller can join them without either payload
     carrying an absolute `workingDir`.
-- `push/` — APNs sender for native clients. `DeviceController`
-  (`POST /me/devices` upsert-by-token — re-homing a token that moved
-  accounts — and idempotent `DELETE /me/devices/:token`) plus
-  `PushService`: env-gated (all `APNS_*` unset = silent no-op),
-  provider JWT (ES256 via jsonwebtoken, cached ~45 min), transport is
-  raw `node:http2` because APNs requires HTTP/2 and Node's fetch can't
-  speak it. Fired from `result-ingestor` at the exact point a session
+- `push/` — push for native clients: one platform-agnostic TRIGGER
+  service over two transports selected by each device row's
+  `platform`. `DeviceController` (`POST /me/devices` upsert-by-token —
+  re-homing a token that moved accounts — and idempotent `DELETE
+  /me/devices/:token`) validates the token per platform: `ios` is APNs
+  hex, `android` the FCM alphabet (base64url plus a colon, generously
+  bounded), because the DTO-level hex regex it used to have would have
+  bounced every Android registration. `PushService` owns which sessions,
+  the answer preview, the `outstandingBanners` set and the read-sync
+  clear; `ApnsTransport` (env-gated on `APNS_*`, provider JWT ES256 via
+  jsonwebtoken cached ~45 min, raw `node:http2` because APNs requires
+  HTTP/2 and Node's fetch can't speak it) and `FcmTransport` (env-gated
+  on `FCM_*`, HTTP v1 over global fetch, an OAuth2 access token minted
+  from the service account with an RS256 assertion and cached until a
+  minute before expiry) each deliver to their platform. Both optional and
+  independent: neither configured = silent no-op, one configured = the
+  other platform's rows are skipped, not errored. Fired from
+  `result-ingestor` at the exact point a session
   flips to `idle`/`failed` + unread (the same trigger as the web's
   desktop notifications); payload carries the session title, a
   `sessionId` for the client deep link, and — for completed turns — a
   ~300-char preview of the assistant's answer (deliberate trade-off:
   answer text on the lock screen in exchange for actionable banners;
-  iOS "Show Previews: When Unlocked" is the user-side scope control;
+  iOS "Show Previews: When Unlocked" / Android's sensitive-notification
+  setting is the user-side scope control;
   failures keep a fixed "Turn failed"). The preview uses the final
   chunk's content (claude-code's `result` carries the whole answer);
   codex finals are content-less, so `PushService.answerPreview`
-  re-derives the answer via the deltaSplit boundary rule — making a
-  THIRD port of deltaSplit (web `lib/deltaSplit.ts`, iOS
-  `DeltaSplit.swift`, server `answerPreview`); change one, change all
-  three. 410/`BadDeviceToken`/
-  `Unregistered` feedback prunes the `DeviceToken` row.
+  re-derives the answer via the deltaSplit boundary rule — one of the
+  FOUR ports of deltaSplit (web `lib/deltaSplit.ts`, iOS
+  `DeltaSplit.swift`, Android `DeltaSplit.kt`, server `answerPreview`);
+  change one, change all. APNs 410/`BadDeviceToken`/`Unregistered` and
+  FCM `UNREGISTERED` (404) feedback prune the `DeviceToken` row; FCM's
+  `INVALID_ARGUMENT` prunes only when Google's message names the
+  registration token, since the same code covers a malformed payload
+  and a server bug must not wipe every device.
+  **Every FCM message is a DATA message**, never a "notification"
+  message: the system tray renders those itself when the app is
+  backgrounded and only hands them to app code in the foreground, which
+  would lose on-screen suppression, tag-replacement of an older banner,
+  and the read-sync clear. The Android app renders `{type: turn,
+  sessionId, title, body, failed}` itself (HIGH priority — it produces a
+  visible notification, which is what FCM's high-priority budget is
+  for) and cancels on `{type: clear, sessionId}` (NORMAL priority).
+  `GET /me/push/config` (`PushConfigController`) serves the PUBLIC
+  Firebase client identifiers (`FCM_APP_ID` / `FCM_API_KEY` /
+  `FCM_SENDER_ID` + project id) so the app initialises Firebase at
+  runtime — one APK for any server, the service-account secret never
+  leaves the server; 404 when unset, which the app shows as "this server
+  has no Android push".
   The phone banner is a **projection of the session's `unread` flag**:
   wherever `unread` flips false — `markSeen` (session opened on any
   client) or the ingestor's fresh-turn/cancel transitions —
-  `clearSessionNotification` withdraws the banner via a silent
-  background push (`content-available: 1`, priority 5) that wakes the
-  iOS app to delete its own delivered notification (APNs has no
-  server-side revoke). Gated by the in-memory `outstandingBanners` set,
-  so the per-chunk caller costs a Set lookup and nothing is sent unless
-  an alert actually went out.
+  `clearSessionNotification` withdraws the banner via a silent push
+  (APNs `content-available: 1` at priority 5; FCM a normal-priority data
+  message) that wakes the app to delete its own delivered notification
+  (neither platform has a server-side revoke). Gated by the in-memory
+  `outstandingBanners` set, so the per-chunk caller costs a Set lookup
+  and nothing is sent unless an alert actually went out. Live Activity
+  pushes stay APNs-only; the Android Live Updates counterpart is Phase 6
+  of the Android plan.
 - `sidecar-link/` — raw WebSocket server on path `/sidecar-link`
   attached to the same `http.Server` as NestJS (via `HttpAdapterHost`,
   `noServer` pattern). Owns one connection per sidecar, validates a
@@ -1507,7 +1538,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   file exists, so CI stays green until someone runs the capture against
   a server with searchable sessions — do run it and commit the fixture.
 
-### `apps/android/` (native client — Phase 4: fleet and account)
+### `apps/android/` (native client — Phase 5: push)
 
 - Kotlin + Jetpack Compose, shaped like `apps/ios/`: `:core` is a **plain
   Kotlin/JVM module** (no Android plugin — the counterpart of ArgusKit,
@@ -1583,6 +1614,42 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   observable update. The 150 ms flush window is non-restarting. The
   file preview's own 400 ms refresh window is non-restarting too — see
   the "Live file tabs" gotchas for why a restarting debounce starves.
+- **Push is FCM with Firebase initialised at RUNTIME, and every message
+  is rendered by the app.** There is no `google-services.json` and no
+  google-services Gradle plugin: `AppModel.setPushEnabled` fetches
+  `GET /me/push/config`, `AndroidPushBridge.initialize` builds
+  `FirebaseOptions` from it (deleting and re-creating the default
+  `FirebaseApp` when the identifiers changed — `initializeApp` throws on
+  a second init), mints the registration token and `POST /me/devices`
+  it with `platform: "android"`. The config is cached in prefs so a
+  process that an incoming message starts (no login path) can
+  re-initialise Firebase in `ArgusApplication.onCreate`; the manifest
+  disables `firebase_messaging_auto_init_enabled`, so no token exists
+  before the user opts in. `ArgusMessagingService` receives data
+  messages only (see the server's `push/` entry for why): `type: turn`
+  becomes a `TurnNotifications` banner posted under the SESSION ID AS
+  ITS TAG (a newer completion replaces the older banner — the web's
+  `tag`, APNs' collapse id) unless `AppModel.isForeground` and the route
+  is that session; `type: clear` cancels by tag. The same tag is what
+  the socket's `session:status` handler cancels the moment `unread`
+  flips false, and what `refreshAll` sweeps against the fresh unread set
+  — the server's clear is best-effort (throttled in Doze, never
+  delivered to a force-stopped app). The tap intent carries the session
+  id as an extra with a per-session request code (extras are not part
+  of `PendingIntent` identity, so one code would make every tap open
+  the last session); `MainActivity` is `singleTop` and routes from
+  `onCreate` (only on a fresh launch — never a recreate) and
+  `onNewIntent`, via `AppModel.openSessionFromNotification`, which
+  parks the id until the app is `Ready`. The toggle requests
+  `POST_NOTIFICATIONS` (13+) from the gesture before registering;
+  registration runs on the process scope so leaving the panel cannot
+  cancel it between "token minted" and "token registered". The
+  enabled flag survives logout (the token is unregistered), so the next
+  login re-registers — iOS parity. Pinned at exact versions:
+  `firebase-messaging` 25.1.3 and `core-ktx` 1.19.0 (NotificationCompat
+  is used directly, so it is a direct pin rather than a transitive
+  accident). `PushConfigDTO` is Android-only and has no Swift mirror
+  by design.
 - **Creation is project-first and the model editor is one composable.**
   `AppModel.createSession(machineId, workingDir, adapterType, title,
   modelSelection)` is the single creation call (the server upserts the
@@ -3252,10 +3319,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   composer + queue, VM cache; device-verified) and 3 (inspector, file
   and attachment previews, model picker, usage badge, attachments, fork,
   Ctrl+P/Ctrl+K palette, hotkey registry + Ctrl+/ sheet, tablet split
-  layout) and 4 (machine panel, account panel, creation sheets, the
-  palette's on-screen entry point) landed on `feat/android-native-client`
-  and were exercised on a device/emulator; Phases 5–6 (FCM push,
-  terminal + Live Updates) are open. The design,
+  layout), 4 (machine panel, account panel, creation sheets, the
+  palette's on-screen entry point) and 5 (FCM push with the server's
+  transport split, runtime Firebase init, the notifications toggle,
+  deep link, on-screen suppression, read-sync clear and the foreground
+  sweep — CI-green, awaiting a device pass against a server with
+  `FCM_*` set) landed on `feat/android-native-client`; Phase 6 (terminal
+  + Live Updates) is open. The design,
   wire contract, lockstep table, CI shape and phases are in
   `docs/plan-android-native-client.md`; the module map is under
   `apps/android/` above. Same posture as iOS (thin client, hand-written
