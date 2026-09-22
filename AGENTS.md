@@ -2125,8 +2125,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   tells us a new subtype appeared and needs explicit handling. Don't
   "fix" it by making the fallback content-less — special-case known-noisy
   subtypes individually instead (as done for `thinking_tokens`,
-  `task_notification`, `api_retry`, `vcs_state_changed`, and
-  `code_change_published`). `TestMapClaudeUnknownSystemSubtype`
+  `task_notification`, `api_retry`, `vcs_state_changed`,
+  `code_change_published` and `dev_intent`).
+  `TestMapClaudeUnknownSystemSubtype`
   (`claude_code_test.go`) pins the visible fallback — if you ever find
   yourself making it content-less, that test is what should stop you.
   *Worked example of the breadcrumb doing its job:* a burst of "system"
@@ -2140,6 +2141,21 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   event queue to stdout **unfiltered** (the interactive REPL bridge
   applies an allowlist), so the sidecar sees strictly more subtypes than
   the interactive UI does.
+  *Faster first step, learned on `dev_intent` (2.1.278):* the binary
+  tells you what a subtype MEANS, but the live runner result stream
+  tells you which one actually fired and with what payload — the whole
+  event rides in the fallback chunk's `meta`. `XRANGE machine:{mid}:cli:
+  claude-code:result - +` and filter `kind == "progress" && content ==
+  "system"`; the machine id and bus credentials are in
+  `~/.config/argus/sidecar.json`. Postgres has it too and keeps it
+  forever, but the stream needs no server credentials — at MAXLEN 500 it
+  holds roughly the last hour on a busy machine, so do this while the
+  report is fresh. Then take the subtype to the bundle: `grep -abo
+  'type:"system",subtype:"<name>"'` for a byte offset and `dd bs=1
+  skip=<offset-N> count=<M>` a window around it (repeated greps over
+  ~234 MB time out). Reading the emitter is what distinguishes a
+  once-per-session event from a once-per-turn one — see `dev_intent`
+  below, where that distinction is the entire finding.
 - **`api_retry` (Claude Code)**: `{"type":"system","subtype":"api_retry",
   "error_status":502,"attempt":N,"max_retries":10,"retry_delay_ms":…}`
   fires when an API call fails retryably and the CLI is backing off; it
@@ -2201,6 +2217,38 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   output or a file the same command catted — a display hint, not a
   verified identity. Never send credentials to `url` on its strength;
   `provider` is an open set too.
+- **`dev_intent` (Claude Code ≥ 2.1.278) fires on EVERY turn, ahead of
+  that turn's `init`.** `{"type":"system","subtype":"dev_intent",
+  "kind":"ios_app","trigger":"xcode_project"}` — the CLI's classification
+  of what kind of development the conversation is doing, and nothing
+  else: no state to reconcile, no path to route, no id to bind. Mapped
+  content-less with `meta.contentType="dev_intent"` + `kind`/`trigger`,
+  i.e. silenced, not consumed.
+  **Why it repeats, which is what makes it worth mapping.** Two emitters
+  exist. The one we see folds over assistant `tool_use` / user
+  `tool_result` blocks and fires when an evidence PAIR completes — for
+  `ios_app`, a `.swift` file **written or edited** (Reads don't count)
+  plus one of `uikit_import` (`import UIKit` / `.iOS(` in a write's
+  content), `xcode_project` (`SDKROOT = iphone*`, `IPHONEOS_DEPLOYMENT_
+  TARGET`, `TARGETED_DEVICE_FAMILY` in a tool result) or `ios_command`
+  (`simctl`, `-sdk iphonesimulator`, `platform=iOS Simulator` in a Bash
+  command); `android_app` is the mirror image. It is guarded once per
+  kind per PROCESS — but every Argus turn is a fresh `claude --resume`,
+  so the detector re-folds the RESUMED TRANSCRIPT at startup. Once a
+  session's history holds the pair, every later turn re-emits it before
+  the turn's own `init`, forever. Measured on the live fleet (Sep 2026,
+  claude 2.1.278): the first emission landed mid-turn, the moment the
+  first `.swift` Write completed the pair; every subsequent turn of that
+  session put it at **seq 1**, so unmapped it is the permanent first row
+  of the activity timeline. A sibling session in the same working
+  directory never emitted it — the trigger is the session's transcript,
+  not the project on disk, which is also how the second emitter is
+  distinguished (it scans the workspace and reports
+  `trigger:"project_scan"`; never observed in `-p` mode).
+  Both fields are **open sets**: `kind` is `ios_app`/`android_app` today,
+  and `trigger`'s declared enum is already wider than the detectors can
+  produce (`swift_edit` / `kotlin_edit` / `java_edit` are declared but
+  unreached). `uuid` is fresh per emit, so it is not a dedupe key.
 - **Claude Code emits `system/init` TWICE, and the second one is a
   state-change stub** (verified against the `claude` 2.1.241 bundle).
   Both come from the same event helper, but carry very different
