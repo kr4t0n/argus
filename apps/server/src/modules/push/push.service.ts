@@ -4,6 +4,9 @@ import { PrismaService } from '../../infra/prisma/prisma.service';
 import { ApnsTransport } from './apns.transport';
 import { FcmTransport } from './fcm.transport';
 
+/** A registered live-turn token and the transport that reaches it. */
+type LiveToken = { token: string; platform: string };
+
 /** Live-turn bookkeeping for one session's lock-screen activity. */
 type LiveTurn = {
   commandId: string;
@@ -13,8 +16,11 @@ type LiveTurn = {
   /** Armed while an update sits suppressed inside the throttle window;
    *  fires at window expiry with the then-current counters. */
   pendingFlush?: NodeJS.Timeout;
-  tokens: string[];
+  tokens: LiveToken[];
   tokensFetchedAt: number;
+  /** Session title, read once per turn for the Android card (the app
+   *  may have been killed and hold no session list when a push lands). */
+  title?: string;
 };
 
 /** A registered device, grouped by the transport that reaches it. */
@@ -236,17 +242,19 @@ export class PushService {
     return chars.slice(0, PushService.ALERT_BODY_MAX - 1).join('').trimEnd() + '…';
   }
 
-  // ── Live Activities (APNs only today) ────────────────────────────
+  // ── Live turns: iOS Live Activities + Android Live Updates ───────
   //
   // The iOS client starts an ActivityKit activity for a running turn
-  // and registers its per-activity push token against the session.
-  // While the app is backgrounded, WE are the only thing that can move
-  // the lock-screen card: throttled 'update' events as tool chunks
-  // stream, and an immediate 'end' when the turn settles. The Swift
-  // ContentState is `{state, toolCount, lastTool}` — key names here
-  // must match it EXACTLY (ActivityKit decodes content-state with the
-  // struct's Codable). Android Live Updates (Phase 6 of the Android
-  // plan) will ride the same throttle as FCM data messages.
+  // and registers its per-activity push token against the session; the
+  // Android client posts a promoted ongoing notification and registers
+  // its FCM device token per session. While the app is backgrounded,
+  // WE are the only thing that can move the lock-screen card: throttled
+  // 'update' events as tool chunks stream, and an immediate 'end' when
+  // the turn settles. The Swift ContentState is `{state, toolCount,
+  // lastTool}` — key names here must match it EXACTLY (ActivityKit
+  // decodes content-state with the struct's Codable); the Android data
+  // message carries the same three plus `event`, `sessionId` and the
+  // session `title`, all as strings.
 
   /** Per-session live-turn bookkeeping: tool counters + push throttle +
    *  a short token-existence cache so chunk ingestion never queries
@@ -275,7 +283,7 @@ export class PushService {
     content?: string;
     meta?: Record<string, unknown>;
   }): void {
-    if (!this.apns.enabled) return;
+    if (!this.enabled) return;
     if (chunk.kind !== 'tool') return;
 
     let entry = this.liveTurns.get(chunk.sessionId);
@@ -342,7 +350,7 @@ export class PushService {
 
   /** Resolve the card when the turn settles — always immediate. */
   async endLiveActivity(sessionId: string, failed: boolean): Promise<void> {
-    if (!this.apns.enabled) return;
+    if (!this.enabled) return;
     const entry = this.liveTurns.get(sessionId);
     // Disarm any pending trailing flush: its "running" update firing
     // after this 'end' would flip a settled ✓/✗ card back to running.
@@ -366,36 +374,62 @@ export class PushService {
     try {
       const tokens = await this.liveTokens(sessionId);
       if (tokens.length === 0) return;
+      const ios = tokens.filter((t) => t.platform !== 'android');
+      const android = tokens.filter((t) => t.platform === 'android');
+      const sends: Promise<void>[] = [];
 
-      const nowSeconds = Math.floor(Date.now() / 1000);
-      const payload = JSON.stringify({
-        aps: {
-          timestamp: nowSeconds,
+      if (ios.length > 0 && this.apns.enabled) {
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const payload = JSON.stringify({
+          aps: {
+            timestamp: nowSeconds,
+            event,
+            'content-state': contentState,
+            // Updates go stale if nothing arrives for a while (the card
+            // dims); an ended card dismisses itself after a few minutes.
+            ...(event === 'update'
+              ? { 'stale-date': nowSeconds + 600 }
+              : { 'dismissal-date': nowSeconds + 240 }),
+          },
+        });
+        for (const t of ios) {
+          sends.push(
+            this.apns.send(t.token, payload, {
+              topic: this.apns.liveActivityTopic,
+              pushType: 'liveactivity',
+              kind: 'live-activity',
+            }),
+          );
+        }
+      }
+
+      if (android.length > 0 && this.fcm.enabled) {
+        // HIGH priority like the APNs leg's priority 10: these update a
+        // visible ongoing notification, which is what the high-priority
+        // budget is for, and NORMAL would be deferred through Doze — the
+        // exact window the card exists to cover. The 15 s server
+        // throttle bounds the rate either way.
+        const data = {
+          type: 'live',
+          sessionId,
           event,
-          'content-state': contentState,
-          // Updates go stale if nothing arrives for a while (the card
-          // dims); an ended card dismisses itself after a few minutes.
-          ...(event === 'update'
-            ? { 'stale-date': nowSeconds + 600 }
-            : { 'dismissal-date': nowSeconds + 240 }),
-        },
-      });
+          state: contentState.state,
+          toolCount: String(contentState.toolCount),
+          lastTool: contentState.lastTool,
+          title: await this.liveTitle(sessionId),
+        };
+        for (const t of android) {
+          sends.push(this.fcm.send(t.token, data, { priority: 'high', kind: 'live-activity' }));
+        }
+      }
 
-      await Promise.allSettled(
-        tokens.map((token) =>
-          this.apns.send(token, payload, {
-            topic: this.apns.liveActivityTopic,
-            pushType: 'liveactivity',
-            kind: 'live-activity',
-          }),
-        ),
-      );
+      await Promise.allSettled(sends);
     } catch (err) {
       this.logger.warn(`live-activity push failed: ${String(err)}`);
     }
   }
 
-  private async liveTokens(sessionId: string): Promise<string[]> {
+  private async liveTokens(sessionId: string): Promise<LiveToken[]> {
     const entry = this.liveTurns.get(sessionId);
     const now = Date.now();
     if (entry && now - entry.tokensFetchedAt < PushService.LIVE_TOKEN_CACHE_MS) {
@@ -403,13 +437,25 @@ export class PushService {
     }
     const rows = await this.prisma.liveActivityToken.findMany({
       where: { sessionId },
-      select: { token: true },
+      select: { token: true, platform: true },
     });
-    const tokens = rows.map((row) => row.token);
     if (entry) {
-      entry.tokens = tokens;
+      entry.tokens = rows;
       entry.tokensFetchedAt = now;
     }
-    return tokens;
+    return rows;
+  }
+
+  /** The session title for the Android card, cached on the live turn. */
+  private async liveTitle(sessionId: string): Promise<string> {
+    const entry = this.liveTurns.get(sessionId);
+    if (entry?.title !== undefined) return entry.title;
+    const row = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      select: { title: true },
+    });
+    const title = row?.title ?? '';
+    if (entry) entry.title = title;
+    return title;
   }
 }

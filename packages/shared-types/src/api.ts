@@ -755,13 +755,18 @@ export interface PushConfigDTO {
   senderId: string;
 }
 
-/** Request body for `POST /me/live-activities` — register an ActivityKit
- *  push token for a running turn's Live Activity. Tokens are
+/** Request body for `POST /me/live-activities` — register a lock-screen
+ *  live-turn token for a session. iOS: an ActivityKit push token,
  *  PER-ACTIVITY (ActivityKit mints one per started activity), so the
- *  client re-registers for every turn it puts on the lock screen. */
+ *  client re-registers for every turn it puts on the lock screen.
+ *  Android (`platform: "android"`): the device's FCM registration token
+ *  bound to the session; rows are keyed (token, sessionId), so one
+ *  device can track several turns. `DELETE /me/live-activities/:token`
+ *  takes an optional `?sessionId=` to end just one of them. */
 export interface RegisterLiveActivityRequest {
   token: string;
   sessionId: string;
+  platform?: 'ios' | 'android' | (string & {});
 }
 
 /** One registered Live Activity token. */

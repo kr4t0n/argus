@@ -123,8 +123,11 @@ export class FcmTransport {
   async send(
     deviceToken: string,
     data: Record<string, string>,
-    opts: { priority: 'high' | 'normal' } = { priority: 'high' },
+    opts: { priority: 'high' | 'normal'; kind?: 'device' | 'live-activity' } = {
+      priority: 'high',
+    },
   ): Promise<void> {
+    const kind = opts.kind ?? 'device';
     try {
       const accessToken = await this.accessToken();
       const response = await fetch(
@@ -151,7 +154,7 @@ export class FcmTransport {
         },
       );
       if (!response.ok) {
-        this.handleFailure(deviceToken, response.status, await response.text());
+        this.handleFailure(deviceToken, response.status, await response.text(), kind);
       }
     } catch (err) {
       this.logger.warn(`FCM request error: ${String(err)}`);
@@ -164,9 +167,15 @@ export class FcmTransport {
    * `INVALID_ARGUMENT` is pruned only when Google's message names the
    * registration token: the same code also covers a malformed payload,
    * and pruning every device over a server-side bug would be the wrong
-   * kind of self-healing.
+   * kind of self-healing. A dead token is dead for every purpose, so a
+   * live-activity failure prunes every session row under it.
    */
-  private handleFailure(deviceToken: string, status: number, body: string): void {
+  private handleFailure(
+    deviceToken: string,
+    status: number,
+    body: string,
+    kind: 'device' | 'live-activity',
+  ): void {
     let code = '';
     let message = '';
     try {
@@ -179,12 +188,18 @@ export class FcmTransport {
       /* non-JSON error body */
     }
     this.logger.warn(
-      `FCM ${status} ${code || message} for token ${deviceToken.slice(0, 8)}…`,
+      `FCM ${status} ${code || message} (${kind}) for token ${deviceToken.slice(0, 8)}…`,
     );
     const invalidToken =
       code === 'INVALID_ARGUMENT' && /registration token/i.test(message);
     if (code === 'UNREGISTERED' || status === 404 || invalidToken) {
-      void this.prisma.deviceToken.delete({ where: { token: deviceToken } }).catch(() => {});
+      if (kind === 'device') {
+        void this.prisma.deviceToken.delete({ where: { token: deviceToken } }).catch(() => {});
+      } else {
+        void this.prisma.liveActivityToken
+          .deleteMany({ where: { token: deviceToken } })
+          .catch(() => {});
+      }
     }
   }
 

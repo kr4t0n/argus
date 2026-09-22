@@ -170,8 +170,10 @@ export class ApnsTransport {
       if (kind === 'device') {
         void this.prisma.deviceToken.delete({ where: { token: deviceToken } }).catch(() => {});
       } else {
+        // Keyed (token, sessionId) since Android joined; an APNs token is
+        // per-activity so this still removes exactly one row.
         void this.prisma.liveActivityToken
-          .delete({ where: { token: deviceToken } })
+          .deleteMany({ where: { token: deviceToken } })
           .catch(() => {});
       }
     }
