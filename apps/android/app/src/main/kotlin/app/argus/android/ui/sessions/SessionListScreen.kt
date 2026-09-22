@@ -19,10 +19,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -51,6 +53,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.argus.android.AppModel
+import app.argus.android.PaletteMode
+import app.argus.android.Route
+import app.argus.android.ui.create.NewProjectSheet
+import app.argus.android.ui.create.NewSessionSheet
 import app.argus.android.ui.components.AgentTypeGlyph
 import app.argus.android.ui.components.ConnectionBanner
 import app.argus.android.ui.components.SessionStatusDot
@@ -72,6 +78,11 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun SessionListScreen(app: AppModel, onOpenSession: (String) -> Unit) {
+    // Creation sheets — project-first, exactly the web's creation
+    // hierarchy: a project row's "+" makes a session inside it, a
+    // machine's "New project…" makes a working dir + first session.
+    var newSessionIn by remember { mutableStateOf<ProjectGroup?>(null) }
+    var newProjectOn by remember { mutableStateOf<MachineDTO?>(null) }
     val sessions by app.sessionList.sessions.collectAsState()
     val loaded by app.sessionList.loaded.collectAsState()
     val machines by app.fleet.machines.collectAsState()
@@ -97,6 +108,12 @@ fun SessionListScreen(app: AppModel, onOpenSession: (String) -> Unit) {
             TopAppBar(
                 title = { Text("Argus") },
                 actions = {
+                    // The one on-screen way into the palette: a phone
+                    // has no Ctrl chords, and the web breaks the same
+                    // circle with its sidebar keyboard glyph.
+                    IconButton(onClick = { app.openPalette(PaletteMode.SESSION) }) {
+                        Icon(Icons.Default.Search, contentDescription = "Search sessions")
+                    }
                     IconButton(onClick = { scope.launch { app.refreshAll() } }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }
@@ -106,10 +123,17 @@ fun SessionListScreen(app: AppModel, onOpenSession: (String) -> Unit) {
                         }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                             DropdownMenuItem(
-                                text = { Text("Sign out") },
+                                text = { Text("Keyboard shortcuts") },
                                 onClick = {
                                     menuOpen = false
-                                    app.logOut()
+                                    app.openPalette(PaletteMode.HELP)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Account") },
+                                onClick = {
+                                    menuOpen = false
+                                    app.navigate(Route.User)
                                 },
                             )
                         }
@@ -143,6 +167,13 @@ fun SessionListScreen(app: AppModel, onOpenSession: (String) -> Unit) {
                             showingArchived = showArchived[group.id] == true,
                             onToggleCollapsed = { collapsed[group.id] = collapsed[group.id] != true },
                             onToggleArchived = { showArchived[group.id] = showArchived[group.id] != true },
+                            // The synthetic "no project" bucket has no
+                            // path to anchor a session against.
+                            onNewSession = if (group.machineId != null && group.workingDir != null) {
+                                { newSessionIn = group }
+                            } else {
+                                null
+                            },
                         )
                     }
                     if (collapsed[group.id] != true) {
@@ -182,12 +213,21 @@ fun SessionListScreen(app: AppModel, onOpenSession: (String) -> Unit) {
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     )
                 }
-                items(machineRows, key = { "m:${it.id}" }) { machine -> MachineRow(machine) }
+                items(machineRows, key = { "m:${it.id}" }) { machine ->
+                    MachineRow(
+                        machine = machine,
+                        onOpen = { app.navigate(Route.Machine(machine.id)) },
+                        onNewProject = { newProjectOn = machine },
+                    )
+                }
 
                 item(key = "account") {
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .combinedClickable(onClick = { app.navigate(Route.User) })
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
@@ -200,6 +240,12 @@ fun SessionListScreen(app: AppModel, onOpenSession: (String) -> Unit) {
         }
     }
 
+    newSessionIn?.let { group ->
+        NewSessionSheet(app = app, project = group, onDismiss = { newSessionIn = null })
+    }
+    newProjectOn?.let { machine ->
+        NewProjectSheet(app = app, machine = machine, onDismiss = { newProjectOn = null })
+    }
     renameTarget?.let { target ->
         RenameDialog(
             initial = target.title,
@@ -235,6 +281,7 @@ private fun ProjectHeader(
     showingArchived: Boolean,
     onToggleCollapsed: () -> Unit,
     onToggleArchived: () -> Unit,
+    onNewSession: (() -> Unit)?,
 ) {
     Row(
         modifier = Modifier
@@ -283,6 +330,16 @@ private fun ProjectHeader(
                     if (showingArchived) "hide archived" else "${group.archivedSessions.size} archived",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (showingArchived) argusPalette.statusDone else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (onNewSession != null) {
+            IconButton(onClick = onNewSession, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = "New session",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
                 )
             }
         }
@@ -341,13 +398,19 @@ private fun SessionRow(
     }
 }
 
+/** Tap opens the machine panel; long-press offers the machine's creation action. */
 @Composable
-private fun MachineRow(machine: MachineDTO) {
+private fun MachineRow(machine: MachineDTO, onOpen: () -> Unit, onNewProject: () -> Unit) {
     val online = machine.status == MachineStatus.ONLINE
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(onClick = onOpen, onLongClick = { menuOpen = true })
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
         StatusCircle(
             color = if (online) argusPalette.statusDone else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
             modifier = Modifier.size(8.dp),
@@ -361,6 +424,10 @@ private fun MachineRow(machine: MachineDTO) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        }
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            DropdownMenuItem(text = { Text("New project…") }, onClick = { menuOpen = false; onNewProject() })
+        }
     }
 }
 

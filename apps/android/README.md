@@ -5,20 +5,24 @@ Like the iOS client it is a *thin client*: it speaks the same NestJS REST
 API + Socket.IO `/stream` namespace as the web app and never touches the
 Go sidecar.
 
-> Status: **Phase 3 — parity batch.** `:core` holds the full non-UI layer
-> (decode-tolerant DTO mirrors of shared-types, the OkHttp REST client,
-> the socket.io realtime client as a `Flow` of typed events, and the
-> transcript engine ported from ArgusKit — all unit-tested against the
-> fixtures shared with the iOS client). `:app` is a usable client on
+> Status: **Phase 4 — fleet and account.** `:core` holds the full non-UI
+> layer (decode-tolerant DTO mirrors of shared-types, the OkHttp REST
+> client, the socket.io realtime client as a `Flow` of typed events, and
+> the transcript engine ported from ArgusKit — all unit-tested against
+> the fixtures shared with the iOS client). `:app` is a usable client on
 > phones and tablets: server + login, the project-grouped session list
 > (a side column from 840dp), a streaming transcript (activity timeline,
 > tool pills, diffs, markdown with math, mermaid, sandboxed HTML and
 > inline workspace images), a composer with attachments and the prompt
 > queue, the inspector (Commits / Files / Note / Diff, terminal
 > placeholder), file preview, model picker, usage badge + context ring,
-> fork, the Ctrl+P / Ctrl+K palette and the Ctrl+/ shortcuts sheet.
-> Fleet + account panels, creation sheets, push and the terminal are
-> later phases. The full design, wire contract and phase plan are in
+> fork, the Ctrl+P / Ctrl+K palette (also behind the list's search
+> button) and the Ctrl+/ shortcuts sheet, the machine panel (host,
+> adapters, projects, sidecar update, remove), the account panel
+> (activity grid/curve, usage windows, plan quota, extensions), and the
+> project / session creation sheets. Push notifications and the terminal
+> are the remaining phases. The full design, wire contract and phase
+> plan are in
 > [`docs/plan-android-native-client.md`](../../docs/plan-android-native-client.md).
 
 ## CI is the compiler
@@ -122,6 +126,8 @@ apps/android/
                                 activity timeline, panels, model picker, usage badge),
                                 inspector/ (Commits / Files / Note / Diff), files/ (file +
                                 attachment previews), palette/ (Ctrl+P / Ctrl+K / Ctrl+/),
+                                machine/ (machine panel), user/ (account panel), create/
+                                (project + session sheets, the shared model form),
                                 markdown/ (AnswerView, Markwon host, WebView blocks, images),
                                 components/ (atoms, DiffBlock, FileChips), theme/
 ```
@@ -262,6 +268,20 @@ restarting debounce starves under sustained editing). The model picker
 is keyed (machine, cliType) and never validates against the catalog; the
 usage badge is the context ring alone, with the breakdown one tap away.
 
+**Fleet and account (Phase 4).** Machines and the account are routes
+beside sessions (`Route.Machine`, `Route.User`), reached from the list's
+machine rows and account row and rendered in the detail column on
+tablets. Creation is project-first, as on the web: a project row's `+`
+creates a session inside it, a machine's "New project…" (long-press on
+its row, or the machine panel's menu) creates a working directory plus
+its first session; both go through one `POST /sessions` that upserts the
+Project row. The model editor is one composable shared by the session
+picker and both sheets, so a catalog fix lands everywhere. The account
+panel's "task completion alerts" toggle is rendered disabled until push
+lands. The list's top bar gained a search action that opens the palette
+in session mode — the on-screen entry point a phone needs, since the
+chords are Ctrl-only.
+
 **Attachments.** The system photo and document pickers feed
 `ArgusClient.uploadAttachment`; uploads happen ahead of send, the chips
 show a local thumbnail from the bytes in hand, and the ids ride the
@@ -335,6 +355,6 @@ See the plan for the full phase list. In short: **0** CI bootstrap ✅ →
 **1** core module ✅ → **2** login, session list, streaming transcript,
 composer with the queue ✅ (device-verified) → **3** inspector, file
 preview, model picker, usage badge, attachments, fork, palette and
-hotkeys ✅ (this) → **4** fleet and account panels, creation sheets →
+hotkeys ✅ → **4** fleet and account panels, creation sheets ✅ (this) →
 **5** push (FCM, with the server-side transport split) → **6** terminal
 and Live Updates.

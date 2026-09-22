@@ -11,6 +11,9 @@ import app.argus.core.api.ServerConfig
 import app.argus.core.model.AgentType
 import app.argus.core.model.AuthUser
 import app.argus.core.model.CreateCommandRequest
+import app.argus.core.model.CreateSessionRequest
+import app.argus.core.model.ModelSelection
+import app.argus.core.model.SessionDTO
 import app.argus.core.model.MachineStatus
 import app.argus.core.model.SessionStatus
 import app.argus.core.model.UserExtensions
@@ -404,6 +407,37 @@ class AppModel(private val prefs: SharedPreferences) {
         maybeDrainAllQueues()
     }
 
+    // MARK: Creation (project-first)
+
+    /**
+     * Create a session in a project with ONE call: the request carries
+     * the `(machineId, workingDir, cliType)` triple and the server
+     * upserts the Project row and pins the session to it (sessions route
+     * by `projectId → machine + cliType`). Returns the new session,
+     * already upserted and routed to. Throws [ApiError] on failure.
+     */
+    suspend fun createSession(
+        machineId: String,
+        workingDir: String?,
+        adapterType: AgentType,
+        title: String?,
+        modelSelection: ModelSelection? = null,
+    ): SessionDTO {
+        val client = client ?: throw ApiError(0, "Not connected")
+        val created = client.createSession(
+            CreateSessionRequest(
+                machineId = machineId,
+                workingDir = workingDir?.takeIf { it.isNotEmpty() },
+                cliType = adapterType,
+                title = title?.takeIf { it.isNotEmpty() },
+                modelSelection = modelSelection?.takeUnless { it.isEmpty },
+            ),
+        )
+        sessionList.upsert(created.session)
+        _route.value = Route.Session(created.session.id)
+        return created.session
+    }
+
     // MARK: Prompt queue drainer
 
     /**
@@ -564,6 +598,8 @@ class AppModel(private val prefs: SharedPreferences) {
 /** What the main surface shows; null is the session list. */
 sealed interface Route {
     data class Session(val id: String) : Route
+    data class Machine(val id: String) : Route
+    data object User : Route
 }
 
 /**

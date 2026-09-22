@@ -1,6 +1,6 @@
 # Plan: native Android client — Kotlin + Jetpack Compose
 
-Status: 🟡 IN PROGRESS · Phase 0 ✅ (2026-09-21) · Phase 1 ✅ (2026-09-21, `android.yml` and `ios.yml` both green on the branch) · Phase 2 ✅ (2026-09-22, CI green and a turn round-tripped on a device) · Phase 3 ✅ code-complete (2026-09-22, CI green; device pass owed) · Phase 4 next
+Status: 🟡 IN PROGRESS · Phase 0 ✅ (2026-09-21) · Phase 1 ✅ (2026-09-21, `android.yml` and `ios.yml` both green on the branch) · Phase 2 ✅ (2026-09-22, CI green and a turn round-tripped on a device) · Phase 3 ✅ (2026-09-22, CI green; composer newline + photo attachment device-confirmed) · Phase 4 ✅ code-complete (2026-09-22, CI green; device pass owed) · Phase 5 next
 Branch: `feat/android-native-client` (PRs target `dev`)
 Prereq: none — the server contract the client speaks is already frozen by the
 iOS client and its captured fixtures.
@@ -438,6 +438,14 @@ image-loading library — a dependency deliberately not taken.
 **Phase 4 — fleet and account.** Machines panel with sidecar update,
 user panel (activity grid and curve, usage windows, quota, extensions),
 project and session creation sheets.
+*Done (code) 2026-09-22.* All of the above landed and `android.yml` is
+green. Two additions beyond the draft: the palette got its on-screen
+entry point (a search action in the list's top bar — the open question
+below is closed), and the catalog editor was extracted from the session
+model picker into one `ModelSelectionForm` shared with both creation
+sheets. The push toggle on the account panel is rendered disabled until
+Phase 5 rather than faking a preference. Sign-out moved from the list's
+menu to the account panel, matching the web.
 
 **Phase 5 — push.** Server §6, then the client: runtime Firebase init,
 registration on login and token refresh, the notifications toggle, tap
@@ -472,13 +480,10 @@ lifecycle; the promoted ongoing notification with local and pushed updates.
   LICENSE file for the repo, are separate decisions.
 - **UnifiedPush** for devices without Play services — only if someone
   needs it.
-- **Palette entry point on phones.** The Ctrl+P / Ctrl+K / Ctrl+/ overlays
-  are reachable only through hardware-keyboard chords, so a phone without
-  a keyboard cannot open them at all. The web breaks this circle with the
-  keyboard glyph in the sidebar; Android needs an on-screen affordance —
-  a search action in the session list's top bar opening the palette in
-  session mode (the in-sheet toggle already switches to content search)
-  is the obvious one. Phase 4 polish.
+- **Palette entry point on phones** — closed in Phase 4: the session
+  list's top bar has a search action that opens the palette in session
+  mode (the in-sheet toggle switches to content search), and its menu
+  opens the shortcuts sheet.
 - **Deep-link to the matched turn from Ctrl+K** — deferred on iOS because
   the transcript engine has no floating-window model; port it to both
   native clients together, or to neither.

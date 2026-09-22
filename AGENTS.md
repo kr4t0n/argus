@@ -1507,7 +1507,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   file exists, so CI stays green until someone runs the capture against
   a server with searchable sessions — do run it and commit the fixture.
 
-### `apps/android/` (native client — Phase 3: parity batch)
+### `apps/android/` (native client — Phase 4: fleet and account)
 
 - Kotlin + Jetpack Compose, shaped like `apps/ios/`: `:core` is a **plain
   Kotlin/JVM module** (no Android plugin — the counterpart of ArgusKit,
@@ -1583,6 +1583,15 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   observable update. The 150 ms flush window is non-restarting. The
   file preview's own 400 ms refresh window is non-restarting too — see
   the "Live file tabs" gotchas for why a restarting debounce starves.
+- **Creation is project-first and the model editor is one composable.**
+  `AppModel.createSession(machineId, workingDir, adapterType, title,
+  modelSelection)` is the single creation call (the server upserts the
+  Project row from the triple); `ui/create/CreateSheets.kt` holds both
+  sheets, and `ModelSelectionForm` (extracted from `ModelPicker.kt`) is
+  what the session picker AND both sheets embed — do not fork a second
+  catalog editor. Routes are `Route.Session` / `Route.Machine` /
+  `Route.User`; the list's machine and account rows navigate, and on a
+  tablet all three render in the detail column.
 - **The split layout is width-driven, not device-driven.** `ArgusApp`
   switches from the stack to the list-column split at 840dp (material
   "expanded"), and `SessionScreen` places the inspector beside the
@@ -3243,8 +3252,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   composer + queue, VM cache; device-verified) and 3 (inspector, file
   and attachment previews, model picker, usage badge, attachments, fork,
   Ctrl+P/Ctrl+K palette, hotkey registry + Ctrl+/ sheet, tablet split
-  layout) landed on `feat/android-native-client`; Phase 3's device pass
-  is owed, and Phases 4–6 (fleet/account + creation sheets, FCM push,
+  layout) and 4 (machine panel, account panel, creation sheets, the
+  palette's on-screen entry point) landed on `feat/android-native-client`;
+  a device pass over Phases 3–4 is owed, and Phases 5–6 (FCM push,
   terminal + Live Updates) are open. The design,
   wire contract, lockstep table, CI shape and phases are in
   `docs/plan-android-native-client.md`; the module map is under

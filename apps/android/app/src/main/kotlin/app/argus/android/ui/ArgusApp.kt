@@ -24,14 +24,16 @@ import app.argus.android.AppModel
 import app.argus.android.Route
 import app.argus.android.ui.components.CloneFailureToasts
 import app.argus.android.ui.login.LoginScreen
+import app.argus.android.ui.machine.MachineScreen
 import app.argus.android.ui.palette.PaletteHost
 import app.argus.android.ui.session.SessionScreen
 import app.argus.android.ui.sessions.SessionListScreen
+import app.argus.android.ui.user.UserScreen
 
 /**
  * Root: the phase switch (launching / login / ready) and, once ready,
  * the main navigation. On a compact width that is a two-level stack —
- * the session list, or one session; from 840dp (the material
+ * the session list, or one detail (a session, a machine, the account); from 840dp (the material
  * "expanded" class) it becomes the split the web and iPad show — the
  * list as a left column beside the open session, hideable with Ctrl+B.
  * State lives in [AppModel] (process-scoped), so this is a pure
@@ -92,6 +94,16 @@ private fun MainNavigation(app: AppModel) {
                                 )
                             }
                         }
+                        is Route.Machine -> {
+                            BackHandler { app.navigate(null) }
+                            key(current.id) {
+                                MachineScreen(app = app, machineId = current.id, onBack = { app.navigate(null) }, showBack = !sidebarVisible)
+                            }
+                        }
+                        Route.User -> {
+                            BackHandler { app.navigate(null) }
+                            UserScreen(app = app, onBack = { app.navigate(null) }, showBack = !sidebarVisible)
+                        }
                         null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text(
                                 "Select a session",
@@ -109,6 +121,16 @@ private fun MainNavigation(app: AppModel) {
                     key(current.id) {
                         SessionScreen(app = app, sessionId = current.id, onBack = { app.navigate(null) })
                     }
+                }
+                is Route.Machine -> {
+                    BackHandler { app.navigate(null) }
+                    key(current.id) {
+                        MachineScreen(app = app, machineId = current.id, onBack = { app.navigate(null) })
+                    }
+                }
+                Route.User -> {
+                    BackHandler { app.navigate(null) }
+                    UserScreen(app = app, onBack = { app.navigate(null) })
                 }
                 null -> SessionListScreen(app = app, onOpenSession = { app.navigate(Route.Session(it)) })
             }
