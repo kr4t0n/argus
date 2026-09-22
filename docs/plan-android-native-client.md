@@ -418,8 +418,12 @@ content search opening at the tail, as iOS does) and the **hotkey
 registry** with its shortcuts sheet, clone-failed toasts, compaction
 divider.
 *Done (code) 2026-09-22.* All of the above landed and `android.yml` is
-green; a device pass over the new surfaces (inspector, previews,
-attachments, hardware keyboard) is owed. Two things the draft did not
+green. Device-confirmed the same day: the on-screen keyboard's Enter
+inserts a newline (it does not send), and a photo picked from the
+system picker uploads, rides the turn, and is read by the model. Still
+owed on a device: the inspector sheet and its tabs, the file preview,
+and the palette — which on a phone has no on-screen entry point yet
+(Ctrl chords only), see the open question below. Two things the draft did not
 foresee, both recorded in `apps/android/README.md` "Parity batch":
 the tablet **split layout** arrived here rather than later (the list as
 a 340dp column from 840dp, Ctrl+B to hide it — without it the ⌘B row in
@@ -468,6 +472,13 @@ lifecycle; the promoted ongoing notification with local and pushed updates.
   LICENSE file for the repo, are separate decisions.
 - **UnifiedPush** for devices without Play services — only if someone
   needs it.
+- **Palette entry point on phones.** The Ctrl+P / Ctrl+K / Ctrl+/ overlays
+  are reachable only through hardware-keyboard chords, so a phone without
+  a keyboard cannot open them at all. The web breaks this circle with the
+  keyboard glyph in the sidebar; Android needs an on-screen affordance —
+  a search action in the session list's top bar opening the palette in
+  session mode (the in-sheet toggle already switches to content search)
+  is the obvious one. Phase 4 polish.
 - **Deep-link to the matched turn from Ctrl+K** — deferred on iOS because
   the transcript engine has no floating-window model; port it to both
   native clients together, or to neither.
