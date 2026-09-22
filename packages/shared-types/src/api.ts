@@ -724,20 +724,35 @@ export interface CreatedApiKey extends ApiKeyDTO {
 /** Request body for `POST /me/devices` — register (or refresh) a push
  *  token for the calling user. Tokens are globally unique; re-posting a
  *  token that moved to another account re-homes it (a device has one
- *  owner). `platform` is open for future clients; only 'ios' today. */
+ *  owner). `platform` selects the transport AND the token validation:
+ *  'ios' (default) is an APNs hex token, 'android' an FCM registration
+ *  token. Open for future clients. */
 export interface RegisterDeviceRequest {
   token: string;
-  platform?: 'ios' | (string & {});
+  platform?: 'ios' | 'android' | (string & {});
 }
 
 /** One registered push device, as returned by `POST /me/devices`.
  *  The token is echoed so clients can confirm what the server stored;
- *  it is not secret (it's useless without the APNs signing key). */
+ *  it is not secret (it's useless without the APNs signing key / the
+ *  FCM service account). */
 export interface DeviceDTO {
   id: string;
   token: string;
   platform: string;
   createdAt: string;
+}
+
+/** `GET /me/push/config` — the public Firebase client identifiers the
+ *  Android app initialises Firebase from at runtime (one APK for any
+ *  server; the service-account secret stays on the server). 404 when
+ *  the server has no FCM client config. Android-only: the iOS client
+ *  has no use for it and there is no Swift mirror by design. */
+export interface PushConfigDTO {
+  projectId: string;
+  applicationId: string;
+  apiKey: string;
+  senderId: string;
 }
 
 /** Request body for `POST /me/live-activities` — register an ActivityKit

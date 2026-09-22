@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -17,12 +18,13 @@ import { PushService } from './push.service';
 
 type AuthedRequest = Request & { user: { id: string } };
 
-/** POST /me/devices body. APNs tokens are hex; keep the check loose
- *  enough for future platforms but tight enough to bounce garbage. */
+/** POST /me/devices body. The token's shape depends on the platform —
+ *  APNs tokens are hex, FCM registration tokens are base64url plus a
+ *  colon — so the class-level check only bounds length and the
+ *  alphabet is validated per platform in the handler. */
 class RegisterDeviceDto {
   @IsString()
-  @MaxLength(256)
-  @Matches(/^[0-9a-fA-F]+$/)
+  @MaxLength(1024)
   token!: string;
 
   @IsOptional()
@@ -30,6 +32,15 @@ class RegisterDeviceDto {
   @MaxLength(32)
   platform?: string;
 }
+
+/** Per-platform token alphabets. `ios` is the APNs hex the DTO used to
+ *  require globally; `android` is the FCM registration-token alphabet
+ *  (base64url characters and one colon after the instance-id prefix),
+ *  bounded generously — Google documents no fixed length. */
+const TOKEN_SHAPES: Record<string, RegExp> = {
+  ios: /^[0-9a-fA-F]{1,256}$/,
+  android: /^[A-Za-z0-9_:\-]{20,1024}$/,
+};
 
 /** POST /me/live-activities body — an ActivityKit per-activity push
  *  token bound to the session whose turn the activity tracks. */
@@ -57,16 +68,22 @@ export class DeviceController {
 
   @Post()
   async register(@Req() req: AuthedRequest, @Body() body: RegisterDeviceDto): Promise<DeviceDTO> {
+    const platform = body.platform ?? 'ios';
+    const shape = TOKEN_SHAPES[platform];
+    if (!shape) throw new BadRequestException(`unknown push platform "${platform}"`);
+    if (!shape.test(body.token)) {
+      throw new BadRequestException(`token is not a valid ${platform} push token`);
+    }
     const row = await this.prisma.deviceToken.upsert({
       where: { token: body.token },
       create: {
         userId: req.user.id,
         token: body.token,
-        platform: body.platform ?? 'ios',
+        platform,
       },
       update: {
         userId: req.user.id,
-        platform: body.platform ?? 'ios',
+        platform,
         lastSeenAt: new Date(),
       },
     });

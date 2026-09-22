@@ -1,10 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import type { SessionDTO } from '@argus/shared-types';
-import * as jwt from 'jsonwebtoken';
-import * as http2 from 'node:http2';
-import { readFileSync } from 'node:fs';
 import { PrismaService } from '../../infra/prisma/prisma.service';
+import { ApnsTransport } from './apns.transport';
+import { FcmTransport } from './fcm.transport';
 
 /** Live-turn bookkeeping for one session's lock-screen activity. */
 type LiveTurn = {
@@ -19,80 +17,58 @@ type LiveTurn = {
   tokensFetchedAt: number;
 };
 
+/** A registered device, grouped by the transport that reaches it. */
+type DeviceRow = { token: string; platform: string };
+
 /**
- * APNs sender for native clients. Fires a task-completion alert to every
- * device token a user has registered, from the same trigger point that
- * powers the web's desktop notifications (result-ingestor flipping a
- * session to idle/failed + unread).
+ * Push for native clients: the platform-agnostic TRIGGER logic — which
+ * sessions, the answer preview, the outstanding-banner set, the
+ * read-sync clear — over two transports selected by each device row's
+ * `platform`: `ApnsTransport` (iOS) and `FcmTransport` (Android). Both
+ * are optional and env-gated; the service is a silent no-op with
+ * neither configured, so web-only deployments need zero extra setup,
+ * and a deployment with only one of them simply never reaches the
+ * other platform's devices.
  *
- * Config (all-or-nothing; the service is a silent no-op when unset, so
- * web-only deployments need zero extra setup):
- *   APNS_TEAM_ID     Apple developer team id
- *   APNS_KEY_ID      key id of the .p8 signing key
- *   APNS_KEY_BASE64  the .p8 file content, base64-encoded
- *   APNS_KEY_PATH    …or a path to the .p8 (BASE64 wins if both set)
- *   APNS_TOPIC       bundle id (default app.argus.ios)
- *   APNS_ENV         'sandbox' (default) | 'production'
- *
- * Transport is raw node:http2 (APNs requires HTTP/2; Node's fetch can't
- * speak it) with a provider JWT cached ~45 min (Apple wants 20–60 min).
- * Volume is one request per finished turn per device — a fresh session
- * per send is fine and sidesteps idle-connection reaping.
+ * Fires from the same trigger point that powers the web's desktop
+ * notifications (result-ingestor flipping a session to idle/failed +
+ * unread). Fire-and-forget throughout: a push failure must never affect
+ * chunk ingestion.
  */
 @Injectable()
 export class PushService {
   private readonly logger = new Logger(PushService.name);
 
-  private readonly teamId?: string;
-  private readonly keyId?: string;
-  private readonly key?: string;
-  private readonly topic: string;
-  private readonly host: string;
-
-  private cachedProviderJwt?: { token: string; mintedAt: number };
-
   constructor(
     private readonly prisma: PrismaService,
-    config: ConfigService,
-  ) {
-    this.teamId = config.get<string>('APNS_TEAM_ID');
-    this.keyId = config.get<string>('APNS_KEY_ID');
-    this.topic = config.get<string>('APNS_TOPIC') ?? 'app.argus.ios';
-    this.host =
-      config.get<string>('APNS_ENV') === 'production'
-        ? 'https://api.push.apple.com'
-        : 'https://api.sandbox.push.apple.com';
-
-    const keyBase64 = config.get<string>('APNS_KEY_BASE64');
-    const keyPath = config.get<string>('APNS_KEY_PATH');
-    try {
-      if (keyBase64) {
-        this.key = Buffer.from(keyBase64, 'base64').toString('utf8');
-      } else if (keyPath) {
-        this.key = readFileSync(keyPath, 'utf8');
-      }
-    } catch (err) {
-      this.logger.error(`failed to read APNs key: ${String(err)}`);
-    }
-
-    if (this.enabled) {
-      this.logger.log(`APNs enabled (topic ${this.topic}, ${this.host})`);
-    } else {
-      this.logger.log('APNs not configured — push notifications disabled');
-    }
-  }
+    private readonly apns: ApnsTransport,
+    private readonly fcm: FcmTransport,
+  ) {}
 
   get enabled(): boolean {
-    return Boolean(this.teamId && this.keyId && this.key);
+    return this.apns.enabled || this.fcm.enabled;
   }
 
   /** Sessions whose completion alert actually went out to some device —
    *  the banner may still be sitting on a lock screen. Consumed by the
    *  background clear so its per-chunk caller costs a Set lookup and no
-   *  DB/APNs work happens unless an alert was really sent. In-memory
-   *  like `liveTurns`: a restart forgets outstanding banners; the app's
+   *  DB/transport work happens unless an alert was really sent. In-memory
+   *  like `liveTurns`: a restart forgets outstanding banners; the apps'
    *  foreground reconcile mops those up. */
   private outstandingBanners = new Set<string>();
+
+  /** The user's devices, keeping only rows a configured transport can
+   *  reach — an Android row on an APNs-only server is skipped, not
+   *  errored. */
+  private async reachableDevices(userId: string): Promise<DeviceRow[]> {
+    const rows = await this.prisma.deviceToken.findMany({
+      where: { userId },
+      select: { token: true, platform: true },
+    });
+    return rows.filter((row) =>
+      row.platform === 'android' ? this.fcm.enabled : this.apns.enabled,
+    );
+  }
 
   /**
    * Called by the result-ingestor when a turn reaches a terminal state.
@@ -106,21 +82,20 @@ export class PushService {
   ): Promise<void> {
     if (!this.enabled) return;
     try {
-      const devices = await this.prisma.deviceToken.findMany({
-        where: { userId: session.userId },
-      });
+      const devices = await this.reachableDevices(session.userId);
       if (devices.length === 0) return;
 
       // Completed turns carry a preview of the assistant's answer so
       // the banner is actionable without opening the app. NOTE this
       // puts answer text on the lock screen — users who care can scope
-      // it with iOS Settings > Notifications > Show Previews. Failures
-      // keep a fixed phrase (error text is stack-trace-y, not a
-      // summary).
+      // it with the OS's notification-preview setting (iOS "Show
+      // Previews", Android "Sensitive notifications"). Failures keep a
+      // fixed phrase (error text is stack-trace-y, not a summary).
       const body = failed
         ? 'Turn failed'
         : ((await this.answerPreview(turn)) ?? 'Turn completed');
-      const payload = JSON.stringify({
+
+      const apnsPayload = JSON.stringify({
         aps: {
           alert: {
             title: session.title,
@@ -131,13 +106,28 @@ export class PushService {
         },
         sessionId: session.id,
       });
+      // The Android app renders this itself (see FcmTransport for why
+      // it is a data message); `failed` lets it pick the icon/colour.
+      const fcmData = {
+        type: 'turn',
+        sessionId: session.id,
+        title: session.title,
+        body,
+        failed: failed ? '1' : '0',
+      };
 
       this.outstandingBanners.add(session.id);
       await Promise.allSettled(
-        // Collapse id mirrors the web notification's `tag`: a newer
-        // completion in the same session replaces the older banner
-        // instead of stacking (and any duplicate send collapses too).
-        devices.map((device) => this.send(device.token, payload, { collapseId: session.id })),
+        devices.map((device) =>
+          device.platform === 'android'
+            ? this.fcm.send(device.token, fcmData, { priority: 'high' })
+            : // Collapse id mirrors the web notification's `tag`: a newer
+              // completion in the same session replaces the older banner
+              // instead of stacking (and any duplicate send collapses too).
+              // The Android app gets the same effect from the
+              // notification tag it posts under.
+              this.apns.send(device.token, apnsPayload, { collapseId: session.id }),
+        ),
       );
     } catch (err) {
       this.logger.warn(`push fan-out failed: ${String(err)}`);
@@ -150,27 +140,31 @@ export class PushService {
    * client, or a fresh turn superseded the result. The phone banner is
    * a projection of the `unread` flag.
    *
-   * APNs has no server-side revoke, so this is the standard workaround:
-   * a silent background push (`content-available: 1`, priority 5 — Apple
-   * requires it) that wakes the app to delete its own delivered
-   * notification. Best-effort by design: Apple throttles background
-   * pushes and never delivers them to a force-quit app — the iOS
-   * client's foreground reconcile sweeps whatever slips through.
+   * Neither APNs nor FCM has a server-side revoke, so this is the
+   * standard workaround on both: a silent push (APNs `content-available:
+   * 1` at priority 5 — Apple requires it; FCM a normal-priority data
+   * message) that wakes the app to delete its own delivered
+   * notification. Best-effort by design: both platforms throttle
+   * background delivery and never wake a force-quit app — the clients'
+   * foreground reconcile sweeps whatever slips through.
    */
   async clearSessionNotification(session: Pick<SessionDTO, 'id' | 'userId'>): Promise<void> {
     if (!this.enabled) return;
     if (!this.outstandingBanners.delete(session.id)) return;
     try {
-      const devices = await this.prisma.deviceToken.findMany({
-        where: { userId: session.userId },
-      });
+      const devices = await this.reachableDevices(session.userId);
       if (devices.length === 0) return;
-      const payload = JSON.stringify({
+      const apnsPayload = JSON.stringify({
         aps: { 'content-available': 1 },
         clearSessionId: session.id,
       });
+      const fcmData = { type: 'clear', sessionId: session.id };
       await Promise.allSettled(
-        devices.map((device) => this.send(device.token, payload, { pushType: 'background' })),
+        devices.map((device) =>
+          device.platform === 'android'
+            ? this.fcm.send(device.token, fcmData, { priority: 'normal' })
+            : this.apns.send(device.token, apnsPayload, { pushType: 'background' }),
+        ),
       );
     } catch (err) {
       this.logger.warn(`push clear fan-out failed: ${String(err)}`);
@@ -178,7 +172,8 @@ export class PushService {
   }
 
   /** Alert-body budget: the lock-screen banner shows ~4 lines and the
-   *  long-look a bit more; APNs caps the whole payload at 4KB. */
+   *  long-look a bit more; APNs caps the whole payload at 4KB and FCM
+   *  data messages at 4KB too. */
   private static readonly ALERT_BODY_MAX = 300;
 
   /**
@@ -187,14 +182,15 @@ export class PushService {
    *
    * claude-code's `result` final carries the canonical answer as the
    * chunk's content. codex finals are content-less (the answer streamed
-   * as deltas), so reconstruct it the way the web/iOS transcripts do
-   * (DeltaSplit): the boundary is the highest tool/stdout/stderr/error
-   * seq, and deltas strictly after it are the answer. Both queries ride
-   * the (commandId, seq) index and run once per finished turn, and only
-   * when the user actually has registered devices.
+   * as deltas), so reconstruct it the way the web/iOS/Android
+   * transcripts do (DeltaSplit): the boundary is the highest
+   * tool/stdout/stderr/error seq, and deltas strictly after it are the
+   * answer. Both queries ride the (commandId, seq) index and run once
+   * per finished turn, and only when the user actually has registered
+   * devices.
    *
-   * Port-sync note: the web/iOS DeltaSplit additionally EXCLUDES
-   * sub-agent-nested chunks (meta.parentToolUseId) and treats earlier
+   * Port-sync note: the client DeltaSplits additionally EXCLUDE
+   * sub-agent-nested chunks (meta.parentToolUseId) and treat earlier
    * inner-turn finals as boundaries (multi-final async commands). Both
    * refinements are deliberately omitted here: this reconstruction path
    * only runs for content-less finals (codex), and codex has no
@@ -240,20 +236,7 @@ export class PushService {
     return chars.slice(0, PushService.ALERT_BODY_MAX - 1).join('').trimEnd() + '…';
   }
 
-  private providerJwt(): string {
-    const now = Date.now();
-    if (this.cachedProviderJwt && now - this.cachedProviderJwt.mintedAt < 45 * 60_000) {
-      return this.cachedProviderJwt.token;
-    }
-    const token = jwt.sign({ iss: this.teamId!, iat: Math.floor(now / 1000) }, this.key!, {
-      algorithm: 'ES256',
-      keyid: this.keyId!,
-    });
-    this.cachedProviderJwt = { token, mintedAt: now };
-    return token;
-  }
-
-  // ── Live Activities ──────────────────────────────────────────────
+  // ── Live Activities (APNs only today) ────────────────────────────
   //
   // The iOS client starts an ActivityKit activity for a running turn
   // and registers its per-activity push token against the session.
@@ -262,7 +245,8 @@ export class PushService {
   // stream, and an immediate 'end' when the turn settles. The Swift
   // ContentState is `{state, toolCount, lastTool}` — key names here
   // must match it EXACTLY (ActivityKit decodes content-state with the
-  // struct's Codable).
+  // struct's Codable). Android Live Updates (Phase 6 of the Android
+  // plan) will ride the same throttle as FCM data messages.
 
   /** Per-session live-turn bookkeeping: tool counters + push throttle +
    *  a short token-existence cache so chunk ingestion never queries
@@ -271,10 +255,6 @@ export class PushService {
 
   private static readonly LIVE_UPDATE_MIN_MS = 15_000;
   private static readonly LIVE_TOKEN_CACHE_MS = 60_000;
-
-  private get liveActivityTopic(): string {
-    return `${this.topic}.push-type.liveactivity`;
-  }
 
   /** Drop the token cache for a session (called on register/unregister
    *  so a fresh activity gets its first update promptly). */
@@ -295,7 +275,7 @@ export class PushService {
     content?: string;
     meta?: Record<string, unknown>;
   }): void {
-    if (!this.enabled) return;
+    if (!this.apns.enabled) return;
     if (chunk.kind !== 'tool') return;
 
     let entry = this.liveTurns.get(chunk.sessionId);
@@ -362,7 +342,7 @@ export class PushService {
 
   /** Resolve the card when the turn settles — always immediate. */
   async endLiveActivity(sessionId: string, failed: boolean): Promise<void> {
-    if (!this.enabled) return;
+    if (!this.apns.enabled) return;
     const entry = this.liveTurns.get(sessionId);
     // Disarm any pending trailing flush: its "running" update firing
     // after this 'end' would flip a settled ✓/✗ card back to running.
@@ -403,8 +383,8 @@ export class PushService {
 
       await Promise.allSettled(
         tokens.map((token) =>
-          this.send(token, payload, {
-            topic: this.liveActivityTopic,
+          this.apns.send(token, payload, {
+            topic: this.apns.liveActivityTopic,
             pushType: 'liveactivity',
             kind: 'live-activity',
           }),
@@ -431,95 +411,5 @@ export class PushService {
       entry.tokensFetchedAt = now;
     }
     return tokens;
-  }
-
-  // ── Transport ────────────────────────────────────────────────────
-
-  private send(
-    deviceToken: string,
-    payload: string,
-    opts: {
-      topic?: string;
-      pushType?: 'alert' | 'liveactivity' | 'background';
-      kind?: 'device' | 'live-activity';
-      /** apns-collapse-id (≤64 bytes): later pushes with the same id
-       *  replace the delivered notification instead of stacking. */
-      collapseId?: string;
-    } = {},
-  ): Promise<void> {
-    const topic = opts.topic ?? this.topic;
-    const pushType = opts.pushType ?? 'alert';
-    const kind = opts.kind ?? 'device';
-    return new Promise((resolve) => {
-      const session = http2.connect(this.host);
-      const finish = () => {
-        session.close();
-        resolve();
-      };
-      session.on('error', (err) => {
-        this.logger.warn(`APNs connect error: ${String(err)}`);
-        finish();
-      });
-
-      const req = session.request({
-        ':method': 'POST',
-        ':path': `/3/device/${deviceToken}`,
-        authorization: `bearer ${this.providerJwt()}`,
-        'apns-topic': topic,
-        'apns-push-type': pushType,
-        // Apple rejects background pushes at priority 10.
-        'apns-priority': pushType === 'background' ? '5' : '10',
-        'content-type': 'application/json',
-        ...(opts.collapseId ? { 'apns-collapse-id': opts.collapseId } : {}),
-      });
-
-      let status = 0;
-      let body = '';
-      req.on('response', (headers) => {
-        status = Number(headers[':status'] ?? 0);
-      });
-      req.setEncoding('utf8');
-      req.on('data', (chunk: string) => {
-        body += chunk;
-      });
-      req.on('end', () => {
-        if (status !== 200) {
-          this.handleFailure(deviceToken, status, body, kind);
-        }
-        finish();
-      });
-      req.on('error', (err) => {
-        this.logger.warn(`APNs request error: ${String(err)}`);
-        finish();
-      });
-      req.end(payload);
-    });
-  }
-
-  /** APNs feedback: dead tokens are pruned so we stop paying for them.
-   *  Live-activity tokens die naturally when their activity ends — the
-   *  410 here is the expected cleanup path, not an error. */
-  private handleFailure(
-    deviceToken: string,
-    status: number,
-    body: string,
-    kind: 'device' | 'live-activity',
-  ): void {
-    let reason = '';
-    try {
-      reason = (JSON.parse(body) as { reason?: string }).reason ?? '';
-    } catch {
-      /* non-JSON error body */
-    }
-    this.logger.warn(`APNs ${status} ${reason} (${kind}) for token ${deviceToken.slice(0, 8)}…`);
-    if (status === 410 || reason === 'BadDeviceToken' || reason === 'Unregistered') {
-      if (kind === 'device') {
-        void this.prisma.deviceToken.delete({ where: { token: deviceToken } }).catch(() => {});
-      } else {
-        void this.prisma.liveActivityToken
-          .delete({ where: { token: deviceToken } })
-          .catch(() => {});
-      }
-    }
   }
 }
