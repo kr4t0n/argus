@@ -221,10 +221,22 @@ band — plain items in the `LazyColumn` instead) and persisted collapse /
 archived-reveal state for the session list. The CLI brand marks are the
 iOS asset catalog's PNGs copied into `res/drawable-*dpi/agent_*.png`
 (24dp at 1x/2x/3x; Android's density folders cannot point at an
-`.imageset`), theme-resolved like the web's `AgentTypeIcon`; the folder
-and eye glyphs the sidebar needs are hand-transcribed Material paths in
-`ui/components/Glyphs.kt`, because `material-icons-core` lacks them and
-the extended set is a 16 MB dependency for three icons.
+`.imageset`), theme-resolved like the web's `AgentTypeIcon`; the folder,
+eye, monitor and archive-box glyphs the sidebar needs are
+hand-transcribed Material paths in `ui/components/Glyphs.kt`, because
+`material-icons-core` lacks them and the extended set is a 16 MB
+dependency for five icons.
+
+The list itself renders as the iOS sidebar's inset grouped "islands":
+one rounded card for every project (headers, sessions and the
+archived-projects row are flat rows inside it, so a collapsed project is
+one compact line), a "Machines" title over the machines card (monitor
+glyph, emerald while online, trailing status dot), and the account card.
+The list stays a `LazyColumn`: every row is its own item and rounds only
+the corners it owns, so the projects section is first flattened into a
+row list (collapse and archive-reveal applied) to know which row is
+first and which is last. The card is one step above the page on both
+themes — white on the light page, the surface1 grey on the dark one.
 
 ## Parity batch (Phase 3)
 

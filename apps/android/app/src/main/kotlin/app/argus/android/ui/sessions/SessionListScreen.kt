@@ -3,6 +3,7 @@
 package app.argus.android.ui.sessions
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,8 +18,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
@@ -30,7 +33,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,6 +51,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -76,6 +80,17 @@ import kotlinx.coroutines.launch
  * machines section, and the account row — the phone form of the iOS
  * sidebar (SessionListView.swift). Collapse and per-project archive
  * reveal are in-memory for now (iOS persists them; Phase 3 polish).
+ *
+ * The three sections render as inset "islands" — the grouped-list look
+ * of the iOS sidebar: one rounded card for every project (headers,
+ * sessions and the archived-projects row are flat rows inside it, NOT a
+ * card per project, so a collapsed project is just a compact row), a
+ * "Machines" title over the machines card, and the account card. The
+ * list stays lazy: each row is its own `LazyColumn` item and rounds
+ * only the corners it owns (first row the top pair, last row the
+ * bottom pair), which is why the projects section is flattened into
+ * [ProjectsRow]s first — a row's corners depend on where it sits after
+ * collapse and archive-reveal are applied.
  */
 @Composable
 fun SessionListScreen(app: AppModel, onOpenSession: (String) -> Unit) {
@@ -103,6 +118,22 @@ fun SessionListScreen(app: AppModel, onOpenSession: (String) -> Unit) {
     val archivedProjectCount = allGroups.count { it.archived }
     val groups = if (showArchivedProjects) allGroups else allGroups.filter { !it.archived }
     val machineRows = remember(machines) { ProjectGroups.sortMachines(machines.values) }
+    // Reads of the collapse / reveal maps here subscribe the screen to
+    // them, so toggling a project rebuilds the rows (and their corners).
+    val projectRows = buildList<ProjectsRow> {
+        if (groups.isEmpty()) add(ProjectsRow.Empty)
+        for (group in groups) {
+            add(ProjectsRow.Header(group))
+            if (collapsed[group.id] != true) {
+                for (session in group.sessions) add(ProjectsRow.Session(session, archived = false))
+                if (showArchived[group.id] == true) {
+                    for (session in group.archivedSessions) add(ProjectsRow.Session(session, archived = true))
+                }
+            }
+        }
+        if (archivedProjectCount > 0) add(ProjectsRow.ArchivedToggle)
+    }
+    val islandColor = islandColor()
 
     Scaffold(
         topBar = {
@@ -149,88 +180,92 @@ fun SessionListScreen(app: AppModel, onOpenSession: (String) -> Unit) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 return@Column
             }
-            LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
-                if (groups.isEmpty()) {
-                    item {
-                        Text(
-                            "No sessions yet — create one from the dashboard.",
+            LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp)) {
+                itemsIndexed(projectRows, key = { _, row -> row.key }) { index, row ->
+                    val island = Modifier.island(islandColor, first = index == 0, last = index == projectRows.lastIndex)
+                    when (row) {
+                        ProjectsRow.Empty -> Text(
+                            "No sessions yet — create one from a machine's \"New project…\".",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(16.dp),
+                            modifier = island.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
                         )
-                    }
-                }
-                for (group in groups) {
-                    item(key = "group:${group.id}") {
-                        ProjectHeader(
-                            group = group,
-                            collapsed = collapsed[group.id] == true,
-                            showingArchived = showArchived[group.id] == true,
-                            onToggleCollapsed = { collapsed[group.id] = collapsed[group.id] != true },
-                            onToggleArchived = { showArchived[group.id] = showArchived[group.id] != true },
-                            // The synthetic "no project" bucket has no
-                            // path to anchor a session against.
-                            onNewSession = if (group.machineId != null && group.workingDir != null) {
-                                { newSessionIn = group }
-                            } else {
-                                null
-                            },
-                        )
-                    }
-                    if (collapsed[group.id] != true) {
-                        items(group.sessions, key = { "s:${it.id}" }) { session ->
-                            SessionRow(session, archived = false, onOpen = { onOpenSession(session.id) },
-                                onRename = { renameTarget = session },
-                                onArchive = { scope.launch { archive(app, session, archive = true) } })
-                        }
-                        if (showArchived[group.id] == true) {
-                            items(group.archivedSessions, key = { "s:${it.id}" }) { session ->
-                                SessionRow(session, archived = true, onOpen = { onOpenSession(session.id) },
-                                    onRename = { renameTarget = session },
-                                    onArchive = { scope.launch { archive(app, session, archive = false) } })
-                            }
-                        }
-                    }
-                }
-                if (archivedProjectCount > 0) {
-                    item(key = "archived-projects-toggle") {
-                        TextButton(onClick = { showArchivedProjects = !showArchivedProjects }, modifier = Modifier.padding(horizontal = 4.dp)) {
-                            Text(
-                                if (showArchivedProjects) "Hide archived projects"
-                                else "$archivedProjectCount archived project${if (archivedProjectCount == 1) "" else "s"}",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (showArchivedProjects) argusPalette.statusDone else MaterialTheme.colorScheme.onSurfaceVariant,
+                        is ProjectsRow.Header -> {
+                            val group = row.group
+                            ProjectHeader(
+                                group = group,
+                                collapsed = collapsed[group.id] == true,
+                                showingArchived = showArchived[group.id] == true,
+                                onToggleCollapsed = { collapsed[group.id] = collapsed[group.id] != true },
+                                onToggleArchived = { showArchived[group.id] = showArchived[group.id] != true },
+                                // The synthetic "no project" bucket has no
+                                // path to anchor a session against.
+                                onNewSession = if (group.machineId != null && group.workingDir != null) {
+                                    { newSessionIn = group }
+                                } else {
+                                    null
+                                },
+                                modifier = island,
                             )
                         }
+                        is ProjectsRow.Session -> {
+                            val session = row.session
+                            SessionRow(
+                                session = session,
+                                archived = row.archived,
+                                onOpen = { onOpenSession(session.id) },
+                                onRename = { renameTarget = session },
+                                onArchive = { scope.launch { archive(app, session, archive = !row.archived) } },
+                                modifier = island,
+                            )
+                        }
+                        ProjectsRow.ArchivedToggle -> ArchivedProjectsToggle(
+                            count = archivedProjectCount,
+                            showing = showArchivedProjects,
+                            onToggle = { showArchivedProjects = !showArchivedProjects },
+                            modifier = island,
+                        )
                     }
                 }
 
-                item(key = "machines-header") {
-                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                    Text(
-                        "MACHINES",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    )
+                item(key = "machines-header") { IslandTitle("Machines") }
+                if (machineRows.isEmpty()) {
+                    item(key = "machines-empty") {
+                        Text(
+                            "No machines yet — install a sidecar to add one.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.island(islandColor, first = true, last = true)
+                                .fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                        )
+                    }
                 }
-                items(machineRows, key = { "m:${it.id}" }) { machine ->
+                itemsIndexed(machineRows, key = { _, machine -> "m:${machine.id}" }) { index, machine ->
                     MachineRow(
                         machine = machine,
                         onOpen = { app.navigate(Route.Machine(machine.id)) },
                         onNewProject = { newProjectOn = machine },
+                        modifier = Modifier.island(islandColor, first = index == 0, last = index == machineRows.lastIndex),
                     )
                 }
 
                 item(key = "account") {
-                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    Spacer(Modifier.height(16.dp))
                     Row(
                         modifier = Modifier
+                            .island(islandColor, first = true, last = true)
                             .fillMaxWidth()
                             .combinedClickable(onClick = { app.navigate(Route.User) })
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        Icon(
+                            Icons.Default.AccountCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text(user?.email ?: "Account", style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(user?.role ?: "", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -276,6 +311,95 @@ private suspend fun archive(app: AppModel, session: SessionDTO, archive: Boolean
 }
 
 /**
+ * The projects island, flattened: one entry per rendered row so the
+ * first and last can round their corners. Keys match the previous
+ * per-item keys, so item identity (and any scroll anchoring) survives.
+ */
+private sealed interface ProjectsRow {
+    val key: String
+
+    data class Header(val group: ProjectGroup) : ProjectsRow {
+        override val key get() = "group:${group.id}"
+    }
+
+    data class Session(val session: SessionDTO, val archived: Boolean) : ProjectsRow {
+        override val key get() = "s:${session.id}"
+    }
+
+    data object ArchivedToggle : ProjectsRow {
+        override val key get() = "archived-projects-toggle"
+    }
+
+    data object Empty : ProjectsRow {
+        override val key get() = "empty"
+    }
+}
+
+private val IslandRadius = 12.dp
+
+/**
+ * The card surface: one step above the page on both themes — white on
+ * the F8F8F8 page in light (iOS's white cells on the grouped grey), the
+ * surface1 grey on the near-black page in dark.
+ */
+@Composable
+private fun islandColor(): Color =
+    if (argusPalette.isDark) MaterialTheme.colorScheme.surfaceContainerLow
+    else MaterialTheme.colorScheme.surfaceContainerLowest
+
+/**
+ * Inset a row into its section's island. Rows are independent lazy
+ * items with no spacing, so a run of them reads as one card as long as
+ * only the first rounds the top corners and only the last the bottom
+ * ones. The clip comes before the row's own clickable, so the ripple
+ * stays inside the rounded corners.
+ */
+private fun Modifier.island(color: Color, first: Boolean, last: Boolean): Modifier {
+    val top = if (first) IslandRadius else 0.dp
+    val bottom = if (last) IslandRadius else 0.dp
+    return padding(horizontal = 16.dp)
+        .clip(RoundedCornerShape(topStart = top, topEnd = top, bottomStart = bottom, bottomEnd = bottom))
+        .background(color)
+}
+
+/** Section title in the gap above an island — iOS's `Section("Machines")` header. */
+@Composable
+private fun IslandTitle(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 30.dp, end = 16.dp, top = 20.dp, bottom = 6.dp),
+    )
+}
+
+/**
+ * The "N archived projects" / "Hide archived projects" row closing the
+ * projects island — iOS `archivedProjectsToggle`: archive-box + label,
+ * neutral while hidden, emerald while revealed (the per-project eye's
+ * language).
+ */
+@Composable
+private fun ArchivedProjectsToggle(count: Int, showing: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+    val tint = if (showing) argusPalette.statusDone else MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onToggle)
+            .padding(start = 14.dp, end = 16.dp, top = 10.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(ArgusGlyphs.Archive, contentDescription = null, tint = tint, modifier = Modifier.size(13.dp))
+        Spacer(Modifier.width(7.dp))
+        Text(
+            if (showing) "Hide archived projects" else "$count archived project${if (count == 1) "" else "s"}",
+            style = MaterialTheme.typography.labelMedium,
+            color = tint,
+        )
+    }
+}
+
+/**
  * The project row — iOS `ProjectRowHeader` / web `ProjectRow`: chevron ·
  * folder · title · count, then the per-project eye (only when there is
  * an archive to reveal; emerald open eye when showing, neutral slashed
@@ -292,13 +416,14 @@ private fun ProjectHeader(
     onToggleCollapsed: () -> Unit,
     onToggleArchived: () -> Unit,
     onNewSession: (() -> Unit)?,
+    modifier: Modifier = Modifier,
 ) {
     val secondary = MaterialTheme.colorScheme.onSurfaceVariant
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .combinedClickable(onClick = onToggleCollapsed)
-            .padding(start = 8.dp, end = 4.dp, top = 8.dp, bottom = 2.dp),
+            .padding(start = 10.dp, end = 6.dp, top = 8.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
@@ -360,7 +485,8 @@ private fun ProjectHeader(
 
 /**
  * Single compact line — glyph · title · dot · time (web parity). Archived
- * rows render dimmed. Long-press for rename / archive.
+ * rows render dimmed with an archive-box in the dot slot (iOS parity —
+ * there is no live status to show). Long-press for rename / archive.
  */
 @Composable
 private fun SessionRow(
@@ -369,15 +495,16 @@ private fun SessionRow(
     onOpen: () -> Unit,
     onRename: () -> Unit,
     onArchive: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val dim = if (archived) 0.55f else 1f
-    Box {
+    Box(modifier) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .combinedClickable(onClick = onOpen, onLongClick = { menuOpen = true })
-                .padding(start = 28.dp, end = 16.dp, top = 9.dp, bottom = 9.dp),
+                .padding(start = 30.dp, end = 16.dp, top = 9.dp, bottom = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             AgentTypeGlyph(session.cliType ?: "custom", size = 16)
@@ -392,7 +519,16 @@ private fun SessionRow(
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(6.dp))
-            if (!archived) SessionStatusDot(session)
+            if (archived) {
+                Icon(
+                    ArgusGlyphs.Archive,
+                    contentDescription = "Archived",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.size(10.dp),
+                )
+            } else {
+                SessionStatusDot(session)
+            }
             Spacer(Modifier.width(8.dp))
             Text(
                 RelativeTime.short(session.updatedAt),
@@ -410,32 +546,38 @@ private fun SessionRow(
     }
 }
 
-/** Tap opens the machine panel; long-press offers the machine's creation action. */
+/**
+ * Machine row — iOS `MachineRow`: monitor glyph (emerald while online,
+ * neutral otherwise) · name · trailing status dot. The installed
+ * adapters are the machine panel's business, not the row's. Tap opens
+ * the machine panel; long-press offers the machine's creation action.
+ */
 @Composable
-private fun MachineRow(machine: MachineDTO, onOpen: () -> Unit, onNewProject: () -> Unit) {
+private fun MachineRow(machine: MachineDTO, onOpen: () -> Unit, onNewProject: () -> Unit, modifier: Modifier = Modifier) {
     val online = machine.status == MachineStatus.ONLINE
+    val liveTint = if (online) argusPalette.statusDone else MaterialTheme.colorScheme.onSurfaceVariant
     var menuOpen by remember { mutableStateOf(false) }
-    Box {
+    Box(modifier) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .combinedClickable(onClick = onOpen, onLongClick = { menuOpen = true })
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-        StatusCircle(
-            color = if (online) argusPalette.statusDone else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-            modifier = Modifier.size(8.dp),
-        )
-        Spacer(Modifier.width(10.dp))
-        Text(machine.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        Text(
-            machine.availableAdapters.joinToString(" · ") { it.type },
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+            Icon(
+                ArgusGlyphs.Monitor,
+                contentDescription = null,
+                tint = liveTint,
+                modifier = Modifier.size(15.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(machine.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(6.dp))
+            StatusCircle(
+                color = if (online) argusPalette.statusDone else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                modifier = Modifier.size(6.dp),
+            )
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(text = { Text("New project…") }, onClick = { menuOpen = false; onNewProject() })
