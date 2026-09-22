@@ -143,6 +143,58 @@ func TestMapClaudeCodeChangePublished(t *testing.T) {
 	}
 }
 
+// TestMapClaudeDevIntent verifies the `system`/`dev_intent` event stays
+// content-less with its classification in Meta. The payload below is the
+// VERBATIM shape claude 2.1.278 emits — reproduced in a scratch dir with
+// `claude -p --output-format stream-json` and diffed field-for-field against
+// this literal, not transcribed from an observation.
+// Unmapped it is worse than the other subtypes: the detector re-folds the
+// resumed transcript on every `--resume`, so it lands at seq 1 — ahead of the
+// turn's own `init` — on EVERY turn of a session whose history holds the
+// evidence pair.
+func TestMapClaudeDevIntent(t *testing.T) {
+	line := `{"type":"system","subtype":"dev_intent","kind":"ios_app",` +
+		`"trigger":"xcode_project","uuid":"u1","session_id":"s1"}`
+	chunks := mapClaudeLine(line, nil, nil, nil, "")
+
+	if len(chunks) != 1 {
+		t.Fatalf("want 1 chunk, got %d: %+v", len(chunks), chunks)
+	}
+	c := chunks[0]
+	if c.Kind != protocol.KindProgress {
+		t.Fatalf("want KindProgress, got %q", c.Kind)
+	}
+	if c.Content != "" {
+		t.Fatalf("want empty content (no junk row), got %q", c.Content)
+	}
+	want := map[string]any{
+		"contentType": "dev_intent",
+		"kind":        "ios_app",
+		"trigger":     "xcode_project",
+	}
+	for k, v := range want {
+		if got := c.Meta[k]; got != v {
+			t.Fatalf("meta[%q]: want %v, got %v", k, v, got)
+		}
+	}
+
+	// Both fields are open sets — `trigger`'s declared enum is already wider
+	// than the detectors produce today, and a second emitter reports
+	// `project_scan`. An unrecognized or absent value must still map
+	// content-less rather than falling back to the visible "system" row.
+	for _, ev := range []string{
+		`{"type":"system","subtype":"dev_intent","kind":"android_app","trigger":"project_scan"}`,
+		`{"type":"system","subtype":"dev_intent","kind":"web_app","trigger":"future_evidence"}`,
+		`{"type":"system","subtype":"dev_intent"}`,
+	} {
+		got := mapClaudeLine(ev, nil, nil, nil, "")
+		if len(got) != 1 || got[0].Content != "" ||
+			got[0].Meta["contentType"] != "dev_intent" {
+			t.Fatalf("%s: want one tagged content-less chunk, got %+v", ev, got)
+		}
+	}
+}
+
 // TestMapClaudeUnknownSystemSubtype pins the deliberate fall-through: system
 // events with subtypes we don't handle yet must stay VISIBLE (Content ==
 // "system") — that junk row is the observability breadcrumb that tells us a
