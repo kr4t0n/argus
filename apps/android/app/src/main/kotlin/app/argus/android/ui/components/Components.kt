@@ -1,5 +1,6 @@
 package app.argus.android.ui.components
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,11 +30,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.argus.android.AppModel
+import app.argus.android.R
 import app.argus.android.CloneFailure
 import app.argus.android.ui.theme.argusPalette
 import app.argus.core.model.AgentType
@@ -61,29 +64,60 @@ fun agentColor(type: AgentType): Color = when (type) {
 }
 
 /**
- * The per-CLI glyph. The web and iOS ship the vendors' brand marks; until
- * those are vendored as drawables this is a brand-coloured monogram —
- * enough to tell a claude session from a codex one at a glance.
+ * The per-CLI glyph — the same brand marks the web (`@lobehub/icons`)
+ * and iOS (`Assets.xcassets/agent-*`) ship, copied from the iOS
+ * catalog into density drawables (`res/drawable-*dpi/agent_*.png`,
+ * 24dp at 1x/2x/3x). Two of them are theme-resolved exactly as the web's
+ * `AgentTypeIcon.tsx` does: Codex's brand glyph is a black mark on a
+ * white tile that reads right on the light page but pops as a bright
+ * chip on the dark surface, so dark mode draws the mono glyph tinted
+ * with the text colour instead; Cursor's mark is mono and tinted in both
+ * themes. Claude's mark paints its own colour and is never tinted. An
+ * unknown CLI type keeps a neutral monogram so the row still has a
+ * leading mark.
  */
 @Composable
 fun AgentTypeGlyph(type: AgentType, modifier: Modifier = Modifier, size: Int = 18) {
-    val letter = when (type) {
-        KnownAgentType.CLAUDE_CODE -> "C"
-        KnownAgentType.CODEX -> "X"
-        KnownAgentType.CURSOR_CLI -> "R"
-        else -> "•"
-    }
-    Box(
-        modifier = modifier.size(size.dp).background(agentColor(type).copy(alpha = 0.9f), CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            letter,
-            color = Color.White,
-            fontSize = (size * 0.58f).sp,
-            fontWeight = FontWeight.Bold,
-            lineHeight = (size * 0.6f).sp,
+    val dark = argusPalette.isDark
+    val sized = modifier.size(size.dp)
+    when (type) {
+        KnownAgentType.CLAUDE_CODE -> Image(
+            painter = painterResource(R.drawable.agent_claude_code),
+            contentDescription = "Claude Code",
+            modifier = sized,
         )
+        KnownAgentType.CODEX -> if (dark) {
+            Icon(
+                painter = painterResource(R.drawable.agent_codex),
+                contentDescription = "Codex",
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = sized,
+            )
+        } else {
+            Image(
+                painter = painterResource(R.drawable.agent_codex_brand),
+                contentDescription = "Codex",
+                modifier = sized,
+            )
+        }
+        KnownAgentType.CURSOR_CLI -> Icon(
+            painter = painterResource(R.drawable.agent_cursor_cli),
+            contentDescription = "Cursor CLI",
+            tint = MaterialTheme.colorScheme.onSurface,
+            modifier = sized,
+        )
+        else -> Box(
+            modifier = sized.background(argusPalette.agentCustom.copy(alpha = 0.9f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "•",
+                color = Color.White,
+                fontSize = (size * 0.58f).sp,
+                fontWeight = FontWeight.Bold,
+                lineHeight = (size * 0.6f).sp,
+            )
+        }
     }
 }
 

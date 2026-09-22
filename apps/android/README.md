@@ -217,9 +217,14 @@ expressed there; `ServerConfig` still infers `http://` only for private
 hosts and `https://` otherwise.
 
 Deliberately not ported: sticky turn headers (the iOS `pinnedViews`
-band — plain items in the `LazyColumn` instead), the vendors' brand
-glyphs (a brand-coloured monogram stands in), and persisted collapse /
-archived-reveal state for the session list.
+band — plain items in the `LazyColumn` instead) and persisted collapse /
+archived-reveal state for the session list. The CLI brand marks are the
+iOS asset catalog's PNGs copied into `res/drawable-*dpi/agent_*.png`
+(24dp at 1x/2x/3x; Android's density folders cannot point at an
+`.imageset`), theme-resolved like the web's `AgentTypeIcon`; the folder
+and eye glyphs the sidebar needs are hand-transcribed Material paths in
+`ui/components/Glyphs.kt`, because `material-icons-core` lacks them and
+the extended set is a 16 MB dependency for three icons.
 
 ## Parity batch (Phase 3)
 

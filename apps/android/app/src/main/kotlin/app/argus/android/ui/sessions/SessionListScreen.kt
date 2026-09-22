@@ -58,6 +58,7 @@ import app.argus.android.Route
 import app.argus.android.ui.create.NewProjectSheet
 import app.argus.android.ui.create.NewSessionSheet
 import app.argus.android.ui.components.AgentTypeGlyph
+import app.argus.android.ui.components.ArgusGlyphs
 import app.argus.android.ui.components.ConnectionBanner
 import app.argus.android.ui.components.SessionStatusDot
 import app.argus.android.ui.components.StatusCircle
@@ -274,6 +275,15 @@ private suspend fun archive(app: AppModel, session: SessionDTO, archive: Boolean
     }
 }
 
+/**
+ * The project row — iOS `ProjectRowHeader` / web `ProjectRow`: chevron ·
+ * folder · title · count, then the per-project eye (only when there is
+ * an archive to reveal; emerald open eye when showing, neutral slashed
+ * eye when hidden) and the `+`. The leading group takes the slack with a
+ * weight of its own so the trailing icons sit on the right edge whatever
+ * the title's width — a `weight(fill = false)` on the title itself left
+ * its unused share as dead space and pushed the icons inward.
+ */
 @Composable
 private fun ProjectHeader(
     group: ProjectGroup,
@@ -283,53 +293,55 @@ private fun ProjectHeader(
     onToggleArchived: () -> Unit,
     onNewSession: (() -> Unit)?,
 ) {
+    val secondary = MaterialTheme.colorScheme.onSurfaceVariant
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(onClick = onToggleCollapsed)
-            .padding(start = 8.dp, end = 8.dp, top = 10.dp, bottom = 4.dp),
+            .padding(start = 8.dp, end = 4.dp, top = 8.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            if (collapsed) Icons.Default.KeyboardArrowRight else Icons.Default.KeyboardArrowDown,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
-        )
-        Spacer(Modifier.width(4.dp))
-        Text(
-            group.title,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false),
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(
-            "${group.sessions.count()}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (group.machineName.isNotEmpty()) {
-            Spacer(Modifier.width(8.dp))
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (collapsed) Icons.Default.KeyboardArrowRight else Icons.Default.KeyboardArrowDown,
+                contentDescription = null,
+                tint = secondary.copy(alpha = 0.7f),
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                ArgusGlyphs.Folder,
+                contentDescription = null,
+                tint = secondary,
+                modifier = Modifier.size(15.dp),
+            )
+            Spacer(Modifier.width(7.dp))
             Text(
-                group.machineName,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                group.title,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = secondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "${group.sessions.count()}",
+                style = MaterialTheme.typography.labelSmall,
+                color = secondary.copy(alpha = 0.7f),
             )
         }
-        Spacer(Modifier.weight(1f))
-        // The web's per-project eye: only offered when there is an
-        // archive to reveal — emerald when showing, neutral when hidden.
         if (group.archivedSessions.isNotEmpty()) {
-            TextButton(onClick = onToggleArchived) {
-                Text(
-                    if (showingArchived) "hide archived" else "${group.archivedSessions.size} archived",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (showingArchived) argusPalette.statusDone else MaterialTheme.colorScheme.onSurfaceVariant,
+            IconButton(onClick = onToggleArchived, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    if (showingArchived) ArgusGlyphs.Eye else ArgusGlyphs.EyeOff,
+                    contentDescription = if (showingArchived) "Hide archived sessions" else "Show ${group.archivedSessions.size} archived sessions",
+                    tint = if (showingArchived) argusPalette.statusDone else secondary,
+                    modifier = Modifier.size(15.dp),
                 )
             }
         }
@@ -338,7 +350,7 @@ private fun ProjectHeader(
                 Icon(
                     Icons.Default.Add,
                     contentDescription = "New session",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = secondary,
                     modifier = Modifier.size(16.dp),
                 )
             }

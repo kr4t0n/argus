@@ -407,8 +407,9 @@ app module lists `apps/ios/Argus/Resources` as an asset directory, so
 like the iOS test; persistence is SharedPreferences rather than
 DataStore; cleartext is allowed app-wide because the network security
 config cannot express a private-range carve-out. Not ported: sticky turn
-headers, the brand glyphs (a monogram stands in), persisted list
-collapse state — all Phase 3 polish.
+headers and persisted list collapse state. (The brand glyphs shipped as
+a monogram at first and were replaced by the iOS catalog's marks in the
+post-Phase-4 polish pass.)
 
 **Phase 3 — parity batch.** Inspector (Files tree with depth-3 prefetch,
 Commits, Diff, Note, Terminal placeholder), model picker keyed (machine,

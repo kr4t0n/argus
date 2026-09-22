@@ -96,20 +96,56 @@ val LocalArgusPalette = staticCompositionLocalOf { LightArgusPalette }
 val argusPalette: ArgusPalette
     @Composable get() = LocalArgusPalette.current
 
+// The Material schemes are pinned to the web's NEUTRAL greys, not
+// Material's default purple-tinted ones: every text and hairline colour
+// Compose components pick up (onSurfaceVariant, outlineVariant, the
+// surfaceContainer* levels that sheets and menus paint) is a surface
+// token or a Tailwind neutral, so a sheet, a menu and the list all sit
+// on the same three greys the web and iOS use.
 private val LightScheme: ColorScheme = lightColorScheme(
     background = LightArgusPalette.surface0,
+    onBackground = rgb(0x171717),
     surface = LightArgusPalette.surface0,
+    onSurface = rgb(0x171717),
     surfaceVariant = LightArgusPalette.surface1,
+    onSurfaceVariant = rgb(0x737373),
+    surfaceContainerLowest = rgb(0xFFFFFF),
+    surfaceContainerLow = rgb(0xFFFFFF),
+    surfaceContainer = LightArgusPalette.surface1,
+    surfaceContainerHigh = LightArgusPalette.surface1,
+    surfaceContainerHighest = LightArgusPalette.surface2,
+    outline = rgb(0xA3A3A3),
+    outlineVariant = rgb(0xE8E8E8),
     primary = rgb(0x171717),
     onPrimary = rgb(0xFAFAFA),
+    primaryContainer = LightArgusPalette.surface2,
+    onPrimaryContainer = rgb(0x171717),
+    secondaryContainer = LightArgusPalette.surface2,
+    onSecondaryContainer = rgb(0x171717),
+    error = rgb(0xDC2626),
 )
 
 private val DarkScheme: ColorScheme = darkColorScheme(
     background = DarkArgusPalette.surface0,
+    onBackground = rgb(0xFAFAFA),
     surface = DarkArgusPalette.surface0,
+    onSurface = rgb(0xFAFAFA),
     surfaceVariant = DarkArgusPalette.surface1,
+    onSurfaceVariant = rgb(0xA3A3A3),
+    surfaceContainerLowest = DarkArgusPalette.surface0,
+    surfaceContainerLow = DarkArgusPalette.surface1,
+    surfaceContainer = DarkArgusPalette.surface1,
+    surfaceContainerHigh = DarkArgusPalette.surface2,
+    surfaceContainerHighest = DarkArgusPalette.surface2,
+    outline = rgb(0x525252),
+    outlineVariant = DarkArgusPalette.surface2,
     primary = rgb(0xFAFAFA),
     onPrimary = rgb(0x171717),
+    primaryContainer = DarkArgusPalette.surface2,
+    onPrimaryContainer = rgb(0xFAFAFA),
+    secondaryContainer = DarkArgusPalette.surface2,
+    onSecondaryContainer = rgb(0xFAFAFA),
+    error = rgb(0xF87171),
 )
 
 @Composable
