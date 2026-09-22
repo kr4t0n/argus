@@ -9,6 +9,8 @@ import app.argus.core.model.CreateCommandRequest
 import app.argus.core.model.CreateSessionRequest
 import app.argus.core.model.CreateSessionResponse
 import app.argus.core.model.DeviceDTO
+import app.argus.core.model.LiveActivityDTO
+import java.net.URLEncoder
 import app.argus.core.model.FSListResponse
 import app.argus.core.model.FSReadResponse
 import app.argus.core.model.GitLogResponse
@@ -303,6 +305,21 @@ class ArgusClient(
     /** Fire-and-forget on logout / push-disable (204 even for unknown tokens). */
     suspend fun unregisterDevice(token: String) = sendVoid("DELETE", "/me/devices/$token")
 
+    /**
+     * Bind this device's FCM token to a running turn so the server drives
+     * its Live Update while the app is backgrounded. Keyed (token,
+     * sessionId) server-side — one device can track several turns.
+     */
+    suspend fun registerLiveActivity(token: String, sessionId: String, platform: String = "android"): LiveActivityDTO =
+        send(
+            "POST", "/me/live-activities",
+            body = json(RegisterLiveActivityRequest(token = token, sessionId = sessionId, platform = platform)),
+        )
+
+    /** End ONE session's registration under the token (without `sessionId` the server drops them all). */
+    suspend fun unregisterLiveActivity(token: String, sessionId: String) =
+        sendVoid("DELETE", "/me/live-activities/$token?sessionId=${URLEncoder.encode(sessionId, "UTF-8")}")
+
     suspend fun getMyExtensions(): UserExtensions = send("GET", "/me/extensions")
 
     suspend fun setMyExtensions(extensions: UserExtensions): UserExtensions =
@@ -340,6 +357,9 @@ class ArgusClient(
 
     @Serializable
     private data class RegisterDeviceRequest(val token: String, val platform: String)
+
+    @Serializable
+    private data class RegisterLiveActivityRequest(val token: String, val sessionId: String, val platform: String)
 
     private inline fun <reified B> json(body: B): String = ArgusJson.encodeToString(body)
 

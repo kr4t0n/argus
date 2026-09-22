@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<!--
+  Android host page for the inspector's Terminal tab (ui/terminal/
+  TerminalPane.kt) — a WebView running the same xterm.js the web's
+  TerminalPane uses, vendored into assets/xterm/ by
+  scripts/sync-android-xterm.sh and version-pinned to apps/web by
+  XtermLockstepTest. Loaded once per open shell from file:///android_asset/.
+
+  Bytes cross the bridge exactly as they cross the wire: base64 of raw
+  PTY bytes. Output comes in through window.argusTerm.write(b64) and is
+  handed to xterm as a Uint8Array so ITS UTF-8 decoder stitches multi-byte
+  glyphs across frame boundaries (write(string) would split them). Input
+  leaves through the `AndroidTerminal` @JavascriptInterface as
+  post('input', b64) — the string xterm hands us, UTF-8-encoded then
+  base64'd, so pasted emoji/CJK round-trip as bytes (btoa alone throws on
+  any codepoint > 0xFF). post(kind, value) — value is always a STRING:
+    ready   — runtime loaded, terminal mounted; the Kotlin side applies
+              the theme, flushes buffered output and focuses
+    input   — base64 keystrokes/paste for terminal:input
+    resize  — "cols,rows" after a fit, for terminal:resize
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="xterm/xterm.css">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: transparent; overflow: hidden; }
+  #term { position: absolute; inset: 0; padding: 6px; }
+  /* xterm sizes its canvas to the rows it fits; let the host box own the rest. */
+  .xterm { height: 100%; }
+</style>
+<script src="xterm/xterm.js"></script>
+<script src="xterm/addon-fit.js"></script>
+<script>
+(function () {
+  // The web's two palettes (TerminalPane.tsx XTERM_DARK / XTERM_LIGHT),
+  // matching the dashboard tokens; hot-swapped through options.theme so
+  // a theme flip repaints without losing scrollback.
+  var THEMES = {
+    dark: {
+      background: '#0a0a0a', foreground: '#e5e5e5', cursor: '#a3a3a3', cursorAccent: '#0a0a0a',
+      selectionBackground: '#525252',
+      black: '#171717', brightBlack: '#404040', red: '#ef4444', brightRed: '#f87171',
+      green: '#22c55e', brightGreen: '#4ade80', yellow: '#eab308', brightYellow: '#facc15',
+      blue: '#3b82f6', brightBlue: '#60a5fa', magenta: '#a855f7', brightMagenta: '#c084fc',
+      cyan: '#06b6d4', brightCyan: '#22d3ee', white: '#e5e5e5', brightWhite: '#fafafa'
+    },
+    light: {
+      background: '#ffffff', foreground: '#171717', cursor: '#525252', cursorAccent: '#ffffff',
+      selectionBackground: '#cccccc',
+      black: '#171717', brightBlack: '#404040', red: '#dc2626', brightRed: '#ef4444',
+      green: '#16a34a', brightGreen: '#22c55e', yellow: '#ca8a04', brightYellow: '#eab308',
+      blue: '#2563eb', brightBlue: '#3b82f6', magenta: '#9333ea', brightMagenta: '#a855f7',
+      cyan: '#0891b2', brightCyan: '#06b6d4', white: '#525252', brightWhite: '#171717'
+    }
+  };
+
+  function post(kind, value) {
+    if (window.AndroidTerminal && typeof window.AndroidTerminal.post === 'function') {
+      window.AndroidTerminal.post(kind, String(value));
+    }
+  }
+
+  var encoder = new TextEncoder();
+  function b64encode(bytes) {
+    var bin = '';
+    var CHUNK = 0x8000; // String.fromCharCode spread blows the stack on huge pastes
+    for (var i = 0; i < bytes.length; i += CHUNK) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(bin);
+  }
+  function b64decode(b64) {
+    var bin = atob(b64);
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  var host = document.getElementById('term');
+  var term = new Terminal({
+    fontFamily: 'monospace',
+    fontSize: 12,
+    lineHeight: 1.25,
+    cursorBlink: true,
+    convertEol: false,
+    scrollback: 5000,
+    allowProposedApi: true,
+    theme: THEMES.dark
+  });
+  var fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(host);
+
+  term.onData(function (data) {
+    post('input', b64encode(encoder.encode(data)));
+  });
+
+  // Refit on host size changes (keyboard up/down, sheet vs pane), debounced
+  // so a drag doesn't hammer the sidecar with resizes.
+  var resizeTimer = null;
+  function refit() {
+    try {
+      fit.fit();
+      post('resize', term.cols + ',' + term.rows);
+    } catch (e) {}
+  }
+  try {
+    new ResizeObserver(function () {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(refit, 80);
+    }).observe(host);
+  } catch (e) {}
+
+  window.argusTerm = {
+    write: function (b64) { try { term.write(b64decode(b64)); } catch (e) {} },
+    writeText: function (text) { term.write(text); },
+    setTheme: function (dark) { term.options.theme = dark ? THEMES.dark : THEMES.light; },
+    fit: refit,
+    focus: function () { term.focus(); }
+  };
+
+  refit();
+  post('ready', 0);
+})();
+</script>
+</head>
+<body><div id="term"></div></body>
+</html>

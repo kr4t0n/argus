@@ -80,6 +80,7 @@ import app.argus.android.ui.session.Chevron
 import app.argus.android.ui.session.captionStyle
 import app.argus.android.ui.session.monoStyle
 import app.argus.android.ui.session.secondaryTextColor
+import app.argus.android.ui.terminal.TerminalPane
 import app.argus.android.ui.session.tertiaryTextColor
 import app.argus.android.ui.theme.argusPalette
 import app.argus.core.api.ApiError
@@ -222,10 +223,11 @@ fun InspectorPane(
                 } else {
                     NoProjectPlaceholder()
                 }
-                // The PTY needs the sidecar-link terminal transport,
-                // which is Phase 6 for this client; the tab is shown so
-                // the capability stays visible where the web puts it.
-                InspectorTab.TERMINAL -> CenteredUnavailable("Terminal", "Terminal arrives in a later phase.")
+                InspectorTab.TERMINAL -> if (projectRef != null) {
+                    TerminalPane(app = app, project = projectRef, machineName = machine?.name)
+                } else {
+                    NoProjectPlaceholder()
+                }
                 InspectorTab.NOTE -> if (projectRef != null) {
                     NotePanel(app = app, project = projectRef)
                 } else {

@@ -1,6 +1,7 @@
 package app.argus.android
 
 import android.content.SharedPreferences
+import app.argus.android.push.LiveUpdateBridge
 import app.argus.android.push.PushBridge
 import app.argus.android.session.SessionViewModel
 import app.argus.android.store.FleetStore
@@ -24,6 +25,8 @@ import app.argus.core.realtime.FSChangedPayload
 import app.argus.core.realtime.GitChangedPayload
 import app.argus.core.realtime.ServerEvent
 import app.argus.core.realtime.StreamClient
+import app.argus.core.realtime.TerminalClosedPayload
+import app.argus.core.realtime.TerminalOutputPayload
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -101,6 +104,16 @@ class AppModel(private val prefs: SharedPreferences) {
 
     /** The push platform — installed by `ArgusApplication`; null in a build without one. */
     var push: PushBridge? = null
+
+    /** The lock-screen live-turn cards — installed by `ArgusApplication`. */
+    var liveUpdates: LiveUpdateBridge? = null
+
+    /**
+     * The terminal pane on screen — terminal output/closed events are
+     * routed here (the iOS `activeTerminal`). Set by TerminalPane while
+     * composed; it rejoins its room on reconnect.
+     */
+    var activeTerminal: TerminalSink? = null
 
     /**
      * Whether the process is in the foreground (ProcessLifecycleOwner
@@ -353,6 +366,8 @@ class AppModel(private val prefs: SharedPreferences) {
 
     fun logOut() {
         prefs.edit().remove(KEY_TOKEN).apply()
+        // Before the client goes: ending a card unregisters its token.
+        liveUpdates?.endAll()
         unregisterPushForLogout()
         eventPump?.cancel()
         eventPump = null
@@ -464,6 +479,38 @@ class AppModel(private val prefs: SharedPreferences) {
         // the server's live clear can't (a data message is best-effort,
         // and never delivered to a force-stopped app).
         push?.reconcile(sessionList.sessions.value.values.filter { it.unread }.map { it.id }.toSet())
+        // Same for live cards: end any whose session settled while the
+        // server's end push could not reach us (or was never configured).
+        liveUpdates?.reconcile { sessionList.sessions.value[it]?.status }
+    }
+
+    // MARK: Live Updates
+
+    /** Put a running turn's card up (idempotent per session). */
+    private fun startLiveUpdate(sessionId: String) {
+        val session = sessionList.sessions.value[sessionId] ?: return
+        liveUpdates?.start(session, session.cliType ?: "custom")
+    }
+
+    /**
+     * A card started: bind this device's push token to the session so the
+     * server drives the card once we are backgrounded. Only meaningful
+     * with push on — without a token the card is local-only, which is
+     * still worth having while the app is in front.
+     */
+    fun onLiveUpdateStarted(sessionId: String) {
+        if (!_pushEnabled.value) return
+        val client = client ?: return
+        val token = prefs.getString(KEY_PUSH_TOKEN, null) ?: return
+        scope.launch { runCatching { client.registerLiveActivity(token, sessionId) }.onFailure(::handleApiError) }
+    }
+
+    /** A card ended: drop the session's registration (push feedback prunes strays). */
+    fun onLiveUpdateEnded(sessionId: String) {
+        if (!_pushEnabled.value) return
+        val client = client ?: return
+        val token = prefs.getString(KEY_PUSH_TOKEN, null) ?: return
+        scope.launch { runCatching { client.unregisterLiveActivity(token, sessionId) } }
     }
 
     // MARK: Push notifications
@@ -682,6 +729,9 @@ class AppModel(private val prefs: SharedPreferences) {
                 )
                 queue.remove(head.id)
                 activeSession?.ingest(command)
+                // Turns submitted from THIS device get a lock-screen card
+                // immediately (iOS parity — the natural moment).
+                startLiveUpdate(sessionId)
                 // drainInFlight stays set until the session goes active
                 // (or the bridge expires) — that's the guard window.
             } catch (e: Exception) {
@@ -726,11 +776,15 @@ class AppModel(private val prefs: SharedPreferences) {
                     refreshAll()
                     activeSession?.handleReconnect()
                 }
+                activeTerminal?.handleReconnect()
             }
             ServerEvent.Disconnected -> _socketConnected.value = false
             is ServerEvent.SocketError -> {}
 
-            is ServerEvent.Chunk -> activeSession?.ingestLive(event.chunk)
+            is ServerEvent.Chunk -> {
+                activeSession?.ingestLive(event.chunk)
+                event.chunk.sessionId?.let { liveUpdates?.noteChunk(it, event.chunk) }
+            }
             is ServerEvent.CommandCreated -> activeSession?.ingest(event.command)
             is ServerEvent.CommandUpdated -> activeSession?.ingest(event.command)
 
@@ -750,7 +804,12 @@ class AppModel(private val prefs: SharedPreferences) {
                     // Dispatch→active bridge closed; the queue stays parked
                     // until this turn finishes.
                     drainInFlight.remove(status.id)
+                    // A turn started in the session on screen → live card
+                    // (turns submitted from this device start theirs in
+                    // the drainer; this covers queued follow-ups too).
+                    if (status.id == activeSession?.sessionId) startLiveUpdate(status.id)
                 } else {
+                    liveUpdates?.end(status.id, failed = status.status == SessionStatus.FAILED)
                     maybeDrain(status.id)
                 }
             }
@@ -777,8 +836,9 @@ class AppModel(private val prefs: SharedPreferences) {
             }
             is ServerEvent.GitChanged ->
                 _gitChanges.value = GitChangeEvent((_gitChanges.value?.seq ?: 0) + 1, event.payload)
-            is ServerEvent.TerminalCreated, is ServerEvent.TerminalUpdated,
-            is ServerEvent.TerminalOutput, is ServerEvent.TerminalClosed -> {}
+            is ServerEvent.TerminalOutput -> activeTerminal?.onOutput(event.payload)
+            is ServerEvent.TerminalClosed -> activeTerminal?.onClosed(event.payload)
+            is ServerEvent.TerminalCreated, is ServerEvent.TerminalUpdated -> {}
         }
     }
 
@@ -799,6 +859,18 @@ class AppModel(private val prefs: SharedPreferences) {
         /** How long to accumulate fs nudges before publishing one batch. */
         private const val FS_FLUSH_WINDOW_MS = 150L
     }
+}
+
+/**
+ * The terminal pane's socket-side surface (`ui/terminal/TerminalPane`):
+ * output and closed events for its terminal, plus a room rejoin on
+ * reconnect — Socket.IO rooms are per connection.
+ */
+interface TerminalSink {
+    val terminalId: String?
+    fun onOutput(payload: TerminalOutputPayload)
+    fun onClosed(payload: TerminalClosedPayload)
+    fun handleReconnect()
 }
 
 /** What the main surface shows; null is the session list. */

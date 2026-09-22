@@ -1,6 +1,6 @@
 # Plan: native Android client — Kotlin + Jetpack Compose
 
-Status: 🟡 IN PROGRESS · Phase 0 ✅ (2026-09-21) · Phase 1 ✅ (2026-09-21, `android.yml` and `ios.yml` both green on the branch) · Phase 2 ✅ (2026-09-22, CI green and a turn round-tripped on a device) · Phase 3 ✅ (2026-09-22, CI green; device-verified) · Phase 4 ✅ (2026-09-22, CI green; verified on an emulator the same day) · Phase 5 ✅ (2026-09-22, CI green; device pass against an FCM-configured server pending) · Phase 6 next
+Status: 🟡 IN PROGRESS · Phase 0 ✅ (2026-09-21) · Phase 1 ✅ (2026-09-21, `android.yml` and `ios.yml` both green on the branch) · Phase 2 ✅ (2026-09-22, CI green and a turn round-tripped on a device) · Phase 3 ✅ (2026-09-22, CI green; device-verified) · Phase 4 ✅ (2026-09-22, CI green; verified on an emulator the same day) · Phase 5 ✅ (2026-09-22, CI green; device pass against an FCM-configured server pending) · Phase 6 ✅ (2026-09-22, CI green; device pass pending)
 Branch: `feat/android-native-client` (PRs target `dev`)
 Prereq: none — the server contract the client speaks is already frozen by the
 iOS client and its captured fixtures.
@@ -308,7 +308,7 @@ The only server changes in the whole plan, all in `apps/server/src/modules/push/
    Document in `.env.example`, `INSTALLATION.md`, and the Helm values.
 5. **Live Updates pushes** — data messages from the same throttle the
    `liveactivity` APNs type uses; can land after the rest of Phase 5.
-   (Items 1–4 landed with Phase 5; item 5 is Phase 6 work.)
+   (Items 1–4 landed with Phase 5; item 5 landed with Phase 6.)
 
 ## 7. CI: `.github/workflows/android.yml`
 
@@ -468,6 +468,18 @@ green; what remains is a device pass against a server with `FCM_*` set
 
 **Phase 6 — terminal and Live Updates.** xterm.js host with the explicit
 lifecycle; the promoted ongoing notification with local and pushed updates.
+*Done 2026-09-22.* Terminal: `ui/terminal/TerminalPane.kt` over
+`assets/terminal.html` + the vendored `assets/xterm/` (sync script +
+`XtermLockstepTest`), the web pane's lifecycle and wire, routed through
+`AppModel.activeTerminal`. Live Updates: `push/LiveUpdates.kt`
+(`LiveUpdateManager`, promoted on 16+, plain ongoing below), started from
+the drainer and the on-screen session's ACTIVE status, throttled local
+updates, `type: live` FCM data messages from the server's existing
+15 s throttle (server §6 item 5 — `LiveActivityToken` gained a
+`platform` and a `(token, sessionId)` key, migration
+`18_live_activity_platform`). `android.yml` green. Pending on a device:
+the terminal under a soft keyboard and hardware Ctrl chords in the
+WebView, and the Live Update against an FCM-configured server.
 
 ## 9. Working on it without a local toolchain
 

@@ -5,6 +5,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import app.argus.android.push.AndroidPushBridge
+import app.argus.android.push.LiveUpdateManager
 import app.argus.android.push.TurnNotifications
 
 /**
@@ -22,11 +23,21 @@ class ArgusApplication : Application() {
     lateinit var turnNotifications: TurnNotifications
         private set
 
+    /** The live-turn cards; shared with the messaging service. */
+    lateinit var liveUpdates: LiveUpdateManager
+        private set
+
     override fun onCreate() {
         super.onCreate()
         turnNotifications = TurnNotifications(this).also { it.ensureChannel() }
         appModel = AppModel(getSharedPreferences(PREFS_NAME, MODE_PRIVATE))
         appModel.push = AndroidPushBridge(this, turnNotifications)
+        liveUpdates = LiveUpdateManager(
+            this,
+            onStarted = appModel::onLiveUpdateStarted,
+            onEnded = appModel::onLiveUpdateEnded,
+        ).also { it.ensureChannel() }
+        appModel.liveUpdates = liveUpdates
         // A process started by an incoming FCM message never runs the
         // login path that initialises Firebase; re-initialise from the
         // cached client config so the messaging service has a default

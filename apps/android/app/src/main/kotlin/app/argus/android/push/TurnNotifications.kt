@@ -60,21 +60,7 @@ class TurnNotifications(private val context: Context) {
     // through the SDK_INT branch.
     @SuppressLint("MissingPermission")
     fun show(sessionId: String, title: String, body: String, failed: Boolean) {
-        if (!notificationsAllowed()) return
-        val tap = Intent(context, MainActivity::class.java).apply {
-            action = Intent.ACTION_VIEW
-            putExtra(EXTRA_SESSION_ID, sessionId)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        }
-        // A distinct request code per session, or every banner's
-        // PendingIntent would collapse into one (extras are not part of
-        // Intent identity) and each tap would open the last session.
-        val pending = PendingIntent.getActivity(
-            context,
-            sessionId.hashCode(),
-            tap,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
+        if (!notificationsAllowed(context)) return
         val notification = NotificationCompat.Builder(context, CHANNEL_TURNS)
             .setSmallIcon(R.drawable.ic_stat_argus)
             .setContentTitle(title)
@@ -83,7 +69,7 @@ class TurnNotifications(private val context: Context) {
             .setCategory(if (failed) NotificationCompat.CATEGORY_ERROR else NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setDefaults(NotificationCompat.DEFAULT_SOUND)
-            .setContentIntent(pending)
+            .setContentIntent(sessionTapIntent(context, sessionId))
             .setAutoCancel(true)
             .build()
         NotificationManagerCompat.from(context).notify(sessionId, TURN_ID, notification)
@@ -108,17 +94,39 @@ class TurnNotifications(private val context: Context) {
         }
     }
 
-    private fun notificationsAllowed(): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
-            if (granted != PackageManager.PERMISSION_GRANTED) return false
-        }
-        return NotificationManagerCompat.from(context).areNotificationsEnabled()
-    }
-
     companion object {
         const val CHANNEL_TURNS = "turns"
         const val TURN_ID = 1
         const val EXTRA_SESSION_ID = "app.argus.android.extra.SESSION_ID"
+
+        /** POST_NOTIFICATIONS granted (13+) and the app not muted in settings. */
+        fun notificationsAllowed(context: Context): Boolean {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+                if (granted != PackageManager.PERMISSION_GRANTED) return false
+            }
+            return NotificationManagerCompat.from(context).areNotificationsEnabled()
+        }
+
+        /**
+         * The deep link into a session. A distinct request code per
+         * session, or every banner's PendingIntent would collapse into one
+         * (extras are not part of Intent identity) and each tap would open
+         * the last session. Shared by the completion banner and the live
+         * card, which therefore tap through to the same place.
+         */
+        fun sessionTapIntent(context: Context, sessionId: String): PendingIntent {
+            val tap = Intent(context, MainActivity::class.java).apply {
+                action = Intent.ACTION_VIEW
+                putExtra(EXTRA_SESSION_ID, sessionId)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+            return PendingIntent.getActivity(
+                context,
+                sessionId.hashCode(),
+                tap,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+        }
     }
 }

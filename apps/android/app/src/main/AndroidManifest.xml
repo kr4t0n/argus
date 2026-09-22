@@ -5,6 +5,9 @@
     <!-- Turn-finished banners (runtime grant on Android 13+, requested by
          the account panel's toggle before the device registers). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 16 Live Updates: lets the running-turn card ask to be
+         promoted to the status bar / lock screen (LiveUpdateManager). -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
 
     <!-- allowBackup=false: the app holds a session JWT; nothing here
          should ride cloud backups or device-to-device transfer.

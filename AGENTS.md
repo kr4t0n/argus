@@ -462,9 +462,22 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   message) that wakes the app to delete its own delivered notification
   (neither platform has a server-side revoke). Gated by the in-memory
   `outstandingBanners` set, so the per-chunk caller costs a Set lookup
-  and nothing is sent unless an alert actually went out. Live Activity
-  pushes stay APNs-only; the Android Live Updates counterpart is Phase 6
-  of the Android plan.
+  and nothing is sent unless an alert actually went out.
+  **Live turns ride the same split.** `LiveActivityToken` rows carry a
+  `platform` and are keyed `(token, sessionId)` (migration
+  `18_live_activity_platform`, sorted right after `17_` which created
+  the table): an iOS row is a per-activity APNs token, an Android row
+  is the device's FCM token bound to one session, so one phone tracks
+  several turns under one token. `pushLiveActivity` sends the APNs
+  `liveactivity` payload to iOS rows and a `{type: live, sessionId,
+  event, state, toolCount, lastTool, title}` HIGH-priority data message
+  to Android rows (NORMAL would be deferred through Doze — the exact
+  window the card exists to cover; the 15 s throttle bounds the rate),
+  with the session title read once per turn because a killed app holds
+  no session list when a push lands. `DELETE /me/live-activities/:token`
+  takes an optional `?sessionId=` so an Android device ending one turn
+  keeps its other registrations; without it every row under the token
+  goes (the iOS shape). Push feedback prunes by token across sessions.
 - `sidecar-link/` — raw WebSocket server on path `/sidecar-link`
   attached to the same `http.Server` as NestJS (via `HttpAdapterHost`,
   `noServer` pattern). Owns one connection per sidecar, validates a
@@ -1538,7 +1551,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   file exists, so CI stays green until someone runs the capture against
   a server with searchable sessions — do run it and commit the fixture.
 
-### `apps/android/` (native client — Phase 5: push)
+### `apps/android/` (native client — Phase 6: terminal and Live Updates)
 
 - Kotlin + Jetpack Compose, shaped like `apps/ios/`: `:core` is a **plain
   Kotlin/JVM module** (no Android plugin — the counterpart of ArgusKit,
@@ -1650,6 +1663,49 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   is used directly, so it is a direct pin rather than a transitive
   accident). `PushConfigDTO` is Android-only and has no Swift mirror
   by design.
+- **The terminal is the web's xterm.js in a WebView, and the vendored
+  copy is version-pinned.** `ui/terminal/TerminalPane.kt` hosts
+  `assets/terminal.html`, which loads `assets/xterm/{xterm.js,
+  addon-fit.js, xterm.css}` — copied from the web's resolved
+  `@xterm/xterm` by `scripts/sync-android-xterm.sh`, which also stamps
+  `xterm/VERSION`; `XtermLockstepTest` pins that stamp to the `apps/web`
+  importer in `pnpm-lock.yaml` (the minified bundle has no version
+  literal to read, unlike mermaid, so the stamp is the pin — re-run the
+  script, never hand-edit it). Same wire as the web `TerminalPane`:
+  project-addressed open, base64 bytes both ways (output handed to
+  xterm as a `Uint8Array` so ITS UTF-8 decoder stitches glyphs across
+  frames; input UTF-8-encoded before base64), a seq guard against the
+  duplicate a reconnect replays, output buffered until the page posts
+  `ready`. The pane registers as `AppModel.activeTerminal` while
+  composed (the iOS `activeTerminal`), which is how output/closed
+  events reach it and how it rejoins its room on `Connected`. Leaving
+  the tab tears the view down without closing the PTY (web parity).
+  GOTCHA: `WebView.destroy()` wants the view detached first, so the
+  controller only forgets the view in `teardown()` and destroys it from
+  `AndroidView`'s `onRelease`. Unverified on a device: whether a
+  hardware Ctrl+B / Ctrl+K / Ctrl+D reaches the shell while the WebView
+  has focus (the page's keydown handlers should consume them before
+  `MainActivity.onKeyDown` sees anything) and how well the soft
+  keyboard drives xterm's hidden textarea.
+- **Live Updates mirror the iOS Live Activity, over the same server
+  throttle.** `push/LiveUpdates.kt` (`LiveUpdateManager`) posts one
+  ongoing notification per running turn under the session id as tag
+  (id 2, so it coexists with the completion banner's id 1), promoted on
+  Android 16+ via `setRequestPromotedOngoing` + `ProgressStyle` +
+  `setShortCriticalText` (and `POST_PROMOTED_NOTIFICATIONS` in the
+  manifest), plain ongoing below. Started from the drainer's successful
+  send and from `session:status` ACTIVE for the on-screen session;
+  `tool` chunks advance the counters with a 2 s leading-edge throttle
+  and a trailing flush (the same shape as iOS and the server — see the
+  Live Activity throttle gotcha); ended on the terminal status with a
+  four-minute `setTimeoutAfter`. With push on, `start` registers the
+  device token per session (`POST /me/live-activities`, `platform:
+  android`) and the server's `type: live` FCM data messages drive the
+  card while backgrounded; an `update` for an unknown session (the
+  process was killed) starts the card from the pushed counters, which
+  is why the server includes the session title. `refreshAll`
+  reconciles: tracked cards whose session settled are ended, and
+  ongoing cards left by a previous process are cancelled.
 - **Creation is project-first and the model editor is one composable.**
   `AppModel.createSession(machineId, workingDir, adapterType, title,
   modelSelection)` is the single creation call (the server upserts the
@@ -3323,9 +3379,12 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   palette's on-screen entry point) and 5 (FCM push with the server's
   transport split, runtime Firebase init, the notifications toggle,
   deep link, on-screen suppression, read-sync clear and the foreground
-  sweep — CI-green, awaiting a device pass against a server with
-  `FCM_*` set) landed on `feat/android-native-client`; Phase 6 (terminal
-  + Live Updates) is open. The design,
+  sweep) and 6 (the xterm.js terminal in a WebView, Live Update cards
+  local + server-pushed) landed on `feat/android-native-client`. Phases
+  0–4 were exercised on a device or emulator; 5 and 6 are CI-green and
+  await device passes (push needs a server with `FCM_*` set; the
+  terminal's hardware-key and soft-keyboard behaviour in the WebView is
+  unverified). The design,
   wire contract, lockstep table, CI shape and phases are in
   `docs/plan-android-native-client.md`; the module map is under
   `apps/android/` above. Same posture as iOS (thin client, hand-written

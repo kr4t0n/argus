@@ -5,7 +5,7 @@ Like the iOS client it is a *thin client*: it speaks the same NestJS REST
 API + Socket.IO `/stream` namespace as the web app and never touches the
 Go sidecar.
 
-> Status: **Phase 5 — push.** `:core` holds the full non-UI
+> Status: **Phase 6 — terminal and Live Updates.** `:core` holds the full non-UI
 > layer (decode-tolerant DTO mirrors of shared-types, the OkHttp REST
 > client, the socket.io realtime client as a `Flow` of typed events, and
 > the transcript engine ported from ArgusKit — all unit-tested against
@@ -14,16 +14,18 @@ Go sidecar.
 > (a side column from 840dp), a streaming transcript (activity timeline,
 > tool pills, diffs, markdown with math, mermaid, sandboxed HTML and
 > inline workspace images), a composer with attachments and the prompt
-> queue, the inspector (Commits / Files / Note / Diff, terminal
-> placeholder), file preview, model picker, usage badge + context ring,
+> queue, the inspector (Commits / Files / Terminal / Note / Diff — the
+> terminal is xterm.js in a WebView), file preview, model picker, usage badge + context ring,
 > fork, the Ctrl+P / Ctrl+K palette (also behind the list's search
 > button) and the Ctrl+/ shortcuts sheet, the machine panel (host,
 > adapters, projects, sidecar update, remove), the account panel
 > (activity grid/curve, usage windows, plan quota, extensions, the
 > push toggle), the project / session creation sheets, and
 > turn-finished push notifications over FCM (deep link, on-screen
-> suppression, read-sync clear). The terminal and Live Updates are the
-> remaining phase. The full design, wire contract and phase plan are in
+> suppression, read-sync clear), and Live Update cards for running turns
+> (local while foregrounded, server-pushed once backgrounded). All six
+> phases are wired; the terminal, push and Live Updates await device
+> passes. The full design, wire contract and phase plan are in
 > [`docs/plan-android-native-client.md`](../../docs/plan-android-native-client.md).
 
 ## CI is the compiler
@@ -113,7 +115,8 @@ apps/android/
 └── app/                        Jetpack Compose application (app.argus.android)
     ├── src/main/assets/        mermaid-android.html — the WebView host page for ```mermaid
     │                           (mermaid.min.js itself comes from apps/ios/Argus/Resources, see below)
-    ├── src/test/               MermaidLockstepTest — pins the vendored mermaid to the web's version
+    ├── src/main/assets/xterm/  xterm.js + addon-fit + css, vendored by scripts/sync-android-xterm.sh (terminal.html hosts them)
+    ├── src/test/               MermaidLockstepTest / XtermLockstepTest — pin the vendored runtimes to the web's versions
     └── src/main/kotlin/app/argus/android/
         ├── ArgusApplication.kt process-scoped owner of AppModel; foreground hook
         ├── MainActivity.kt     theme + root composable; the hardware-keyboard dispatch point
@@ -148,6 +151,7 @@ same table ArgusKit keeps, so a change lands on all three clients):
 | `engine/DeltaSplit.kt` | `apps/web/src/lib/deltaSplit.ts` (also ported on the server as `PushService.answerPreview`) |
 | `engine/UsageMath.kt` | `packages/shared-types/src/usage.ts` |
 | `engine/ContextWindow.kt` | `packages/shared-types/src/contextWindow.ts` — **hash-pinned** by `ContextWindowLockstepTest`; `android.yml` triggers on the TS path |
+| `app/src/main/assets/xterm/` | the `@xterm/xterm` release `apps/web` resolves — **version-pinned** by `XtermLockstepTest` via the `VERSION` stamp `scripts/sync-android-xterm.sh` writes (the minified bundle carries no version literal) |
 | `engine/MathDelimiters.kt`, `MathSegments.kt`, `InlineMath.kt` | `apps/web/src/lib/markdown.ts` delimiter rules (semantic port; deviations documented in-file) |
 | `engine/FileReferences.kt` | `apps/web/src/components/FileChips.tsx` helpers + the `img` source split in `MarkdownImage.tsx` |
 | `engine/SessionMatch.kt` | `apps/web/src/lib/sessionMatch.ts` (Ctrl+P ranking — weights, bonuses, tie-breaks) |
@@ -328,6 +332,39 @@ intent extra with a per-session request code; `MainActivity` is
 `singleTop`. The enabled flag survives logout and the token is
 unregistered, so the next login re-registers — iOS parity throughout.
 
+**Terminal (Phase 6).** The inspector's Terminal tab is the web's
+`TerminalPane` in a WebView: the same xterm.js (vendored into
+`assets/xterm/`, hosted by `assets/terminal.html`), the same explicit
+lifecycle (idle → open shell with close → settled shell with dismiss /
+new shell), and the same wire — `POST /projects/:id/terminals` to open,
+then the socket's `subscribe:terminal`, `terminal:input` / `resize` /
+`close` out and `terminal:output` / `closed` in, bytes as base64 both
+ways. The page hands output to xterm as a `Uint8Array` so its UTF-8
+decoder stitches glyphs across frames, encodes input as UTF-8 before
+base64, seq-guards the duplicate a reconnect can replay, buffers output
+that lands before the page reports ready, and rejoins its room on
+reconnect through `AppModel.activeTerminal`. Leaving the tab tears the
+view down but does not close the PTY (web parity; the sidecar reaps it).
+Chosen over a native terminal view because xterm.js is what the web
+already runs and the alternatives are GPL.
+
+**Live Updates (Phase 6).** `LiveUpdateManager` is the iOS
+`LiveActivityManager`: one ongoing notification per running turn (title,
+tool count, last tool, elapsed via the chronometer) that resolves to
+✓/✗ and lingers four minutes. On Android 16+ it asks to be promoted
+(`setRequestPromotedOngoing`, `ProgressStyle`, the tool count as short
+critical text, `POST_PROMOTED_NOTIFICATIONS` in the manifest); below 16
+it is a plain ongoing notification. Cards start for turns submitted from
+this device and for turns starting in the session on screen; local
+updates are throttled to one render per 2 s with a trailing flush.
+With push on, the device token is registered per session
+(`POST /me/live-activities`, keyed (token, sessionId) so one phone can
+track several turns) and the server drives the card with `type: live`
+data messages once the app is backgrounded — a pushed update for a
+session the process does not know (the app was killed) starts the card
+from the pushed counters. `refreshAll` ends any card whose session has
+settled, including leftovers from a previous process.
+
 **Attachments.** The system photo and document pickers feed
 `ArgusClient.uploadAttachment`; uploads happen ahead of send, the chips
 show a local thumbnail from the bytes in hand, and the ids ride the
@@ -354,11 +391,16 @@ dependency, on purpose.
 - **`org.json` is excluded from socket.io-client-java** in `:core` and
   restored only on the JVM test runtime: Android ships it in the
   platform, and the app module would fail lint's `DuplicatePlatformClasses`.
-- **Push tokens are validated per platform** by `POST /me/devices`:
-  `platform: "android"` accepts the FCM alphabet, `ios` (the default)
-  APNs hex — always send the platform. `GET /me/push/config` is
-  Android-only and 404s on a server without `FCM_*`; `PushConfigDTO`
-  has no Swift mirror by design.
+- **Push tokens are validated per platform** by `POST /me/devices` and
+  `POST /me/live-activities`: `platform: "android"` accepts the FCM
+  alphabet, `ios` (the default) APNs hex — always send the platform.
+  `GET /me/push/config` is Android-only and 404s on a server without
+  `FCM_*`; `PushConfigDTO` has no Swift mirror by design.
+- **Live-activity rows are keyed (token, sessionId).** An Android device
+  registers ONE token per running turn, so `DELETE
+  /me/live-activities/:token?sessionId=` ends just that session's card;
+  without the query the server drops every row under the token (the iOS
+  shape, where a token is per activity).
 
 ## Toolchain and pins
 
@@ -409,5 +451,7 @@ See the plan for the full phase list. In short: **0** CI bootstrap ✅ →
 composer with the queue ✅ (device-verified) → **3** inspector, file
 preview, model picker, usage badge, attachments, fork, palette and
 hotkeys ✅ → **4** fleet and account panels, creation sheets ✅ →
-**5** push (FCM, with the server-side transport split) ✅ (this) →
-**6** terminal and Live Updates.
+**5** push (FCM, with the server-side transport split) ✅ →
+**6** terminal and Live Updates ✅ (this). What remains is device
+verification of 5 and 6 and the open questions in the plan
+(distribution and signing, UnifiedPush, the Ctrl+K deep link).

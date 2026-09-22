@@ -148,6 +148,20 @@ data class PushConfigDTO(
     val senderId: String,
 )
 
+/**
+ * One live-turn registration (`POST /me/live-activities`): on Android the
+ * device's FCM token bound to a session so the server can drive the
+ * Live Update while the app is backgrounded. Keyed (token, sessionId)
+ * server-side, so one device can track several turns.
+ */
+@Serializable
+data class LiveActivityDTO(
+    val id: String,
+    val token: String,
+    val sessionId: String,
+    val createdAt: String = "",
+)
+
 /** `GET`/`PUT /me/project-notes` envelope. */
 @Serializable
 data class ProjectNotesResponse(val notes: String)
