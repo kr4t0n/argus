@@ -1507,7 +1507,7 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   file exists, so CI stays green until someone runs the capture against
   a server with searchable sessions — do run it and commit the fixture.
 
-### `apps/android/` (native client — Phase 2: app shell)
+### `apps/android/` (native client — Phase 3: parity batch)
 
 - Kotlin + Jetpack Compose, shaped like `apps/ios/`: `:core` is a **plain
   Kotlin/JVM module** (no Android plugin — the counterpart of ArgusKit,
@@ -1559,6 +1559,38 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   every navigation but the initial asset load cancelled, a source that
   fails to parse keeps the last good diagram (or the code block) with no
   error state.
+- **Hotkeys are a third hand-mirrored table, Ctrl-only, dispatched from
+  the Activity.** `Hotkeys.kt` carries the same ids/labels/scopes as
+  `apps/web/src/lib/hotkeys.ts` and `apps/ios/Argus/Sources/Hotkeys.swift`
+  (add a chord to all three or to none; nothing hash-pins them, though
+  `android.yml` runs on edits to the TS file so a drift at least
+  triggers a build). Chords are Ctrl, never Meta (the launcher key).
+  The dispatch point is `MainActivity.onKeyDown`, which only sees keys
+  the Compose hierarchy declined — that is what keeps a focused text
+  field's editing chords intact without a per-field guard. The composer
+  owns Enter/Shift+Enter/Escape via `onPreviewKeyEvent` and lets the
+  VIRTUAL keyboard's Enter through as a newline (`nativeKeyEvent.
+  deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD`); without that check a
+  soft-keyboard Enter would send. SESSION-scoped bindings reach the
+  handler the open `SessionScreen` registers on `AppModel.
+  sessionHotkeyHandler`, and are refused while the palette is up.
+- **fs/git nudges are published as sequence-numbered batches**
+  (`AppModel.fsChanges: StateFlow<FsChangeBatch>`, `gitChanges`), the
+  StateFlow form of the iOS `fsChangeSeq` + `fsChanges` pair and for
+  the same two reasons: the payloads carry no timestamp, so a
+  `StateFlow<FSChangedPayload>` would conflate two writes to one
+  directory (StateFlow drops equal values), and a burst must be ONE
+  observable update. The 150 ms flush window is non-restarting. The
+  file preview's own 400 ms refresh window is non-restarting too — see
+  the "Live file tabs" gotchas for why a restarting debounce starves.
+- **The split layout is width-driven, not device-driven.** `ArgusApp`
+  switches from the stack to the list-column split at 840dp (material
+  "expanded"), and `SessionScreen` places the inspector beside the
+  transcript at 900dp of session-area width, as a bottom sheet below
+  that. Both are `BoxWithConstraints` checks, so a resized window or a
+  foldable crosses them live; the session-list column's visibility
+  (`AppModel.sidebarVisible`, Ctrl+B) is process state and survives the
+  crossing.
 - **Fixtures are shared with iOS.** `scripts/capture-client-fixtures.sh`
   (renamed from `capture-ios-fixtures.sh`) writes sanitized live-server
   responses to `packages/shared-types/fixtures/`, and BOTH
@@ -3206,11 +3238,14 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 - **Native Android client** — Phases 0 (CI bootstrap), 1 (the `:core`
   module: DTO mirrors, REST + realtime clients, engine ports, shared
-  fixtures) and 2 (the app shell: login, project-grouped session list,
+  fixtures), 2 (the app shell: login, project-grouped session list,
   streaming transcript with Markwon/mermaid/HTML/image rendering,
-  composer + queue, VM cache) landed on `feat/android-native-client`;
-  Phase 2's device round-trip is still owed, and Phases 3–6 (parity,
-  fleet/account, FCM push, terminal + Live Updates) are open. The design,
+  composer + queue, VM cache; device-verified) and 3 (inspector, file
+  and attachment previews, model picker, usage badge, attachments, fork,
+  Ctrl+P/Ctrl+K palette, hotkey registry + Ctrl+/ sheet, tablet split
+  layout) landed on `feat/android-native-client`; Phase 3's device pass
+  is owed, and Phases 4–6 (fleet/account + creation sheets, FCM push,
+  terminal + Live Updates) are open. The design,
   wire contract, lockstep table, CI shape and phases are in
   `docs/plan-android-native-client.md`; the module map is under
   `apps/android/` above. Same posture as iOS (thin client, hand-written

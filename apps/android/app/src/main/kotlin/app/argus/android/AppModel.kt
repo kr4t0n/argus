@@ -14,6 +14,8 @@ import app.argus.core.model.CreateCommandRequest
 import app.argus.core.model.MachineStatus
 import app.argus.core.model.SessionStatus
 import app.argus.core.model.UserExtensions
+import app.argus.core.realtime.FSChangedPayload
+import app.argus.core.realtime.GitChangedPayload
 import app.argus.core.realtime.ServerEvent
 import app.argus.core.realtime.StreamClient
 import kotlinx.coroutines.CoroutineScope
@@ -21,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -70,9 +73,124 @@ class AppModel(private val prefs: SharedPreferences) {
     private val _cloneFailures = MutableStateFlow<List<CloneFailure>>(emptyList())
     val cloneFailures: StateFlow<List<CloneFailure>> = _cloneFailures.asStateFlow()
 
-    /** Account-level extension opt-ins (gate the inspector's Note / Diff tabs, Phase 3). */
+    /** Account-level extension opt-ins — gate the inspector's Note / Diff tabs, like the web's ContextPane. */
     private val _extensions = MutableStateFlow(UserExtensions())
     val extensions: StateFlow<UserExtensions> = _extensions.asStateFlow()
+
+    /**
+     * Which overlay is showing — the web's `paletteStore.mode`; null is
+     * closed. Ctrl+P / Ctrl+K / Ctrl+/ all ride this ONE field so each
+     * hotkey is a toggle for its own mode and a switch away from
+     * another's, instead of three sheets negotiating which is up.
+     * Deliberately not persisted: an open palette restored on relaunch
+     * is a bug, not a preference.
+     */
+    private val _paletteMode = MutableStateFlow<PaletteMode?>(null)
+    val paletteMode: StateFlow<PaletteMode?> = _paletteMode.asStateFlow()
+
+    /** Tablet split layout: whether the session-list column is shown (Ctrl+B). */
+    private val _sidebarVisible = MutableStateFlow(true)
+    val sidebarVisible: StateFlow<Boolean> = _sidebarVisible.asStateFlow()
+
+    /**
+     * Latest fs change events — inspector panels and the file preview
+     * watch these and refetch when a change matches their project's
+     * (machineId, workingDir) pair.
+     *
+     * Published as a BATCH with a sequence number, once per flush window,
+     * for two reasons carried over from iOS: `FSChangedPayload` has no
+     * timestamp, so two writes to one directory are an identical value
+     * and a `StateFlow` of the payload would swallow every repeat; and a
+     * burst (an agent touching several directories) must become ONE
+     * observable update, not N recompositions. The window is
+     * non-restarting: a nudge arriving mid-window joins the pending
+     * batch instead of pushing the flush later, which keeps updates
+     * flowing during sustained editing.
+     */
+    private val _fsChanges = MutableStateFlow(FsChangeBatch(0, emptyList()))
+    val fsChanges: StateFlow<FsChangeBatch> = _fsChanges.asStateFlow()
+    private val pendingFsChanges = ArrayList<FSChangedPayload>()
+    private var fsFlushScheduled = false
+
+    /** Latest git change, sequence-numbered for the same reason as [fsChanges]. */
+    private val _gitChanges = MutableStateFlow<GitChangeEvent?>(null)
+    val gitChanges: StateFlow<GitChangeEvent?> = _gitChanges.asStateFlow()
+
+    /**
+     * The open session screen's hotkey handler (SESSION-scoped
+     * bindings). Set on appear, cleared on dispose — a session binding is
+     * inert on the list by construction.
+     */
+    var sessionHotkeyHandler: ((HotkeyBinding) -> Boolean)? = null
+
+    fun openPalette(mode: PaletteMode) {
+        if (_phase.value != Phase.Ready) return
+        _paletteMode.value = mode
+    }
+
+    /** Press-again-to-dismiss: open [mode], or close if it is already up. No-ops before login. */
+    fun togglePalette(mode: PaletteMode) {
+        if (_phase.value != Phase.Ready) return
+        _paletteMode.value = if (_paletteMode.value == mode) null else mode
+    }
+
+    fun closePalette() {
+        _paletteMode.value = null
+    }
+
+    fun toggleSidebar() {
+        _sidebarVisible.value = !_sidebarVisible.value
+    }
+
+    /**
+     * The activity's key path lands here for a matched [HotkeyBinding].
+     * GLOBAL bindings are handled in place; SESSION bindings go to the
+     * registered session screen. Returns whether the key was consumed.
+     */
+    fun dispatchHotkey(binding: HotkeyBinding): Boolean {
+        if (_phase.value != Phase.Ready) return false
+        return when (binding.scope) {
+            HotkeyScope.GLOBAL -> {
+                when (binding.id) {
+                    Hotkeys.paletteSession.id -> togglePalette(PaletteMode.SESSION)
+                    Hotkeys.paletteContent.id -> togglePalette(PaletteMode.CONTENT)
+                    Hotkeys.shortcutsHelp.id -> togglePalette(PaletteMode.HELP)
+                    Hotkeys.toggleSidebar.id -> toggleSidebar()
+                    else -> return false
+                }
+                true
+            }
+            // A modal palette can be showing a different session; a
+            // session key must not reach the screen behind it.
+            HotkeyScope.SESSION -> if (_paletteMode.value == null) sessionHotkeyHandler?.invoke(binding) == true else false
+        }
+    }
+
+    /** PUT the full extension flag set (no server-side merge). Optimistic with revert on failure. */
+    suspend fun setExtensions(newValue: UserExtensions) {
+        val client = client ?: return
+        val previous = _extensions.value
+        _extensions.value = newValue
+        try {
+            _extensions.value = client.setMyExtensions(newValue)
+        } catch (e: Exception) {
+            handleApiError(e)
+            _extensions.value = previous
+        }
+    }
+
+    private fun scheduleFsFlush() {
+        if (fsFlushScheduled) return
+        fsFlushScheduled = true
+        scope.launch {
+            delay(FS_FLUSH_WINDOW_MS)
+            fsFlushScheduled = false
+            if (pendingFsChanges.isEmpty()) return@launch
+            val batch = pendingFsChanges.toList()
+            pendingFsChanges.clear()
+            _fsChanges.value = FsChangeBatch(_fsChanges.value.seq + 1, batch)
+        }
+    }
 
     var serverConfig: ServerConfig? = null
         private set
@@ -191,10 +309,14 @@ class AppModel(private val prefs: SharedPreferences) {
         activeSession = null
         sessionVMs.clear()
         _route.value = null
+        _paletteMode.value = null
+        sessionHotkeyHandler = null
         drainInFlight.clear()
         drainCooldown.clear()
         _cloneFailures.value = emptyList()
         _extensions.value = UserExtensions()
+        pendingFsChanges.clear()
+        _gitChanges.value = null
         fleet.reset()
         sessionList.reset()
         _phase.value = Phase.LoggedOut
@@ -410,8 +532,14 @@ class AppModel(private val prefs: SharedPreferences) {
             is ServerEvent.MachineRemoved -> fleet.removeMachine(event.payload.id)
             is ServerEvent.ProjectUpsert -> fleet.upsert(event.project)
 
-            // Inspector panels (Phase 3) will watch these.
-            is ServerEvent.FsChanged, is ServerEvent.GitChanged -> {}
+            is ServerEvent.FsChanged -> {
+                // Dedupe within the batch: the same directory nudged twice
+                // before the flush is one refetch, not two.
+                if (event.payload !in pendingFsChanges) pendingFsChanges += event.payload
+                scheduleFsFlush()
+            }
+            is ServerEvent.GitChanged ->
+                _gitChanges.value = GitChangeEvent((_gitChanges.value?.seq ?: 0) + 1, event.payload)
             is ServerEvent.TerminalCreated, is ServerEvent.TerminalUpdated,
             is ServerEvent.TerminalOutput, is ServerEvent.TerminalClosed -> {}
         }
@@ -428,12 +556,34 @@ class AppModel(private val prefs: SharedPreferences) {
         private const val SESSION_VM_CACHE_LIMIT = 8
         private const val DRAIN_IN_FLIGHT_MS = 30_000L
         private const val DRAIN_COOLDOWN_MS = 60_000L
+        /** How long to accumulate fs nudges before publishing one batch. */
+        private const val FS_FLUSH_WINDOW_MS = 150L
     }
 }
 
 /** What the main surface shows; null is the session list. */
 sealed interface Route {
     data class Session(val id: String) : Route
+}
+
+/**
+ * The overlay [AppModel.paletteMode] names (web `PaletteMode`): `SESSION`
+ * (Ctrl+P) switches by NAME, client-side over the hydrated list;
+ * `CONTENT` (Ctrl+K) searches what was SAID, server-side; `HELP`
+ * (Ctrl+/) is the shortcuts list.
+ */
+enum class PaletteMode { SESSION, CONTENT, HELP }
+
+/** One flush of fs nudges; [seq] makes every batch a distinct value. */
+data class FsChangeBatch(val seq: Int, val changes: List<FSChangedPayload>) {
+    /** The batch's directories that belong to this project. */
+    fun pathsFor(machineId: String, workingDir: String): List<String> =
+        changes.filter { it.machineId == machineId && it.workingDir == workingDir }.map { it.path }
+}
+
+data class GitChangeEvent(val seq: Int, val payload: GitChangedPayload) {
+    fun matches(machineId: String, workingDir: String): Boolean =
+        payload.machineId == machineId && payload.workingDir == workingDir
 }
 
 /**

@@ -2,6 +2,9 @@ package app.argus.android.store
 
 import app.argus.core.engine.ProjectGroup
 import app.argus.core.engine.ProjectGroups
+import app.argus.core.engine.SessionCandidate
+import app.argus.core.model.MachineDTO
+import app.argus.core.model.ProjectDTO
 import app.argus.core.model.SessionDTO
 import app.argus.core.model.SessionStatusEvent
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -67,4 +70,44 @@ class SessionListStore {
     /** Sessions grouped into projects with the shared ordering rule. */
     fun projectGroups(fleet: FleetStore): List<ProjectGroup> =
         ProjectGroups.group(_sessions.value.values, fleet.projects.value, fleet.machines.value)
+
+    /**
+     * Candidates for the Ctrl+P switcher: every session plus the labels
+     * the ranker matches against (the web palette's candidate build).
+     * Labels resolve through the session's Project row exactly like
+     * [projectGroups]; a session whose row is missing still ranks by
+     * title and cliType.
+     */
+    fun searchCandidates(fleet: FleetStore): List<SessionCandidate> {
+        val projectsById = fleet.projects.value.values.associateBy { it.id }
+        val machines = fleet.machines.value
+        return _sessions.value.values.map { searchCandidate(it, projectsById, machines) }
+    }
+
+    /** Single-row form of [searchCandidates] (a Ctrl+K hit's trailing label). */
+    fun searchCandidate(session: SessionDTO, fleet: FleetStore): SessionCandidate =
+        searchCandidate(session, fleet.projects.value.values.associateBy { it.id }, fleet.machines.value)
+
+    private fun searchCandidate(
+        session: SessionDTO,
+        projectsById: Map<String, ProjectDTO>,
+        machines: Map<String, MachineDTO>,
+    ): SessionCandidate {
+        val project = session.projectId?.let { projectsById[it] }
+        var projectLabel: String? = null
+        var machineName: String? = null
+        if (project != null) {
+            val name = project.name
+            projectLabel = if (!name.isNullOrEmpty()) {
+                name
+            } else {
+                ProjectGroups.basename(project.workingDir).ifEmpty { null }
+            }
+            machineName = machines[project.machineId]?.name
+        }
+        // No removed-machine context on this client (the web's
+        // removedContextStore): a tombstoned machine's sessions rank by
+        // title and cliType only and carry no "removed" tag.
+        return SessionCandidate(session = session, projectLabel = projectLabel, machineName = machineName)
+    }
 }

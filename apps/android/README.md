@@ -5,17 +5,20 @@ Like the iOS client it is a *thin client*: it speaks the same NestJS REST
 API + Socket.IO `/stream` namespace as the web app and never touches the
 Go sidecar.
 
-> Status: **Phase 2 — app shell.** `:core` holds the full non-UI layer
+> Status: **Phase 3 — parity batch.** `:core` holds the full non-UI layer
 > (decode-tolerant DTO mirrors of shared-types, the OkHttp REST client,
 > the socket.io realtime client as a `Flow` of typed events, and the
 > transcript engine ported from ArgusKit — all unit-tested against the
-> fixtures shared with the iOS client). `:app` is now a usable phone
-> client: server + login, the project-grouped session list, a streaming
-> transcript (activity timeline, tool pills, diffs, markdown with math,
-> mermaid, sandboxed HTML and inline workspace images), and a composer
-> with the prompt queue. Inspector, model picker, attachments, fork,
-> palette and push are later phases. The full design, wire contract and
-> phase plan are in
+> fixtures shared with the iOS client). `:app` is a usable client on
+> phones and tablets: server + login, the project-grouped session list
+> (a side column from 840dp), a streaming transcript (activity timeline,
+> tool pills, diffs, markdown with math, mermaid, sandboxed HTML and
+> inline workspace images), a composer with attachments and the prompt
+> queue, the inspector (Commits / Files / Note / Diff, terminal
+> placeholder), file preview, model picker, usage badge + context ring,
+> fork, the Ctrl+P / Ctrl+K palette and the Ctrl+/ shortcuts sheet.
+> Fleet + account panels, creation sheets, push and the terminal are
+> later phases. The full design, wire contract and phase plan are in
 > [`docs/plan-android-native-client.md`](../../docs/plan-android-native-client.md).
 
 ## CI is the compiler
@@ -108,11 +111,17 @@ apps/android/
     ├── src/test/               MermaidLockstepTest — pins the vendored mermaid to the web's version
     └── src/main/kotlin/app/argus/android/
         ├── ArgusApplication.kt process-scoped owner of AppModel; foreground hook
-        ├── AppModel.kt         auth, socket, event routing, VM cache, queue drainer
+        ├── MainActivity.kt     theme + root composable; the hardware-keyboard dispatch point
+        ├── AppModel.kt         auth, socket, event routing, VM cache, queue drainer,
+        │                       palette mode, fs/git change batches, hotkey dispatch
+        ├── Hotkeys.kt          the binding registry (mirror of hotkeys.ts / Hotkeys.swift)
         ├── store/              FleetStore, SessionListStore, QueueStore (StateFlow-backed)
         ├── session/            SessionViewModel — TranscriptState + room + start()/revalidate
-        └── ui/                 ArgusApp (phase switch + routes), login/, sessions/ (list),
-                                session/ (transcript, composer, activity timeline, panels),
+        └── ui/                 ArgusApp (phase switch, stack ↔ split layout), login/,
+                                sessions/ (list), session/ (transcript, composer, attachments,
+                                activity timeline, panels, model picker, usage badge),
+                                inspector/ (Commits / Files / Note / Diff), files/ (file +
+                                attachment previews), palette/ (Ctrl+P / Ctrl+K / Ctrl+/),
                                 markdown/ (AnswerView, Markwon host, WebView blocks, images),
                                 components/ (atoms, DiffBlock, FileChips), theme/
 ```
@@ -201,10 +210,64 @@ takes domain lists, not CIDR ranges, so a private-IP carve-out cannot be
 expressed there; `ServerConfig` still infers `http://` only for private
 hosts and `https://` otherwise.
 
-Deliberately not ported in this phase: sticky turn headers (the iOS
-`pinnedViews` band — plain items in the `LazyColumn` instead), the
-vendors' brand glyphs (a brand-coloured monogram stands in), and
-persisted collapse / archived-reveal state for the session list.
+Deliberately not ported: sticky turn headers (the iOS `pinnedViews`
+band — plain items in the `LazyColumn` instead), the vendors' brand
+glyphs (a brand-coloured monogram stands in), and persisted collapse /
+archived-reveal state for the session list.
+
+## Parity batch (Phase 3)
+
+**Layout.** Compact widths keep the two-level stack (list, then one
+session); from 840dp the session list becomes a 340dp column beside the
+open session, hideable with Ctrl+B — the split the web and iPad show.
+Inside a session the inspector sits beside the transcript when the
+session area is at least 900dp wide and is a full-height bottom sheet
+otherwise.
+
+**Hardware keyboard.** `Hotkeys.kt` mirrors the web's `hotkeys.ts` and
+the iOS `Hotkeys.swift` table — same ids, labels and scopes — but the
+chords are **Ctrl-only**: Android keyboards carry Ctrl, and Meta is the
+system's launcher key. Dispatch is one place, `MainActivity.onKeyDown`,
+which sees only keys the view hierarchy declined: a focused text field
+keeps its editing chords, and the composer handles Enter (send),
+Shift+Enter (newline), Ctrl+Enter (send) and Escape (leave the field)
+itself. The on-screen keyboard's Enter still inserts a newline — a key
+event from the virtual device is let through. GLOBAL bindings (palette
+modes, sidebar) are handled by `AppModel`; SESSION bindings (archive
+toggle, stop turn) go to the handler the open session screen registers,
+so they are inert on the list by construction, and are refused while
+the palette is up (a modal can be showing a different session). There
+is no terminal pane yet; when one lands, Ctrl+K / P / D / B must reach
+the PTY while it has focus, as the web defers them.
+
+**Palette.** One `ModalBottomSheet` keyed on `AppModel.paletteMode`
+(session / content / help) — another mode's hotkey swaps the content
+in place instead of stacking a second sheet, and the last non-null mode
+is latched so the content does not flip while the sheet animates out.
+Ctrl+P ranks client-side with the ported `SessionMatch`; Ctrl+K calls
+the server's full-text search with a 200 ms debounce and cancels the
+previous request, and opens the hit at the session's TAIL (the same
+tail-only cut iOS made — see the AGENTS.md entry on the transcript
+window invariant). Snippets render the `[[hl]]` sentinel runs as styled
+text; they never reach an HTML sink.
+
+**Inspector, previews, picker, badge.** All project-addressed through
+`ProjectRef`, all joining the (refcounted) project socket room
+themselves, all refetching from `AppModel.fsChanges` /
+`AppModel.gitChanges` — sequence-numbered batches, because the wire
+payloads carry no timestamp and a `StateFlow` of the raw payload would
+swallow every repeat edit to one directory. The file preview's
+auto-refresh window is NON-restarting, as on the web and iOS (a
+restarting debounce starves under sustained editing). The model picker
+is keyed (machine, cliType) and never validates against the catalog; the
+usage badge is the context ring alone, with the breakdown one tap away.
+
+**Attachments.** The system photo and document pickers feed
+`ArgusClient.uploadAttachment`; uploads happen ahead of send, the chips
+show a local thumbnail from the bytes in hand, and the ids ride the
+queued prompt. A sent turn's thumbnails and the file preview's images
+are fetched with `HttpURLConnection` — there is no image-loading
+dependency, on purpose.
 
 ## Wire rules the client encodes
 
@@ -270,7 +333,8 @@ re-validates it against the same list on every CI run.
 
 See the plan for the full phase list. In short: **0** CI bootstrap ✅ →
 **1** core module ✅ → **2** login, session list, streaming transcript,
-composer with the queue ✅ (this; a device round-trip is still owed) →
-**3** inspector, model picker, attachments, fork, palette and hotkeys →
-**4** fleet and account panels → **5** push (FCM, with the server-side
-transport split) → **6** terminal and Live Updates.
+composer with the queue ✅ (device-verified) → **3** inspector, file
+preview, model picker, usage badge, attachments, fork, palette and
+hotkeys ✅ (this) → **4** fleet and account panels, creation sheets →
+**5** push (FCM, with the server-side transport split) → **6** terminal
+and Live Updates.

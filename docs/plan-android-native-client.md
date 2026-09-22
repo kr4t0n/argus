@@ -1,6 +1,6 @@
 # Plan: native Android client — Kotlin + Jetpack Compose
 
-Status: 🟡 IN PROGRESS · Phase 0 ✅ (2026-09-21) · Phase 1 ✅ (2026-09-21, `android.yml` and `ios.yml` both green on the branch) · Phase 2 ✅ code-complete (2026-09-21, CI green; the device round-trip is still owed) · Phase 3 next
+Status: 🟡 IN PROGRESS · Phase 0 ✅ (2026-09-21) · Phase 1 ✅ (2026-09-21, `android.yml` and `ios.yml` both green on the branch) · Phase 2 ✅ (2026-09-22, CI green and a turn round-tripped on a device) · Phase 3 ✅ code-complete (2026-09-22, CI green; device pass owed) · Phase 4 next
 Branch: `feat/android-native-client` (PRs target `dev`)
 Prereq: none — the server contract the client speaks is already frozen by the
 iOS client and its captured fixtures.
@@ -390,9 +390,9 @@ pills, diffs, answer markdown with math, mermaid, sandboxed HTML, inline
 workdir images); composer with the queue; session view-model cache with
 the stale-while-revalidate `start()` rule. Exit: a turn round-trips on a
 device or emulator someone else runs, recorded in the PR.
-*Done (code) 2026-09-21.* Everything above landed and `android.yml` is
-green; the device round-trip is the one exit criterion still open and is
-recorded in the PR when it happens. Decisions that differ from the draft
+*Done 2026-09-21/22.* Everything above landed and `android.yml` is
+green; the device round-trip was confirmed on 2026-09-22 (a turn sent
+from the debug APK, the response streamed back). Decisions that differ from the draft
 above, each recorded in `apps/android/README.md`: the prose renderer is
 **Markwon** in an `AndroidView` (the "fallback" option — it ships tables,
 task lists, linkify and JLatexMath in one library, and a Compose-native
@@ -417,6 +417,19 @@ usage badge and context ring, **command palette** (Ctrl+P ranking, Ctrl+K
 content search opening at the tail, as iOS does) and the **hotkey
 registry** with its shortcuts sheet, clone-failed toasts, compaction
 divider.
+*Done (code) 2026-09-22.* All of the above landed and `android.yml` is
+green; a device pass over the new surfaces (inspector, previews,
+attachments, hardware keyboard) is owed. Two things the draft did not
+foresee, both recorded in `apps/android/README.md` "Parity batch":
+the tablet **split layout** arrived here rather than later (the list as
+a 340dp column from 840dp, Ctrl+B to hide it — without it the ⌘B row in
+the shared hotkey table would have had no meaning on this client), and
+the hotkeys are **Ctrl-only** with dispatch in `MainActivity.onKeyDown`
+(the one point that sees every key the view hierarchy declined), with
+the composer owning Enter / Shift+Enter / Escape itself and letting the
+virtual keyboard's Enter through as a newline. Image bytes (attachment
+thumbnails, previews) go through `HttpURLConnection` rather than an
+image-loading library — a dependency deliberately not taken.
 
 **Phase 4 — fleet and account.** Machines panel with sidecar update,
 user panel (activity grid and curve, usage windows, quota, extensions),
