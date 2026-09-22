@@ -1,6 +1,6 @@
 # Plan: native Android client — Kotlin + Jetpack Compose
 
-Status: 🟡 IN PROGRESS · Phase 0 ✅ (2026-09-21) · Phase 1 ✅ (2026-09-21, `android.yml` and `ios.yml` both green on the branch) · Phase 2 ✅ (2026-09-22, CI green and a turn round-tripped on a device) · Phase 3 ✅ (2026-09-22, CI green; composer newline + photo attachment device-confirmed) · Phase 4 ✅ code-complete (2026-09-22, CI green; device pass owed) · Phase 5 next
+Status: 🟡 IN PROGRESS · Phase 0 ✅ (2026-09-21) · Phase 1 ✅ (2026-09-21, `android.yml` and `ios.yml` both green on the branch) · Phase 2 ✅ (2026-09-22, CI green and a turn round-tripped on a device) · Phase 3 ✅ (2026-09-22, CI green; device-verified) · Phase 4 ✅ (2026-09-22, CI green; verified on an emulator the same day) · Phase 5 next
 Branch: `feat/android-native-client` (PRs target `dev`)
 Prereq: none — the server contract the client speaks is already frozen by the
 iOS client and its captured fixtures.
@@ -420,10 +420,9 @@ divider.
 *Done (code) 2026-09-22.* All of the above landed and `android.yml` is
 green. Device-confirmed the same day: the on-screen keyboard's Enter
 inserts a newline (it does not send), and a photo picked from the
-system picker uploads, rides the turn, and is read by the model. Still
-owed on a device: the inspector sheet and its tabs, the file preview,
-and the palette — which on a phone has no on-screen entry point yet
-(Ctrl chords only), see the open question below. Two things the draft did not
+system picker uploads, rides the turn, and is read by the model. The
+inspector, file preview and palette were exercised on an emulator after
+Phase 4 gave the palette its on-screen entry point — all working. Two things the draft did not
 foresee, both recorded in `apps/android/README.md` "Parity batch":
 the tablet **split layout** arrived here rather than later (the list as
 a 340dp column from 840dp, Ctrl+B to hide it — without it the ⌘B row in
@@ -438,8 +437,9 @@ image-loading library — a dependency deliberately not taken.
 **Phase 4 — fleet and account.** Machines panel with sidecar update,
 user panel (activity grid and curve, usage windows, quota, extensions),
 project and session creation sheets.
-*Done (code) 2026-09-22.* All of the above landed and `android.yml` is
-green. Two additions beyond the draft: the palette got its on-screen
+*Done 2026-09-22.* All of the above landed, `android.yml` is green, and
+the panels, creation sheets and palette were exercised on an emulator
+the same day — all working. Two additions beyond the draft: the palette got its on-screen
 entry point (a search action in the list's top bar — the open question
 below is closed), and the catalog editor was extracted from the session
 model picker into one `ModelSelectionForm` shared with both creation

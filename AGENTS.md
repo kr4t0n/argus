@@ -3253,8 +3253,8 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   and attachment previews, model picker, usage badge, attachments, fork,
   Ctrl+P/Ctrl+K palette, hotkey registry + Ctrl+/ sheet, tablet split
   layout) and 4 (machine panel, account panel, creation sheets, the
-  palette's on-screen entry point) landed on `feat/android-native-client`;
-  a device pass over Phases 3–4 is owed, and Phases 5–6 (FCM push,
+  palette's on-screen entry point) landed on `feat/android-native-client`
+  and were exercised on a device/emulator; Phases 5–6 (FCM push,
   terminal + Live Updates) are open. The design,
   wire contract, lockstep table, CI shape and phases are in
   `docs/plan-android-native-client.md`; the module map is under
