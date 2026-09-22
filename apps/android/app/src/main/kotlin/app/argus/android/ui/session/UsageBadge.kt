@@ -181,7 +181,9 @@ private fun Breakdown(usage: TokenUsage?, context: ContextSnapshot?, onCompact: 
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(info.family, style = captionStyle(), color = secondaryTextColor, modifier = Modifier.weight(1f))
                 Spacer(Modifier.width(12.dp))
-                Text(String.format(Locale.getDefault(), "%.1f%%", fraction * 100), style = mono)
+                // Locale.ROOT, not the device default: lint forbids a non-observable
+                // locale read inside a composable, and a percentage needs no grouping.
+                Text(String.format(Locale.ROOT, "%.1f%%", fraction * 100), style = mono)
             }
             ContextBar(fraction = fraction.coerceIn(0.0, 1.0))
             Row(modifier = Modifier.fillMaxWidth()) {
@@ -197,7 +199,7 @@ private fun Breakdown(usage: TokenUsage?, context: ContextSnapshot?, onCompact: 
             if (usage.cacheReadTokens > 0) LabeledValue("Cache read", TokenFormat.grouped(usage.cacheReadTokens), mono)
             if (usage.cacheWriteTokens > 0) LabeledValue("Cache write", TokenFormat.grouped(usage.cacheWriteTokens), mono)
             usage.costUsd?.takeIf { it > 0 }?.let { cost ->
-                LabeledValue("Cost", String.format(Locale.getDefault(), "$%.4f", cost), mono)
+                LabeledValue("Cost", String.format(Locale.ROOT, "$%.4f", cost), mono)
             }
             usage.durationApiMs?.takeIf { it > 0 }?.let { ms ->
                 LabeledValue("API time", TokenFormat.apiTime(ms), mono)
