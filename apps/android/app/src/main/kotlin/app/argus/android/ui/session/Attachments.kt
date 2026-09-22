@@ -36,8 +36,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -55,6 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -344,21 +343,29 @@ fun rememberAttachmentUploader(app: AppModel, onError: (String) -> Unit): Attach
  * are different system surfaces, and one button that always opened the
  * document picker would hide the photo grid most attachments come from.
  * Sized like the iOS pill's 32pt actions — it sits INSIDE the composer
- * pill, so a 40dp Material button would fatten the pill; the touch
- * target is still expanded to 48dp by Compose's minimum-touch-target
- * hit testing.
+ * pill. A plain clipped Box rather than a Material `IconButton`, which
+ * measures its 48dp minimum interactive size regardless of a smaller
+ * `size` constraint and would spill its ripple past the pill (see
+ * `PillAction` in SessionScreen.kt); Compose still expands the touch
+ * bounds of a small pointer node to 48dp at hit-test time.
  */
 @Composable
 fun AttachButton(uploader: AttachmentUploader, enabled: Boolean, modifier: Modifier = Modifier) {
     var menuOpen by remember { mutableStateOf(false) }
     Box(modifier) {
-        IconButton(
-            onClick = { menuOpen = true },
-            enabled = enabled,
-            colors = IconButtonDefaults.iconButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
-            modifier = Modifier.size(32.dp),
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .clickable(enabled = enabled, role = Role.Button) { menuOpen = true },
+            contentAlignment = Alignment.Center,
         ) {
-            Icon(AttachFileIcon, contentDescription = "Attach", modifier = Modifier.size(18.dp))
+            Icon(
+                AttachFileIcon,
+                contentDescription = "Attach",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 1f else 0.38f),
+                modifier = Modifier.size(18.dp),
+            )
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(text = { Text("Photos") }, onClick = { menuOpen = false; uploader.pickPhotos() })

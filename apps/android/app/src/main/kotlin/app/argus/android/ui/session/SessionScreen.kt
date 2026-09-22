@@ -5,6 +5,7 @@ package app.argus.android.ui.session
 import android.view.KeyCharacterMap
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,7 +31,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import app.argus.android.ui.components.ArgusGlyphs
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -733,9 +739,11 @@ private fun Composer(app: AppModel, model: SessionViewModel, sessionId: String) 
                     }
                     // Subtle (surface-2) square, NOT red — matches the web's
                     // `variant="subtle"` cancel button.
-                    IconButton(
+                    PillAction(
+                        fill = argusPalette.surface2,
+                        enabled = true,
                         onClick = { scope.launch { model.cancelRunningTurn() } },
-                        modifier = Modifier.size(32.dp).background(argusPalette.surface2, CircleShape),
+                        modifier = Modifier.semantics { contentDescription = "Stop turn" },
                     ) {
                         Box(Modifier.size(11.dp).background(MaterialTheme.colorScheme.onSurface, RoundedCornerShape(2.dp)))
                     }
@@ -761,15 +769,10 @@ private fun PrimaryAction(
     onClick: () -> Unit,
 ) {
     val fg = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-    IconButton(
-        onClick = onClick,
+    PillAction(
+        fill = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f),
         enabled = enabled,
-        modifier = Modifier
-            .size(32.dp)
-            .background(
-                if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f),
-                CircleShape,
-            ),
+        onClick = onClick,
     ) {
         if (busy) {
             CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = fg)
@@ -781,6 +784,36 @@ private fun PrimaryAction(
                 modifier = Modifier.size(18.dp),
             )
         }
+    }
+}
+
+/**
+ * A 32dp disc inside the composer pill — iOS's plain-style 32pt
+ * buttons. Deliberately NOT a Material `IconButton`: that one enforces
+ * a 48dp minimum interactive size and its coordinator measures 48dp
+ * even under a `size(32.dp)` constraint, so a background set on the
+ * button painted a 48dp circle bursting out of the pill (the parent
+ * only coerces the PLACED size, not what the child draws). A plain
+ * clipped Box draws exactly its 32dp; Compose still expands a small
+ * pointer node's touch bounds to 48dp at hit-test time.
+ */
+@Composable
+private fun PillAction(
+    fill: Color,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier = modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(fill)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
     }
 }
 
