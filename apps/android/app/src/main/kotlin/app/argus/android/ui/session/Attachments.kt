@@ -343,6 +343,10 @@ fun rememberAttachmentUploader(app: AppModel, onError: (String) -> Unit): Attach
  * iOS's confirmation dialog: the photo picker and the document picker
  * are different system surfaces, and one button that always opened the
  * document picker would hide the photo grid most attachments come from.
+ * Sized like the iOS pill's 32pt actions — it sits INSIDE the composer
+ * pill, so a 40dp Material button would fatten the pill; the touch
+ * target is still expanded to 48dp by Compose's minimum-touch-target
+ * hit testing.
  */
 @Composable
 fun AttachButton(uploader: AttachmentUploader, enabled: Boolean, modifier: Modifier = Modifier) {
@@ -352,8 +356,9 @@ fun AttachButton(uploader: AttachmentUploader, enabled: Boolean, modifier: Modif
             onClick = { menuOpen = true },
             enabled = enabled,
             colors = IconButtonDefaults.iconButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
+            modifier = Modifier.size(32.dp),
         ) {
-            Icon(AttachFileIcon, contentDescription = "Attach", modifier = Modifier.size(20.dp))
+            Icon(AttachFileIcon, contentDescription = "Attach", modifier = Modifier.size(18.dp))
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             DropdownMenuItem(text = { Text("Photos") }, onClick = { menuOpen = false; uploader.pickPhotos() })

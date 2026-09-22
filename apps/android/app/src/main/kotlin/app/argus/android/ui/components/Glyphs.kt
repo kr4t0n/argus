@@ -15,11 +15,31 @@ import androidx.compose.ui.graphics.vector.ImageVector
  * `Folder` is the OUTLINED folder (the web's lucide `Folder` and iOS's
  * SF `folder`), `Eye` / `EyeOff` are the per-project archive toggle
  * (web `Eye` / `EyeOff`, iOS `eye` / `eye.slash`), `Monitor` leads the
- * machine rows (iOS `desktopcomputer`, web `Monitor`) and `Archive` is
+ * machine rows (iOS `desktopcomputer`, web `Monitor`), `Archive` is
  * the archive-box on archived rows and the archived-projects toggle
- * (iOS `archivebox`, web `Archive`).
+ * (iOS `archivebox`, web `Archive`), and `ArrowUp` is the composer's
+ * send arrow (iOS `arrow.up`, web `ArrowUp`) — `material-icons-core`
+ * ships arrow-back/forward but no upward one.
  */
 object ArgusGlyphs {
+    val ArrowUp: ImageVector by lazy {
+        materialIcon(name = "Argus.ArrowUp") {
+            materialPath {
+                moveTo(4f, 12f)
+                lineToRelative(1.41f, 1.41f)
+                lineTo(11f, 7.83f)
+                verticalLineTo(20f)
+                horizontalLineToRelative(2f)
+                verticalLineTo(7.83f)
+                lineToRelative(5.58f, 5.59f)
+                lineTo(20f, 12f)
+                lineToRelative(-8f, -8f)
+                lineToRelative(-8f, 8f)
+                close()
+            }
+        }
+    }
+
     val Monitor: ImageVector by lazy {
         materialIcon(name = "Argus.Monitor") {
             materialPath {

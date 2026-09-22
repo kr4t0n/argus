@@ -29,7 +29,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
+import app.argus.android.ui.components.ArgusGlyphs
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
@@ -657,67 +659,99 @@ private fun Composer(app: AppModel, model: SessionViewModel, sessionId: String) 
             Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
         }
         if (queued.isNotEmpty()) PromptQueueList(app, queued)
-        AttachmentChipsRow(uploader)
+        // The pill — iOS `inputBox` / the web's rounded-3xl composer: ONE
+        // surface1 capsule wrapping the pending-attachment chips, the
+        // paperclip, the growing field and the actions, rather than a
+        // Material outlined field with the buttons standing outside it.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(argusPalette.surface1, RoundedCornerShape(24.dp))
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AttachmentChipsRow(uploader)
 
-        Row(verticalAlignment = Alignment.Bottom) {
-            AttachButton(uploader = uploader, enabled = true)
-            Spacer(Modifier.width(4.dp))
-            OutlinedTextField(
-                value = draft,
-                onValueChange = { draft = it },
-                placeholder = { Text(if (busy) "Queue a follow-up…" else "Request changes or ask a question…") },
-                maxLines = 6,
-                shape = RoundedCornerShape(22.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .onPreviewKeyEvent { event ->
-                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                        // The soft keyboard reports the virtual device;
-                        // its Enter is a newline, as on iOS.
-                        val virtual = event.nativeKeyEvent.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD
-                        when (event.key) {
-                            Key.Enter, Key.NumPadEnter -> when {
-                                virtual || event.isShiftPressed -> false
-                                else -> {
-                                    // An unmodified Return is ALWAYS swallowed:
-                                    // send() no-ops when there's nothing to
-                                    // send, and Enter never newlines.
-                                    send()
-                                    true
-                                }
+            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                AttachButton(uploader = uploader, enabled = true)
+                BasicTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    maxLines = 6,
+                    decorationBox = { inner ->
+                        Box(contentAlignment = Alignment.CenterStart) {
+                            if (draft.isEmpty()) {
+                                Text(
+                                    if (busy) "Queue a follow-up…" else "Request changes or ask a question…",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
-                            Key.Escape -> {
-                                focusManager.clearFocus()
-                                true
-                            }
-                            else -> false
+                            inner()
                         }
                     },
-            )
-            Spacer(Modifier.width(8.dp))
-            if (isRunning) {
-                // Web order: add-to-queue (only when there's content) on
-                // the LEFT, then the stop button on the RIGHT.
-                if (hasContent) {
-                    PrimaryAction(icon = Icons.Default.Add, description = "Queue", enabled = canSend, busy = uploader.inFlight > 0) { send() }
-                    Spacer(Modifier.width(6.dp))
+                    modifier = Modifier
+                        .weight(1f)
+                        // A 24sp line plus 4dp each side is the 32dp of
+                        // the actions beside it, so a one-line field and
+                        // the buttons share a centre line; extra lines
+                        // grow upward from there (bottom-aligned row).
+                        .padding(horizontal = 4.dp, vertical = 4.dp)
+                        .onPreviewKeyEvent { event ->
+                            if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                            // The soft keyboard reports the virtual device;
+                            // its Enter is a newline, as on iOS.
+                            val virtual = event.nativeKeyEvent.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD
+                            when (event.key) {
+                                Key.Enter, Key.NumPadEnter -> when {
+                                    virtual || event.isShiftPressed -> false
+                                    else -> {
+                                        // An unmodified Return is ALWAYS swallowed:
+                                        // send() no-ops when there's nothing to
+                                        // send, and Enter never newlines.
+                                        send()
+                                        true
+                                    }
+                                }
+                                Key.Escape -> {
+                                    focusManager.clearFocus()
+                                    true
+                                }
+                                else -> false
+                            }
+                        },
+                )
+                if (isRunning) {
+                    // Web order: add-to-queue (only when there's content) on
+                    // the LEFT, then the stop button on the RIGHT.
+                    if (hasContent) {
+                        PrimaryAction(icon = Icons.Default.Add, description = "Queue", enabled = canSend, busy = uploader.inFlight > 0) { send() }
+                    }
+                    // Subtle (surface-2) square, NOT red — matches the web's
+                    // `variant="subtle"` cancel button.
+                    IconButton(
+                        onClick = { scope.launch { model.cancelRunningTurn() } },
+                        modifier = Modifier.size(32.dp).background(argusPalette.surface2, CircleShape),
+                    ) {
+                        Box(Modifier.size(11.dp).background(MaterialTheme.colorScheme.onSurface, RoundedCornerShape(2.dp)))
+                    }
+                } else {
+                    PrimaryAction(icon = ArgusGlyphs.ArrowUp, description = "Send", enabled = canSend, busy = uploader.inFlight > 0) { send() }
                 }
-                // Subtle (surface-2) square, NOT red — matches the web's
-                // `variant="subtle"` cancel button.
-                IconButton(
-                    onClick = { scope.launch { model.cancelRunningTurn() } },
-                    modifier = Modifier.size(44.dp).background(argusPalette.surface2, CircleShape),
-                ) {
-                    Box(Modifier.size(12.dp).background(MaterialTheme.colorScheme.onSurface, RoundedCornerShape(2.dp)))
-                }
-            } else {
-                PrimaryAction(icon = Icons.AutoMirrored.Filled.Send, description = "Send", enabled = canSend, busy = uploader.inFlight > 0) { send() }
             }
         }
     }
 }
 
-/** The primary circular action (send when idle, add-to-queue while running). */
+/**
+ * The primary circular action (send when idle, add-to-queue while
+ * running) — iOS `primaryButton`: a 32pt disc, filled with the text
+ * colour when there is something to send and a faint neutral otherwise.
+ */
 @Composable
 private fun PrimaryAction(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -726,24 +760,25 @@ private fun PrimaryAction(
     busy: Boolean,
     onClick: () -> Unit,
 ) {
+    val fg = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
     IconButton(
         onClick = onClick,
         enabled = enabled,
         modifier = Modifier
-            .size(44.dp)
+            .size(32.dp)
             .background(
-                if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+                if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f),
                 CircleShape,
             ),
     ) {
         if (busy) {
-            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = fg)
         } else {
             Icon(
                 icon,
                 contentDescription = description,
-                tint = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
+                tint = fg,
+                modifier = Modifier.size(18.dp),
             )
         }
     }

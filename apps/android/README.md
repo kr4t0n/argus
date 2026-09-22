@@ -187,7 +187,13 @@ overlaps the cached window; wipes and replaces when it doesn't).
 session), reachability is machine-level, a 30 s in-flight bridge covers
 the dispatch → first-chunk window, and a failed send stalls that session
 for 60 s. The composer's send always goes through the queue so a manual
-submit joins the tail of a draining backlog.
+submit joins the tail of a draining backlog. The composer itself is the
+iOS pill: one surface1 capsule holding the pending-attachment chips, the
+paperclip, a `BasicTextField` that grows to six lines, and the 32dp
+actions (up-arrow send, or add-to-queue plus the square stop while a turn
+runs) — a Material outlined field with the buttons outside it read as a
+different app. The field's one-line height is sized to the actions so
+the row shares one centre line and extra lines grow upward.
 
 **Answer rendering** is a column of segments produced by
 `AnswerSegments.split` (`:core`, layered on `MathSegments`): markdown
