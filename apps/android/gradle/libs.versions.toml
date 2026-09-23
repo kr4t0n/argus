@@ -1,0 +1,80 @@
+# Version catalog — every entry is an EXACT pin, by decision
+# (docs/plan-android-native-client.md §2: the iOS build broke once with no
+# iOS commit because floating ranges re-resolved in CI). Update procedure and
+# the compatibility rules behind each pin are in apps/android/README.md.
+
+[versions]
+# Android Gradle Plugin. Needs Gradle >= 9.6.0 (wrapper is 9.7.1), JDK 17,
+# SDK Build-Tools 36.0.0; supports compileSdk <= 37. Built-in Kotlin: do not
+# apply org.jetbrains.kotlin.android anywhere.
+agp = "9.4.1"
+# Kotlin Gradle plugin. The Compose compiler and serialization plugins ship at
+# this exact version; the :core JVM module compiles with it and AGP's
+# built-in Kotlin picks it up from the build classpath.
+kotlin = "2.4.10"
+# Runtime library; the plugin is versioned by `kotlin` above.
+kotlinxSerialization = "1.11.0"
+# Compose BOM — the one place Compose artifact versions come from.
+composeBom = "2026.09.00"
+activityCompose = "1.13.0"
+# JUnit 4 on both modules: :app's unit tests are JUnit 4 by AGP default, and
+# kotlin("test") resolves to kotlin-test-junit under `useJUnit()`.
+junit = "4.13.2"
+# :core networking. socket.io-client 2.1.x speaks the Socket.IO v4 protocol
+# the server runs (socket.io 4.8) and supports the `auth` handshake payload;
+# its engine.io-client declares an ancient okhttp (3.12) that Gradle
+# resolves up to this one. mockwebserver rides the okhttp version.
+okhttp = "5.5.0"
+socketio = "2.1.2"
+coroutines = "1.11.0"
+# org.json for the :core JVM test runtime only — Android ships it in the
+# platform (see core/build.gradle.kts).
+orgJson = "20260814"
+# :app rendering + lifecycle. Markwon's last release is from 2021 — stable
+# and dormant; its LaTeX extension (JLatexMath) is why it was chosen.
+markwon = "4.6.2"
+lifecycle = "2.11.0"
+# NotificationCompat / NotificationManagerCompat / ContextCompat for the
+# turn-finished banners. Direct pin: the app calls these APIs itself
+# rather than leaning on the copy activity-compose drags in.
+androidxCore = "1.19.0"
+# Firebase Cloud Messaging (HTTP v1 on the server side). No google-services
+# plugin: Firebase is initialised at runtime from the server's public
+# client identifiers (GET /me/push/config). Needs minSdk >= 23.
+firebaseMessaging = "25.1.3"
+
+[libraries]
+kotlinx-coroutinesAndroid = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+androidx-lifecycleProcess = { module = "androidx.lifecycle:lifecycle-process", version.ref = "lifecycle" }
+androidx-coreKtx = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
+firebase-messaging = { module = "com.google.firebase:firebase-messaging", version.ref = "firebaseMessaging" }
+compose-foundation = { module = "androidx.compose.foundation:foundation" }
+compose-materialIconsCore = { module = "androidx.compose.material:material-icons-core" }
+markwon-core = { module = "io.noties.markwon:core", version.ref = "markwon" }
+markwon-extTables = { module = "io.noties.markwon:ext-tables", version.ref = "markwon" }
+markwon-extStrikethrough = { module = "io.noties.markwon:ext-strikethrough", version.ref = "markwon" }
+markwon-extTasklist = { module = "io.noties.markwon:ext-tasklist", version.ref = "markwon" }
+markwon-extLatex = { module = "io.noties.markwon:ext-latex", version.ref = "markwon" }
+# ext-latex's inline `$$…$$` spans hang off Markwon's own inline parser;
+# JLatexMathPlugin `require()`s this plugin when inlines are enabled.
+markwon-inlineParser = { module = "io.noties.markwon:inline-parser", version.ref = "markwon" }
+markwon-linkify = { module = "io.noties.markwon:linkify", version.ref = "markwon" }
+kotlinx-serializationJson = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+kotlinx-coroutinesCore = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "okhttp" }
+socketio-client = { module = "io.socket:socket.io-client", version.ref = "socketio" }
+orgJson = { module = "org.json:json", version.ref = "orgJson" }
+androidx-activityCompose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+compose-uiTooling = { module = "androidx.compose.ui:ui-tooling" }
+compose-uiToolingPreview = { module = "androidx.compose.ui:ui-tooling-preview" }
+compose-material3 = { module = "androidx.compose.material3:material3" }
+junit = { module = "junit:junit", version.ref = "junit" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

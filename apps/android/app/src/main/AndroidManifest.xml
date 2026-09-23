@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Turn-finished banners (runtime grant on Android 13+, requested by
+         the account panel's toggle before the device registers). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 16 Live Updates: lets the running-turn card ask to be
+         promoted to the status bar / lock screen (LiveUpdateManager). -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
+
+    <!-- allowBackup=false: the app holds a session JWT; nothing here
+         should ride cloud backups or device-to-device transfer.
+         usesCleartextTraffic: self-hosted Argus servers on a LAN rarely
+         have TLS (ServerConfig defaults private hosts to http), the same
+         posture as the iOS app's ATS exception. -->
+    <application
+        android:name=".ArgusApplication"
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:theme="@style/Theme.Argus">
+
+        <!-- configChanges: app state is process-scoped (ArgusApplication),
+             but the transcript hosts WebViews (mermaid, html) that would
+             reload on an activity recreate; Compose re-reads the
+             configuration itself. adjustResize so the composer rides
+             above the keyboard. -->
+        <!-- singleTop: a notification tap while the app runs reaches the
+             existing activity as onNewIntent instead of stacking a
+             second one. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Push (Phase 5). Firebase is initialised at runtime from the
+             server's public client identifiers (no google-services.json),
+             and auto-init is off so no registration token exists until
+             the user turns the notifications toggle on. -->
+        <meta-data
+            android:name="firebase_messaging_auto_init_enabled"
+            android:value="false" />
+        <service
+            android:name=".push.ArgusMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+    </application>
+
+</manifest>

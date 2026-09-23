@@ -79,7 +79,8 @@ argus/
 ├── apps/
 │   ├── web/                  Vite + React + TS + Tailwind + Zustand
 │   ├── server/               NestJS + Prisma + Socket.IO
-│   └── ios/                  Native SwiftUI client (see apps/ios/README.md)
+│   ├── ios/                  Native SwiftUI client (see apps/ios/README.md)
+│   └── android/              Native Kotlin + Compose client, CI-compiled (see apps/android/README.md)
 ├── packages/
 │   ├── shared-types/         TS types shared by web + server
 │   └── sidecar/              Go sidecar (single binary)
@@ -175,8 +176,12 @@ string and the UI falls back to a generic icon for unknown types.
 
 Actively developed. Deploy via Docker Compose or the Helm chart; a native
 SwiftUI iOS/iPadOS client is in progress (see
-[`apps/ios/README.md`](apps/ios/README.md)). Single-tenant admin auth today, with
-RBAC and OpenTelemetry still deferred.
+[`apps/ios/README.md`](apps/ios/README.md)), and a native Kotlin/Compose
+Android client is in progress — login, session list, streaming transcript
+and composer have landed, CI-compiled only (see
+[`apps/android/README.md`](apps/android/README.md) and
+[`docs/plan-android-native-client.md`](docs/plan-android-native-client.md)).
+Single-tenant admin auth today, with RBAC and OpenTelemetry still deferred.
 
 Contributing? [`AGENTS.md`](./AGENTS.md) has the local-development setup plus
 design notes, gotchas and known follow-ups.

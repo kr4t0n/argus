@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Capture REST-response fixtures from a LIVE Argus server for the Swift
-# client's decoding tests (apps/ios/ArgusKit/Tests/ArgusKitTests/Fixtures).
+# Capture REST-response fixtures from a LIVE Argus server for the native
+# clients' decoding tests. Written to packages/shared-types/fixtures — ONE
+# directory shared by ArgusKit (Swift) and the Android :core module
+# (Kotlin), so one capture keeps both mirrors honest.
 #
-# This is the iOS client's contract-confidence mechanism: instead of
-# OpenAPI codegen, the hand-written Swift models are exercised in CI
-# against real server responses captured here. Re-run whenever
+# This is the native clients' contract-confidence mechanism: instead of
+# OpenAPI codegen, the hand-written Swift and Kotlin models are exercised
+# in CI against real server responses captured here. Re-run whenever
 # packages/shared-types DTOs change shape, then commit the diff.
 #
 #   SERVER_URL=http://localhost:4000 \
 #   ARGUS_EMAIL=admin@argus.local ARGUS_PASSWORD=... \
-#   scripts/capture-ios-fixtures.sh [--session <id>]
+#   scripts/capture-client-fixtures.sh [--session <id>]
 #
 # Credentials fall back to ADMIN_EMAIL / ADMIN_PASSWORD from a repo-root
 # .env if present. Fixtures are SANITIZED before writing:
@@ -42,7 +44,7 @@ fi
 
 command -v jq >/dev/null || { echo "error: jq is required" >&2; exit 1; }
 
-OUT_DIR="apps/ios/ArgusKit/Tests/ArgusKitTests/Fixtures"
+OUT_DIR="packages/shared-types/fixtures"
 mkdir -p "$OUT_DIR"
 
 # Sanitizer: redact tokens, truncate long strings. `walk` needs jq >= 1.6.

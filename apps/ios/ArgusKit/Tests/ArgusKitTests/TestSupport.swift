@@ -98,23 +98,44 @@ enum TestSupport {
         return try! JSONDecoder().decode(SessionDTO.self, from: Data(json.utf8))
     }
 
+    /// Fixtures live in packages/shared-types/fixtures — ONE directory
+    /// shared with the Android client's `:core` tests, so a single
+    /// capture keeps both mirrors honest. Resolved from #filePath the way
+    /// the lockstep tests resolve the repo root (this file sits six
+    /// components below it), so it works under `swift test` on CI and
+    /// locally without a SwiftPM resource bundle.
+    static var fixturesDirectory: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // TestSupport.swift
+            .deletingLastPathComponent() // ArgusKitTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // ArgusKit
+            .deletingLastPathComponent() // ios
+            .deletingLastPathComponent() // apps → repo root
+            .appending(path: "packages/shared-types/fixtures")
+    }
+
+    static func fixtureURL(_ name: String) -> URL {
+        fixturesDirectory.appending(path: "\(name).json")
+    }
+
     /// For `.enabled(if:)` on fixtures that are captured on demand — a
     /// test that needs one skips (visibly) until the capture script has
     /// been run against a server that can produce it.
     static func hasFixture(_ name: String) -> Bool {
-        Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Fixtures") != nil
+        FileManager.default.fileExists(atPath: fixtureURL(name).path)
     }
 
     static func fixtureData(_ name: String) throws -> Data {
-        guard let url = Bundle.module.url(
-            forResource: name,
-            withExtension: "json",
-            subdirectory: "Fixtures"
-        ) else {
+        let url = fixtureURL(name)
+        guard FileManager.default.fileExists(atPath: url.path) else {
             throw NSError(
                 domain: "TestSupport",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "missing fixture \(name).json"]
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "missing fixture \(name).json under \(fixturesDirectory.path)"
+                ]
             )
         }
         return try Data(contentsOf: url)

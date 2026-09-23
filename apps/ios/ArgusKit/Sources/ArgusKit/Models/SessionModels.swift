@@ -69,7 +69,7 @@ public struct CommandDTO: Codable, Equatable, Sendable, Identifiable {
 /// sidecar resets it each turn); ordering is `(command.createdAt, seq)`.
 ///
 /// The same logical chunk arrives in two dressings (verified against a
-/// live server — see Tests/Fixtures/session-detail.json):
+/// live server — see packages/shared-types/fixtures/session-detail.json):
 ///   - WS `chunk` events relay the wire ResultChunk verbatim: carries
 ///     `sessionId`/`isFinal`, `ts` is Unix millis (number);
 ///   - REST rows come from Postgres: NO sessionId/isFinal columns

@@ -1,0 +1,114 @@
+name: android
+
+# The Android client (apps/android) is compiled and tested HERE, not on the
+# dev box — by decision: the box gets no JDK, Gradle or Android SDK, so this
+# workflow is the compiler for Kotlin changes exactly as ios.yml is for
+# Swift (docs/plan-android-native-client.md §2 and §7). Runs on push to
+# main/dev/`feat/android-*`, on PRs, and via workflow_dispatch for long-lived
+# branches.
+on:
+  push:
+    branches: [main, dev, 'feat/android-*']
+    paths:
+      - 'apps/android/**'
+      - '.github/workflows/android.yml'
+      # The Kotlin ContextWindow table will mirror this TS file and pin its
+      # hash (Phase 1), as the Swift one does — running Android CI on
+      # TS-side edits is what surfaces an unported change in the same push.
+      - 'packages/shared-types/src/contextWindow.ts'
+      # Same idea for the hotkey registry the Kotlin table mirrors (Phase 3).
+      - 'apps/web/src/lib/hotkeys.ts'
+      # The captured live-server fixtures :core's decoding tests consume
+      # (shared with ArgusKit) — a re-capture must re-prove the mirror.
+      - 'packages/shared-types/fixtures/**'
+  pull_request:
+    paths:
+      - 'apps/android/**'
+      - '.github/workflows/android.yml'
+      - 'packages/shared-types/src/contextWindow.ts'
+      - 'apps/web/src/lib/hotkeys.ts'
+      - 'packages/shared-types/fixtures/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: core (Kotlin/JVM — build + test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/android
+    steps:
+      - uses: actions/checkout@v7
+      # AGP 9 and Gradle 9 both need JDK 17+; 17 is the pinned floor.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      # Also validates gradle/wrapper/gradle-wrapper.jar against Gradle's
+      # published checksums (validate-wrappers defaults to true), so a
+      # tampered wrapper fails here before anything runs. The dependency
+      # cache is written only from main/dev to stay inside the repo's
+      # ~10 GB Actions cache budget (see the GHA cache gotcha in AGENTS.md).
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
+      - name: Build and test :core
+        run: ./gradlew :core:build
+      # Always, not only on failure: Gradle logs nothing per passing test,
+      # and this workflow is the only test runner the project has for
+      # Kotlin — the JUnit XML is how "201 tests ran" gets verified from
+      # a dev box with no toolchain.
+      - name: Upload test results and reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-core-reports
+          path: |
+            apps/android/core/build/reports/**
+            apps/android/core/build/test-results/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+  app:
+    name: app (assembleDebug + lint + unit tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/android
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
+      # The hosted Ubuntu image ships the Android SDK (ANDROID_HOME set,
+      # platforms 34–37 and Build-Tools 36.0.0 installed, licences
+      # accepted); AGP downloads anything else it needs.
+      - name: Assemble, lint and unit-test :app
+        run: ./gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: argus-android-debug-apk
+          path: apps/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload build reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-app-reports
+          path: |
+            apps/android/app/build/reports/**
+            apps/android/app/build/test-results/**
+          if-no-files-found: ignore
