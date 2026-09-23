@@ -6,7 +6,8 @@ import { PrismaService } from '../../infra/prisma/prisma.service';
 /** Highlight sentinels wrapped around matched terms in a snippet.
  *  Deliberately NOT `<b>`/`</b>` (ts_headline's default): the client
  *  splits on these to build React nodes, so nothing user-authored ever
- *  reaches an HTML sink. Mirrored in apps/web/src/components/SearchPalette.tsx. */
+ *  reaches an HTML sink. Mirrored as SEARCH_HL_START/SEARCH_HL_STOP in
+ *  @argus/shared-types. */
 const HL_START = '[[hl]]';
 const HL_STOP = '[[/hl]]';
 
@@ -20,6 +21,71 @@ const DEFAULT_LIMIT = 30;
 const MAX_LIMIT = 100;
 /** Chars of context to show either side of a substring-fallback match. */
 const FALLBACK_PAD = 90;
+
+/**
+ * How far a session's own activity pulls its hits forward in time. Every
+ * hit is dated by an EFFECTIVE time between when its turn was said and
+ * when its session was last worked in (the session's newest turn, matching
+ * or not):
+ *
+ *   effective_at = turn_at + SESSION_RECENCY_WEIGHT · (last_turn_at − turn_at)
+ *
+ * A session's newest turn is never older than any of its turns, so session
+ * activity can only move a hit forward, never back: an old turn in a
+ * session still in use reads as fresher than the same turn in one
+ * abandoned long ago, and a dormant session ranks as its turns alone would.
+ * 0 ignores the session entirely; 1 dates every hit by its session alone.
+ *
+ * Session activity is the newest Command row, deliberately NOT
+ * `Session.updatedAt`: that column moves on every write to the row —
+ * archive, unarchive, rename, model change, markSeen — so archiving a
+ * project (which archives each of its sessions) would float that project's
+ * entire history to the top of the results.
+ */
+const SESSION_RECENCY_WEIGHT = 0.5;
+
+/**
+ * Full-text pass only: `score = ts_rank / (1 + age_days / RECENCY_HALVING_DAYS)`,
+ * age measured to `effective_at`. A hit this old keeps half its rank,
+ * three times this old a quarter, a year old about a thirteenth.
+ *
+ * Multiplied, not added, because ts_rank has no fixed scale: for a single
+ * term it is a term-frequency score confined to a narrow band, for an AND
+ * of terms it is dominated by how close together they sit and spans orders
+ * of magnitude. A ratio means the same thing at every magnitude — a hit
+ * this much older needs twice the rank to tie. Hyperbolic rather than
+ * exponential because ⌘K exists to excavate history: a curve steep enough
+ * to matter this month would bury every strong match from last year.
+ *
+ * Neither this nor SESSION_RECENCY_WEIGHT has been tuned against the live
+ * corpus.
+ */
+const RECENCY_HALVING_DAYS = 30;
+
+/**
+ * The recency CTEs both passes share, so they cannot drift into dating hits
+ * differently. Expects a preceding CTE named `hits` with one row per
+ * matching turn carrying `"sessionId"` and `turn_at`; yields `dated`, which
+ * is `hits` plus `effective_at`.
+ *
+ * `last_turn` reads the newest turn of each matched session over the
+ * (sessionId, createdAt) index — including a turn still running, which is
+ * exactly when a session is most in use.
+ */
+const RECENCY_CTES = Prisma.sql`
+  last_turn AS (
+    SELECT c."sessionId", max(c."createdAt") AS last_at
+      FROM "Command" c
+     WHERE c."sessionId" IN (SELECT "sessionId" FROM hits)
+     GROUP BY c."sessionId"
+  ),
+  dated AS (
+    SELECT h.*,
+           h.turn_at + (l.last_at - h.turn_at) * ${SESSION_RECENCY_WEIGHT}::float8 AS effective_at
+      FROM hits h
+      JOIN last_turn l ON l."sessionId" = h."sessionId"
+  )
+`;
 
 @Injectable()
 export class SearchService {
@@ -54,8 +120,11 @@ export class SearchService {
 
   /**
    * Full-text search across every one of the caller's sessions —
-   * archived included. Results are one-per-session (the best-ranked turn
-   * in each) so a single chatty session can't crowd out the rest.
+   * archived included. Results are one-per-session (the best-scoring turn
+   * in each) so a single chatty session can't crowd out the rest. Both
+   * passes weigh recency — of the turn and of its session, see
+   * SESSION_RECENCY_WEIGHT — and archived sessions get no extra demotion:
+   * ⌘K is for excavating history, and age already does that work.
    *
    * Two-pass by design. The primary pass is a GIN-indexed `tsvector`
    * match with the last term treated as a prefix, which makes
@@ -93,34 +162,53 @@ export class SearchService {
     // `matchCount` counts every matching turn in the session while
     // `DISTINCT ON` keeps only the best one, so the row can say
     // "12 matching turns" while showing the single most relevant snippet.
-    // ts_headline is the expensive part, so it runs on the final page
-    // only — after DISTINCT ON and after LIMIT.
+    // The per-session pick and the final order use the SAME score, so the
+    // snippet shown (and the turn `?turn=` deep-links to) is the one that
+    // earned the session its place. `doc` is joined back in only for the
+    // final page: ts_headline is the expensive part, so it runs after
+    // DISTINCT ON and after LIMIT, and `hits` stays slim.
+    // Age is taken against `now() AT TIME ZONE 'UTC'` because timestamps
+    // are `timestamp without time zone` holding UTC; a bare
+    // `now() - effective_at` would read them in the connection's zone.
     const rows = await this.prisma.$queryRaw<
       { sessionId: string; commandId: string; matchCount: number; snippet: string }[]
     >`
       WITH q AS (SELECT to_tsquery('english', ${tsQuery}) AS query),
       hits AS (
-        SELECT d."sessionId", d."commandId", d.doc,
+        SELECT d."sessionId", d."commandId", c."createdAt" AS turn_at,
                ts_rank(d.tsv, q.query) AS rank,
                count(*) OVER (PARTITION BY d."sessionId") AS session_hits
-          FROM "CommandSearchDoc" d, q
+          FROM "CommandSearchDoc" d
+          JOIN "Command" c ON c.id = d."commandId"
+         CROSS JOIN q
          WHERE d."userId" = ${userId}
            AND d.tsv @@ q.query
       ),
+      ${RECENCY_CTES},
+      scored AS (
+        SELECT dt.*,
+               dt.rank / (1 + greatest(0, extract(epoch FROM (now() AT TIME ZONE 'UTC') - dt.effective_at))
+                              / 86400 / ${RECENCY_HALVING_DAYS}::float8) AS score
+          FROM dated dt
+      ),
       best AS (
         SELECT DISTINCT ON ("sessionId") *
-          FROM hits
-         ORDER BY "sessionId", rank DESC
+          FROM scored
+         ORDER BY "sessionId", score DESC, turn_at DESC, "commandId" DESC
       ),
       top AS (
-        SELECT * FROM best ORDER BY rank DESC LIMIT ${limit}
+        SELECT * FROM best
+         ORDER BY score DESC, effective_at DESC, "sessionId"
+         LIMIT ${limit}
       )
       SELECT t."sessionId"                                              AS "sessionId",
              t."commandId"                                              AS "commandId",
              t.session_hits::int                                        AS "matchCount",
-             ts_headline('english', t.doc, q.query, ${HEADLINE_OPTS})   AS snippet
-        FROM top t, q
-       ORDER BY t.rank DESC
+             ts_headline('english', d.doc, q.query, ${HEADLINE_OPTS})   AS snippet
+        FROM top t
+        JOIN "CommandSearchDoc" d ON d."commandId" = t."commandId"
+       CROSS JOIN q
+       ORDER BY t.score DESC, t.effective_at DESC, t."sessionId"
     `;
     return rows;
   }
@@ -132,27 +220,41 @@ export class SearchService {
     limit: number,
   ): Promise<SessionSearchHitDTO[]> {
     const pattern = `%${escapeLike(query)}%`;
+    // A substring match is yes/no — there is no rank to weigh — so the
+    // effective time IS the ordering: the newest matching turn per
+    // session, sessions newest first. The explicit ORDER BY on `top` is
+    // load-bearing. Without one, rows leave in DISTINCT ON's sort order,
+    // i.e. by session id — and cuids are time-prefixed, so LIMIT kept the
+    // OLDEST matching sessions and dropped every recent one.
     const rows = await this.prisma.$queryRaw<
       { sessionId: string; commandId: string; matchCount: number; doc: string }[]
     >`
       WITH hits AS (
-        SELECT d."sessionId", d."commandId", d.doc,
+        SELECT d."sessionId", d."commandId", c."createdAt" AS turn_at,
                count(*) OVER (PARTITION BY d."sessionId") AS session_hits
           FROM "CommandSearchDoc" d
+          JOIN "Command" c ON c.id = d."commandId"
          WHERE d."userId" = ${userId}
            AND d.doc ILIKE ${pattern} ESCAPE '\\'
       ),
+      ${RECENCY_CTES},
       best AS (
         SELECT DISTINCT ON ("sessionId") *
-          FROM hits
-         ORDER BY "sessionId", length(doc) ASC
+          FROM dated
+         ORDER BY "sessionId", effective_at DESC, "commandId" DESC
+      ),
+      top AS (
+        SELECT * FROM best
+         ORDER BY effective_at DESC, "sessionId"
+         LIMIT ${limit}
       )
-      SELECT b."sessionId"        AS "sessionId",
-             b."commandId"        AS "commandId",
-             b.session_hits::int  AS "matchCount",
-             b.doc                AS doc
-        FROM best b
-       LIMIT ${limit}
+      SELECT t."sessionId"        AS "sessionId",
+             t."commandId"        AS "commandId",
+             t.session_hits::int  AS "matchCount",
+             d.doc                AS doc
+        FROM top t
+        JOIN "CommandSearchDoc" d ON d."commandId" = t."commandId"
+       ORDER BY t.effective_at DESC, t."sessionId"
     `;
     // Snippet extraction happens here rather than in SQL so the fallback
     // emits the same [[hl]] markup ts_headline does and the client needs

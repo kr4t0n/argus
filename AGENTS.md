@@ -339,10 +339,33 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   before the LIMIT), and the substring fallback **~270–350 ms**. That
   fallback would be indefensible on a large corpus; it is affordable
   here only because the corpus is small, so re-check it if the fleet
-  grows an order of magnitude.
+  grows an order of magnitude. (Those timings predate the recency join
+  below and have not been re-measured.)
   Results are one-per-session (`DISTINCT ON`) so a chatty session can't
   crowd out the rest, with `matchCount` reporting how many of its turns
-  matched. Snippets come from `ts_headline` and wrap matches in
+  matched.
+  **Ordering weighs recency in both passes.** Each hit is dated by an
+  *effective* time halfway (`SESSION_RECENCY_WEIGHT`) between when its
+  turn was said and when its session was last worked in — the session's
+  newest `Command.createdAt`, deliberately NOT `Session.updatedAt`, which
+  every archive/rename/markSeen write moves (archiving a project would
+  float its whole history to the top). Session activity can therefore
+  only pull a hit forward, never push it back. The full-text pass scores
+  `ts_rank / (1 + age_days / 30)` — multiplied, not added, because
+  `ts_rank` has no fixed scale (a single term sits in ~0.06–0.1; an AND
+  of terms spans 0.1 → 1e-16 with term distance), and hyperbolic so a
+  strong match from last year still surfaces. The substring pass has no
+  rank, so it orders by the effective time alone. The per-session pick
+  and the final order use the same score, so the snippet and `?turn=`
+  target are the turn that earned the session its place. Archived
+  sessions get no extra demotion — age already does that. The two
+  recency passes share one SQL fragment (`RECENCY_CTES`) so they can't
+  drift. Neither constant has been tuned on the live corpus. GOTCHA: the
+  substring pass's final `ORDER BY` is load-bearing — without it rows
+  leave in `DISTINCT ON`'s session-id order, and cuids are time-prefixed,
+  so `LIMIT` silently kept the OLDEST matching sessions (the bug this
+  replaced).
+  Snippets come from `ts_headline` and wrap matches in
   `[[hl]]`/`[[/hl]]` — NOT `<b>`, so clients split on the sentinels and
   transcript text never reaches an HTML sink.
   Maintained by `SearchService.indexCommandSafe()`, called from the
