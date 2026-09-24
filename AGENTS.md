@@ -681,7 +681,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   with exponential backoff (0.5 s → 30 s cap), pings every 15 s with a
   40 s pong timeout, serializes writes with a mutex. The inbound
   channel uses drop-oldest backpressure to keep the read loop from
-  stalling pongs if a downstream consumer is slow.
+  stalling pongs if a downstream consumer is slow. Dials through
+  `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` via `Dialer.Proxy` — a bare
+  `websocket.Dialer{}` connects directly (only gorilla's `DefaultDialer`
+  sets it), which is how the link went unproxied. GOTCHA: gorilla's
+  proxy dialer knows `http://` and `socks5://` proxy URLs only, so an
+  `https://` or `socks5h://` proxy that net/http accepts for the
+  updater/quota/attachment clients fails the link with `proxy: unknown
+  scheme` — the dial error names the proxy (redacted) for exactly that
+  reason, and masks the link `token` query param, which it used to log
+  on every failed reconnect. Redis (go-redis) has no proxy support, so a
+  proxied host still needs direct Redis. `service install` bakes only
+  `PATH` into the unit, so a proxy must be added to it by hand.
 - `terminal/` — PTY runner using `github.com/creack/pty`. Consumes
   control frames from the `Link` (a `sidecarlink.Client`) instead of a
   Redis stream, multiplexes per-terminal goroutines (read pump +
