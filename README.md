@@ -141,7 +141,8 @@ start a **session**.
 
 For long-lived installs, `argus-sidecar service install` writes and enables a
 systemd/launchd unit. See [INSTALLATION.md](INSTALLATION.md) for that, for
-pinning versions, and for updating a fleet.
+pinning versions, for updating a fleet, and for running the terminal behind
+an HTTP proxy.
 
 ## Environment variables
 
