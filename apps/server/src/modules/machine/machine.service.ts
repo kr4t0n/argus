@@ -96,6 +96,8 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
   private loopPromise?: Promise<void>;
   /** Guards reclaimStalePending against overlapping reconnect storms. */
   private reclaiming = false;
+  /** Guards the timed stale sweep against overlapping runs on a slow DB. */
+  private sweeping = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -114,7 +116,7 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
     await this.reclaimStalePending();
     this.running = true;
     this.loopPromise = this.consumeLoop();
-    this.sweepTimer = setInterval(() => this.sweepStale(), SWEEP_INTERVAL_MS);
+    this.sweepTimer = setInterval(() => void this.sweepStaleSafe(), SWEEP_INTERVAL_MS);
     // A reconnect strands the PEL exactly the way a crash does: the loop
     // resumes reading with '>' under the same fixed consumer name, so
     // whatever Redis had already delivered before the socket died is
@@ -675,6 +677,26 @@ export class MachineService implements OnModuleInit, OnModuleDestroy {
         this.sidecarUpdate.handleUpdateEvent(ev);
         break;
       }
+    }
+  }
+
+  /**
+   * The timer-driven sweep. Same trap as the result ingestor's timed
+   * refresh: `setInterval` discards the promise, so a Prisma rejection
+   * out of `sweepStale` was an unhandled rejection and Node raised it
+   * as a fatal uncaught exception — a DB blip in the 15 s window killed
+   * the server. Log and let the next tick retry; `sweeping` skips a tick
+   * while the previous one is still running.
+   */
+  private async sweepStaleSafe(): Promise<void> {
+    if (this.sweeping) return;
+    this.sweeping = true;
+    try {
+      await this.sweepStale();
+    } catch (err) {
+      this.logger.warn(`stale machine sweep failed, will retry: ${(err as Error).message}`);
+    } finally {
+      this.sweeping = false;
     }
   }
 
