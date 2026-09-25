@@ -190,6 +190,11 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
 - `chunk` / `command:*` arrive only while subscribed to `session:{id}`;
   `session:status` arrives always (drives list dots + notifications).
 - On socket reconnect: `getSessionChunks(afterSeq: transcript.maxSeq)`.
+  That endpoint returns EVERY command in the session, not a window, so
+  `mergeBackfill` filters the merge to turns the window already holds
+  plus turns created while disconnected (the web's `sessionStore.backfill`
+  rule) — merging it wholesale un-windows the tail and jumps the
+  transcript to the top of the session.
 - On app foreground (iOS suspends sockets): treat it as a cold start —
   full `getSession` snapshot via `applySnapshot`, then rejoin rooms.
   `seq` resets per command server-side, so the afterSeq heuristic only

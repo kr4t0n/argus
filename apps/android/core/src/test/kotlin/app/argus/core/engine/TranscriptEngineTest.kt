@@ -562,6 +562,67 @@ class TranscriptEngineTest {
     }
 
     @Test
+    fun `reconnect backfill keeps the window held turns update newer join older are dropped`() {
+        val state = TranscriptState("sess-1")
+        // A 2-turn tail of a longer session, the last turn still running.
+        state.applySnapshot(
+            commands = listOf(
+                testCommand(id = "cmd-5", status = CommandStatus.COMPLETED, createdAt = "2026-07-05T14:00:00.000Z"),
+                testCommand(id = "cmd-6", status = CommandStatus.RUNNING, createdAt = "2026-07-05T15:00:00.000Z"),
+            ),
+            chunks = listOf(testChunk(id = "a", commandId = "cmd-6", seq = 40, kind = ResultKind.DELTA, delta = "…")),
+            hasMore = true,
+        )
+
+        // `GET /sessions/:id/chunks` answers with EVERY command in the
+        // session: the ancient ones, the held ones (cmd-6 finished while
+        // away) and one created while disconnected. Ancient chunks ride
+        // along too (seq > afterSeq on a long old turn).
+        state.mergeBackfill(
+            commands = listOf(
+                testCommand(id = "cmd-1", status = CommandStatus.COMPLETED, createdAt = "2026-07-05T10:00:00.000Z"),
+                testCommand(id = "cmd-2", status = CommandStatus.COMPLETED, createdAt = "2026-07-05T11:00:00.000Z"),
+                testCommand(id = "cmd-5", status = CommandStatus.COMPLETED, createdAt = "2026-07-05T14:00:00.000Z"),
+                testCommand(id = "cmd-6", status = CommandStatus.COMPLETED, createdAt = "2026-07-05T15:00:00.000Z"),
+                testCommand(id = "cmd-7", status = CommandStatus.RUNNING, createdAt = "2026-07-05T16:00:00.000Z"),
+            ),
+            chunks = listOf(
+                testChunk(id = "b", commandId = "cmd-1", seq = 41, kind = ResultKind.DELTA, delta = "ancient"),
+                testChunk(id = "c", commandId = "cmd-6", seq = 41, kind = ResultKind.FINAL, isFinal = true),
+                testChunk(id = "d", commandId = "cmd-7", seq = 42, kind = ResultKind.DELTA, delta = "new"),
+            ),
+        )
+
+        // The window's lower edge did not move: nothing older than cmd-5
+        // was let in, so the history pager still has a true cursor.
+        assertEquals(listOf("cmd-5", "cmd-6", "cmd-7"), state.commands.map { it.id })
+        assertEquals("cmd-5", state.oldestCommandId)
+        assertTrue(state.hasMoreHistory)
+        // Held turn updated in place; the disconnected-era turn joined.
+        assertEquals(CommandStatus.COMPLETED, state.commands[1].status)
+        assertTrue(state.isRunning)
+        // Chunks follow their turn: dropped with cmd-1, kept for the rest.
+        assertNull(state.chunksByCommand["cmd-1"])
+        assertEquals(listOf(40, 41), state.chunksByCommand["cmd-6"]?.map { it.seq })
+        assertEquals(listOf(42), state.chunksByCommand["cmd-7"]?.map { it.seq })
+        assertEquals(42, state.maxSeq)
+    }
+
+    @Test
+    fun `reconnect backfill into an empty transcript accepts everything`() {
+        val state = TranscriptState("sess-1")
+        state.mergeBackfill(
+            commands = listOf(
+                testCommand(id = "cmd-1", status = CommandStatus.COMPLETED, createdAt = "2026-07-05T10:00:00.000Z"),
+                testCommand(id = "cmd-2", status = CommandStatus.RUNNING, createdAt = "2026-07-05T11:00:00.000Z"),
+            ),
+            chunks = listOf(testChunk(id = "x", commandId = "cmd-2", seq = 1, kind = ResultKind.DELTA, delta = "hi")),
+        )
+        assertEquals(listOf("cmd-1", "cmd-2"), state.commands.map { it.id })
+        assertEquals(1, state.chunksByCommand["cmd-2"]?.size)
+    }
+
+    @Test
     fun `context snapshot prefers the last iteration and finds the window`() {
         val state = TranscriptState("sess-1")
         state.upsert(testCommand(status = CommandStatus.COMPLETED))

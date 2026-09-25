@@ -1572,7 +1572,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   bottom of whatever window it holds, `start()` merges the tail on every
   appearance (a disjoint window trips the wipe-and-replace fallback and
   yanks the user off the turn), and `handleReconnect`'s afterSeq
-  backfill merges every command in the session. Porting the deep link
+  backfill accepts any turn newer than the newest held (the web's
+  TAIL-window rule; the floating-window "never widen" branch has no
+  counterpart). Porting the deep link
   means porting the web's three `hasMoreNewer` guards plus a
   `history?after=` pager and a jump-to-latest control (see the
   transcript-window invariant under Gotchas), and calling the around
@@ -1964,6 +1966,24 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   touch this, note that `ResultChunk.seq` restarts at 1 PER COMMAND, so
   `lastSeq` is a max-across-commands, not a session-wide cursor, and
   `WHERE seq > lastSeq` cannot be used to mean "everything new".
+  **Both native clients kept the unfiltered merge after the web fix
+  (Aug 2026)**, and on a phone it presents differently: the socket is
+  suspended in the background, so "foreground the app, open a session,
+  scroll a little" lands the reconnect backfill a second or two into
+  reading — hundreds of prompt-only turns are inserted ABOVE the 4-turn
+  tail, and since a SwiftUI `ScrollView` keeps its numeric offset, the
+  user is suddenly looking at the top of the session (confirmed on iOS,
+  Sep 2026: the tell is empty answer bodies on every turn above). The
+  same filter now lives in ArgusKit `TranscriptState.mergeBackfill` and
+  the Android `:core` port, tested in both `TranscriptEngineTests`;
+  `hasMoreHistory` is deliberately left alone there because the
+  window's lower edge never moves. Android had the identical
+  un-windowing (its `Connected` handler runs the same unfiltered merge),
+  but the jump itself should not reproduce there: `SessionScreen`'s
+  `LazyColumn` keys turns by id, and Compose anchors the scroll
+  position to the first visible KEY when items are inserted above it,
+  so the prompt-only turns landed silently above the viewport instead
+  (reasoned from the code, not device-verified).
 
 - **`CommandSearchDoc.tsv` is invisible to Prisma, and that is
   load-bearing.** Prisma cannot represent `tsvector`, so the field is
