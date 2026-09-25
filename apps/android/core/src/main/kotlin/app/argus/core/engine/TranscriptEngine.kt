@@ -211,9 +211,30 @@ class TranscriptState(val sessionId: String) {
         merge(commands, chunks)
     }
 
-    /** Merge an afterSeq backfill response (reconnect catch-up). */
+    /**
+     * Merge an afterSeq backfill response (reconnect catch-up), filtered
+     * to what the held window is entitled to. `GET /sessions/:id/chunks`
+     * has no window parameters — it returns EVERY command in the session —
+     * so a wholesale merge un-windowed a short tail into the whole history:
+     * hundreds of turns landed ABOVE the viewport, contentless (their
+     * chunks are filtered out by `afterSeq`), and the list jumped to the
+     * top of the session. The rule is the web's `sessionStore.backfill`
+     * (tail-window branch): a turn already held updates in place, a turn
+     * strictly newer than the newest held one is accepted (created while
+     * disconnected), everything older is dropped, and so are chunks whose
+     * turn is outside the window. An empty transcript accepts everything:
+     * there is no window to protect. [hasMoreHistory] is untouched because
+     * the window's lower edge did not move. Same filter as ArgusKit's
+     * `TranscriptState.mergeBackfill`.
+     */
     fun mergeBackfill(commands: List<CommandDTO>, chunks: List<ResultChunk>) {
-        merge(commands, chunks)
+        val held = mutableCommands.mapTo(HashSet()) { it.id }
+        val newest = mutableCommands.lastOrNull()?.createdAt
+        val accepted = commands.filter { command ->
+            command.id in held || newest == null || command.createdAt >= newest
+        }
+        val window = held + accepted.map { it.id }
+        merge(accepted, chunks.filter { it.commandId in window })
     }
 
     fun upsert(command: CommandDTO) {
