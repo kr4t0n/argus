@@ -499,6 +499,67 @@ struct TranscriptEngineTests {
         #expect(state.maxSeq == 0)
     }
 
+    @Test("reconnect backfill keeps the window: held turns update, newer join, older are dropped")
+    func backfillKeepsWindow() {
+        var state = TranscriptState(sessionId: "sess-1")
+        // A 2-turn tail of a longer session, the last turn still running.
+        state.applySnapshot(
+            commands: [
+                TestSupport.command(id: "cmd-5", status: .completed, createdAt: "2026-07-05T14:00:00.000Z"),
+                TestSupport.command(id: "cmd-6", status: .running, createdAt: "2026-07-05T15:00:00.000Z"),
+            ],
+            chunks: [TestSupport.chunk(id: "a", commandId: "cmd-6", seq: 40, kind: .delta, delta: "…")],
+            hasMore: true
+        )
+
+        // `GET /sessions/:id/chunks` answers with EVERY command in the
+        // session: the ancient ones, the held ones (cmd-6 finished while
+        // away) and one created while disconnected. Ancient chunks ride
+        // along too (seq > afterSeq on a long old turn).
+        state.mergeBackfill(
+            commands: [
+                TestSupport.command(id: "cmd-1", status: .completed, createdAt: "2026-07-05T10:00:00.000Z"),
+                TestSupport.command(id: "cmd-2", status: .completed, createdAt: "2026-07-05T11:00:00.000Z"),
+                TestSupport.command(id: "cmd-5", status: .completed, createdAt: "2026-07-05T14:00:00.000Z"),
+                TestSupport.command(id: "cmd-6", status: .completed, createdAt: "2026-07-05T15:00:00.000Z"),
+                TestSupport.command(id: "cmd-7", status: .running, createdAt: "2026-07-05T16:00:00.000Z"),
+            ],
+            chunks: [
+                TestSupport.chunk(id: "b", commandId: "cmd-1", seq: 41, kind: .delta, delta: "ancient"),
+                TestSupport.chunk(id: "c", commandId: "cmd-6", seq: 41, kind: .final, isFinal: true),
+                TestSupport.chunk(id: "d", commandId: "cmd-7", seq: 42, kind: .delta, delta: "new"),
+            ]
+        )
+
+        // The window's lower edge did not move: nothing older than cmd-5
+        // was let in, so the history pager still has a true cursor.
+        #expect(state.commands.map(\.id) == ["cmd-5", "cmd-6", "cmd-7"])
+        #expect(state.oldestCommandId == "cmd-5")
+        #expect(state.hasMoreHistory)
+        // Held turn updated in place; the disconnected-era turn joined.
+        #expect(state.commands[1].status == .completed)
+        #expect(state.isRunning)
+        // Chunks follow their turn: dropped with cmd-1, kept for the rest.
+        #expect(state.chunksByCommand["cmd-1"] == nil)
+        #expect(state.chunksByCommand["cmd-6"]?.map(\.seq) == [40, 41])
+        #expect(state.chunksByCommand["cmd-7"]?.map(\.seq) == [42])
+        #expect(state.maxSeq == 42)
+    }
+
+    @Test("reconnect backfill into an empty transcript accepts everything")
+    func backfillIntoEmpty() {
+        var state = TranscriptState(sessionId: "sess-1")
+        state.mergeBackfill(
+            commands: [
+                TestSupport.command(id: "cmd-1", status: .completed, createdAt: "2026-07-05T10:00:00.000Z"),
+                TestSupport.command(id: "cmd-2", status: .running, createdAt: "2026-07-05T11:00:00.000Z"),
+            ],
+            chunks: [TestSupport.chunk(id: "x", commandId: "cmd-2", seq: 1, kind: .delta, delta: "hi")]
+        )
+        #expect(state.commands.map(\.id) == ["cmd-1", "cmd-2"])
+        #expect(state.chunksByCommand["cmd-2"]?.count == 1)
+    }
+
     @Test("context snapshot prefers iterations[-1] and finds the window")
     func contextSnapshot() throws {
         var state = TranscriptState(sessionId: "sess-1")

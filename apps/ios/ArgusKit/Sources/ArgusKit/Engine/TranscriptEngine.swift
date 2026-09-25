@@ -172,9 +172,33 @@ public struct TranscriptState: Equatable, Sendable {
         merge(commands: commands, chunks: chunks)
     }
 
-    /// Merge an afterSeq backfill response (reconnect catch-up).
-    public mutating func mergeBackfill(commands: [CommandDTO], chunks: [ResultChunk]) {
-        merge(commands: commands, chunks: chunks)
+    /// Merge an afterSeq backfill response (reconnect catch-up), filtered
+    /// to what the held window is entitled to. `GET /sessions/:id/chunks`
+    /// has no window parameters — it returns EVERY command in the
+    /// session — so a wholesale merge un-windowed a 4-turn tail into the
+    /// whole history: hundreds of turns landed ABOVE the viewport,
+    /// contentless (their chunks are filtered out by `afterSeq`), and the
+    /// ScrollView, which keeps its numeric offset, was suddenly showing
+    /// the top of the session. The rule is the web's
+    /// `sessionStore.backfill` (tail-window branch): a turn already held
+    /// updates in place, a turn strictly newer than the newest held one is
+    /// accepted (created while disconnected), everything older is dropped,
+    /// and so are chunks whose turn is outside the window — they would
+    /// never render and would grow the state without bound. An empty
+    /// transcript accepts everything: there is no window to protect.
+    /// `hasMoreHistory` is untouched because the window's lower edge did
+    /// not move. (The web's floating-window branch has no counterpart —
+    /// this state has no `hasMoreNewer`; see the ⌘K note in AGENTS.md.)
+    public mutating func mergeBackfill(commands newCommands: [CommandDTO], chunks newChunks: [ResultChunk]) {
+        let held = Set(commands.map(\.id))
+        let newest = commands.last?.createdAt
+        let accepted = newCommands.filter { command in
+            if held.contains(command.id) { return true }
+            guard let newest else { return true }
+            return command.createdAt >= newest
+        }
+        let window = held.union(accepted.map(\.id))
+        merge(commands: accepted, chunks: newChunks.filter { window.contains($0.commandId) })
     }
 
     public mutating func upsert(command: CommandDTO) {
