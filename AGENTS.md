@@ -2240,6 +2240,34 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `CLIENT KILL` go-redis conns with `idle>300` and `cmd≠xreadgroup`
   (parked stream readers always show `idle≤5`; go-redis re-dials
   transparently, and Postgres is the source of truth).
+- **A Postgres blip used to kill the whole server — timers must never
+  fire a bare async method.** Both periodic DB jobs were scheduled as
+  `setInterval(() => this.someAsyncMethod(), …)`: the result ingestor's
+  5 s runner-stream refresh and the machine service's 15 s stale sweep.
+  `setInterval` discards the returned promise, neither method caught,
+  and the server registers no `unhandledRejection` handler — so under
+  Node's default (`--unhandled-rejections=throw` since v15) the first
+  Prisma rejection became a fatal uncaught exception. Seen in production
+  (Sep 2026): `PrismaClientKnownRequestError … Can't reach database
+  server … at ResultIngestorService.refreshStreams`, `code: 'P1001'`,
+  then the `Node.js v20.x` footer Node prints as it exits. A crash here
+  drops every browser socket and sidecar link, force-closes every open
+  terminal (link-drop semantics), strands the ingestor's un-acked batch
+  in a PEL that is never redelivered (the loop reads `>`), and — because
+  the container runs `prisma migrate deploy` before Node — crash-loops
+  until Postgres is back. Caught, the next tick retries and Prisma
+  reconnects by itself. Both timers now go through a `*Safe` wrapper
+  (`refreshStreamsSafe` / `sweepStaleSafe`) that logs a warning and
+  skips a tick while the previous run is still in flight. The
+  boot-time `refreshStreams()` in `onModuleInit` is deliberately still
+  strict. The consume loops were never affected — their try/catch wraps
+  the whole iteration. **Rule:** a timer or event callback that calls an
+  async method must either `await` inside a try/catch or go through a
+  wrapper like these; `() => this.asyncThing()` is a latent crash. The
+  same log shape (a stack with no request context, then the Node
+  version footer) is the tell for any future instance. There is still no
+  process-level `unhandledRejection` backstop, on purpose: it would keep
+  the process alive but hide the next one of these in the logs.
 - **Server boot BLOCKS on Redis — a probe `connection refused` on :4000
   means Redis, not Postgres**: `RedisService.onModuleInit` awaits
   `_cmd.ping()` with `maxRetriesPerRequest: null`, so an unreachable
