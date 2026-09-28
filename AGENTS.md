@@ -3370,6 +3370,29 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   than reverting to CLI default) and `Command.options` (so replayed
   history stays attributable). `usage` is the sole deliberate omission —
   if you find yourself "fixing" that asymmetry, re-read this entry.
+- **A fork's history is copied by ONE SQL statement — keep it that way.**
+  `SessionService.fork` replays the prefix with a data-modifying CTE
+  (`INSERT … SELECT` for the Commands, then for their ResultChunks)
+  inside an interactive transaction. It used to loop in Prisma: two
+  round trips per turn, with every chunk read into Node and written
+  back, under Prisma's default 5 s interactive-transaction timeout. A
+  long enough session failed the whole fork with `P2028 Transaction
+  already closed`. Measured against a local Postgres 16 with no network
+  latency: 300 turns × 100 chunks took 3.6 s the old way (0.7 s now),
+  and 1,000 × 100 hit P2028 at 5 s (2.4 s now). Over a real network the
+  old loop fails far sooner, since its cost is per round trip. Two
+  consequences of doing it in SQL:
+  (1) forked Command ids are `<fork session id>-<8-digit position>`, not
+  cuids. Prisma's `cuid()` default is generated client-side, so raw SQL
+  has to mint ids, and these sort in the source's order. That matters
+  because two turns sharing a `createdAt` millisecond are ordered by id
+  on every read path, so a random id would reshuffle them. Nothing
+  parses command ids.
+  (2) Chunk ids come from `gen_random_uuid()`, the same shape the
+  sidecar mints. If you add a column to `Command` or `ResultChunk` that
+  a fork should carry, add it to that statement: the Prisma model no
+  longer drives the copy, so a new field is silently NOT copied until
+  you do.
 - **Forking a Claude Code session: `turnIndex` counts server Commands,
   and the transcript has user-typed lines that are not prompts.** The
   `clone-session` command carries `turnIndex = prefix.length` (Command

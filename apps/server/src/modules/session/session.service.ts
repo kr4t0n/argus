@@ -43,6 +43,15 @@ export const TERMINAL_COMMAND_STATUSES = ['completed', 'failed', 'cancelled'] as
  */
 const FORK_CLONE_TIMEOUT_MS = 15_000;
 
+/**
+ * Upper bound on the transaction that replays a fork's history. Prisma's
+ * interactive-transaction default is 5 s, which a long session used to
+ * exceed when the copy ran as a per-turn loop. The copy is now one
+ * server-side statement, so this is a safety margin, not a budget the
+ * normal path gets anywhere near.
+ */
+const FORK_COPY_TIMEOUT_MS = 30_000;
+
 type CloneOutcome = 'ready' | 'failed' | 'timeout';
 
 /** What a fork learned about its clone. `reason` is the sidecar's own
@@ -358,36 +367,9 @@ export class SessionService implements OnModuleDestroy {
       throw new BadRequestException('command does not belong to this session');
     }
 
-    // Take everything up to and including the anchor, ordered the same
-    // way the chat view renders it. Tie-breaker on id keeps the order
-    // deterministic if two commands share a createdAt millisecond.
-    const prefix = await this.prisma.command.findMany({
-      where: {
-        sessionId,
-        OR: [
-          { createdAt: { lt: anchor.createdAt } },
-          { createdAt: anchor.createdAt, id: { lte: anchor.id } },
-        ],
-      },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    });
-
-    const chunks = prefix.length
-      ? await this.prisma.resultChunk.findMany({
-          where: { commandId: { in: prefix.map((c) => c.id) } },
-          orderBy: [{ commandId: 'asc' }, { seq: 'asc' }],
-        })
-      : [];
-    const chunksByCommand = new Map<string, typeof chunks>();
-    for (const ch of chunks) {
-      const arr = chunksByCommand.get(ch.commandId) ?? [];
-      arr.push(ch);
-      chunksByCommand.set(ch.commandId, arr);
-    }
-
     const forkTitle = title?.trim() || `Fork of ${src.title}`.slice(0, 200);
 
-    const newSession = await this.prisma.$transaction(async (tx) => {
+    const { newSession, turnCount } = await this.prisma.$transaction(async (tx) => {
       const created = await tx.session.create({
         data: {
           userId,
@@ -412,51 +394,72 @@ export class SessionService implements OnModuleDestroy {
               : (src.modelSelection as Prisma.InputJsonValue),
         },
       });
-      for (const c of prefix) {
-        const newCmd = await tx.command.create({
-          data: {
-            sessionId: created.id,
-            kind: c.kind,
-            prompt: c.prompt,
-            // Force-completed: the fork has no live runner to drive
-            // this command to its real status, and replaying it as
-            // pending would leave a phantom spinner.
-            status:
-              c.status === 'pending' || c.status === 'sent' || c.status === 'running'
-                ? 'completed'
-                : c.status,
-            createdAt: c.createdAt,
-            completedAt: c.completedAt ?? c.createdAt,
-            // The merged ModelSelection this turn actually ran with.
-            // `Command.options` exists precisely so history can answer
-            // "which model ran this turn?", and a fork that drops it
-            // leaves every replayed turn unattributable.
-            options:
-              c.options === null ? undefined : (c.options as Prisma.InputJsonValue),
-            // `usage` is deliberately NOT copied, and the asymmetry with
-            // `options` directly above is the point: a fork duplicated
-            // rows, it did not spend tokens. Copying usage would
-            // double-count every fork in /me/usage and
-            // /me/usage/by-project. See the fork gotcha in AGENTS.md
-            // before "fixing" this to match.
-          },
-        });
-        const cmdChunks = chunksByCommand.get(c.id) ?? [];
-        if (cmdChunks.length === 0) continue;
-        await tx.resultChunk.createMany({
-          data: cmdChunks.map((ch) => ({
-            commandId: newCmd.id,
-            seq: ch.seq,
-            kind: ch.kind,
-            delta: ch.delta,
-            content: ch.content,
-            meta: ch.meta ?? undefined,
-            ts: ch.ts,
-          })),
-        });
-      }
-      return created;
-    });
+      // Replay every turn up to and including the anchor, and all of their
+      // chunks, in ONE statement that runs entirely inside Postgres. This
+      // used to be a loop of two round trips per turn that also pulled
+      // every chunk through the server and back — inside an interactive
+      // transaction whose default timeout is 5 s, so a long enough session
+      // failed the whole fork. Now the cost in round trips is constant and
+      // the transcript never leaves the database.
+      //
+      // `src` is the prefix in the order the chat view renders it:
+      // (createdAt, id), bounded by comparing against the anchor's own row
+      // rather than a JS Date parameter, which would pick up the session
+      // TimeZone against this `timestamp without time zone` column.
+      //
+      // New command ids are `<fork session id>-<position>`. Prisma's cuid()
+      // default is generated client-side, so SQL has to mint ids itself,
+      // and these sort in the source's order: two turns that share a
+      // createdAt millisecond are ordered by id on every read path, and a
+      // random id would reshuffle them.
+      //
+      // Per turn: unfinished statuses become `completed` (the fork has no
+      // runner to drive them, so they would spin forever); a missing
+      // completedAt falls back to createdAt; `options` is copied so history
+      // can still answer "which model ran this turn?". `usage` is
+      // deliberately NOT copied, and the asymmetry with `options` is the
+      // point: a fork duplicated rows, it did not spend tokens, so copying
+      // usage would double-count every fork in /me/usage and
+      // /me/usage/by-project. See the fork gotcha in AGENTS.md before
+      // "fixing" this to match.
+      //
+      // Chunk ids come from gen_random_uuid(), the same shape the sidecar
+      // mints. The chunk insert references commands inserted by the sibling
+      // CTE; that is fine because FK checks run at the end of the statement.
+      const [copied] = await tx.$queryRaw<{ turns: number }[]>`
+        WITH src AS (
+          SELECT c.*,
+                 ${created.id}::text || '-' ||
+                   lpad((row_number() OVER (ORDER BY c."createdAt", c.id))::text, 8, '0')
+                   AS "newId"
+            FROM "Command" c
+           WHERE c."sessionId" = ${sessionId}
+             AND (c."createdAt", c.id) <= (
+                   SELECT a."createdAt", a.id FROM "Command" a WHERE a.id = ${anchor.id}
+                 )
+        ),
+        cmds AS (
+          INSERT INTO "Command"
+                 (id, "sessionId", kind, prompt, status, "createdAt", "completedAt", options)
+          SELECT src."newId", ${created.id}, src.kind, src.prompt,
+                 CASE WHEN src.status IN ('pending', 'sent', 'running') THEN 'completed'
+                      ELSE src.status END,
+                 src."createdAt", COALESCE(src."completedAt", src."createdAt"), src.options
+            FROM src
+          RETURNING 1
+        ),
+        chunks AS (
+          INSERT INTO "ResultChunk" (id, "commandId", seq, kind, delta, content, meta, ts)
+          SELECT gen_random_uuid()::text, src."newId", ch.seq, ch.kind, ch.delta,
+                 ch.content, ch.meta, ch.ts
+            FROM src
+            JOIN "ResultChunk" ch ON ch."commandId" = src.id
+          RETURNING 1
+        )
+        SELECT (SELECT count(*) FROM cmds)::int AS turns
+      `;
+      return { newSession: created, turnCount: copied?.turns ?? 0 };
+    }, { timeout: FORK_COPY_TIMEOUT_MS });
 
     // Clone the CLI's on-disk state and WAIT for the sidecar's answer
     // before telling anyone the session exists. The row is created with
@@ -484,7 +487,7 @@ export class SessionService implements OnModuleDestroy {
         kind: 'clone-session',
         clone: {
           srcExternalId: src.externalId,
-          turnIndex: prefix.length,
+          turnIndex: turnCount,
         },
         workingDir: routing.workingDir ?? undefined,
         cliType: routing.cliType,
