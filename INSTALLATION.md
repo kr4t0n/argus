@@ -912,6 +912,36 @@ These can be overridden with environment variables on the sidecar
 `ARGUS_TERMINAL_MAX=32`) — see
 `packages/sidecar/internal/terminal/runner.go` for the full list.
 
+### Terminal behind an HTTP proxy
+
+The terminal's WebSocket honors the standard proxy variables, the same as
+the sidecar's HTTPS calls (self-update, quota probes, attachment pulls):
+`HTTP_PROXY` for an `http://` server URL, `HTTPS_PROXY` for `https://`,
+and `NO_PROXY` to exempt hosts. The sidecar logs
+`sidecarlink: connected via proxy …` when the link goes through one.
+
+- **Proxy URL scheme.** Only `http://` (optionally `http://user:pass@…`)
+  and `socks5://` work. An `https://` or `socks5h://` proxy URL makes
+  every reconnect fail with `proxy: unknown scheme`, even though the
+  sidecar's other HTTPS calls accept those forms.
+- **CONNECT to the server's port.** Both `ws://` and `wss://` are tunnelled
+  with `CONNECT`. Proxies that only allow `CONNECT` to 443 refuse a server
+  on `:4000`; put the server behind TLS on 443 (see the reverse-proxy
+  section above).
+- **Redis is not proxied.** The sidecar still needs a direct connection to
+  `REDIS_URL` for registration, heartbeats and turns — the proxy only
+  carries the terminal.
+- **Service installs.** `argus-sidecar service install` bakes only `PATH`
+  into the unit, so add the proxy yourself:
+  `systemctl --user edit argus-sidecar` with
+  `[Service]` / `Environment="HTTPS_PROXY=http://proxy:3128"`, or an extra
+  key under `EnvironmentVariables` in the launchd plist. Agent CLIs the
+  sidecar spawns inherit the same environment.
+- **Hosts that already export a proxy.** A host with `HTTPS_PROXY` set
+  whose server is reachable directly will now send terminal traffic
+  through that proxy. List the server's host in `NO_PROXY` to keep the
+  direct path.
+
 ---
 
 ## Updating

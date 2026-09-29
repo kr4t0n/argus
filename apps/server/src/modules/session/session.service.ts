@@ -43,6 +43,13 @@ export const TERMINAL_COMMAND_STATUSES = ['completed', 'failed', 'cancelled'] as
  */
 const FORK_CLONE_TIMEOUT_MS = 15_000;
 
+/**
+ * Upper bound on the transaction that replays a fork's history, replacing
+ * Prisma's 5 s interactive-transaction default. A safety margin: the copy
+ * is one server-side statement (see the fork gotchas in AGENTS.md).
+ */
+const FORK_COPY_TIMEOUT_MS = 30_000;
+
 type CloneOutcome = 'ready' | 'failed' | 'timeout';
 
 /** What a fork learned about its clone. `reason` is the sidecar's own
@@ -358,36 +365,9 @@ export class SessionService implements OnModuleDestroy {
       throw new BadRequestException('command does not belong to this session');
     }
 
-    // Take everything up to and including the anchor, ordered the same
-    // way the chat view renders it. Tie-breaker on id keeps the order
-    // deterministic if two commands share a createdAt millisecond.
-    const prefix = await this.prisma.command.findMany({
-      where: {
-        sessionId,
-        OR: [
-          { createdAt: { lt: anchor.createdAt } },
-          { createdAt: anchor.createdAt, id: { lte: anchor.id } },
-        ],
-      },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    });
-
-    const chunks = prefix.length
-      ? await this.prisma.resultChunk.findMany({
-          where: { commandId: { in: prefix.map((c) => c.id) } },
-          orderBy: [{ commandId: 'asc' }, { seq: 'asc' }],
-        })
-      : [];
-    const chunksByCommand = new Map<string, typeof chunks>();
-    for (const ch of chunks) {
-      const arr = chunksByCommand.get(ch.commandId) ?? [];
-      arr.push(ch);
-      chunksByCommand.set(ch.commandId, arr);
-    }
-
     const forkTitle = title?.trim() || `Fork of ${src.title}`.slice(0, 200);
 
-    const newSession = await this.prisma.$transaction(async (tx) => {
+    const { newSession, turnCount } = await this.prisma.$transaction(async (tx) => {
       const created = await tx.session.create({
         data: {
           userId,
@@ -412,51 +392,51 @@ export class SessionService implements OnModuleDestroy {
               : (src.modelSelection as Prisma.InputJsonValue),
         },
       });
-      for (const c of prefix) {
-        const newCmd = await tx.command.create({
-          data: {
-            sessionId: created.id,
-            kind: c.kind,
-            prompt: c.prompt,
-            // Force-completed: the fork has no live runner to drive
-            // this command to its real status, and replaying it as
-            // pending would leave a phantom spinner.
-            status:
-              c.status === 'pending' || c.status === 'sent' || c.status === 'running'
-                ? 'completed'
-                : c.status,
-            createdAt: c.createdAt,
-            completedAt: c.completedAt ?? c.createdAt,
-            // The merged ModelSelection this turn actually ran with.
-            // `Command.options` exists precisely so history can answer
-            // "which model ran this turn?", and a fork that drops it
-            // leaves every replayed turn unattributable.
-            options:
-              c.options === null ? undefined : (c.options as Prisma.InputJsonValue),
-            // `usage` is deliberately NOT copied, and the asymmetry with
-            // `options` directly above is the point: a fork duplicated
-            // rows, it did not spend tokens. Copying usage would
-            // double-count every fork in /me/usage and
-            // /me/usage/by-project. See the fork gotcha in AGENTS.md
-            // before "fixing" this to match.
-          },
-        });
-        const cmdChunks = chunksByCommand.get(c.id) ?? [];
-        if (cmdChunks.length === 0) continue;
-        await tx.resultChunk.createMany({
-          data: cmdChunks.map((ch) => ({
-            commandId: newCmd.id,
-            seq: ch.seq,
-            kind: ch.kind,
-            delta: ch.delta,
-            content: ch.content,
-            meta: ch.meta ?? undefined,
-            ts: ch.ts,
-          })),
-        });
-      }
-      return created;
-    });
+      // Replay every turn up to and including the anchor, with its chunks,
+      // in one statement (see the fork gotchas in AGENTS.md).
+      // - The prefix is bounded by the anchor's own row, not a Date
+      //   parameter, which would be shifted by the session TimeZone against
+      //   this `timestamp without time zone` column.
+      // - New ids `<fork id>-<position>` sort in the source's order, because
+      //   turns sharing a createdAt are ordered by id on every read path.
+      // - Unfinished turns become `completed`: nothing will ever drive them.
+      // - `usage` is deliberately not copied: a fork spends no tokens.
+      // - The chunk insert references the sibling CTE's commands; FK checks
+      //   run at the end of the statement.
+      const [copied] = await tx.$queryRaw<{ turns: number }[]>`
+        WITH src AS (
+          SELECT c.*,
+                 ${created.id}::text || '-' ||
+                   lpad((row_number() OVER (ORDER BY c."createdAt", c.id))::text, 8, '0')
+                   AS "newId"
+            FROM "Command" c
+           WHERE c."sessionId" = ${sessionId}
+             AND (c."createdAt", c.id) <= (
+                   SELECT a."createdAt", a.id FROM "Command" a WHERE a.id = ${anchor.id}
+                 )
+        ),
+        cmds AS (
+          INSERT INTO "Command"
+                 (id, "sessionId", kind, prompt, status, "createdAt", "completedAt", options)
+          SELECT src."newId", ${created.id}, src.kind, src.prompt,
+                 CASE WHEN src.status IN ('pending', 'sent', 'running') THEN 'completed'
+                      ELSE src.status END,
+                 src."createdAt", COALESCE(src."completedAt", src."createdAt"), src.options
+            FROM src
+          RETURNING 1
+        ),
+        chunks AS (
+          INSERT INTO "ResultChunk" (id, "commandId", seq, kind, delta, content, meta, ts)
+          SELECT gen_random_uuid()::text, src."newId", ch.seq, ch.kind, ch.delta,
+                 ch.content, ch.meta, ch.ts
+            FROM src
+            JOIN "ResultChunk" ch ON ch."commandId" = src.id
+          RETURNING 1
+        )
+        SELECT (SELECT count(*) FROM cmds)::int AS turns
+      `;
+      return { newSession: created, turnCount: copied?.turns ?? 0 };
+    }, { timeout: FORK_COPY_TIMEOUT_MS });
 
     // Clone the CLI's on-disk state and WAIT for the sidecar's answer
     // before telling anyone the session exists. The row is created with
@@ -484,7 +464,7 @@ export class SessionService implements OnModuleDestroy {
         kind: 'clone-session',
         clone: {
           srcExternalId: src.externalId,
-          turnIndex: prefix.length,
+          turnIndex: turnCount,
         },
         workingDir: routing.workingDir ?? undefined,
         cliType: routing.cliType,

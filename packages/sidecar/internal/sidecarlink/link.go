@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -48,6 +49,12 @@ const (
 	minReconnectBackoff = 500 * time.Millisecond
 	maxReconnectBackoff = 30 * time.Second
 )
+
+// proxyFromEnvironment picks the proxy for the link dial. It is a var so
+// tests can point it at a local proxy: net/http reads the environment
+// once per process and never proxies loopback addresses, so a test can't
+// drive it through HTTP_PROXY.
+var proxyFromEnvironment = http.ProxyFromEnvironment
 
 type Client struct {
 	serverURL string
@@ -130,6 +137,23 @@ func (c *Client) buildURL() (string, error) {
 	return u.String(), nil
 }
 
+// redactToken masks the link token in a dial URL so it can be logged.
+// Dial errors are logged on every reconnect attempt, and a misconfigured
+// proxy makes those routine.
+func redactToken(target string) string {
+	u, err := url.Parse(target)
+	if err != nil {
+		return "<unparseable link url>"
+	}
+	q := u.Query()
+	if !q.Has("token") {
+		return target
+	}
+	q.Set("token", "redacted")
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 func (c *Client) dialAndServe(ctx context.Context) error {
 	target, err := c.buildURL()
 	if err != nil {
@@ -138,15 +162,30 @@ func (c *Client) dialAndServe(ctx context.Context) error {
 
 	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
+	var proxyURL *url.URL
 	dialer := websocket.Dialer{
 		HandshakeTimeout: dialTimeout,
+		// Honor HTTP_PROXY / HTTPS_PROXY / NO_PROXY. gorilla maps ws:// to
+		// the http proxy and wss:// to the https one and tunnels both with
+		// CONNECT, so the proxy must allow CONNECT to the server's port.
+		// Only http:// and socks5:// proxy URLs dial; https:// and
+		// socks5h:// fail with "proxy: unknown scheme".
+		Proxy: func(req *http.Request) (*url.URL, error) {
+			u, err := proxyFromEnvironment(req)
+			proxyURL = u
+			return u, err
+		},
 	}
 	conn, resp, err := dialer.DialContext(dialCtx, target, nil)
+	via := ""
+	if proxyURL != nil {
+		via = " via proxy " + proxyURL.Redacted()
+	}
 	if err != nil {
 		if resp != nil {
-			return fmt.Errorf("dial %s: %s (%w)", target, resp.Status, err)
+			return fmt.Errorf("dial %s%s: %s (%w)", redactToken(target), via, resp.Status, err)
 		}
-		return fmt.Errorf("dial %s: %w", target, err)
+		return fmt.Errorf("dial %s%s: %w", redactToken(target), via, err)
 	}
 	defer conn.Close()
 
@@ -169,7 +208,7 @@ func (c *Client) dialAndServe(ctx context.Context) error {
 	if ack.Kind != protocol.LinkKindHelloAck {
 		return fmt.Errorf("unexpected handshake frame kind=%q", ack.Kind)
 	}
-	c.log.Printf("sidecarlink: connected (server ack idleTimeout=%dms)", ack.IdleTimeoutMS)
+	c.log.Printf("sidecarlink: connected%s (server ack idleTimeout=%dms)", via, ack.IdleTimeoutMS)
 
 	// Pong handler extends the read deadline whenever a pong arrives.
 	// This is how we detect a dead server (no pong for > pongWait).

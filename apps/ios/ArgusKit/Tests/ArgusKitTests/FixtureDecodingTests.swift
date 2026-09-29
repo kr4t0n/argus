@@ -3,7 +3,7 @@ import Testing
 @testable import ArgusKit
 
 /// Decode REAL server responses captured by
-/// `scripts/capture-ios-fixtures.sh`. This suite is the contract check:
+/// `scripts/capture-client-fixtures.sh`. This suite is the contract check:
 /// when packages/shared-types changes shape, re-run the capture script
 /// against a live server and these tests tell you whether the Swift
 /// mirror still holds.

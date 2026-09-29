@@ -212,6 +212,37 @@ id, key id, and key are all present (the chart mirrors this — the env
 block renders only when `existingSecret` is set, or `teamId` and
 `keyId` are both inline). Check the server boot log for `APNs enabled`.
 Requires a server image with the push module (`sha-6cb9f9f` / ≥ 0.2.7).
+
+## Push notifications — FCM (native Android client)
+
+The Android client uses Firebase Cloud Messaging, configured
+independently of APNs and just as optional: leave the `fcm` block empty
+and Android push is silently disabled. Two things are needed, both from
+the Firebase console after creating a project and adding an Android app
+with package name `app.argus.android`:
+
+- a **service-account key** (Project settings → Service accounts →
+  Generate new private key), which lets the server send; and
+- the app's three **public identifiers** (Project settings → General →
+  Your apps: App ID, API key; Cloud Messaging → Sender ID), which the
+  server serves on `GET /me/push/config` so the app can initialise
+  Firebase at runtime — one APK works against any server, and the
+  secret never leaves the server. They are the same values a
+  `google-services.json` carries.
+
+```yaml
+fcm:
+  serviceAccountBase64: "<base64 of the JSON key>"   # base64 -i argus-firebase.json | tr -d '\n'
+  appId: "1:123456789012:android:0123456789abcdef"
+  apiKey: "AIza…"
+  senderId: "123456789012"
+  # projectId: my-project          # only if it differs from the key's project_id
+  # existingSecret: my-fcm         # instead of serviceAccountBase64; key FCM_SERVICE_ACCOUNT_BASE64
+```
+
+The server needs to reach `googleapis.com`, and the phone needs Google
+Play services; air-gapped installs and de-Googled phones run without
+push, as web-only deployments do. Check the boot log for `FCM enabled`.
 Note the pod-rolling `checksum/secret` annotation only tracks the
 chart-managed Secret — after rotating a key inside your own
 `existingSecret`, roll the server Deployment yourself.
@@ -369,6 +400,9 @@ The most important knobs:
 | `apns.keyBase64`          | `""`                        | base64 `.p8` content (or use `apns.existingSecret`) |
 | `apns.existingSecret`     | `""`                        | Secret holding the whole trio (`APNS_TEAM_ID`/`APNS_KEY_ID`/`APNS_KEY_BASE64`) |
 | `apns.environment`        | `""` (→ `sandbox`)          | `production` for TestFlight/App Store builds    |
+| `fcm.serviceAccountBase64` | `""` (off)                 | base64 Firebase service-account JSON; enables Android push (or use `fcm.existingSecret`) |
+| `fcm.appId` / `fcm.apiKey` / `fcm.senderId` | `""`      | the app's public Firebase identifiers, served on `GET /me/push/config` |
+| `fcm.projectId`           | `""` (→ key's `project_id`) | Firebase project id override                    |
 | `server.replicaCount`     | `1`                         | NestJS replicas (Socket.IO is sticky-friendly)  |
 | `server.image.repository` | `kr4t0n/argus-server`       |                                                 |
 | `web.replicaCount`        | `1`                         | nginx replicas serving the SPA bundle           |

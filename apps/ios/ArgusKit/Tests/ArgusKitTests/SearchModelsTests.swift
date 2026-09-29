@@ -4,7 +4,7 @@ import Testing
 
 /// `GET /search/sessions` mirror. Inline JSON in the exact shape of
 /// shared-types' `SessionSearchResponse` — a captured fixture
-/// (`search-sessions.json`, see scripts/capture-ios-fixtures.sh) is the
+/// (`search-sessions.json`, see scripts/capture-client-fixtures.sh) is the
 /// stronger check once one has been recorded against a live server.
 @Suite("Search models — SessionSearchResponse decoding")
 struct SearchModelsTests {

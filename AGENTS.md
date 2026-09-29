@@ -339,10 +339,33 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   before the LIMIT), and the substring fallback **~270–350 ms**. That
   fallback would be indefensible on a large corpus; it is affordable
   here only because the corpus is small, so re-check it if the fleet
-  grows an order of magnitude.
+  grows an order of magnitude. (Those timings predate the recency join
+  below and have not been re-measured.)
   Results are one-per-session (`DISTINCT ON`) so a chatty session can't
   crowd out the rest, with `matchCount` reporting how many of its turns
-  matched. Snippets come from `ts_headline` and wrap matches in
+  matched.
+  **Ordering weighs recency in both passes.** Each hit is dated by an
+  *effective* time halfway (`SESSION_RECENCY_WEIGHT`) between when its
+  turn was said and when its session was last worked in — the session's
+  newest `Command.createdAt`, deliberately NOT `Session.updatedAt`, which
+  every archive/rename/markSeen write moves (archiving a project would
+  float its whole history to the top). Session activity can therefore
+  only pull a hit forward, never push it back. The full-text pass scores
+  `ts_rank / (1 + age_days / 30)` — multiplied, not added, because
+  `ts_rank` has no fixed scale (a single term sits in ~0.06–0.1; an AND
+  of terms spans 0.1 → 1e-16 with term distance), and hyperbolic so a
+  strong match from last year still surfaces. The substring pass has no
+  rank, so it orders by the effective time alone. The per-session pick
+  and the final order use the same score, so the snippet and `?turn=`
+  target are the turn that earned the session its place. Archived
+  sessions get no extra demotion — age already does that. The two
+  recency passes share one SQL fragment (`RECENCY_CTES`) so they can't
+  drift. Neither constant has been tuned on the live corpus. GOTCHA: the
+  substring pass's final `ORDER BY` is load-bearing — without it rows
+  leave in `DISTINCT ON`'s session-id order, and cuids are time-prefixed,
+  so `LIMIT` silently kept the OLDEST matching sessions (the bug this
+  replaced).
+  Snippets come from `ts_headline` and wrap matches in
   `[[hl]]`/`[[/hl]]` — NOT `<b>`, so clients split on the sentinels and
   transcript text never reaches an HTML sink.
   Maintained by `SearchService.indexCommandSafe()`, called from the
@@ -404,36 +427,80 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     silently and plausibly. Both endpoints hash `projectId` into the same
     opaque `key` so a caller can join them without either payload
     carrying an absolute `workingDir`.
-- `push/` — APNs sender for native clients. `DeviceController`
-  (`POST /me/devices` upsert-by-token — re-homing a token that moved
-  accounts — and idempotent `DELETE /me/devices/:token`) plus
-  `PushService`: env-gated (all `APNS_*` unset = silent no-op),
-  provider JWT (ES256 via jsonwebtoken, cached ~45 min), transport is
-  raw `node:http2` because APNs requires HTTP/2 and Node's fetch can't
-  speak it. Fired from `result-ingestor` at the exact point a session
+- `push/` — push for native clients: one platform-agnostic TRIGGER
+  service over two transports selected by each device row's
+  `platform`. `DeviceController` (`POST /me/devices` upsert-by-token —
+  re-homing a token that moved accounts — and idempotent `DELETE
+  /me/devices/:token`) validates the token per platform: `ios` is APNs
+  hex, `android` the FCM alphabet (base64url plus a colon, generously
+  bounded), because the DTO-level hex regex it used to have would have
+  bounced every Android registration. `PushService` owns which sessions,
+  the answer preview, the `outstandingBanners` set and the read-sync
+  clear; `ApnsTransport` (env-gated on `APNS_*`, provider JWT ES256 via
+  jsonwebtoken cached ~45 min, raw `node:http2` because APNs requires
+  HTTP/2 and Node's fetch can't speak it) and `FcmTransport` (env-gated
+  on `FCM_*`, HTTP v1 over global fetch, an OAuth2 access token minted
+  from the service account with an RS256 assertion and cached until a
+  minute before expiry) each deliver to their platform. Both optional and
+  independent: neither configured = silent no-op, one configured = the
+  other platform's rows are skipped, not errored. Fired from
+  `result-ingestor` at the exact point a session
   flips to `idle`/`failed` + unread (the same trigger as the web's
   desktop notifications); payload carries the session title, a
   `sessionId` for the client deep link, and — for completed turns — a
   ~300-char preview of the assistant's answer (deliberate trade-off:
   answer text on the lock screen in exchange for actionable banners;
-  iOS "Show Previews: When Unlocked" is the user-side scope control;
+  iOS "Show Previews: When Unlocked" / Android's sensitive-notification
+  setting is the user-side scope control;
   failures keep a fixed "Turn failed"). The preview uses the final
   chunk's content (claude-code's `result` carries the whole answer);
   codex finals are content-less, so `PushService.answerPreview`
-  re-derives the answer via the deltaSplit boundary rule — making a
-  THIRD port of deltaSplit (web `lib/deltaSplit.ts`, iOS
-  `DeltaSplit.swift`, server `answerPreview`); change one, change all
-  three. 410/`BadDeviceToken`/
-  `Unregistered` feedback prunes the `DeviceToken` row.
+  re-derives the answer via the deltaSplit boundary rule — one of the
+  FOUR ports of deltaSplit (web `lib/deltaSplit.ts`, iOS
+  `DeltaSplit.swift`, Android `DeltaSplit.kt`, server `answerPreview`);
+  change one, change all. APNs 410/`BadDeviceToken`/`Unregistered` and
+  FCM `UNREGISTERED` (404) feedback prune the `DeviceToken` row; FCM's
+  `INVALID_ARGUMENT` prunes only when Google's message names the
+  registration token, since the same code covers a malformed payload
+  and a server bug must not wipe every device.
+  **Every FCM message is a DATA message**, never a "notification"
+  message: the system tray renders those itself when the app is
+  backgrounded and only hands them to app code in the foreground, which
+  would lose on-screen suppression, tag-replacement of an older banner,
+  and the read-sync clear. The Android app renders `{type: turn,
+  sessionId, title, body, failed}` itself (HIGH priority — it produces a
+  visible notification, which is what FCM's high-priority budget is
+  for) and cancels on `{type: clear, sessionId}` (NORMAL priority).
+  `GET /me/push/config` (`PushConfigController`) serves the PUBLIC
+  Firebase client identifiers (`FCM_APP_ID` / `FCM_API_KEY` /
+  `FCM_SENDER_ID` + project id) so the app initialises Firebase at
+  runtime — one APK for any server, the service-account secret never
+  leaves the server; 404 when unset, which the app shows as "this server
+  has no Android push".
   The phone banner is a **projection of the session's `unread` flag**:
   wherever `unread` flips false — `markSeen` (session opened on any
   client) or the ingestor's fresh-turn/cancel transitions —
-  `clearSessionNotification` withdraws the banner via a silent
-  background push (`content-available: 1`, priority 5) that wakes the
-  iOS app to delete its own delivered notification (APNs has no
-  server-side revoke). Gated by the in-memory `outstandingBanners` set,
-  so the per-chunk caller costs a Set lookup and nothing is sent unless
-  an alert actually went out.
+  `clearSessionNotification` withdraws the banner via a silent push
+  (APNs `content-available: 1` at priority 5; FCM a normal-priority data
+  message) that wakes the app to delete its own delivered notification
+  (neither platform has a server-side revoke). Gated by the in-memory
+  `outstandingBanners` set, so the per-chunk caller costs a Set lookup
+  and nothing is sent unless an alert actually went out.
+  **Live turns ride the same split.** `LiveActivityToken` rows carry a
+  `platform` and are keyed `(token, sessionId)` (migration
+  `18_live_activity_platform`, sorted right after `17_` which created
+  the table): an iOS row is a per-activity APNs token, an Android row
+  is the device's FCM token bound to one session, so one phone tracks
+  several turns under one token. `pushLiveActivity` sends the APNs
+  `liveactivity` payload to iOS rows and a `{type: live, sessionId,
+  event, state, toolCount, lastTool, title}` HIGH-priority data message
+  to Android rows (NORMAL would be deferred through Doze — the exact
+  window the card exists to cover; the 15 s throttle bounds the rate),
+  with the session title read once per turn because a killed app holds
+  no session list when a push lands. `DELETE /me/live-activities/:token`
+  takes an optional `?sessionId=` so an Android device ending one turn
+  keeps its other registrations; without it every row under the token
+  goes (the iOS shape). Push feedback prunes by token across sessions.
 - `sidecar-link/` — raw WebSocket server on path `/sidecar-link`
   attached to the same `http.Server` as NestJS (via `HttpAdapterHost`,
   `noServer` pattern). Owns one connection per sidecar, validates a
@@ -614,7 +681,18 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   with exponential backoff (0.5 s → 30 s cap), pings every 15 s with a
   40 s pong timeout, serializes writes with a mutex. The inbound
   channel uses drop-oldest backpressure to keep the read loop from
-  stalling pongs if a downstream consumer is slow.
+  stalling pongs if a downstream consumer is slow. Dials through
+  `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` via `Dialer.Proxy` — a bare
+  `websocket.Dialer{}` connects directly (only gorilla's `DefaultDialer`
+  sets it), which is how the link went unproxied. GOTCHA: gorilla's
+  proxy dialer knows `http://` and `socks5://` proxy URLs only, so an
+  `https://` or `socks5h://` proxy that net/http accepts for the
+  updater/quota/attachment clients fails the link with `proxy: unknown
+  scheme` — the dial error names the proxy (redacted) for exactly that
+  reason, and masks the link `token` query param, which it used to log
+  on every failed reconnect. Redis (go-redis) has no proxy support, so a
+  proxied host still needs direct Redis. `service install` bakes only
+  `PATH` into the unit, so a proxy must be added to it by hand.
 - `terminal/` — PTY runner using `github.com/creack/pty`. Consumes
   control frames from the `Link` (a `sidecarlink.Client`) instead of a
   Redis stream, multiplexes per-terminal goroutines (read pump +
@@ -1258,8 +1336,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   constantly. Instead the Swift models are hand-written and
   decode-tolerant (unknown fields ignored, open enums fall back to
   `.unknown`), and contract confidence comes from
-  `scripts/capture-ios-fixtures.sh`: it captures sanitized live-server
-  responses into the package's test fixtures, which CI decodes.
+  `scripts/capture-client-fixtures.sh`: it captures sanitized live-server
+  responses into `packages/shared-types/fixtures/` — shared with the
+  Android client's `:core` tests — which CI decodes on both platforms.
 - **Runner-refactor posture** (docs/plan-agent-to-runners.md, complete):
   the Agent entity is retired, so there is no `agentId`, `AgentDTO`, or
   fleet-agents store on the client. Sessions carry their own
@@ -1493,7 +1572,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   bottom of whatever window it holds, `start()` merges the tail on every
   appearance (a disjoint window trips the wipe-and-replace fallback and
   yanks the user off the turn), and `handleReconnect`'s afterSeq
-  backfill merges every command in the session. Porting the deep link
+  backfill accepts any turn newer than the newest held (the web's
+  TAIL-window rule; the floating-window "never widen" branch has no
+  counterpart). Porting the deep link
   means porting the web's three `hasMoreNewer` guards plus a
   `history?after=` pager and a jump-to-latest control (see the
   transcript-window invariant under Gotchas), and calling the around
@@ -1505,6 +1586,231 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   by the fixture script and its decoding test is `.enabled(if:)` the
   file exists, so CI stays green until someone runs the capture against
   a server with searchable sessions — do run it and commit the fixture.
+
+### `apps/android/` (native client — Phase 6: terminal and Live Updates)
+
+- Kotlin + Jetpack Compose, shaped like `apps/ios/`: `:core` is a **plain
+  Kotlin/JVM module** (no Android plugin — the counterpart of ArgusKit,
+  all testable without the SDK) and `:app` is the Compose application.
+  Design, wire contract, lockstep table and
+  phases: `docs/plan-android-native-client.md`; build/test/pins and the
+  lockstep table: `apps/android/README.md`. `:core` is laid out as
+  `model/` (DTO mirrors + `JsonSupport`), `api/` (`ArgusClient` on OkHttp,
+  `ServerConfig`, `ApiError`), `realtime/` (`StreamClient` on
+  socket.io-client-java → `Flow<ServerEvent>`, `ProjectRoomRegistry`) and
+  `engine/` (the ArgusKit ports: `TranscriptEngine`, `DeltaSplit`,
+  `UsageMath`, `ContextWindow`, the math trio, `FileReferences`,
+  `ToolDisplay`, `DedicatedPanels`, `SessionMatch`, `SearchSnippet`, plus
+  the Phase 2 additions `AnswerSegments`/`MarkwonMath`, `ProjectGroups`,
+  `DiffLines`, `PromptQueue`, `RelativeTime` — pure and unit-tested so the
+  app module carries only Compose).
+- **`:app` mirrors the iOS app's shape**: `ArgusApplication` owns one
+  process-scoped `AppModel` (phase, auth, socket + event pump on
+  `Dispatchers.Main.immediate`, `FleetStore` / `SessionListStore` /
+  `QueueStore` as `StateFlow`s, the LRU `SessionViewModel` cache with the
+  idempotent stale-while-revalidate `start()`, and the app-wide queue
+  drainer ported from the web). `ui/` is a phase switch → session list ↔
+  one session, phone-only for now. Persistence is SharedPreferences (four
+  small values), the JWT also sits in a `@Volatile` field for OkHttp's
+  threads, and cleartext is allowed app-wide (the network security config
+  can't carve out private ranges). Every decision is written up in
+  `apps/android/README.md` "The app module".
+- **Answer markdown renders through Markwon in an `AndroidView`**, not a
+  Compose-native renderer: `AnswerSegments.split` (`:core`, over
+  `MathSegments`) yields a column of Markdown / DisplayMath / Fence
+  (closed ```` ```mermaid ````/```` ```html ```` only) / Image (standalone
+  `![alt](path)` inside the workspace) segments, and `MarkwonMath.
+  rewriteInline` folds `$x$` into Markwon's `$$x$$` inline form (outside
+  fences, honouring `\$` and code spans). Streaming rule as on the web:
+  an UNCLOSED renderable fence stays inside the markdown as a code block
+  and snaps into a diagram when its closer arrives. GOTCHA: Markwon's
+  LaTeX plugin treats `$$…$$` on one line as INLINE and `$$` on its own
+  lines as a block, which is why display math is split out BEFORE
+  Markwon ever sees it — feeding it a `$$\n…\n$$` block would work, but
+  the inline rewrite would then have to know not to touch those lines.
+- **The mermaid runtime is shared with iOS, not vendored twice.**
+  `app/build.gradle.kts` adds `apps/ios/Argus/Resources` as an asset
+  source dir, so `mermaid.min.js` is loaded by `assets/mermaid-android.
+  html` straight out of the iOS folder; `scripts/sync-ios-mermaid.sh`
+  therefore refreshes BOTH native clients, and `MermaidLockstepTest`
+  (an `:app` JVM unit test) pins the bundle's `version:"x.y.z"` literal
+  against the web importer's resolved version in `pnpm-lock.yaml`, same
+  as the Swift test. Same posture as web/iOS: `securityLevel: 'strict'`,
+  every navigation but the initial asset load cancelled, a source that
+  fails to parse keeps the last good diagram (or the code block) with no
+  error state.
+- **Hotkeys are a third hand-mirrored table, Ctrl-only, dispatched from
+  the Activity.** `Hotkeys.kt` carries the same ids/labels/scopes as
+  `apps/web/src/lib/hotkeys.ts` and `apps/ios/Argus/Sources/Hotkeys.swift`
+  (add a chord to all three or to none; nothing hash-pins them, though
+  `android.yml` runs on edits to the TS file so a drift at least
+  triggers a build). Chords are Ctrl, never Meta (the launcher key).
+  The dispatch point is `MainActivity.onKeyDown`, which only sees keys
+  the Compose hierarchy declined — that is what keeps a focused text
+  field's editing chords intact without a per-field guard. The composer
+  owns Enter/Shift+Enter/Escape via `onPreviewKeyEvent` and lets the
+  VIRTUAL keyboard's Enter through as a newline (`nativeKeyEvent.
+  deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD`); without that check a
+  soft-keyboard Enter would send. SESSION-scoped bindings reach the
+  handler the open `SessionScreen` registers on `AppModel.
+  sessionHotkeyHandler`, and are refused while the palette is up.
+- **fs/git nudges are published as sequence-numbered batches**
+  (`AppModel.fsChanges: StateFlow<FsChangeBatch>`, `gitChanges`), the
+  StateFlow form of the iOS `fsChangeSeq` + `fsChanges` pair and for
+  the same two reasons: the payloads carry no timestamp, so a
+  `StateFlow<FSChangedPayload>` would conflate two writes to one
+  directory (StateFlow drops equal values), and a burst must be ONE
+  observable update. The 150 ms flush window is non-restarting. The
+  file preview's own 400 ms refresh window is non-restarting too — see
+  the "Live file tabs" gotchas for why a restarting debounce starves.
+- **Push is FCM with Firebase initialised at RUNTIME, and every message
+  is rendered by the app.** There is no `google-services.json` and no
+  google-services Gradle plugin: `AppModel.setPushEnabled` fetches
+  `GET /me/push/config`, `AndroidPushBridge.initialize` builds
+  `FirebaseOptions` from it (deleting and re-creating the default
+  `FirebaseApp` when the identifiers changed — `initializeApp` throws on
+  a second init), mints the registration token and `POST /me/devices`
+  it with `platform: "android"`. The config is cached in prefs so a
+  process that an incoming message starts (no login path) can
+  re-initialise Firebase in `ArgusApplication.onCreate`; the manifest
+  disables `firebase_messaging_auto_init_enabled`, so no token exists
+  before the user opts in. `ArgusMessagingService` receives data
+  messages only (see the server's `push/` entry for why): `type: turn`
+  becomes a `TurnNotifications` banner posted under the SESSION ID AS
+  ITS TAG (a newer completion replaces the older banner — the web's
+  `tag`, APNs' collapse id) unless `AppModel.isForeground` and the route
+  is that session; `type: clear` cancels by tag. The same tag is what
+  the socket's `session:status` handler cancels the moment `unread`
+  flips false, and what `refreshAll` sweeps against the fresh unread set
+  — the server's clear is best-effort (throttled in Doze, never
+  delivered to a force-stopped app). The tap intent carries the session
+  id as an extra with a per-session request code (extras are not part
+  of `PendingIntent` identity, so one code would make every tap open
+  the last session); `MainActivity` is `singleTop` and routes from
+  `onCreate` (only on a fresh launch — never a recreate) and
+  `onNewIntent`, via `AppModel.openSessionFromNotification`, which
+  parks the id until the app is `Ready`. The toggle requests
+  `POST_NOTIFICATIONS` (13+) from the gesture before registering;
+  registration runs on the process scope so leaving the panel cannot
+  cancel it between "token minted" and "token registered". The
+  enabled flag survives logout (the token is unregistered), so the next
+  login re-registers — iOS parity. Pinned at exact versions:
+  `firebase-messaging` 25.1.3 and `core-ktx` 1.19.0 (NotificationCompat
+  is used directly, so it is a direct pin rather than a transitive
+  accident). `PushConfigDTO` is Android-only and has no Swift mirror
+  by design.
+- **The terminal is the web's xterm.js in a WebView, and the vendored
+  copy is version-pinned.** `ui/terminal/TerminalPane.kt` hosts
+  `assets/terminal.html`, which loads `assets/xterm/{xterm.js,
+  addon-fit.js, xterm.css}` — copied from the web's resolved
+  `@xterm/xterm` by `scripts/sync-android-xterm.sh`, which also stamps
+  `xterm/VERSION`; `XtermLockstepTest` pins that stamp to the `apps/web`
+  importer in `pnpm-lock.yaml` (the minified bundle has no version
+  literal to read, unlike mermaid, so the stamp is the pin — re-run the
+  script, never hand-edit it). Same wire as the web `TerminalPane`:
+  project-addressed open, base64 bytes both ways (output handed to
+  xterm as a `Uint8Array` so ITS UTF-8 decoder stitches glyphs across
+  frames; input UTF-8-encoded before base64), a seq guard against the
+  duplicate a reconnect replays, output buffered until the page posts
+  `ready`. The pane registers as `AppModel.activeTerminal` while
+  composed (the iOS `activeTerminal`), which is how output/closed
+  events reach it and how it rejoins its room on `Connected`. Leaving
+  the tab tears the view down without closing the PTY (web parity).
+  GOTCHA: `WebView.destroy()` wants the view detached first, so the
+  controller only forgets the view in `teardown()` and destroys it from
+  `AndroidView`'s `onRelease`. Unverified on a device: whether a
+  hardware Ctrl+B / Ctrl+K / Ctrl+D reaches the shell while the WebView
+  has focus (the page's keydown handlers should consume them before
+  `MainActivity.onKeyDown` sees anything) and how well the soft
+  keyboard drives xterm's hidden textarea.
+- **Live Updates mirror the iOS Live Activity, over the same server
+  throttle.** `push/LiveUpdates.kt` (`LiveUpdateManager`) posts one
+  ongoing notification per running turn under the session id as tag
+  (id 2, so it coexists with the completion banner's id 1), promoted on
+  Android 16+ via `setRequestPromotedOngoing` + `ProgressStyle` +
+  `setShortCriticalText` (and `POST_PROMOTED_NOTIFICATIONS` in the
+  manifest), plain ongoing below. Started from the drainer's successful
+  send and from `session:status` ACTIVE for the on-screen session;
+  `tool` chunks advance the counters with a 2 s leading-edge throttle
+  and a trailing flush (the same shape as iOS and the server — see the
+  Live Activity throttle gotcha); ended on the terminal status with a
+  four-minute `setTimeoutAfter`. With push on, `start` registers the
+  device token per session (`POST /me/live-activities`, `platform:
+  android`) and the server's `type: live` FCM data messages drive the
+  card while backgrounded; an `update` for an unknown session (the
+  process was killed) starts the card from the pushed counters, which
+  is why the server includes the session title. `refreshAll`
+  reconciles: tracked cards whose session settled are ended, and
+  ongoing cards left by a previous process are cancelled.
+- **Creation is project-first and the model editor is one composable.**
+  `AppModel.createSession(machineId, workingDir, adapterType, title,
+  modelSelection)` is the single creation call (the server upserts the
+  Project row from the triple); `ui/create/CreateSheets.kt` holds both
+  sheets, and `ModelSelectionForm` (extracted from `ModelPicker.kt`) is
+  what the session picker AND both sheets embed — do not fork a second
+  catalog editor. Routes are `Route.Session` / `Route.Machine` /
+  `Route.User`; the list's machine and account rows navigate, and on a
+  tablet all three render in the detail column.
+- **The split layout is width-driven, not device-driven.** `ArgusApp`
+  switches from the stack to the list-column split at 840dp (material
+  "expanded"), and `SessionScreen` places the inspector beside the
+  transcript at 900dp of session-area width, as a bottom sheet below
+  that. Both are `BoxWithConstraints` checks, so a resized window or a
+  foldable crosses them live; the session-list column's visibility
+  (`AppModel.sidebarVisible`, Ctrl+B) is process state and survives the
+  crossing.
+- **Fixtures are shared with iOS.** `scripts/capture-client-fixtures.sh`
+  (renamed from `capture-ios-fixtures.sh`) writes sanitized live-server
+  responses to `packages/shared-types/fixtures/`, and BOTH
+  `FixtureDecodingTests` (Swift, resolved from `#filePath`; no SwiftPM
+  resource bundle any more) and `FixtureDecodingTest` (Kotlin, via a
+  Gradle system property with a walk-up fallback) decode every file
+  there — so one capture re-proves both mirrors, and both `ios.yml` and
+  `android.yml` trigger on that directory.
+- **Decode tolerance is explicit, per enum.** Every wire enum names a
+  `TolerantEnumSerializer` (`model/JsonSupport.kt`) that maps an unknown
+  or non-string value to its `UNKNOWN` member — chosen over relying on
+  `coerceInputValues`, which only coerces when the PROPERTY declares a
+  default, so one forgotten `= UNKNOWN` would silently reintroduce strict
+  decoding. `ResultChunk.ts` goes through `EpochMillisSerializer` (numeric
+  millis on WS relays, ISO string on REST rows, unparseable → 0).
+  `explicitNulls = false` drops null properties on encode, so the one
+  body that needs an explicit JSON null — `PATCH /sessions/:id/model`
+  clearing the model — is built as a `JsonObject`
+  (`UpdateSessionModelRequest.toJson()`); `RequestShapesTest` pins it.
+- **Two OkHttp facts the client works around:** it refuses a body-less
+  POST (archive/seen/cancel/sidecar-update send an empty body), and its
+  default read timeout (10 s) is shorter than the server's 15 s fork
+  hold — `forkSession` uses a dedicated client with a 30 s read timeout.
+  Gzip is negotiated and inflated by OkHttp itself; never set
+  `Accept-Encoding` by hand or that stops.
+- **`org.json` is excluded from socket.io-client-java** in `:core`
+  (`compileOnly` for the sources, `testRuntimeOnly` for the JVM tests):
+  Android ships it in the platform, and leaving it on the app's runtime
+  classpath fails lint's `DuplicatePlatformClasses` check.
+- **Kotlin is CI-compiled only, by decision.** The dev box gets no JDK,
+  Gradle or Android SDK; `.github/workflows/android.yml` (ubuntu runner,
+  `:core:build` + `:app:assembleDebug :app:lintDebug :app:testDebugUnitTest`)
+  IS the compiler, exactly as `ios.yml` is for Swift. It runs on push to
+  main/dev/`feat/android-*`, on PRs, on `workflow_dispatch`, and — like
+  `ios.yml` — on edits to `packages/shared-types/src/contextWindow.ts` and
+  `apps/web/src/lib/hotkeys.ts`, the two files the Kotlin side will mirror.
+  A Kotlin change is unverified until that workflow has run on it; say so.
+- **Every dependency is an exact pin** (`gradle/libs.versions.toml`, plus
+  `distributionSha256Sum` on the wrapper), the fix the iOS side still owes
+  itself after the floating-range CI break. `setup-gradle` validates the
+  committed wrapper jar against Gradle's published checksums on every run.
+- **AGP 9 gotcha: never apply `org.jetbrains.kotlin.android`.** AGP 9 has
+  built-in Kotlin and errors if that plugin is applied. The catalog's
+  Kotlin still reaches `:app` because `kotlin.jvm` is declared in the
+  top-level `plugins {}` (`apply false`), which puts that KGP on the build
+  classpath ahead of AGP's older runtime dependency. `jvmTarget` in `:app`
+  follows `compileOptions.targetCompatibility`.
+- `ArgusJson` (`core/…/ArgusJson.kt`) is the one `Json` instance every
+  wire model will decode through: `ignoreUnknownKeys`, `coerceInputValues`
+  (unknown enum values → the property's `UNKNOWN` default),
+  `explicitNulls = false`. `ArgusJsonTest` pins that posture. Same rule as
+  iOS: never add strictness that rejects an unknown field.
 
 ## Conventions
 
@@ -1660,6 +1966,24 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   touch this, note that `ResultChunk.seq` restarts at 1 PER COMMAND, so
   `lastSeq` is a max-across-commands, not a session-wide cursor, and
   `WHERE seq > lastSeq` cannot be used to mean "everything new".
+  **Both native clients kept the unfiltered merge after the web fix
+  (Aug 2026)**, and on a phone it presents differently: the socket is
+  suspended in the background, so "foreground the app, open a session,
+  scroll a little" lands the reconnect backfill a second or two into
+  reading — hundreds of prompt-only turns are inserted ABOVE the 4-turn
+  tail, and since a SwiftUI `ScrollView` keeps its numeric offset, the
+  user is suddenly looking at the top of the session (confirmed on iOS,
+  Sep 2026: the tell is empty answer bodies on every turn above). The
+  same filter now lives in ArgusKit `TranscriptState.mergeBackfill` and
+  the Android `:core` port, tested in both `TranscriptEngineTests`;
+  `hasMoreHistory` is deliberately left alone there because the
+  window's lower edge never moves. Android had the identical
+  un-windowing (its `Connected` handler runs the same unfiltered merge),
+  but the jump itself should not reproduce there: `SessionScreen`'s
+  `LazyColumn` keys turns by id, and Compose anchors the scroll
+  position to the first visible KEY when items are inserted above it,
+  so the prompt-only turns landed silently above the viewport instead
+  (reasoned from the code, not device-verified).
 
 - **`CommandSearchDoc.tsv` is invisible to Prisma, and that is
   load-bearing.** Prisma cannot represent `tsvector`, so the field is
@@ -1916,6 +2240,34 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `CLIENT KILL` go-redis conns with `idle>300` and `cmd≠xreadgroup`
   (parked stream readers always show `idle≤5`; go-redis re-dials
   transparently, and Postgres is the source of truth).
+- **A Postgres blip used to kill the whole server — timers must never
+  fire a bare async method.** Both periodic DB jobs were scheduled as
+  `setInterval(() => this.someAsyncMethod(), …)`: the result ingestor's
+  5 s runner-stream refresh and the machine service's 15 s stale sweep.
+  `setInterval` discards the returned promise, neither method caught,
+  and the server registers no `unhandledRejection` handler — so under
+  Node's default (`--unhandled-rejections=throw` since v15) the first
+  Prisma rejection became a fatal uncaught exception. Seen in production
+  (Sep 2026): `PrismaClientKnownRequestError … Can't reach database
+  server … at ResultIngestorService.refreshStreams`, `code: 'P1001'`,
+  then the `Node.js v20.x` footer Node prints as it exits. A crash here
+  drops every browser socket and sidecar link, force-closes every open
+  terminal (link-drop semantics), strands the ingestor's un-acked batch
+  in a PEL that is never redelivered (the loop reads `>`), and — because
+  the container runs `prisma migrate deploy` before Node — crash-loops
+  until Postgres is back. Caught, the next tick retries and Prisma
+  reconnects by itself. Both timers now go through a `*Safe` wrapper
+  (`refreshStreamsSafe` / `sweepStaleSafe`) that logs a warning and
+  skips a tick while the previous run is still in flight. The
+  boot-time `refreshStreams()` in `onModuleInit` is deliberately still
+  strict. The consume loops were never affected — their try/catch wraps
+  the whole iteration. **Rule:** a timer or event callback that calls an
+  async method must either `await` inside a try/catch or go through a
+  wrapper like these; `() => this.asyncThing()` is a latent crash. The
+  same log shape (a stack with no request context, then the Node
+  version footer) is the tell for any future instance. There is still no
+  process-level `unhandledRejection` backstop, on purpose: it would keep
+  the process alive but hide the next one of these in the logs.
 - **Server boot BLOCKS on Redis — a probe `connection refused` on :4000
   means Redis, not Postgres**: `RedisService.onModuleInit` awaits
   `_cmd.ping()` with `maxRetriesPerRequest: null`, so an unreachable
@@ -2125,8 +2477,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   tells us a new subtype appeared and needs explicit handling. Don't
   "fix" it by making the fallback content-less — special-case known-noisy
   subtypes individually instead (as done for `thinking_tokens`,
-  `task_notification`, `api_retry`, `vcs_state_changed`, and
-  `code_change_published`). `TestMapClaudeUnknownSystemSubtype`
+  `task_notification`, `api_retry`, `vcs_state_changed`,
+  `code_change_published` and `dev_intent`).
+  `TestMapClaudeUnknownSystemSubtype`
   (`claude_code_test.go`) pins the visible fallback — if you ever find
   yourself making it content-less, that test is what should stop you.
   *Worked example of the breadcrumb doing its job:* a burst of "system"
@@ -2140,6 +2493,21 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   event queue to stdout **unfiltered** (the interactive REPL bridge
   applies an allowlist), so the sidecar sees strictly more subtypes than
   the interactive UI does.
+  *Faster first step, learned on `dev_intent` (2.1.278):* the binary
+  tells you what a subtype MEANS, but the live runner result stream
+  tells you which one actually fired and with what payload — the whole
+  event rides in the fallback chunk's `meta`. `XRANGE machine:{mid}:cli:
+  claude-code:result - +` and filter `kind == "progress" && content ==
+  "system"`; the machine id and bus credentials are in
+  `~/.config/argus/sidecar.json`. Postgres has it too and keeps it
+  forever, but the stream needs no server credentials — at MAXLEN 500 it
+  holds roughly the last hour on a busy machine, so do this while the
+  report is fresh. Then take the subtype to the bundle: `grep -abo
+  'type:"system",subtype:"<name>"'` for a byte offset and `dd bs=1
+  skip=<offset-N> count=<M>` a window around it (repeated greps over
+  ~234 MB time out). Reading the emitter is what distinguishes a
+  once-per-session event from a once-per-turn one — see `dev_intent`
+  below, where that distinction is the entire finding.
 - **`api_retry` (Claude Code)**: `{"type":"system","subtype":"api_retry",
   "error_status":502,"attempt":N,"max_retries":10,"retry_delay_ms":…}`
   fires when an API call fails retryably and the CLI is backing off; it
@@ -2201,6 +2569,47 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   output or a file the same command catted — a display hint, not a
   verified identity. Never send credentials to `url` on its strength;
   `provider` is an open set too.
+- **`dev_intent` (Claude Code ≥ 2.1.278) fires on EVERY turn, ahead of
+  that turn's `init`.** `{"type":"system","subtype":"dev_intent",
+  "kind":"ios_app","trigger":"xcode_project"}` — the CLI's classification
+  of what kind of development the conversation is doing, and nothing
+  else: no state to reconcile, no path to route, no id to bind. Mapped
+  content-less with `meta.contentType="dev_intent"` + `kind`/`trigger`,
+  i.e. silenced, not consumed.
+  **Why it repeats, which is what makes it worth mapping.** Two emitters
+  exist. The one we see folds over assistant `tool_use` / user
+  `tool_result` blocks and fires when an evidence PAIR completes — for
+  `ios_app`, a `.swift` file **written or edited** (Reads don't count)
+  plus one of `uikit_import` (`import UIKit` / `.iOS(` in a write's
+  content), `xcode_project` (`SDKROOT = iphone*`, `IPHONEOS_DEPLOYMENT_
+  TARGET`, `TARGETED_DEVICE_FAMILY` in a tool result) or `ios_command`
+  (`simctl`, `-sdk iphonesimulator`, `platform=iOS Simulator` in a Bash
+  command); `android_app` is the mirror image. **The conjunction is
+  verified, not just read off the bundle** — reproduced against claude
+  2.1.278 in a scratch dir with `claude -p --output-format stream-json`:
+  Read-an-Xcode-project alone emits nothing, Write-a-`.swift` alone emits
+  nothing, the two together emit it. *Trap when reading such a capture:*
+  in a FRESH session the `dev_intent` line can be flushed to stdout
+  AHEAD of the assistant `tool_use` line that completed the pair, so the
+  transcript reads as though the evidence alone sufficed. It did not —
+  that is stdout ordering, not causation, and the controls above are what
+  settle it. It is guarded once per
+  kind per PROCESS — but every Argus turn is a fresh `claude --resume`,
+  so the detector re-folds the RESUMED TRANSCRIPT at startup. Once a
+  session's history holds the pair, every later turn re-emits it before
+  the turn's own `init`, forever. Measured on the live fleet (Sep 2026,
+  claude 2.1.278): the first emission landed mid-turn, the moment the
+  first `.swift` Write completed the pair; every subsequent turn of that
+  session put it at **seq 1**, so unmapped it is the permanent first row
+  of the activity timeline. A sibling session in the same working
+  directory never emitted it — the trigger is the session's transcript,
+  not the project on disk, which is also how the second emitter is
+  distinguished (it scans the workspace and reports
+  `trigger:"project_scan"`; never observed in `-p` mode).
+  Both fields are **open sets**: `kind` is `ios_app`/`android_app` today,
+  and `trigger`'s declared enum is already wider than the detectors can
+  produce (`swift_edit` / `kotlin_edit` / `java_edit` are declared but
+  unreached). `uuid` is fresh per emit, so it is not a dedupe key.
 - **Claude Code emits `system/init` TWICE, and the second one is a
   state-change stub** (verified against the `claude` 2.1.241 bundle).
   Both come from the same event helper, but carry very different
@@ -2961,6 +3370,29 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   than reverting to CLI default) and `Command.options` (so replayed
   history stays attributable). `usage` is the sole deliberate omission —
   if you find yourself "fixing" that asymmetry, re-read this entry.
+- **A fork's history is copied by ONE SQL statement — keep it that way.**
+  `SessionService.fork` replays the prefix with a data-modifying CTE
+  (`INSERT … SELECT` for the Commands, then for their ResultChunks)
+  inside an interactive transaction. It used to loop in Prisma: two
+  round trips per turn, with every chunk read into Node and written
+  back, under Prisma's default 5 s interactive-transaction timeout. A
+  long enough session failed the whole fork with `P2028 Transaction
+  already closed`. Measured against a local Postgres 16 with no network
+  latency: 300 turns × 100 chunks took 3.6 s the old way (0.7 s now),
+  and 1,000 × 100 hit P2028 at 5 s (2.4 s now). Over a real network the
+  old loop fails far sooner, since its cost is per round trip. Two
+  consequences of doing it in SQL:
+  (1) forked Command ids are `<fork session id>-<8-digit position>`, not
+  cuids. Prisma's `cuid()` default is generated client-side, so raw SQL
+  has to mint ids, and these sort in the source's order. That matters
+  because two turns sharing a `createdAt` millisecond are ordered by id
+  on every read path, so a random id would reshuffle them. Nothing
+  parses command ids.
+  (2) Chunk ids come from `gen_random_uuid()`, the same shape the
+  sidecar mints. If you add a column to `Command` or `ResultChunk` that
+  a fork should carry, add it to that statement: the Prisma model no
+  longer drives the copy, so a new field is silently NOT copied until
+  you do.
 - **Forking a Claude Code session: `turnIndex` counts server Commands,
   and the transcript has user-typed lines that are not prompts.** The
   `clone-session` command carries `turnIndex = prefix.length` (Command
@@ -3098,6 +3530,29 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 
 ## Tech debt / planned
 
+- **Native Android client** — Phases 0 (CI bootstrap), 1 (the `:core`
+  module: DTO mirrors, REST + realtime clients, engine ports, shared
+  fixtures), 2 (the app shell: login, project-grouped session list,
+  streaming transcript with Markwon/mermaid/HTML/image rendering,
+  composer + queue, VM cache; device-verified) and 3 (inspector, file
+  and attachment previews, model picker, usage badge, attachments, fork,
+  Ctrl+P/Ctrl+K palette, hotkey registry + Ctrl+/ sheet, tablet split
+  layout), 4 (machine panel, account panel, creation sheets, the
+  palette's on-screen entry point) and 5 (FCM push with the server's
+  transport split, runtime Firebase init, the notifications toggle,
+  deep link, on-screen suppression, read-sync clear and the foreground
+  sweep) and 6 (the xterm.js terminal in a WebView, Live Update cards
+  local + server-pushed) landed on `feat/android-native-client`. Phases
+  0–4 were exercised on a device or emulator; 5 and 6 are CI-green and
+  await device passes (push needs a server with `FCM_*` set; the
+  terminal's hardware-key and soft-keyboard behaviour in the WebView is
+  unverified). The design,
+  wire contract, lockstep table, CI shape and phases are in
+  `docs/plan-android-native-client.md`; the module map is under
+  `apps/android/` above. Same posture as iOS (thin client, hand-written
+  decode-tolerant DTOs, ported engine, shared fixtures) with one
+  deliberate constraint: **Kotlin is CI-compiled only** — the dev box
+  gets no JDK/Gradle/Android SDK.
 - Per-socket backpressure for `delta` chunks (drop-on-lag).
 - Real RBAC and multi-tenant isolation.
 - OpenTelemetry traces from web → server → sidecar (we already log structured).

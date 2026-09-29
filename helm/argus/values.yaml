@@ -122,6 +122,30 @@ apns:
   topic: ""
   environment: ""
 
+# ─── FCM push (native Android client) ────────────────────────────────
+# Independent of APNs and just as optional: leave serviceAccountBase64 /
+# existingSecret empty and Android push is silently disabled. Needs the
+# server to reach googleapis.com and the phone to have Play services.
+fcm:
+  # A Firebase service-account JSON key, base64-encoded to a single line
+  # (`base64 -i argus-firebase.json | tr -d '\n'`). Stored in the
+  # chart-managed server secret.
+  serviceAccountBase64: ""
+  # Or point at a Secret you manage, holding the same value under the
+  # key below.
+  existingSecret: ""
+  existingSecretKey: "FCM_SERVICE_ACCOUNT_BASE64"
+  # Optional; defaults to the service account's project_id.
+  projectId: ""
+  # The PUBLIC Android client identifiers the app initialises Firebase
+  # from at runtime (served on GET /me/push/config): the App ID
+  # (1:<number>:android:<hash>), the Android API key and the project
+  # number. All three are needed for devices to register; they are the
+  # same values a google-services.json carries.
+  appId: ""
+  apiKey: ""
+  senderId: ""
+
 # ─── Server ──────────────────────────────────────────────────────────
 server:
   enabled: true

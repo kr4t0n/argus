@@ -676,6 +676,36 @@ func mapClaudeLine(line string, state *fileEditState, tasks *taskListState, comp
 				}
 			}
 			return []Chunk{{Kind: protocol.KindProgress, Meta: meta}}
+
+		case "dev_intent":
+			// Claude Code's classification of what KIND of development this
+			// conversation is doing — `{kind: "ios_app"|"android_app",
+			// trigger: "<evidence>"}` and nothing else. Pure classification:
+			// there is no state to reconcile, no path to route and no id to
+			// bind, so it is silenced rather than consumed.
+			//
+			// It fires at most once per kind per CLI PROCESS, and every Argus
+			// turn is a fresh `claude --resume`, so the detector re-folds the
+			// resumed transcript at startup: once a session's history holds
+			// the evidence pair (for iOS, a `.swift` write plus an Xcode
+			// project / UIKit import / simulator command), EVERY later turn
+			// re-emits it — ahead of that turn's own `init`, as the first
+			// chunk. That is why it is worth mapping: unmapped it becomes the
+			// permanent first row of every turn in any session that has ever
+			// touched Swift.
+			//
+			// Both fields are open sets. `kind` is ["ios_app","android_app"]
+			// today; `trigger`'s declared enum is wider than the detectors can
+			// currently produce (`swift_edit` / `kotlin_edit` / `java_edit` are
+			// declared but unreached), and a second emitter that scans the
+			// workspace rather than the transcript reports `project_scan`.
+			meta := map[string]any{"contentType": "dev_intent"}
+			for _, k := range []string{"kind", "trigger"} {
+				if s, _ := ev[k].(string); s != "" {
+					meta[k] = s
+				}
+			}
+			return []Chunk{{Kind: protocol.KindProgress, Meta: meta}}
 		}
 		return []Chunk{{Kind: protocol.KindProgress, Content: t, Meta: ev}}
 

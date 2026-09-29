@@ -127,6 +127,10 @@ final class SessionViewModel {
         }
     }
 
+    /// Socket reconnect catch-up. The chunks endpoint answers with EVERY
+    /// command in the session, not a window — `mergeBackfill` keeps only
+    /// the turns this window holds or that were created while away, so a
+    /// reconnect can't un-window the tail (see TranscriptState).
     func handleReconnect() async {
         stream.joinSession(sessionId)
         do {

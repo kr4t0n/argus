@@ -67,7 +67,7 @@ interface UIState {
 export const SIDEBAR_MIN = 220;
 export const SIDEBAR_MAX = 520;
 export const CONTEXT_PANE_MIN = 240;
-export const CONTEXT_PANE_MAX = 720;
+export const CONTEXT_PANE_MAX = 1440;
 
 export const useUIStore = create<UIState>()(
   persist(

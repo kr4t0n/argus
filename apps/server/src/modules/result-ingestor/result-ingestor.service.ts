@@ -55,6 +55,8 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
   private streams: string[] = [];
   private refreshTimer?: NodeJS.Timeout;
   private loopPromise?: Promise<void>;
+  /** Guards the timed refresh against overlapping runs on a slow DB. */
+  private refreshing = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -67,9 +69,35 @@ export class ResultIngestorService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     await this.refreshStreams();
-    this.refreshTimer = setInterval(() => this.refreshStreams(), REFRESH_RUNNER_STREAMS_MS);
+    this.refreshTimer = setInterval(() => void this.refreshStreamsSafe(), REFRESH_RUNNER_STREAMS_MS);
     this.running = true;
     this.loopPromise = this.consumeLoop();
+  }
+
+  /**
+   * The timer-driven refresh. This MUST swallow: `setInterval` discards the
+   * promise, so a rejection out of `refreshStreams` was an unhandled
+   * rejection, and Node (≥ 15) turns those into a fatal uncaught exception.
+   * One `P1001 Can't reach database server` from the `findMany` while
+   * Postgres blinked therefore took the whole control plane down — every
+   * browser socket, sidecar link and open terminal with it — and the pod
+   * then crash-looped on `prisma migrate deploy` until the DB was back
+   * (production, Sep 2026). Caught, the next tick simply retries and Prisma
+   * reconnects on its own. `refreshing` skips a tick while the previous
+   * one is still in flight, so a slow DB can't stack overlapping queries.
+   * The boot-time call in onModuleInit stays strict on purpose: a server
+   * that can't read the machine roster at boot should fail boot.
+   */
+  private async refreshStreamsSafe(): Promise<void> {
+    if (this.refreshing) return;
+    this.refreshing = true;
+    try {
+      await this.refreshStreams();
+    } catch (err) {
+      this.logger.warn(`runner stream refresh failed, will retry: ${(err as Error).message}`);
+    } finally {
+      this.refreshing = false;
+    }
   }
 
   async onModuleDestroy() {

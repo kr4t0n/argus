@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Platform theme only hosts the window; all real theming is Compose
+         MaterialTheme. NoActionBar because Compose draws its own chrome. -->
+    <style name="Theme.Argus" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

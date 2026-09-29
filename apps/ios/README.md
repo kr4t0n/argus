@@ -39,11 +39,12 @@ Contract confidence comes from **fixtures captured from a real server**:
 ```bash
 # repo root; needs a running server + jq. Credentials fall back to
 # ADMIN_EMAIL/ADMIN_PASSWORD in .env.
-scripts/capture-ios-fixtures.sh [--session <id>]
+scripts/capture-client-fixtures.sh [--session <id>]
 ```
 
 That writes sanitized responses (tokens redacted, long strings truncated)
-into `ArgusKit/Tests/ArgusKitTests/Fixtures/`, and
+into `packages/shared-types/fixtures/` (shared with the Android client's
+`:core` tests — one capture keeps both mirrors honest), and
 `FixtureDecodingTests` decodes every one of them in CI. **When
 shared-types changes shape: re-run the capture script, run the tests,
 commit the fixture diff.** Review the diff before committing — fixtures
@@ -189,6 +190,11 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
 - `chunk` / `command:*` arrive only while subscribed to `session:{id}`;
   `session:status` arrives always (drives list dots + notifications).
 - On socket reconnect: `getSessionChunks(afterSeq: transcript.maxSeq)`.
+  That endpoint returns EVERY command in the session, not a window, so
+  `mergeBackfill` filters the merge to turns the window already holds
+  plus turns created while disconnected (the web's `sessionStore.backfill`
+  rule) — merging it wholesale un-windows the tail and jumps the
+  transcript to the top of the session.
 - On app foreground (iOS suspends sockets): treat it as a cold start —
   full `getSession` snapshot via `applySnapshot`, then rejoin rooms.
   `seq` resets per command server-side, so the afterSeq heuristic only
@@ -365,7 +371,7 @@ Reconnect/lifecycle rules (mirror the web, plus mobile realities):
   are scene commands (`ArgusCommands`), session ones sit on views in
   `SessionView`; every chord is ⌘-only so Ctrl chords keep reaching the
   terminal's shell; type-to-focus is deliberately not ported (IME).
-  `scripts/capture-ios-fixtures.sh` now also captures
+  `scripts/capture-client-fixtures.sh` now also captures
   `search-sessions.json` (committed, snippet text scrubbed to
   placeholders — the test checks the envelope and the repo is public);
   its decoding test is `.enabled(if:)` the file exists.
