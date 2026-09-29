@@ -44,11 +44,9 @@ export const TERMINAL_COMMAND_STATUSES = ['completed', 'failed', 'cancelled'] as
 const FORK_CLONE_TIMEOUT_MS = 15_000;
 
 /**
- * Upper bound on the transaction that replays a fork's history. Prisma's
- * interactive-transaction default is 5 s, which a long session used to
- * exceed when the copy ran as a per-turn loop. The copy is now one
- * server-side statement, so this is a safety margin, not a budget the
- * normal path gets anywhere near.
+ * Upper bound on the transaction that replays a fork's history, replacing
+ * Prisma's 5 s interactive-transaction default. A safety margin: the copy
+ * is one server-side statement (see the fork gotchas in AGENTS.md).
  */
 const FORK_COPY_TIMEOUT_MS = 30_000;
 
@@ -394,38 +392,17 @@ export class SessionService implements OnModuleDestroy {
               : (src.modelSelection as Prisma.InputJsonValue),
         },
       });
-      // Replay every turn up to and including the anchor, and all of their
-      // chunks, in ONE statement that runs entirely inside Postgres. This
-      // used to be a loop of two round trips per turn that also pulled
-      // every chunk through the server and back — inside an interactive
-      // transaction whose default timeout is 5 s, so a long enough session
-      // failed the whole fork. Now the cost in round trips is constant and
-      // the transcript never leaves the database.
-      //
-      // `src` is the prefix in the order the chat view renders it:
-      // (createdAt, id), bounded by comparing against the anchor's own row
-      // rather than a JS Date parameter, which would pick up the session
-      // TimeZone against this `timestamp without time zone` column.
-      //
-      // New command ids are `<fork session id>-<position>`. Prisma's cuid()
-      // default is generated client-side, so SQL has to mint ids itself,
-      // and these sort in the source's order: two turns that share a
-      // createdAt millisecond are ordered by id on every read path, and a
-      // random id would reshuffle them.
-      //
-      // Per turn: unfinished statuses become `completed` (the fork has no
-      // runner to drive them, so they would spin forever); a missing
-      // completedAt falls back to createdAt; `options` is copied so history
-      // can still answer "which model ran this turn?". `usage` is
-      // deliberately NOT copied, and the asymmetry with `options` is the
-      // point: a fork duplicated rows, it did not spend tokens, so copying
-      // usage would double-count every fork in /me/usage and
-      // /me/usage/by-project. See the fork gotcha in AGENTS.md before
-      // "fixing" this to match.
-      //
-      // Chunk ids come from gen_random_uuid(), the same shape the sidecar
-      // mints. The chunk insert references commands inserted by the sibling
-      // CTE; that is fine because FK checks run at the end of the statement.
+      // Replay every turn up to and including the anchor, with its chunks,
+      // in one statement (see the fork gotchas in AGENTS.md).
+      // - The prefix is bounded by the anchor's own row, not a Date
+      //   parameter, which would be shifted by the session TimeZone against
+      //   this `timestamp without time zone` column.
+      // - New ids `<fork id>-<position>` sort in the source's order, because
+      //   turns sharing a createdAt are ordered by id on every read path.
+      // - Unfinished turns become `completed`: nothing will ever drive them.
+      // - `usage` is deliberately not copied: a fork spends no tokens.
+      // - The chunk insert references the sibling CTE's commands; FK checks
+      //   run at the end of the statement.
       const [copied] = await tx.$queryRaw<{ turns: number }[]>`
         WITH src AS (
           SELECT c.*,
