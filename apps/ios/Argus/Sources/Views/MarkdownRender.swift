@@ -19,6 +19,10 @@ struct AnswerView: View {
     /// nil = no project context: remote URLs still load, workspace paths
     /// render as text.
     var images: MarkdownImageContext? = nil
+    /// False for file previews: the ```html preview runs scripts, which is
+    /// acceptable for model output but not for working-tree files (see
+    /// StaticHtmlView), so those fences stay source.
+    var htmlPreview = true
 
     var body: some View {
         // `$$…$$` display math renders OUTSIDE MarkdownUI — cmark-gfm
@@ -102,7 +106,7 @@ struct AnswerView: View {
             .markdownBlockStyle(\.heading4) { heading($0, size: 15, top: 16) }
             .markdownBlockStyle(\.codeBlock) { configuration in
                 Group {
-                    if configuration.language?.lowercased() == "html", !isStreaming {
+                    if configuration.language?.lowercased() == "html", htmlPreview, !isStreaming {
                         HtmlBlock(source: configuration.content)
                     } else if configuration.language?.lowercased() == "mermaid", !isStreaming {
                         MermaidBlock(source: configuration.content)

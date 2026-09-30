@@ -19,7 +19,8 @@ struct FilePreviewTarget: Identifiable, Equatable {
 /// with a line-number gutter, syntax highlighting (Highlightr — the
 /// iOS stand-in for the web's shiki), and target-line scroll/highlight;
 /// `.html` files get a rendered preview with a Source toggle (strictly
-/// script-less, matching the web FileViewer's inert `sandbox=""`).
+/// script-less, matching the web FileViewer's inert `sandbox=""`), and
+/// `.md` files render through the answer renderer, mermaid included.
 struct FilePreviewSheet: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
@@ -30,14 +31,14 @@ struct FilePreviewSheet: View {
     let project: ProjectRef
     let target: FilePreviewTarget
 
-    private enum HtmlMode: String, CaseIterable {
+    private enum PreviewMode: String, CaseIterable {
         case preview = "Preview"
         case source = "Source"
     }
 
     @State private var result: FSReadResult?
     @State private var loadError: String?
-    @State private var htmlMode: HtmlMode = .preview
+    @State private var previewMode: PreviewMode = .preview
     /// Coalesces a burst of nudges into one re-read; cancelled and
     /// replaced while the window is open, and on dismiss.
     @State private var refreshTask: Task<Void, Never>?
@@ -64,6 +65,10 @@ struct FilePreviewSheet: View {
         fileExtension == "html" || fileExtension == "htm"
     }
 
+    private var isMarkdownFile: Bool {
+        fileExtension == "md" || fileExtension == "markdown"
+    }
+
     var body: some View {
         NavigationStack {
             content
@@ -77,10 +82,10 @@ struct FilePreviewSheet: View {
                             }
                         }
                     }
-                    if isHTMLFile, case .text = result {
+                    if isHTMLFile || isMarkdownFile, case .text = result {
                         ToolbarItem(placement: .principal) {
-                            Picker("Mode", selection: $htmlMode) {
-                                ForEach(HtmlMode.allCases, id: \.self) { Text($0.rawValue) }
+                            Picker("Mode", selection: $previewMode) {
+                                ForEach(PreviewMode.allCases, id: \.self) { Text($0.rawValue) }
                             }
                             .pickerStyle(.segmented)
                             .frame(maxWidth: 220)
@@ -195,9 +200,11 @@ struct FilePreviewSheet: View {
                 ProgressView()
             }
         case .text(let content, _):
-            if isHTMLFile, htmlMode == .preview {
+            if isHTMLFile, previewMode == .preview {
                 StaticHtmlView(html: content)
                     .ignoresSafeArea(edges: .bottom)
+            } else if isMarkdownFile, previewMode == .preview {
+                MarkdownFileView(content: content)
             } else {
                 TextFileView(
                     content: content,
@@ -406,6 +413,34 @@ enum CodeHighlighter {
             }
             return lines
         }.value
+    }
+}
+
+// MARK: - Markdown preview (.md files)
+
+/// A `.md` file through the answer renderer, so math and ```mermaid
+/// diagrams render as they do in the transcript — the web FileViewer's
+/// markdown preview reuses its chat renderer the same way. ```html fences
+/// stay source (`htmlPreview: false`), and with no image context
+/// workspace image paths render as text.
+///
+/// Links: http/mailto go to the system; `path:line`-shaped links stay
+/// inert — one preview is open at a time (Android parity).
+private struct MarkdownFileView: View {
+    let content: String
+
+    var body: some View {
+        ScrollView {
+            AnswerView(markdown: content, htmlPreview: false)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+        }
+        .environment(\.openURL, OpenURLAction { url in
+            let scheme = url.scheme?.lowercased()
+            return scheme == "http" || scheme == "https" || scheme == "mailto"
+                ? .systemAction
+                : .discarded
+        })
     }
 }
 

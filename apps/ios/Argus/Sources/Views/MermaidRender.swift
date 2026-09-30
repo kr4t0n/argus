@@ -11,8 +11,8 @@ import WebKit
 /// that doesn't parse falls back to the plain code block with no error
 /// state, matching the web and the way unparseable LaTeX renders as
 /// visible source instead of failing. `AnswerView` only routes here
-/// once the turn has settled, so the source is final by the time it
-/// arrives — there is no streaming churn to debounce.
+/// once the turn has settled, so there is no streaming churn to
+/// debounce.
 struct MermaidBlock: View {
     let source: String
 
@@ -27,40 +27,50 @@ struct MermaidBlock: View {
     }
 
     var body: some View {
-        if failed {
-            CodeBlock(code: trimmed, language: "mermaid")
-        } else {
-            VStack(spacing: 0) {
-                HStack(spacing: 6) {
-                    Spacer()
-                    Button {
-                        showSource.toggle()
-                    } label: {
-                        Label(showSource ? "Preview" : "Source",
-                              systemImage: showSource ? "eye" : "chevron.left.forwardslash.chevron.right")
-                            .labelStyle(.titleAndIcon)
-                            .font(.caption2)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    CopyButton(text: trimmed)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                Divider()
-
-                if showSource {
-                    CodeBlock(code: trimmed, language: "mermaid")
-                        .padding(8)
-                } else {
-                    MermaidWebView(source: trimmed, height: $height, failed: $failed)
-                        .frame(height: max(48, height))
-                }
+        Group {
+            if failed {
+                CodeBlock(code: trimmed, language: "mermaid")
+            } else {
+                diagram
             }
-            .background(Color.surface0)
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(.separator)))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
+        // A fresh source gets a fresh chance: a file preview re-reads as an
+        // agent edits, so a diagram that failed mid-edit must not stay
+        // source once it parses again.
+        .onChange(of: trimmed) { failed = false }
+    }
+
+    private var diagram: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Spacer()
+                Button {
+                    showSource.toggle()
+                } label: {
+                    Label(showSource ? "Preview" : "Source",
+                          systemImage: showSource ? "eye" : "chevron.left.forwardslash.chevron.right")
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption2)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                CopyButton(text: trimmed)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            Divider()
+
+            if showSource {
+                CodeBlock(code: trimmed, language: "mermaid")
+                    .padding(8)
+            } else {
+                MermaidWebView(source: trimmed, height: $height, failed: $failed)
+                    .frame(height: max(48, height))
+            }
+        }
+        .background(Color.surface0)
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(.separator)))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 

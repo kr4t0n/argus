@@ -867,6 +867,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `FileViewer`'s `.md` preview uses the same renderer with
   `htmlPreview={false}`, so mermaid diagrams in a previewed file render but
   ```` ```html ```` fences stay source (see the sandbox postures below).
+  Both native file previews do the same through their `AnswerView` with
+  `htmlPreview` off: iOS `FilePreviewSheet` (a Preview/Source toggle for
+  `.md`, like `.html`) and Android `MarkdownFileView`.
   `MermaidBlock` is built around the fact that a fence streams in token
   by token: renders are debounced (~200 ms), a failed parse keeps the
   last good diagram rather than clearing it, and before anything parses
@@ -1389,7 +1392,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   can't take the npm dependency the web does, and loading it off a CDN
   would break air-gapped servers and offline phones. Same posture as
   the web: `securityLevel: 'strict'`, never `'loose'`; a source that
-  doesn't parse falls back to the plain code block with no error state.
+  doesn't parse falls back to the plain code block with no error state,
+  and a changed source clears that fallback — a previewed `.md` file
+  re-reads while an agent edits it, so one bad intermediate write must
+  not pin the block to source (Android's `MermaidBlock` does the same).
   Every navigation but the initial file load is cancelled (async
   `decidePolicyFor`, same trap as StaticHtmlView). Lockstep with the
   web is version-pinned by `MermaidLockstepTests`, which reads the
