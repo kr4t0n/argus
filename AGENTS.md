@@ -864,6 +864,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   *every* renderable language, not just HTML — the copy button falls
   back to it whenever the rendered view has unmounted the `<pre>`, so
   adding a third language means widening that memo too.
+  `FileViewer`'s `.md` preview uses the same renderer with
+  `htmlPreview={false}`, so mermaid diagrams in a previewed file render but
+  ```` ```html ```` fences stay source (see the sandbox postures below).
   `MermaidBlock` is built around the fact that a fence streams in token
   by token: renders are debounced (~200 ms), a failed parse keeps the
   last good diagram rather than clearing it, and before anything parses
@@ -877,7 +880,10 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `HtmlPreview` has two sandbox postures keyed off its
   `autoHeight` prop. `FileViewer` (`.html` files) uses the strict
   `sandbox=""`: opaque origin, no scripts, sized by its container —
-  remote-tree file content stays fully inert. The chat code-block path
+  remote-tree file content stays fully inert. That is also why an
+  ```` ```html ```` fence inside a previewed `.md` file is NOT given the
+  chat's scripted preview: a README from a cloned third-party repo is no
+  more trusted than a `.html` file. The chat code-block path
   passes `autoHeight` and uses `sandbox="allow-scripts"`, so model-
   generated pages can run JS (Chart.js and other CDN-loaded libraries
   work). It deliberately does NOT add `allow-same-origin`: the frame is
