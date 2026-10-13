@@ -57,7 +57,8 @@ token-level streaming with reconnect-safe replay.
   snippets, and lands you on the matching turn.
 - **Live file tree + attachments** — a gitignore-aware tree kept in sync by the
   sidecar's file watcher, with open files re-reading in place as the agent edits
-  them. Drag-drop images and files into the composer.
+  them. Markdown files open rendered, Mermaid diagrams included. Drag-drop
+  images and files into the composer.
 - **Interactive terminal per project (opt-in)** — a real PTY shell, usable for
   full-screen TUIs like `vim` and `htop`. Treat it as remote shell access and
   enable only where every dashboard user is trusted to that level.

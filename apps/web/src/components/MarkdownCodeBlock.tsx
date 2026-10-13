@@ -33,9 +33,13 @@ type Props = ComponentPropsWithoutRef<'pre'> & {
   // attributes; destructure it so it isn't spread onto the DOM element
   // (where React would warn about an unknown attribute).
   node?: unknown;
+  /** When false, ```html fences stay source. The preview runs scripts
+   *  (`allow-scripts`), which is acceptable for model output but not for
+   *  file content, which is kept inert. */
+  htmlPreview?: boolean;
 };
 
-export function MarkdownCodeBlock({ children, node: _node, ...rest }: Props) {
+export function MarkdownCodeBlock({ children, node: _node, htmlPreview = true, ...rest }: Props) {
   const preRef = useRef<HTMLPreElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [copied, setCopied] = useState(false);
@@ -48,7 +52,7 @@ export function MarkdownCodeBlock({ children, node: _node, ...rest }: Props) {
   // Walk the immediate children to find that className so we can decide
   // whether the Preview affordance applies.
   const lang = useMemo(() => detectLanguage(children), [children]);
-  const isHtml = lang === 'html';
+  const isHtml = htmlPreview && lang === 'html';
   const isMermaid = lang === 'mermaid';
   const renderable = isHtml || isMermaid;
   // Pre-compute the raw source up front so it's available whether the

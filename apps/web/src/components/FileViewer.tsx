@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { markdownRemarkPlugins, markdownRehypePlugins, normalizeMathDelimiters } from '../lib/markdown';
 import { Code2, Download, Eye, FileWarning, Loader2 } from 'lucide-react';
@@ -14,6 +14,7 @@ import {
 } from '../stores/fileTabsStore';
 import { cn } from '../lib/utils';
 import { HtmlPreview } from './HtmlPreview';
+import { MarkdownCodeBlock } from './MarkdownCodeBlock';
 
 type Props = { file: OpenFile };
 
@@ -129,6 +130,12 @@ export function FileContentView({
 
 type PreviewKind = 'markdown' | 'html' | null;
 
+function FileMarkdownCodeBlock(props: ComponentProps<typeof MarkdownCodeBlock>) {
+  return <MarkdownCodeBlock {...props} htmlPreview={false} />;
+}
+
+const fileMarkdownComponents = { pre: FileMarkdownCodeBlock };
+
 /**
  * Text files that have a meaningful "rendered" form (markdown, HTML)
  * default to that preview with a "view source" toggle in the corner.
@@ -182,7 +189,11 @@ function PreviewableTextViewer({
         <TextViewer path={path} content={content} line={line} />
       ) : previewKind === 'markdown' ? (
         <div className="markdown h-full overflow-auto px-6 py-5 text-sm leading-relaxed text-fg-primary">
-          <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>
+          <ReactMarkdown
+            remarkPlugins={markdownRemarkPlugins}
+            rehypePlugins={markdownRehypePlugins}
+            components={fileMarkdownComponents}
+          >
             {normalizeMathDelimiters(content)}
           </ReactMarkdown>
         </div>
