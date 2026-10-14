@@ -1,7 +1,6 @@
 # Plan: retire per-agent resources — Runners (machine × CLI) + first-class Projects
 
 Status: ✅ COMPLETE (2026-07-15) · originally drafted 2026-07-13
-Owner: kyle
 Prereq: Phase 0 (lifecycle consumer fix) shipped independently, before the rest.
 
 > **This refactor has landed in full.** The `Agent` entity is retired end to
@@ -236,7 +235,7 @@ Locked design decisions (as implemented):
 - **Clean cut, server-leading.** Sidecar ≥0.3.x drops supervisors
   entirely: runners per installed CLI, no per-agent heartbeats, new
   streams. It REQUIRES a Phase-3 server (deploy order: server first,
-  then sidecars self-update — Kyle's normal order). The server keeps
+  then sidecars self-update — the owner's normal order). The server keeps
   full legacy support for old sidecars, gated on `Machine.sidecarVersion`
   (semver ≥ 0.3.0 ⇒ new-style). Old-server + new-sidecar is unsupported.
 - **Streams**: `machine:{id}:cli:{type}:cmd` / `:result`, MAXLEN mirrors
@@ -301,7 +300,7 @@ App Store cadence (its Stage A tolerance means it survives either way).
 Follow-ups (non-blocking cosmetic): remove the fs.service dead agent
 methods, web agentStore + CreateAgentPopover agent branch + archive
 cascade agent calls, iOS FleetStore.agents + agent WS cases. Sweep the
-~41 leftover agent:{id}:* Redis streams once (Kyle-approved, data-safe).
+~41 leftover agent:{id}:* Redis streams once (owner-approved, data-safe).
 
 ### Phase 5 — sweep the vestigial agentId ✅ IMPLEMENTED (branch refactor/agent-to-runners)
 
@@ -336,7 +335,7 @@ leftover `agent:{id}:*` Redis streams (prod mutation, data-safe).
 
 Original gate (all cleared):
 
-- [x] Whole fleet runs sidecar ≥0.3.x (Kyle confirms after real-life
+- [x] Whole fleet runs sidecar ≥0.3.x (the owner confirms after real-life
       testing of rc.2+; `SELECT "sidecarVersion" FROM "Machine"`)
 - [ ] Phases 1–3 soak in prod without regressions (fs panel, turn
       dispatch/streaming, archive flows, quota, terminals)
@@ -349,7 +348,7 @@ Original gate (all cleared):
       build). Stage A = the DTO relax that MUST be installed on devices
       BEFORE the Phase-4 server nulls agentId; App Store propagation is
       now the long pole of the gate, so cut a build early.
-- [ ] Kyle: build + ship the iOS app from a macOS window, confirm
+- [ ] Owner: build + ship the iOS app from a macOS window, confirm
       on-device (sessions list, transcripts, project-first create,
       Files/Commits live refresh on a ≥0.3 machine, model picker,
       queued prompts).
