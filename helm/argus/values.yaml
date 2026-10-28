@@ -319,7 +319,8 @@ web:
   # cluster's Pod Security Admission permits — but if PSA is set to
   # `restricted`, switch to a non-root nginx base image instead (the
   # nginxinc/nginx-unprivileged variant runs as UID 101 from PID 1,
-  # which is compatible with `drop: [ALL]` + `runAsNonRoot: true`).
+  # which is compatible with `drop: [ALL]` + `runAsNonRoot: true`;
+  # `restricted` also requires `seccompProfile.type: RuntimeDefault`).
   # A fork of deploy/web.Dockerfile on that base needs root for its
   # build steps, a config.js UID 101 can write, and nginx on :8080 —
   # see "Swapping the web image" in the chart README.

@@ -336,6 +336,8 @@ web:
       drop: ["ALL"]
     runAsNonRoot: true
     runAsUser: 101
+    seccompProfile:
+      type: RuntimeDefault
 ```
 
 Pointing `web.image.repository` at a stock `nginx` / `nginx-unprivileged`
