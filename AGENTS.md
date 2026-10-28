@@ -3157,7 +3157,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   prefix so it still runs after the surviving `15-local-resolvers`,
   `20-envsubst` and `30-tune-worker-processes` scripts. (3) Forks of the Dockerfile
   built `FROM nginxinc/nginx-unprivileged` inherit the same `10-`
-  script and should keep the `rm`.
+  script and should keep the `rm`, but only as root: that base is
+  `USER 101` and `/docker-entrypoint.d` is root-owned, so the `rm`
+  (like the `chmod` beside it and `apk upgrade`) fails the build
+  unless the stage switches to `USER root` and back. Such a fork also
+  needs a `config.js` UID 101 can write and `listen 8080;`. The full
+  list is in `helm/argus/README.md`, "Swapping the web image". The
+  project builds no such variant.
 - **`detectRestartMode` must use `term.IsTerminal`, not `os.ModeCharDevice`**:
   the daemon child of `argus-sidecar start` has its stdin dup2'd to
   `/dev/null`, which *is* a character device — so the original

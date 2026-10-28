@@ -289,16 +289,45 @@ nginx master chowns cache dirs and binds :80 before dropping to UID
 
 To run the chart on a `restricted` Pod Security Admission cluster
 without `runAsUser: 0`, build a fork of [`deploy/web.Dockerfile`](https://github.com/kr4t0n/argus/blob/main/deploy/web.Dockerfile)
-that swaps `FROM nginx:alpine` for `FROM nginxinc/nginx-unprivileged:alpine`
-(everything else — the SPA copy and the entrypoint hook — keeps
-working unchanged). Push it somewhere your cluster can pull, then:
+on `nginxinc/nginx-unprivileged:alpine`. Swapping the `FROM` line alone
+does not work: that image runs as UID 101, the paths our runtime stage
+writes to are owned by root, and our nginx config listens on :80. The
+fork's runtime stage needs four more changes:
+
+1. **`USER root` right after `FROM`.** The `chmod`/`rm` step changes
+   root-owned files in `/docker-entrypoint.d`, and `apk upgrade` writes
+   to root-owned `/var/log/apk.log` and `/lib/apk/db`. As UID 101 both
+   steps fail with `Permission denied` (apk exits 99), and the build
+   stops. The base image switches to root for its own `apk add` too.
+2. **A `config.js` UID 101 can write.** The entrypoint hook rewrites
+   `/usr/share/nginx/html/config.js` on every start, and `COPY` leaves
+   that file and its folder owned by root. Without a fix the hook fails,
+   the entrypoint exits before nginx starts, and the pod crash-loops.
+   While still root, `chown 101 /usr/share/nginx/html/config.js`. The
+   SPA bundle ships a stub there and the hook rewrites it in place, so
+   the folder can stay root-owned.
+3. **`listen 8080;` in `deploy/web.nginx.conf`** (and `EXPOSE 8080`).
+   The base image's own config listens on :8080, but ours replaces it
+   with `listen 80;`, so `containerPort: 8080` below would point the
+   Service and the probes at a port nothing listens on. With
+   `drop: ["ALL"]`, nginx as UID 101 can bind :80 only where the
+   container runtime lowers `net.ipv4.ip_unprivileged_port_start`.
+4. **`USER 101` at the end of the stage**, so the image runs as the
+   `runAsUser` below.
+
+Keep the `rm` of `10-listen-on-ipv6-by-default.sh`: the unprivileged
+base ships the same script. The project doesn't build or test this
+variant. The list above comes from reading the
+`nginxinc/nginx-unprivileged:alpine` image's layers (October 2026,
+nginx 1.31.7 on Alpine 3.24), so check it against the base you build
+on. Push the image somewhere your cluster can pull, then:
 
 ```yaml
 web:
   image:
     repository: my-org/argus-web-unprivileged
     tag: "0.1.2"
-  containerPort: 8080            # nginx-unprivileged binds :8080
+  containerPort: 8080            # the fork's web.nginx.conf listens on :8080 (step 3)
   service:
     port: 80                     # external still 80, targetPort follows containerPort
   securityContext:
