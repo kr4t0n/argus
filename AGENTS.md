@@ -579,7 +579,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     appends a uniform "attached files" path-listing preamble to the
     prompt. Fail-soft per file (a bad pull is logged and skipped, not
     fatal). `safeAttachmentFilename` jails the on-disk name (strips
-    path separators / control chars; id-prefixed for collision safety).
+    path separators / control chars; id-prefixed for collision safety)
+    and caps it at 128 bytes on a rune boundary, so a multi-byte name
+    stays valid UTF-8.
     Workdir-less sessions fall back to a temp dir.
 - `quota/` — per-CLI plan-quota prober. Runs on a 5-minute tick inside
   the daemon, reads each tool's OAuth file
