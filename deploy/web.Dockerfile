@@ -12,7 +12,7 @@
 # are present (see `apps/web/src/lib/host.ts`).
 
 # ── Stage 1: install deps ─────────────────────────────────────────────
-FROM node:20-alpine AS deps
+FROM node:24-alpine AS deps
 # Install pnpm via npm (not corepack) with a BuildKit cache on npm's
 # download cache so cold rebuilds reuse the pnpm tarball instead of
 # refetching it. corepack's content-addressed cache can't be preserved

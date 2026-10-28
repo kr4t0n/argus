@@ -90,7 +90,7 @@ argus/
 
 ## Prerequisites
 
-- **Node.js** ≥ 20 and **pnpm** ≥ 10 (only to build server/web from source)
+- **Node.js** ≥ 24 and **pnpm** ≥ 10 (only to build server/web from source)
 - **Go** ≥ 1.23 (only to build the sidecar locally)
 - **Docker** + Docker Compose (only for the bundled local stack)
 - **Postgres** 16+ and **Redis** 7+ if not using Compose
