@@ -240,7 +240,9 @@ web:
   # the chart slots into restricted Pod Security Admission clusters
   # without `runAsUser: 0`. Note that any third-party nginx image will
   # need to ALSO ship the SPA bundle and the runtime-config entrypoint
-  # hook; see deploy/web.Dockerfile for the recipe to fork.
+  # hook; deploy/web.Dockerfile is the recipe to fork. On the
+  # unprivileged base, a new FROM line alone fails to build: see
+  # "Swapping the web image" in the chart README for the other changes.
   image:
     repository: kr4t0n/argus-web
     tag: ""
@@ -316,9 +318,12 @@ web:
   # defaults alone. Override below to lock down further if your
   # cluster's Pod Security Admission permits — but if PSA is set to
   # `restricted`, switch to a non-root nginx base image instead (the
-  # nginxinc/nginx-unprivileged variant listens on :8080 and runs as
-  # UID 101 from PID 1, which is compatible with `drop: [ALL]` +
-  # `runAsNonRoot: true`).
+  # nginxinc/nginx-unprivileged variant runs as UID 101 from PID 1,
+  # which is compatible with `drop: [ALL]` + `runAsNonRoot: true`;
+  # `restricted` also requires `seccompProfile.type: RuntimeDefault`).
+  # A fork of deploy/web.Dockerfile on that base needs root for its
+  # build steps, a config.js UID 101 can write, and nginx on :8080 —
+  # see "Swapping the web image" in the chart README.
   securityContext:
     allowPrivilegeEscalation: false
 
