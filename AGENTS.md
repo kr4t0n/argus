@@ -3541,15 +3541,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   `argus-sidecar update`); `ARGUS_PRERELEASE=1` opts back in.
 - **Nest 10 pins its dependencies exactly, so security fixes under it go
   through `pnpm.overrides`** in the root `package.json`.
-  `@nestjs/platform-express` 10.4.22, `@nestjs/config` 3.3.0,
-  `@nestjs/cli` 10.4.9 and `@angular-devkit/core` 17.3.11 are the last
-  releases of their lines and pin `express`, `body-parser`, `multer`,
-  `lodash`, `glob`, `webpack`, `ajv` and `picomatch` to one version each
-  (and `external-editor` holds `tmp` at `^0.0.33`), so no in-range update
-  can take a fix there. Each override is scoped to that parent
-  (`parent>child`) and sits on the newest patch of the first minor that
-  fixes the advisories; everything else takes its fix inside the declared
-  ranges. Two packages are held back on purpose:
+  `@nestjs/platform-express` 10.4.22, `@nestjs/config` 3.3.0 and
+  `@nestjs/cli` 10.4.9 are the last releases of their majors and pin
+  `express`, `body-parser`, `multer`, `lodash`, `glob` and `webpack` to one
+  version each. `@nestjs/cli` 10.4.9 also pins `@angular-devkit/core`
+  17.3.11, which pins `ajv` and `picomatch` (17.3.17, the newest 17.x,
+  pins the same two), and `external-editor` holds `tmp` at `^0.0.33`. So
+  no in-range update can take a fix there. Each override is scoped to
+  that parent (`parent>child`) and sits on the newest patch of the first
+  minor that fixes the advisories; everything else takes its fix inside
+  the declared ranges. Two packages are held back on purpose:
   - **multer stays at 2.3.x while the server is on Nest 10.** Nest 10's
     `transformException` (`@nestjs/platform-express`,
     `multer/multer/multer.utils.js`) maps multer errors to HTTP exceptions
