@@ -280,6 +280,17 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   "unreachable" vs "rejected the request". The 404 test is keyed on the
   error *name*, not the status: `NoSuchBucket` is also a 404 from S3 but
   means the deployment is misconfigured, so it stays a 503.
+  **Filenames are UTF-8 end to end.** Every client sends the multipart
+  `filename` as raw UTF-8, so the interceptor passes multer
+  `defParamCharset: 'utf8'`. The option exists only from multer 2.1;
+  older multer ignores it silently and names come back as latin1 mojibake
+  (`名前.txt` → `å\x90\x8då\x89\x8d.txt`), so recheck it whenever multer
+  moves. Rows uploaded before the fix keep their mojibake; nothing repairs
+  them. The download sends RFC 6266 `filename="<ASCII fallback>";
+  filename*=UTF-8''<percent-encoded>` for any non-ASCII name, because
+  Node throws on a header character above U+00FF. `sanitizeFilename`'s
+  200-unit cut drops a trailing high surrogate: a lone one makes
+  `encodeURIComponent`, and with it the SDK's S3 key escaping, throw.
 - `result-ingestor/` — single XREADGROUP across **all** runner result
   streams (refreshed every 5s): `machine:{id}:cli:{type}:result`, one per
   entry in each machine's `availableAdapters`. Persists each chunk and
