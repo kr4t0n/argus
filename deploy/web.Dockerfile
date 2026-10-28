@@ -69,4 +69,14 @@ COPY deploy/web.entrypoint.sh /docker-entrypoint.d/40-argus-runtime-config.sh
 RUN chmod +x /docker-entrypoint.d/40-argus-runtime-config.sh \
  && rm -f /docker-entrypoint.d/10-listen-on-ipv6-by-default.sh
 
+# The nginx:alpine base can lag Alpine's security fixes: in Oct 2026 it
+# still carried brotli-libs 1.2.0 and curl 8.22 after Alpine v3.24 had
+# fixed both. This moves only Alpine's own packages. nginx and its
+# modules come from nginx.org, whose repo the base doesn't keep, and
+# /etc/apk/world pins them to exact versions. Keep this last in the
+# stage: BuildKit reuses a cached RUN layer while its inputs are
+# unchanged, so here it reruns whenever the SPA changes, where right
+# after FROM it would stay cached for as long as the base digest held.
+RUN apk upgrade --no-cache
+
 EXPOSE 80
