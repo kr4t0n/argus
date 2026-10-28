@@ -69,8 +69,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import app.argus.android.AppModel
-import app.argus.android.ui.markdown.MarkwonText
-import app.argus.android.ui.markdown.handleAnswerLink
+import app.argus.android.ui.markdown.AnswerView
+import app.argus.android.ui.markdown.MarkdownImageContext
 import app.argus.android.ui.markdown.prepareHtmlDocument
 import app.argus.android.ui.session.captionStyle
 import app.argus.android.ui.session.monoStyle
@@ -78,7 +78,6 @@ import app.argus.android.ui.session.secondaryTextColor
 import app.argus.android.ui.session.tertiaryTextColor
 import app.argus.android.ui.theme.argusPalette
 import app.argus.core.api.ApiError
-import app.argus.core.engine.MarkwonMath
 import app.argus.core.engine.ProjectRef
 import app.argus.core.model.FSReadResult
 import kotlinx.coroutines.CancellationException
@@ -126,7 +125,8 @@ private const val MAX_DECODED_EDGE = 4096
 /**
  * Full-screen file preview. Text renders as monospace lines with a
  * line-number gutter and the target line highlighted; `.md` files render
- * through Markwon and `.html` files in a strictly script-less WebView,
+ * through the answer renderer (mermaid included) and `.html` files in a
+ * strictly script-less WebView,
  * both with a Source toggle; images pinch-zoom; binary / unsupported
  * files show a size line. Presented as a full-screen [Dialog] so back
  * (and a hardware keyboard's Escape, which Android's Dialog maps to
@@ -374,11 +374,13 @@ private fun TextFileView(content: String, targetLine: Int?, modifier: Modifier =
 // MARK: - Markdown (.md files)
 
 /**
- * A `.md` file through the same Markwon surface as answers (GFM + math),
- * matching the web FileViewer's markdown preview, which reuses the
- * transcript's plugin set. Single-dollar inline math gets the same
- * rewrite the answer path applies — the web's trade (a README's "$5 and
- * $10" can false-positive) is accepted here identically.
+ * A `.md` file through the answer renderer (GFM + math + ```mermaid
+ * diagrams), matching the web FileViewer's markdown preview, which reuses
+ * the transcript's renderer. Single-dollar inline math gets the answer
+ * path's rewrite — the web's trade (a README's "$5 and $10" can
+ * false-positive) is accepted here identically. ```html fences stay
+ * source (`htmlPreview = false`), and with [MarkdownImageContext.None]
+ * workspace image paths render as text.
  *
  * Links: http/mailto go to the system; `path:line`-shaped links stay
  * inert — one preview is open at a time and nesting them is not worth a
@@ -386,17 +388,18 @@ private fun TextFileView(content: String, targetLine: Int?, modifier: Modifier =
  */
 @Composable
 private fun MarkdownFileView(content: String, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    val markdown = remember(content) { MarkwonMath.rewriteInline(content) }
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        MarkwonText(
-            markdown = markdown,
+        AnswerView(
+            markdown = content,
+            isStreaming = false,
+            images = MarkdownImageContext.None,
+            onOpenFile = { _, _ -> },
             modifier = Modifier.fillMaxWidth(),
-            onLink = { link -> handleAnswerLink(context, link) { _, _ -> } },
+            htmlPreview = false,
         )
     }
 }

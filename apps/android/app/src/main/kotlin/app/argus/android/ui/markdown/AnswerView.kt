@@ -32,7 +32,9 @@ import app.argus.core.engine.MarkwonMath
  *   single-dollar inline math into Markwon's `$$x$$` inline form.
  * - DisplayMath → [MarkwonText] holding a block-LaTeX fence, so JLatexMath
  *   draws it centred at block size.
- * - Fence("mermaid") → [MermaidBlock], Fence("html") → [HtmlBlock]. An
+ * - Fence("mermaid") → [MermaidBlock], Fence("html") → [HtmlBlock] (or a
+ *   plain code block when [htmlPreview] is off — file previews, whose
+ *   working-tree content stays script-less). An
  *   UNCLOSED renderable fence stays in its Markdown segment while
  *   streaming — a code block that snaps into the diagram when the
  *   closing fence arrives, exactly the web's behaviour.
@@ -51,6 +53,7 @@ fun AnswerView(
     images: MarkdownImageContext,
     onOpenFile: (path: String, line: Int?) -> Unit,
     modifier: Modifier = Modifier,
+    htmlPreview: Boolean = true,
 ) {
     val context = LocalContext.current
     val segments = remember(markdown) { AnswerSegments.split(markdown) }
@@ -75,7 +78,15 @@ fun AnswerView(
                 )
                 is AnswerSegment.Fence -> when (segment.language.lowercase()) {
                     "mermaid" -> MermaidBlock(segment.code, Modifier.fillMaxWidth(), isStreaming)
-                    "html" -> HtmlBlock(segment.code, Modifier.fillMaxWidth(), isStreaming)
+                    "html" -> if (htmlPreview) {
+                        HtmlBlock(segment.code, Modifier.fillMaxWidth(), isStreaming)
+                    } else {
+                        MarkwonText(
+                            markdown = fenceMarkdown(segment.language, segment.code),
+                            modifier = Modifier.fillMaxWidth(),
+                            onLink = onLink,
+                        )
+                    }
                     // Defensive: only renderableFences reach here today.
                     else -> MarkwonText(
                         markdown = fenceMarkdown(segment.language, segment.code),

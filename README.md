@@ -57,7 +57,8 @@ token-level streaming with reconnect-safe replay.
   snippets, and lands you on the matching turn.
 - **Live file tree + attachments** — a gitignore-aware tree kept in sync by the
   sidecar's file watcher, with open files re-reading in place as the agent edits
-  them. Drag-drop images and files into the composer.
+  them. Markdown files open rendered, Mermaid diagrams included. Drag-drop
+  images and files into the composer.
 - **Interactive terminal per project (opt-in)** — a real PTY shell, usable for
   full-screen TUIs like `vim` and `htop`. Treat it as remote shell access and
   enable only where every dashboard user is trusted to that level.
@@ -89,7 +90,7 @@ argus/
 
 ## Prerequisites
 
-- **Node.js** ≥ 20 and **pnpm** ≥ 10 (only to build server/web from source)
+- **Node.js** ≥ 24 and **pnpm** ≥ 10 (only to build server/web from source)
 - **Go** ≥ 1.23 (only to build the sidecar locally)
 - **Docker** + Docker Compose (only for the bundled local stack)
 - **Postgres** 16+ and **Redis** 7+ if not using Compose
