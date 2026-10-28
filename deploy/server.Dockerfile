@@ -17,7 +17,7 @@
 # lives at a fixed path baked into the image. corepack's cache is
 # content-addressed under $HOME and isn't preserved by BuildKit cache
 # mounts, which would force a re-download on every cold container start.
-FROM node:20-alpine AS base
+FROM node:24-alpine AS base
 RUN apk add --no-cache openssl
 RUN --mount=type=cache,id=npm,target=/root/.npm \
     npm install -g pnpm@10.33.0
