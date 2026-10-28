@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/kr4t0n/argus/sidecar/internal/protocol"
 )
@@ -29,6 +30,9 @@ func TestSafeAttachmentFilename(t *testing.T) {
 		{"control chars", "abc123", "a\x00b\x1fc.txt", "abc123-abc.txt"},
 		{"empty falls back", "abc123", "", "abc123-file"},
 		{"only separators", "abc123", "/", "abc123-file"},
+		{"long ascii capped at 128 bytes", "abc123", strings.Repeat("a", 200), "abc123-" + strings.Repeat("a", 128)},
+		{"cap keeps whole CJK runes", "abc123", strings.Repeat("名", 50), "abc123-" + strings.Repeat("名", 42)},
+		{"cap keeps whole emoji", "abc123", strings.Repeat("a", 126) + "😀.txt", "abc123-" + strings.Repeat("a", 126)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -38,6 +42,9 @@ func TestSafeAttachmentFilename(t *testing.T) {
 			}
 			if strings.ContainsAny(got, `/\`) {
 				t.Fatalf("result %q must not contain path separators", got)
+			}
+			if !utf8.ValidString(got) {
+				t.Fatalf("result %q is not valid UTF-8", got)
 			}
 		})
 	}

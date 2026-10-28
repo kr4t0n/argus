@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/kr4t0n/argus/sidecar/internal/protocol"
 )
@@ -177,7 +178,14 @@ func safeAttachmentFilename(id, filename string) string {
 	}, base)
 	cleaned = strings.TrimLeft(cleaned, ".")
 	if len(cleaned) > 128 {
-		cleaned = cleaned[:128]
+		// Cut on a rune boundary: half a multi-byte character is invalid
+		// UTF-8, which encoding/json turns into U+FFFD, so the path the
+		// prompt hands a JSON-speaking CLI would no longer name the file.
+		cut := 128
+		for cut > 0 && !utf8.RuneStart(cleaned[cut]) {
+			cut--
+		}
+		cleaned = cleaned[:cut]
 	}
 	if cleaned == "" {
 		cleaned = "file"

@@ -207,10 +207,7 @@ export class AttachmentService {
 
     res.setHeader('Content-Type', row.mime);
     res.setHeader('Content-Length', row.size);
-    res.setHeader(
-      'Content-Disposition',
-      `inline; filename="${sanitizeFilename(row.filename)}"`,
-    );
+    res.setHeader('Content-Disposition', contentDisposition(sanitizeFilename(row.filename)));
     res.setHeader('Cache-Control', 'private, max-age=3600');
 
     body.on('error', (err) => {
@@ -328,11 +325,31 @@ function isConnectFailure(err: unknown): boolean {
  *  Falls back to a generic name when nothing usable remains. */
 function sanitizeFilename(name: string): string {
   const base = (name || '').split(/[\\/]/).pop() ?? '';
-  const cleaned = base
+  let cleaned = base
     // eslint-disable-next-line no-control-regex
     .replace(/[\x00-\x1f\x7f"]/g, '')
     .replace(/^\.+/, '')
     .trim()
     .slice(0, 200);
+  // A cut inside a surrogate pair leaves a lone high surrogate, which
+  // encodeURIComponent throws on (the SDK escaping the S3 key, `filename*`).
+  if (/[\ud800-\udbff]$/.test(cleaned)) cleaned = cleaned.slice(0, -1);
   return cleaned || 'file';
+}
+
+/** RFC 6266 `inline` disposition for a sanitized filename. Node refuses
+ *  header characters above U+00FF, and the RFC's Appendix D advises
+ *  against non-ASCII in `filename` at all, so a non-ASCII name goes out as
+ *  an ASCII `filename` fallback followed by the exact name as RFC 8187
+ *  `filename*`, which recipients pick when both are present. ASCII names
+ *  keep the plain form, byte for byte. */
+function contentDisposition(filename: string): string {
+  const fallback = filename.replace(/[^\x20-\x7e]/gu, '_');
+  if (fallback === filename) return `inline; filename="${filename}"`;
+  // encodeURIComponent leaves ' ( ) * as they are; RFC 8187's attr-char doesn't allow them
+  const encoded = encodeURIComponent(filename).replace(
+    /['()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `inline; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
