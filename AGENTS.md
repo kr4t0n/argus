@@ -3545,6 +3545,48 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   included prereleases — so a fresh `curl | sh` during an rc cycle
   silently installed the rc. Stable-only is now the default (matching
   `argus-sidecar update`); `ARGUS_PRERELEASE=1` opts back in.
+- **Nest 10 pins its dependencies exactly, so security fixes under it go
+  through `pnpm.overrides`** in the root `package.json`.
+  `@nestjs/platform-express` 10.4.22, `@nestjs/config` 3.3.0 and
+  `@nestjs/cli` 10.4.9 are the last releases of their majors and pin
+  `express`, `body-parser`, `multer`, `lodash`, `glob` and `webpack` to one
+  version each. `@nestjs/cli` 10.4.9 also pins `@angular-devkit/core`
+  17.3.11, which pins `ajv` and `picomatch` (17.3.17, the newest 17.x,
+  pins the same two), and `external-editor` holds `tmp` at `^0.0.33`. So
+  no in-range update can take a fix there. Each override is scoped to
+  that parent (`parent>child`) and sits on the newest patch of the first
+  minor that fixes the advisories; everything else takes its fix inside
+  the declared ranges. Two packages are held back on purpose:
+  - **multer stays at 2.3.x while the server is on Nest 10.** Nest 10's
+    `transformException` (`@nestjs/platform-express`,
+    `multer/multer/multer.utils.js`) maps multer errors to HTTP exceptions
+    by their MESSAGE. multer 2.4.0 renamed `LIMIT_UNEXPECTED_FILE`'s
+    message from "Unexpected field" to "Unexpected file field", so on 2.4+
+    an upload with a stray file field falls through as a raw `MulterError`
+    and answers 500 instead of 400. Later Nest releases map by
+    `error.code` (11.2.8 does, 11.0.0 doesn't). The two
+    multer advisories fixed only in 2.4/2.5 need `diskStorage` or an async
+    `fileFilter`, and `POST /attachments` uses neither (memory storage, no
+    filter).
+  - **mermaid stays below 11.17 until the lockstep probes change.** 11.17's
+    `mermaid.min.js` carries an unrelated `version:"0.0.0"` literal ahead
+    of mermaid's own, and `MermaidLockstepTests` (Swift),
+    `MermaidLockstepTest` (Kotlin) and `scripts/sync-ios-mermaid.sh` all
+    read the FIRST `version:"…"` literal. The web's range is `^11.16.1`
+    with the lockfile on 11.16.1, so a plain `pnpm up mermaid` lands 11.17
+    and the iOS test fails with "the bundle's shape changed". Fix the
+    probes first. Note that `android.yml` doesn't trigger on
+    `apps/ios/Argus/Resources/**` or `pnpm-lock.yaml`, so the Kotlin
+    lockstep test only runs on a PR that also touches `apps/android/`.
+
+  How to bump one package without churn: any `pnpm update` in `apps/web`,
+  even of a single direct dependency, re-resolves the whole `@lobehub/ui`
+  tree (about 120 packages, of which the bundle ships three `Flex` files).
+  For a direct dependency, raise the floor in its `package.json` and run
+  `pnpm install`. For a transitive one still inside its parent's range,
+  add a temporary bare override (`"js-cookie": "3.0.8"`), install, delete
+  it and install again: the lockfile keeps the version, since it still
+  satisfies every range.
 
 ## Tech debt / planned
 
