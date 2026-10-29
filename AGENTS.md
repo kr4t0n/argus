@@ -1828,6 +1828,13 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   that starts reading another file outside its app's folder needs that path
   in both of its workflow's `paths` lists, or it won't run when that file
   changes.
+  **On Android a path filter isn't enough.** `gradle.properties` sets
+  `org.gradle.caching=true`, and a Test task's cache key covers only what it
+  declares, not files a test opens through `File()`. So a change to only
+  such a file would replay a cached pass (the log says `FROM-CACHE`) without
+  running the test. That's why `app/build.gradle.kts` and
+  `core/build.gradle.kts` declare every repo file their tests read as task
+  `inputs`. A test that reads a new one needs it added there too.
   A Kotlin change is unverified until that workflow has run on it; say so.
 - **Every dependency is an exact pin** (`gradle/libs.versions.toml`, plus
   `distributionSha256Sum` on the wrapper), the fix the iOS side still owes

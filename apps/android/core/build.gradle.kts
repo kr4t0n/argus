@@ -1,6 +1,8 @@
 // :core — everything except UI, as a PLAIN Kotlin/JVM module. No Android
 // plugin, so it compiles and tests on any JDK 17 without the Android SDK;
 // the counterpart of apps/ios/ArgusKit.
+import org.gradle.api.tasks.PathSensitivity
+
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
@@ -39,4 +41,13 @@ tasks.test {
     val repoRoot = rootDir.parentFile.parentFile.canonicalFile
     systemProperty("argus.repoRoot", repoRoot.path)
     systemProperty("argus.fixtures", repoRoot.resolve("packages/shared-types/fixtures").path)
+    // Those properties are only paths, so the files the tests read through
+    // them are declared as inputs too: otherwise the build cache replays a
+    // cached pass when only the TS table or a fixture changed.
+    inputs.file(repoRoot.resolve("packages/shared-types/src/contextWindow.ts"))
+        .withPropertyName("contextWindowTs")
+        .withPathSensitivity(PathSensitivity.NONE)
+    inputs.dir(repoRoot.resolve("packages/shared-types/fixtures"))
+        .withPropertyName("sharedFixtures")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }
