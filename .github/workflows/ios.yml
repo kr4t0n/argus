@@ -24,12 +24,16 @@ on:
       # shared with the Android client — a re-capture must re-prove the
       # Swift mirror too.
       - 'packages/shared-types/fixtures/**'
+      # MermaidLockstepTests pins the vendored bundle to the web's
+      # resolved mermaid in the lockfile.
+      - 'pnpm-lock.yaml'
   pull_request:
     paths:
       - 'apps/ios/**'
       - '.github/workflows/ios.yml'
       - 'packages/shared-types/src/contextWindow.ts'
       - 'packages/shared-types/fixtures/**'
+      - 'pnpm-lock.yaml'
   # Manual runs for Swift work on long-lived refactor branches — the
   # dev box has no Swift toolchain, so this workflow is the compiler.
   workflow_dispatch:

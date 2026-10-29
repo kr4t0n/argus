@@ -36,7 +36,9 @@ locally and compiled on a Linux runner, the same posture the Swift client
 has with `ios.yml`. `.github/workflows/android.yml` is therefore the
 primary verifier: it runs on push to `main`, `dev` and `feat/android-*`,
 on pull requests, on `workflow_dispatch`, and on edits to the files the
-Kotlin side mirrors (`contextWindow.ts`, `hotkeys.ts`, the shared fixtures):
+Kotlin side mirrors or its tests read (`contextWindow.ts`, `hotkeys.ts`,
+the shared fixtures, the vendored `mermaid.min.js`, `pnpm-lock.yaml` and
+`pnpm-workspace.yaml`):
 
 ```bash
 gh workflow run android.yml --ref feat/android-native-client

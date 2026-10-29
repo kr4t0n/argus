@@ -21,6 +21,12 @@ on:
       # The captured live-server fixtures :core's decoding tests consume
       # (shared with ArgusKit) — a re-capture must re-prove the mirror.
       - 'packages/shared-types/fixtures/**'
+      # :app's lockstep tests pin the vendored mermaid bundle (kept under
+      # the iOS app) and the xterm stamp to the web's lockfile.
+      - 'apps/ios/Argus/Resources/mermaid.min.js'
+      - 'pnpm-lock.yaml'
+      # Those tests find the repo root by this file.
+      - 'pnpm-workspace.yaml'
   pull_request:
     paths:
       - 'apps/android/**'
@@ -28,6 +34,9 @@ on:
       - 'packages/shared-types/src/contextWindow.ts'
       - 'apps/web/src/lib/hotkeys.ts'
       - 'packages/shared-types/fixtures/**'
+      - 'apps/ios/Argus/Resources/mermaid.min.js'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
   workflow_dispatch:
 
 permissions:

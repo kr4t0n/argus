@@ -318,7 +318,10 @@ Modelled on `ios.yml`, cheaper because it runs on Linux:
   `workflow_dispatch` for long-lived branches. Path-filtered to
   `apps/android/**`, the workflow file, `packages/shared-types/src/contextWindow.ts`
   (so an unported table change fails Android CI in the same push, as it
-  fails iOS CI), and `apps/web/src/lib/hotkeys.ts`.
+  fails iOS CI), and `apps/web/src/lib/hotkeys.ts`. The filter has since
+  grown the shared fixtures and the files the `:app` lockstep tests read
+  (the vendored `mermaid.min.js`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`);
+  the workflow's own `paths` lists are the current set.
 - **Toolchain** — `actions/setup-java` (Temurin, JDK 17: what AGP 8
   requires to run Gradle); `gradle/actions/setup-gradle` for caching;
   `gradle/actions/wrapper-validation` before anything runs. The hosted
