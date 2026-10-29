@@ -1816,10 +1816,25 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
 - **Kotlin is CI-compiled only, by decision.** The dev box gets no JDK,
   Gradle or Android SDK; `.github/workflows/android.yml` (ubuntu runner,
   `:core:build` + `:app:assembleDebug :app:lintDebug :app:testDebugUnitTest`)
-  IS the compiler, exactly as `ios.yml` is for Swift. It runs on push to
-  main/dev/`feat/android-*`, on PRs, on `workflow_dispatch`, and — like
-  `ios.yml` — on edits to `packages/shared-types/src/contextWindow.ts` and
-  `apps/web/src/lib/hotkeys.ts`, the two files the Kotlin side will mirror.
+  IS the compiler, exactly as `ios.yml` is for Swift. It runs on
+  `workflow_dispatch`, and on push to main/dev/`feat/android-*` and on PRs
+  that touch `apps/android/**`, the workflow itself, or a file outside
+  `apps/android/` that its tests read or the Kotlin side mirrors:
+  `packages/shared-types/src/contextWindow.ts`, `apps/web/src/lib/hotkeys.ts`,
+  `packages/shared-types/fixtures/**`, and for the `:app` lockstep tests the
+  vendored `apps/ios/Argus/Resources/mermaid.min.js`, `pnpm-lock.yaml` and
+  `pnpm-workspace.yaml` (how those tests find the repo root). `ios.yml`
+  likewise runs on `pnpm-lock.yaml`, for its mermaid lockstep test. A test
+  that starts reading another file outside its app's folder needs that path
+  in both of its workflow's `paths` lists, or it won't run when that file
+  changes.
+  **On Android a path filter isn't enough.** `gradle.properties` sets
+  `org.gradle.caching=true`, and a Test task's cache key covers only what it
+  declares, not files a test opens through `File()`. So a change to only
+  such a file would replay a cached pass (the log says `FROM-CACHE`) without
+  running the test. That's why `app/build.gradle.kts` and
+  `core/build.gradle.kts` declare every repo file their tests read as task
+  `inputs`. A test that reads a new one needs it added there too.
   A Kotlin change is unverified until that workflow has run on it; say so.
 - **Every dependency is an exact pin** (`gradle/libs.versions.toml`, plus
   `distributionSha256Sum` on the wrapper), the fix the iOS side still owes
@@ -3588,9 +3603,9 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
     read the FIRST `version:"…"` literal. The web's range is `^11.16.1`
     with the lockfile on 11.16.1, so a plain `pnpm up mermaid` lands 11.17
     and the iOS test fails with "the bundle's shape changed". Fix the
-    probes first. Note that `android.yml` doesn't trigger on
-    `apps/ios/Argus/Resources/**` or `pnpm-lock.yaml`, so the Kotlin
-    lockstep test only runs on a PR that also touches `apps/android/`.
+    probes first. Any mermaid bump changes `pnpm-lock.yaml`, and both
+    `ios.yml` and `android.yml` trigger on it, so both native lockstep
+    tests run on the bump's PR.
 
   How to bump one package without churn: any `pnpm update` in `apps/web`,
   even of a single direct dependency, re-resolves the whole `@lobehub/ui`

@@ -1,6 +1,8 @@
 // :app — the Jetpack Compose application. Kotlin compilation comes from
 // AGP 9's built-in Kotlin (no kotlin-android plugin); its jvmTarget follows
 // compileOptions.targetCompatibility below.
+import org.gradle.api.tasks.PathSensitivity
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -93,4 +95,21 @@ dependencies {
     implementation(libs.markwon.linkify)
 
     testImplementation(libs.junit)
+}
+
+// The lockstep tests read these files straight off the checkout, which
+// Gradle can't see. With the build cache on (gradle.properties), a change
+// to only the lockfile or a vendored runtime would replay a cached pass, so
+// they are declared as inputs and such a change re-runs the tests.
+val repoRoot = rootDir.parentFile.parentFile.canonicalFile
+tasks.withType<Test>().configureEach {
+    inputs.file(repoRoot.resolve("pnpm-lock.yaml"))
+        .withPropertyName("pnpmLock")
+        .withPathSensitivity(PathSensitivity.NONE)
+    inputs.file(repoRoot.resolve("apps/ios/Argus/Resources/mermaid.min.js"))
+        .withPropertyName("vendoredMermaid")
+        .withPathSensitivity(PathSensitivity.NONE)
+    inputs.dir("src/main/assets/xterm")
+        .withPropertyName("vendoredXterm")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }
