@@ -34,6 +34,7 @@ go run ./cmd/sidecar
 | Typecheck everything                | `pnpm typecheck`                                      |
 | Build everything                    | `pnpm build`                                          |
 | Sidecar tests                       | `cd packages/sidecar && go test ./...`                |
+| Sidecar vulnerability scan          | `cd packages/sidecar && go tool govulncheck ./...`    |
 | Apply a Prisma migration            | `pnpm --filter @argus/server exec prisma migrate dev` |
 | Re-seed the admin user              | `pnpm --filter @argus/server seed`                    |
 | List adapters compiled into sidecar | `argus-sidecar --list-adapters`                       |
@@ -41,9 +42,14 @@ go run ./cmd/sidecar
 | Open Prisma Studio                  | `pnpm --filter @argus/server exec prisma studio`      |
 
 **Verify with `pnpm typecheck` and `pnpm build`** — those two, plus
-`go test ./...` and `go test -race ./...` in the sidecar, are exactly what
-CI runs. There is no TypeScript test suite; the only automated tests in
-the repo are the sidecar's Go tests. So for anything on the web or server
+`go vet ./...`, `go build ./...`, `go test ./...`, `go test -race ./...`
+and `go tool govulncheck ./...` in the sidecar, are exactly what CI runs.
+govulncheck checks the standard library of the Go that runs it, so a
+local run on another patch release than CI's can disagree with CI in
+either direction: rerun it with `GOTOOLCHAIN=go1.27.N` set to the version
+the `Go (sidecar)` log shows before trusting a difference. There is no
+TypeScript test suite; the only automated tests in the repo are the
+sidecar's Go tests. So for anything on the web or server
 side, typecheck plus a manual pass in the UI *is* the verification, and
 saying so beats implying coverage that doesn't exist.
 
@@ -3149,6 +3155,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   set `GITHUB_TOKEN` on the **server** to dodge the
   unauthenticated rate limit when the badge fans out across many
   dashboards.
+- **A Go bump can raise the macOS floor of the release binaries.**
+  Go's linker stamps the darwin binary's `LC_BUILD_VERSION` `minos`
+  with the oldest macOS that Go version supports: 12.0.0 on Go 1.25 and
+  1.26, 13.0.0 from Go 1.27 (Go dropped Monterey). Nothing on the update
+  path checks the host's version (not the updater, not the dashboard's
+  update, not `scripts/install.sh`), so a release built on a newer Go
+  is handed to every Mac. When `go-version` moves in
+  `argus-sidecar-release.yml`, read that Go's release notes for a
+  Ports → Darwin change and update the host list in `INSTALLATION.md`
+  ("Prerequisites") in the same PR.
 - **Terminal output binary safety**: PTYs emit raw bytes (escape
   sequences, control chars, partial UTF-8 across read boundaries). We
   base64-encode `data` in both directions so JSON serialization can't
