@@ -570,8 +570,11 @@ argus-sidecar version
 
 #### Option C — Build from source
 
-Useful if you want to bake in custom adapters. Requires Go 1.25+ (see
-`packages/sidecar/go.mod`; CI builds on 1.25).
+Useful if you want to bake in custom adapters. Requires Go 1.26+ (see
+`packages/sidecar/go.mod`); CI and the release binaries build on 1.27.
+Use the newest patch release of whichever you pick: Go ships its standard
+library's security fixes in patch releases, and they are compiled into
+the binary.
 
 ```bash
 git clone https://github.com/kr4t0n/argus.git

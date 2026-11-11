@@ -34,6 +34,7 @@ go run ./cmd/sidecar
 | Typecheck everything                | `pnpm typecheck`                                      |
 | Build everything                    | `pnpm build`                                          |
 | Sidecar tests                       | `cd packages/sidecar && go test ./...`                |
+| Sidecar vulnerability scan          | `cd packages/sidecar && go tool govulncheck ./...`    |
 | Apply a Prisma migration            | `pnpm --filter @argus/server exec prisma migrate dev` |
 | Re-seed the admin user              | `pnpm --filter @argus/server seed`                    |
 | List adapters compiled into sidecar | `argus-sidecar --list-adapters`                       |
@@ -41,9 +42,14 @@ go run ./cmd/sidecar
 | Open Prisma Studio                  | `pnpm --filter @argus/server exec prisma studio`      |
 
 **Verify with `pnpm typecheck` and `pnpm build`** — those two, plus
-`go test ./...` and `go test -race ./...` in the sidecar, are exactly what
-CI runs. There is no TypeScript test suite; the only automated tests in
-the repo are the sidecar's Go tests. So for anything on the web or server
+`go vet ./...`, `go build ./...`, `go test ./...`, `go test -race ./...`
+and `go tool govulncheck ./...` in the sidecar, are exactly what CI runs.
+govulncheck checks the standard library of the Go that runs it, so a
+local run on another patch release than CI's can disagree with CI in
+either direction: rerun it with `GOTOOLCHAIN=go1.27.N` set to the version
+the `Go (sidecar)` log shows before trusting a difference. There is no
+TypeScript test suite; the only automated tests in the repo are the
+sidecar's Go tests. So for anything on the web or server
 side, typecheck plus a manual pass in the UI *is* the verification, and
 saying so beats implying coverage that doesn't exist.
 
