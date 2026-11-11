@@ -3155,6 +3155,16 @@ effect. The viewer concatenates them per-command in `(commandId, seq)` order.
   set `GITHUB_TOKEN` on the **server** to dodge the
   unauthenticated rate limit when the badge fans out across many
   dashboards.
+- **A Go bump can raise the macOS floor of the release binaries.**
+  Go's linker stamps the darwin binary's `LC_BUILD_VERSION` `minos`
+  with the oldest macOS that Go version supports: 12.0.0 on Go 1.25 and
+  1.26, 13.0.0 from Go 1.27 (Go dropped Monterey). Nothing on the update
+  path checks the host's version (not the updater, not the dashboard's
+  update, not `scripts/install.sh`), so a release built on a newer Go
+  is handed to every Mac. When `go-version` moves in
+  `argus-sidecar-release.yml`, read that Go's release notes for a
+  Ports → Darwin change and update the host list in `INSTALLATION.md`
+  ("Prerequisites") in the same PR.
 - **Terminal output binary safety**: PTYs emit raw bytes (escape
   sequences, control chars, partial UTF-8 across read boundaries). We
   base64-encode `data` in both directions so JSON serialization can't

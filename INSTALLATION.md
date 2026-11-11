@@ -49,10 +49,18 @@ For the control-plane host:
 
 For each sidecar host (separate from the control plane in production):
 
-- Linux (amd64/arm64) or macOS (amd64/arm64)
+- Linux (amd64/arm64) or macOS 13 Ventura or later (amd64/arm64)
 - The CLI you want to expose, on `$PATH` (`claude`, `codex`, or `cursor-agent`)
 - Outbound access to your Redis URL, and to the server's HTTP(S) port
 if you'll enable the interactive terminal feature
+
+The release binaries are built with Go 1.27, which no longer supports
+macOS 12 Monterey. `argus-sidecar-v0.3.7`, the newest release when that
+changed, was built with Go 1.25 and still runs there. Neither the
+installer nor `argus-sidecar update` (nor the sidecar-update button on
+the dashboard's machine page) checks the macOS version, so on macOS 12
+stay on the release you run, or build from source with Go 1.26
+(Option C).
 
 ---
 
@@ -574,7 +582,11 @@ Useful if you want to bake in custom adapters. Requires Go 1.26+ (see
 `packages/sidecar/go.mod`); CI and the release binaries build on 1.27.
 Use the newest patch release of whichever you pick: Go ships its standard
 library's security fixes in patch releases, and they are compiled into
-the binary.
+the binary. With an older Go installed (1.21 to 1.25), `go` downloads
+exactly go1.26.0 and builds with it, which has none of those fixes, so
+install the newest Go first or set `GOTOOLCHAIN=go1.27.N` for the build.
+Go 1.26 is the last Go that supports macOS 12 Monterey: a build with it
+still runs there, and one with Go 1.27 needs macOS 13 Ventura.
 
 ```bash
 git clone https://github.com/kr4t0n/argus.git
